@@ -1,0 +1,33 @@
+# Gradle
+.gradle/
+build/
+
+# Android
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+local.properties
+*.iml
+.externalNativeBuild/
+.cxx/
+captures/
+outputs/
+
+# Android Studio / IntelliJ
+.idea/
+*.iws
+
+# Kotlin
+*.kotlin_module
+
+# VSCode / Cursor
+.vscode/
+.cursor/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
