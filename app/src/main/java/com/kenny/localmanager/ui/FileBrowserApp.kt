@@ -121,7 +121,7 @@ fun FileBrowserApp() {
         }
         else -> {
             val currentUri = remember(rootUri) { mutableStateOf(rootUri!!) }
-            val backStack = remember { mutableStateListOf<String>() }
+            val backStack = remember(rootUri) { mutableStateListOf<String>() }
             FileBrowserScreen(
                 currentUri = currentUri.value,
                 onNavigate = { uri ->
@@ -134,6 +134,7 @@ fun FileBrowserApp() {
                     }
                 },
                 canGoBack = backStack.isNotEmpty(),
+                onChangeRoot = { treeLauncher.launch(null) },
                 onOpenFile = { uri, name, isEncrypted ->
                     viewingFile = Triple(uri, name, isEncrypted)
                 }
@@ -149,6 +150,7 @@ fun FileBrowserScreen(
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     canGoBack: Boolean,
+    onChangeRoot: () -> Unit,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit
 ) {
     val context = LocalContext.current
@@ -196,6 +198,11 @@ fun FileBrowserScreen(
                         IconButton(onClick = onBack) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                         }
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onChangeRoot) {
+                        Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
