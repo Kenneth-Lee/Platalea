@@ -18,6 +18,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -28,6 +31,8 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -45,6 +50,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -70,6 +76,7 @@ import android.widget.Toast
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
+import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
@@ -80,6 +87,13 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collect
+
+/** 规范化 content URI 字符串，修正 authority 中可能被错误成空格的句点（如 android .externalstorage -> android.externalstorage） */
+private fun normalizeContentUriString(s: String): String {
+    if (!s.startsWith("content://")) return s
+    return s.replace("android ", "android.")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -91,7 +105,7 @@ fun FileBrowserApp() {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
-        rootUri = prefs.rootUri.first()
+        rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
     }
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -102,8 +116,9 @@ fun FileBrowserApp() {
                 uri,
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-            scope.launch { prefs.setRootUri(uri.toString()) }
-            rootUri = uri.toString()
+            val normalized = normalizeContentUriString(uri.toString())
+            scope.launch { prefs.setRootUri(normalized) }
+            rootUri = normalized
         }
     }
 
@@ -142,83 +157,122 @@ fun FileBrowserApp() {
             val backStack = remember(rootUri) { mutableStateListOf<String>() }
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
+            var showConfigDialog by remember { mutableStateOf(false) }
             var refreshTrigger by remember { mutableStateOf(0) }
-            FileBrowserScreen(
-                currentUri = currentUri.value,
-                refreshTrigger = refreshTrigger,
-                pendingList = pendingList,
-                onNavigate = { uri ->
-                    backStack.add(currentUri.value)
-                    currentUri.value = uri
-                },
-                onBack = {
-                    if (backStack.isNotEmpty()) {
-                        currentUri.value = backStack.removeAt(backStack.lastIndex)
-                    }
-                },
-                canGoBack = backStack.isNotEmpty(),
-                onChangeRoot = { treeLauncher.launch(null) },
-                onOpenFile = { uri, name, isEncrypted ->
-                    viewingFile = Triple(uri, name, isEncrypted)
-                },
-                onAddToPendingList = { pendingList.add(it) },
-                onRemoveFromPendingList = { pendingList.remove(it) },
-                onCopyHere = { targetDirUri ->
-                    val ctx = context
-                    val list = pendingList.toList()
-                    scope.launch {
-                        val (ok, fail) = withContext(Dispatchers.IO) {
-                            var o = 0
-                            var f = 0
-                            list.forEach { model ->
-                                if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri)) != null) o++
-                                else f++
+            var debugEnabled by remember { mutableStateOf(false) }
+            val debugLog = remember { mutableStateListOf<String>() }
+            LaunchedEffect(prefs) {
+                prefs.debugEnabled.collect { debugEnabled = it }
+            }
+            fun logDebug(msg: String) {
+                scope.launch(Dispatchers.Main.immediate) {
+                    debugLog.add(msg)
+                }
+            }
+            val copyMoveLog: ((String) -> Unit)? = if (debugEnabled) { { logDebug(it) } } else null
+            Column(Modifier.fillMaxSize()) {
+                FileBrowserScreen(
+                    modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
+                    currentUri = currentUri.value,
+                    refreshTrigger = refreshTrigger,
+                    pendingList = pendingList,
+                    onNavigate = { uri ->
+                        backStack.add(currentUri.value)
+                        currentUri.value = normalizeContentUriString(uri)
+                    },
+                    onBack = {
+                        if (backStack.isNotEmpty()) {
+                            currentUri.value = backStack.removeAt(backStack.lastIndex)
+                        }
+                    },
+                    canGoBack = backStack.isNotEmpty(),
+                    onChangeRoot = { treeLauncher.launch(null) },
+                    onOpenFile = { uri, name, isEncrypted ->
+                        viewingFile = Triple(uri, name, isEncrypted)
+                    },
+                    onAddToPendingList = { pendingList.add(it) },
+                    onRemoveFromPendingList = { pendingList.remove(it) },
+                    onCopyHere = {
+                        var targetDirUri = currentUri.value
+                        targetDirUri = normalizeContentUriString(targetDirUri)
+                        copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
+                        val ctx = context
+                        val list = pendingList.toList()
+                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        scope.launch {
+                            val (ok, fail) = withContext(Dispatchers.IO) {
+                                var o = 0
+                                var f = 0
+                                list.forEach { model ->
+                                    if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
+                                    else f++
+                                }
+                                Pair(o, f)
                             }
-                            Pair(o, f)
-                        }
-                        if (fail == 0 && ok > 0) {
-                            pendingList.clear()
-                            Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                        } else if (ok > 0) {
-                            Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
-                        }
-                        refreshTrigger++
-                    }
-                },
-                onMoveHere = { targetDirUri ->
-                    val ctx = context
-                    val list = pendingList.toList()
-                    scope.launch {
-                        val (ok, fail) = withContext(Dispatchers.IO) {
-                            var o = 0
-                            var f = 0
-                            list.forEach { model ->
-                                if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri))) o++
-                                else f++
+                            copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
+                            if (fail == 0 && ok > 0) {
+                                pendingList.clear()
+                                Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                            } else if (ok > 0) {
+                                Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
                             }
-                            Pair(o, f)
+                            refreshTrigger++
                         }
-                        if (fail == 0 && ok > 0) {
-                            pendingList.clear()
-                            Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                        } else if (ok > 0) {
-                            Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
+                    },
+                    onMoveHere = {
+                        var targetDirUri = currentUri.value
+                        targetDirUri = normalizeContentUriString(targetDirUri)
+                        copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
+                        val ctx = context
+                        val list = pendingList.toList()
+                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        scope.launch {
+                            val (ok, fail) = withContext(Dispatchers.IO) {
+                                var o = 0
+                                var f = 0
+                                list.forEach { model ->
+                                    if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
+                                    else f++
+                                }
+                                Pair(o, f)
+                            }
+                            copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
+                            if (fail == 0 && ok > 0) {
+                                pendingList.clear()
+                                Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                            } else if (ok > 0) {
+                                Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
+                            }
+                            refreshTrigger++
                         }
-                        refreshTrigger++
-                    }
-                },
-                onShowPendingList = { showPendingList = it },
-                onRefresh = { refreshTrigger++ }
-            )
+                    },
+                    onShowPendingList = { showPendingList = it },
+                    onRefresh = { refreshTrigger++ },
+                    onOpenConfig = { showConfigDialog = true }
+                )
+                if (debugEnabled) {
+                    DebugPanel(
+                        debugLog = debugLog,
+                        onClear = { debugLog.clear() }
+                    )
+                }
+            }
             if (showPendingList) {
                 PendingListScreen(
                     pendingList = pendingList,
                     onRemove = { pendingList.remove(it) },
                     onDismiss = { showPendingList = false }
+                )
+            }
+            if (showConfigDialog) {
+                ConfigDialog(
+                    onDismiss = { showConfigDialog = false },
+                    debugEnabled = debugEnabled,
+                    onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } }
                 )
             }
         }
@@ -228,6 +282,7 @@ fun FileBrowserApp() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
+    modifier: Modifier = Modifier,
     currentUri: String,
     refreshTrigger: Int,
     pendingList: List<DocumentFileModel>,
@@ -238,10 +293,11 @@ fun FileBrowserScreen(
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
-    onCopyHere: (String) -> Unit,
-    onMoveHere: (String) -> Unit,
+    onCopyHere: () -> Unit,
+    onMoveHere: () -> Unit,
     onShowPendingList: (Boolean) -> Unit,
-    onRefresh: () -> Unit
+    onRefresh: () -> Unit,
+    onOpenConfig: () -> Unit
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -253,8 +309,12 @@ fun FileBrowserScreen(
     var showContextMenu by remember { mutableStateOf(false) }
     var contextMenuTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var showCreateFileDialog by remember { mutableStateOf(false) }
+    var showCreateDirDialog by remember { mutableStateOf(false) }
     var newFileName by remember { mutableStateOf("") }
+    var newDirName by remember { mutableStateOf("") }
     var showPendingMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
+    var filterText by remember { mutableStateOf("") }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         loading = true
@@ -283,76 +343,122 @@ fun FileBrowserScreen(
         loading = false
     }
 
+    val filteredItems = remember(items, filterText) {
+        if (filterText.isBlank()) items
+        else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
+            items.filter { regex.containsMatchIn(it.name) }
+        } ?: items
+    }
+
+    var showFabMenu by remember { mutableStateOf(false) }
+    var showOverflowMenu by remember { mutableStateOf(false) }
     Scaffold(
+        modifier = modifier,
         topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        DocumentFile.fromTreeUri(context, Uri.parse(currentUri))?.name ?: "根目录",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                navigationIcon = {
-                    if (canGoBack) {
-                        IconButton(onClick = onBack) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+            Column(Modifier.fillMaxWidth()) {
+                TopAppBar(
+                    title = {
+                        val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
+                            ?: DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
+                        Text(
+                            doc?.name ?: "根目录",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    navigationIcon = {
+                        if (canGoBack) {
+                            IconButton(onClick = onBack) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                            }
                         }
-                    }
-                },
-                actions = {
-                    if (pendingList.isNotEmpty()) {
-                        IconButton(onClick = { showPendingMenu = true }) {
-                            Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
+                    },
+                    actions = {
+                        if (pendingList.isNotEmpty()) {
+                            IconButton(onClick = { showPendingMenu = true }) {
+                                Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
+                            }
+                            DropdownMenu(
+                                expanded = showPendingMenu,
+                                onDismissRequest = { showPendingMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("拷贝到本处") },
+                                    onClick = {
+                                        showPendingMenu = false
+                                        onCopyHere()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("移动到本处") },
+                                    onClick = {
+                                        showPendingMenu = false
+                                        onMoveHere()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("待处理列表 (${pendingList.size})") },
+                                    onClick = {
+                                        showPendingMenu = false
+                                        onShowPendingList(true)
+                                    }
+                                )
+                            }
+                        }
+                        IconButton(onClick = onChangeRoot) {
+                            Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
+                        }
+                        IconButton(onClick = { showOverflowMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "菜单")
                         }
                         DropdownMenu(
-                            expanded = showPendingMenu,
-                            onDismissRequest = { showPendingMenu = false }
+                            expanded = showOverflowMenu,
+                            onDismissRequest = { showOverflowMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("拷贝到本处") },
+                                text = { Text("配置") },
                                 onClick = {
-                                    showPendingMenu = false
-                                    onCopyHere(currentUri)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("移动到本处") },
-                                onClick = {
-                                    showPendingMenu = false
-                                    onMoveHere(currentUri)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("待处理列表 (${pendingList.size})") },
-                                onClick = {
-                                    showPendingMenu = false
-                                    onShowPendingList(true)
+                                    showOverflowMenu = false
+                                    onOpenConfig()
                                 }
                             )
                         }
-                    }
-                    IconButton(onClick = onChangeRoot) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-            )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = filterText,
+                        onValueChange = { filterText = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("正则过滤文件名，留空显示全部") },
+                        label = null
+                    )
+                    if (filterText.isNotEmpty()) {
+                        IconButton(onClick = { filterText = "" }) {
+                            Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
         },
         floatingActionButton = {
             if (!loading && error == null) {
                 FloatingActionButton(
-                    onClick = {
-                        newFileName = ""
-                        showCreateFileDialog = true
-                    },
+                    onClick = { showFabMenu = true },
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = MaterialTheme.colorScheme.onPrimary
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "新建文件")
+                    Icon(Icons.Default.Add, contentDescription = "新建")
                 }
             }
         }
@@ -379,7 +485,7 @@ fun FileBrowserScreen(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        items(items) { item ->
+                        items(filteredItems) { item ->
                             FileItem(
                                 model = item,
                                 isInPendingList = pendingList.any { it.uri == item.uri },
@@ -456,9 +562,46 @@ fun FileBrowserScreen(
                             contextMenuTarget = null
                         }
                     ) { Text("重命名", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            contextMenuTarget = null
+                            showDeleteConfirm = menuTarget
+                        }
+                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
                         Text("取消", color = MaterialTheme.colorScheme.onSurface)
                     }
+                }
+            }
+        }
+    }
+
+    if (showFabMenu) {
+        Dialog(onDismissRequest = { showFabMenu = false }) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(Modifier.padding(24.dp)) {
+                    Text("新建", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(16.dp))
+                    TextButton(
+                        onClick = {
+                            showFabMenu = false
+                            newFileName = ""
+                            showCreateFileDialog = true
+                        }
+                    ) { Text("新建文件", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(
+                        onClick = {
+                            showFabMenu = false
+                            newDirName = ""
+                            showCreateDirDialog = true
+                        }
+                    ) { Text("新建文件夹", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(onClick = { showFabMenu = false }) { Text("取消", color = MaterialTheme.colorScheme.onSurface) }
                 }
             }
         }
@@ -505,6 +648,76 @@ fun FileBrowserScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showCreateFileDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showCreateDirDialog) {
+        val createDirFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(150)
+            createDirFocus.requestFocus()
+        }
+        AlertDialog(
+            onDismissRequest = { showCreateDirDialog = false },
+            title = { Text("新建文件夹") },
+            text = {
+                OutlinedTextField(
+                    value = newDirName,
+                    onValueChange = { newDirName = it },
+                    label = { Text("文件夹名") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(createDirFocus),
+                    placeholder = { Text("例如：新文件夹") }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newDirName.trim()
+                        if (name.isNotEmpty()) {
+                            val uri = Uri.parse(currentUri)
+                            val dir = if (currentUri.contains("/tree/")) {
+                                DocumentFile.fromTreeUri(context, uri)
+                            } else {
+                                DocumentFile.fromSingleUri(context, uri)
+                            }
+                            dir?.takeIf { it.isDirectory }?.createDirectory(name)
+                            showCreateDirDialog = false
+                            onRefresh()
+                        }
+                    }
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateDirDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showDeleteConfirm != null) {
+        val target = showDeleteConfirm!!
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = null },
+            title = { Text("确认删除") },
+            text = { Text("确定删除「${target.name}」吗？此操作不可恢复。", color = MaterialTheme.colorScheme.onSurface) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (context.contentResolver.deleteDocument(target.uri)) {
+                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                            onRefresh()
+                        } else {
+                            Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                        }
+                        showDeleteConfirm = null
+                    }
+                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = null }) { Text("取消") }
             }
         )
     }
@@ -688,6 +901,80 @@ fun PendingListScreen(
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun ConfigDialog(
+    onDismiss: () -> Unit,
+    debugEnabled: Boolean,
+    onDebugEnabledChange: (Boolean) -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text("配置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("显示调试窗口", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
+                }
+                Spacer(Modifier.height(24.dp))
+                TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+        }
+    }
+}
+
+@Composable
+fun DebugPanel(
+    debugLog: List<String>,
+    onClear: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(180.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        tonalElevation = 2.dp
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("调试", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = onClear) { Text("清空") }
+            }
+            SelectionContainer(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+            ) {
+                Column {
+                    debugLog.forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
                     }
                 }
             }
