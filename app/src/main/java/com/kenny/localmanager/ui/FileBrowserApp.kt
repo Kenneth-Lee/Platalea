@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -404,6 +405,9 @@ fun FileBrowserScreen(
                                     }
                                 )
                             }
+                        }
+                        IconButton(onClick = onRefresh) {
+                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
                         IconButton(onClick = onChangeRoot) {
                             Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
