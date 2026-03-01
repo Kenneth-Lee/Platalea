@@ -24,10 +24,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,7 +53,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -59,6 +65,7 @@ import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -160,12 +167,20 @@ fun FileBrowserScreen(
     var actionTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameValue by remember { mutableStateOf("") }
+    var showCreateFileDialog by remember { mutableStateOf(false) }
+    var newFileName by remember { mutableStateOf("") }
+    var refreshTrigger by remember { mutableStateOf(0) }
 
-    LaunchedEffect(currentUri) {
+    LaunchedEffect(currentUri, refreshTrigger) {
         loading = true
         error = null
         try {
-            val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
+            val uri = Uri.parse(currentUri)
+            val doc = if (currentUri.contains("/tree/")) {
+                DocumentFile.fromTreeUri(context, uri)
+            } else {
+                DocumentFile.fromSingleUri(context, uri)
+            }
             if (doc == null || !doc.exists()) {
                 error = "无法访问该目录"
                 items = emptyList()
@@ -210,6 +225,20 @@ fun FileBrowserScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
+        },
+        floatingActionButton = {
+            if (!loading && error == null) {
+                FloatingActionButton(
+                    onClick = {
+                        newFileName = ""
+                        showCreateFileDialog = true
+                    },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "新建文件")
+                }
+            }
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -231,7 +260,7 @@ fun FileBrowserScreen(
                 else -> {
                     LazyColumn(
                         Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         items(items) { item ->
@@ -258,8 +287,60 @@ fun FileBrowserScreen(
         }
     }
 
+    if (showCreateFileDialog) {
+        val createFileFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(150)
+            createFileFocus.requestFocus()
+        }
+        AlertDialog(
+            onDismissRequest = { showCreateFileDialog = false },
+            title = { Text("新建文件") },
+            text = {
+                OutlinedTextField(
+                    value = newFileName,
+                    onValueChange = { newFileName = it },
+                    label = { Text("文件名") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(createFileFocus),
+                    placeholder = { Text("例如：newfile.txt") }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val name = newFileName.trim()
+                        if (name.isNotEmpty()) {
+                            val uri = Uri.parse(currentUri)
+                            val dir = if (currentUri.contains("/tree/")) {
+                                DocumentFile.fromTreeUri(context, uri)
+                            } else {
+                                DocumentFile.fromSingleUri(context, uri)
+                            }
+                            dir?.takeIf { it.isDirectory }?.createFile("application/octet-stream", name)
+                            showCreateFileDialog = false
+                            refreshTrigger++
+                        }
+                    }
+                ) { Text("创建") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCreateFileDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (showRenameDialog && actionTarget != null) {
         var target = actionTarget!!
+        val renameFocus = remember { FocusRequester() }
+        val keyboardController = LocalSoftwareKeyboardController.current
+        LaunchedEffect(Unit) {
+            delay(100)
+            renameFocus.requestFocus()
+            keyboardController?.show()
+        }
         AlertDialog(
             onDismissRequest = {
                 showRenameDialog = false
@@ -270,12 +351,14 @@ fun FileBrowserScreen(
                 Column {
                     Text("重命名为:", style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))
-                    androidx.compose.material3.OutlinedTextField(
+                    OutlinedTextField(
                         value = renameValue,
                         onValueChange = { renameValue = it },
                         label = { Text("新名称") },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(renameFocus)
                     )
                 }
             },
