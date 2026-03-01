@@ -3,6 +3,8 @@ package com.kenny.localmanager.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.filled.ArrowBack
+import android.app.Activity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -77,11 +79,15 @@ import android.widget.Toast
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
+import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.listFilesSafe
+import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
+import com.kenny.localmanager.gpg.GpgHelper
+import com.kenny.localmanager.gpg.generateDefaultKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -159,7 +165,24 @@ fun FileBrowserApp() {
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
+            var showGenerateKeyDialog by remember { mutableStateOf(false) }
             var refreshTrigger by remember { mutableStateOf(0) }
+            var lastBackPressTime by remember { mutableStateOf(0L) }
+            BackHandler {
+                if (backStack.isNotEmpty()) {
+                    currentUri.value = backStack.removeAt(backStack.lastIndex)
+                } else {
+                    val now = System.currentTimeMillis()
+                    if (now - lastBackPressTime < 2000) {
+                        (context as? Activity)?.finish()
+                    } else {
+                        lastBackPressTime = now
+                        Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
+            var gpgPassword by remember { mutableStateOf("") }
             var debugEnabled by remember { mutableStateOf(false) }
             val debugLog = remember { mutableStateListOf<String>() }
             LaunchedEffect(prefs) {
@@ -253,7 +276,13 @@ fun FileBrowserApp() {
                     },
                     onShowPendingList = { showPendingList = it },
                     onRefresh = { refreshTrigger++ },
-                    onOpenConfig = { showConfigDialog = true }
+                    onOpenConfig = { showConfigDialog = true },
+                    onRequestGpgDecrypt = { fileModel, dirUri ->
+                        gpgState = GpgOpState.Decrypt(fileModel, dirUri)
+                    },
+                    onRequestGpgEncrypt = { fileModel, dirUri ->
+                        gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                    }
                 )
                 if (debugEnabled) {
                     DebugPanel(
@@ -273,11 +302,73 @@ fun FileBrowserApp() {
                 ConfigDialog(
                     onDismiss = { showConfigDialog = false },
                     debugEnabled = debugEnabled,
-                    onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } }
+                    onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } },
+                    onGenerateKey = { showConfigDialog = false; showGenerateKeyDialog = true }
+                )
+            }
+            if (showGenerateKeyDialog) {
+                GenerateKeyDialog(
+                    onDismiss = { showGenerateKeyDialog = false },
+                    onConfirm = { identity, passphrase ->
+                        showGenerateKeyDialog = false
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                generateDefaultKey(context, identity, passphrase)
+                            }
+                            if (ok) Toast.makeText(context, "默认密钥已生成，保存在应用存储", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(context, "生成失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
+            }
+            gpgState?.let { op ->
+                GpgPasswordDialog(
+                    isDecrypt = op.isDecrypt,
+                    fileName = op.fileModel.name,
+                    password = gpgPassword,
+                    onPasswordChange = { gpgPassword = it },
+                    onConfirm = { pwd ->
+                        val ctx = context
+                        val dirUri = normalizeContentUriString(op.dirUri)
+                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                if (op.isDecrypt) {
+                                    ctx.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
+                                        val decrypted = GpgHelper.decryptStream(input, pwd.toCharArray())
+                                        if (decrypted != null) {
+                                            val outName = op.fileModel.name.removeSuffix(".gpg").ifEmpty { op.fileModel.name + ".dec" }
+                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                        } else false
+                                    } ?: false
+                                } else {
+                                    ctx.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
+                                        val plain = input.readBytes()
+                                        val encrypted = GpgHelper.encryptSymmetric(plain, pwd.toCharArray(), op.fileModel.name)
+                                        if (encrypted != null) {
+                                            val outName = op.fileModel.name + ".gpg"
+                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/pgp-encrypted", encrypted)
+                                        } else false
+                                    } ?: false
+                                }
+                            }
+                            if (ok) Toast.makeText(ctx, if (op.isDecrypt) "解密完成" else "加密完成", Toast.LENGTH_SHORT).show()
+                            else Toast.makeText(ctx, if (op.isDecrypt) "解密失败（密码错误？）" else "加密失败", Toast.LENGTH_SHORT).show()
+                            gpgState = null
+                            gpgPassword = ""
+                            refreshTrigger++
+                        }
+                    },
+                    onDismiss = { gpgState = null; gpgPassword = "" }
                 )
             }
         }
     }
+}
+
+private sealed class GpgOpState(val isDecrypt: Boolean, val fileModel: DocumentFileModel, val dirUri: String) {
+    class Decrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(true, fileModel, dirUri)
+    class Encrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(false, fileModel, dirUri)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -298,7 +389,9 @@ fun FileBrowserScreen(
     onMoveHere: () -> Unit,
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
-    onOpenConfig: () -> Unit
+    onOpenConfig: () -> Unit,
+    onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
+    onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -549,6 +642,23 @@ fun FileBrowserScreen(
                                 contextMenuTarget = null
                             }
                         ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
+                        if (menuTarget.name.endsWith(".gpg", ignoreCase = true)) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestGpgDecrypt(menuTarget, currentUri)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("GnuPG 解密", color = MaterialTheme.colorScheme.onSurface) }
+                        } else {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestGpgEncrypt(menuTarget, currentUri)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("GnuPG 加密", color = MaterialTheme.colorScheme.onSurface) }
+                        }
                     }
                     TextButton(
                         onClick = {
@@ -913,10 +1023,51 @@ fun PendingListScreen(
 }
 
 @Composable
+fun GpgPasswordDialog(
+    isDecrypt: Boolean,
+    fileName: String,
+    password: String,
+    onPasswordChange: (String) -> Unit,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    if (isDecrypt) "GnuPG 解密" else "GnuPG 加密",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密码") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Button(onClick = { onConfirm(password) }) { Text("确定") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
-    onDebugEnabledChange: (Boolean) -> Unit
+    onDebugEnabledChange: (Boolean) -> Unit,
+    onGenerateKey: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -934,8 +1085,57 @@ fun ConfigDialog(
                     Text("显示调试窗口", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
                 }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onGenerateKey, modifier = Modifier.fillMaxWidth()) { Text("生成默认 GnuPG 密钥") }
                 Spacer(Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+        }
+    }
+}
+
+@Composable
+fun GenerateKeyDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (identity: String, passphrase: CharArray) -> Unit
+) {
+    var identity by remember { mutableStateOf("") }
+    var passphrase by remember { mutableStateOf("") }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text("生成默认密钥", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = identity,
+                    onValueChange = { identity = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("用户标识（如：姓名 <email@example.com>）") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = passphrase,
+                    onValueChange = { passphrase = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密钥保护密码") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("取消") }
+                    Button(
+                        onClick = {
+                            if (identity.isNotBlank() && passphrase.isNotEmpty()) {
+                                onConfirm(identity.trim(), passphrase.toCharArray())
+                            }
+                        }
+                    ) { Text("生成") }
+                }
             }
         }
     }

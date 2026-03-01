@@ -36,6 +36,36 @@ fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
     } catch (_: Exception) { null }
 
 /**
+ * 在目标目录下创建新文件并写入字节内容。
+ * @return 成功返回 true
+ */
+fun createFileWithBytes(
+    context: Context,
+    targetParentUri: Uri,
+    treeUri: Uri?,
+    fileName: String,
+    mimeType: String,
+    bytes: ByteArray
+): Boolean {
+    val cr = context.contentResolver
+    val parentCandidates = if (treeUri != null && !DocumentsContract.isTreeUri(targetParentUri)) {
+        val treeBuilt = resolveParentDocumentUri(targetParentUri, treeUri)
+        listOf(targetParentUri, treeBuilt).filterNotNull().distinct()
+    } else {
+        listOf(resolveParentDocumentUri(targetParentUri, treeUri) ?: return false)
+    }
+    for (parentDocUri in parentCandidates) {
+        try {
+            val newUri = DocumentsContract.createDocument(cr, parentDocUri, mimeType, fileName)
+                ?: continue
+            cr.openOutputStream(newUri)?.use { it.write(bytes) }
+            return true
+        } catch (_: Exception) { }
+    }
+    return false
+}
+
+/**
  * 解析为目标目录的 document URI，供 createDocument 使用。
  * 重要：若 URI 同时含 /tree/ 与 /document/（树下某文档），须用 getDocumentId 取当前目录 ID，
  * 否则 isTreeUri 为 true 时用 getTreeDocumentId 会误取树根，导致拷贝/移动到上级目录。
@@ -140,7 +170,8 @@ fun copyDocumentTo(
 }
 
 /**
- * 将单个文档移动到目标父目录。先尝试系统 moveDocument，不支持则拷贝后删除源。
+ * 将单个文档移动到目标父目录。目录始终用「递归拷贝后删除」以保留子内容；
+ * 文件先尝试系统 moveDocument，不支持则拷贝后删除源。
  * @param log 调试日志回调
  */
 fun moveDocumentTo(
@@ -152,6 +183,20 @@ fun moveDocumentTo(
 ): Boolean {
     val cr = context.contentResolver
     val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
+    // 目录：系统 moveDocument 可能不迁移子节点导致内容丢失，统一用拷贝后删除
+    if (source.isDirectory) {
+        val copied = copyDocumentTo(context, sourceUri, targetParentUri, treeUri, log)
+        return if (copied != null) {
+            val deleted = try {
+                DocumentsContract.deleteDocument(cr, sourceUri)
+            } catch (e: Exception) {
+                log?.invoke("  删除源目录异常: ${e.message}")
+                false
+            }
+            if (deleted) log?.invoke("  目录(递归拷贝后删除) 成功")
+            deleted
+        } else false
+    }
     val sourceParent = source.parentFile?.uri
     if (sourceParent != null) {
         val targetCandidates = if (treeUri != null && !DocumentsContract.isTreeUri(targetParentUri)) {
@@ -173,6 +218,10 @@ fun moveDocumentTo(
     }
     val copied = copyDocumentTo(context, sourceUri, targetParentUri, treeUri, log)
     return if (copied != null) {
-        DocumentsContract.deleteDocument(cr, sourceUri)
+        try {
+            DocumentsContract.deleteDocument(cr, sourceUri)
+        } catch (_: Exception) {
+            false
+        }
     } else false
 }

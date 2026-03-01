@@ -50,6 +50,7 @@ dependencies {
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("org.bouncycastle:bcpg-jdk18on:1.77")
     implementation("org.bouncycastle:bcutil-jdk18on:1.77")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.77")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
