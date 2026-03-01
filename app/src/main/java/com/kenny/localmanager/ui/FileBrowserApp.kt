@@ -27,8 +27,11 @@ import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Surface
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
@@ -40,6 +43,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -59,16 +64,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
+import android.widget.Toast
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.listFilesSafe
+import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -129,8 +140,13 @@ fun FileBrowserApp() {
         else -> {
             val currentUri = remember(rootUri) { mutableStateOf(rootUri!!) }
             val backStack = remember(rootUri) { mutableStateListOf<String>() }
+            val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
+            var showPendingList by remember { mutableStateOf(false) }
+            var refreshTrigger by remember { mutableStateOf(0) }
             FileBrowserScreen(
                 currentUri = currentUri.value,
+                refreshTrigger = refreshTrigger,
+                pendingList = pendingList,
                 onNavigate = { uri ->
                     backStack.add(currentUri.value)
                     currentUri.value = uri
@@ -144,8 +160,67 @@ fun FileBrowserApp() {
                 onChangeRoot = { treeLauncher.launch(null) },
                 onOpenFile = { uri, name, isEncrypted ->
                     viewingFile = Triple(uri, name, isEncrypted)
-                }
+                },
+                onAddToPendingList = { pendingList.add(it) },
+                onRemoveFromPendingList = { pendingList.remove(it) },
+                onCopyHere = { targetDirUri ->
+                    val ctx = context
+                    val list = pendingList.toList()
+                    scope.launch {
+                        val (ok, fail) = withContext(Dispatchers.IO) {
+                            var o = 0
+                            var f = 0
+                            list.forEach { model ->
+                                if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri)) != null) o++
+                                else f++
+                            }
+                            Pair(o, f)
+                        }
+                        if (fail == 0 && ok > 0) {
+                            pendingList.clear()
+                            Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                        } else if (ok > 0) {
+                            Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
+                        }
+                        refreshTrigger++
+                    }
+                },
+                onMoveHere = { targetDirUri ->
+                    val ctx = context
+                    val list = pendingList.toList()
+                    scope.launch {
+                        val (ok, fail) = withContext(Dispatchers.IO) {
+                            var o = 0
+                            var f = 0
+                            list.forEach { model ->
+                                if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri))) o++
+                                else f++
+                            }
+                            Pair(o, f)
+                        }
+                        if (fail == 0 && ok > 0) {
+                            pendingList.clear()
+                            Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                        } else if (ok > 0) {
+                            Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
+                        }
+                        refreshTrigger++
+                    }
+                },
+                onShowPendingList = { showPendingList = it },
+                onRefresh = { refreshTrigger++ }
             )
+            if (showPendingList) {
+                PendingListScreen(
+                    pendingList = pendingList,
+                    onRemove = { pendingList.remove(it) },
+                    onDismiss = { showPendingList = false }
+                )
+            }
         }
     }
 }
@@ -154,11 +229,19 @@ fun FileBrowserApp() {
 @Composable
 fun FileBrowserScreen(
     currentUri: String,
+    refreshTrigger: Int,
+    pendingList: List<DocumentFileModel>,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     canGoBack: Boolean,
     onChangeRoot: () -> Unit,
-    onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit
+    onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
+    onAddToPendingList: (DocumentFileModel) -> Unit,
+    onRemoveFromPendingList: (DocumentFileModel) -> Unit,
+    onCopyHere: (String) -> Unit,
+    onMoveHere: (String) -> Unit,
+    onShowPendingList: (Boolean) -> Unit,
+    onRefresh: () -> Unit
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -167,9 +250,11 @@ fun FileBrowserScreen(
     var actionTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var showRenameDialog by remember { mutableStateOf(false) }
     var renameValue by remember { mutableStateOf("") }
+    var showContextMenu by remember { mutableStateOf(false) }
+    var contextMenuTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var showCreateFileDialog by remember { mutableStateOf(false) }
     var newFileName by remember { mutableStateOf("") }
-    var refreshTrigger by remember { mutableStateOf(0) }
+    var showPendingMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         loading = true
@@ -216,6 +301,37 @@ fun FileBrowserScreen(
                     }
                 },
                 actions = {
+                    if (pendingList.isNotEmpty()) {
+                        IconButton(onClick = { showPendingMenu = true }) {
+                            Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
+                        }
+                        DropdownMenu(
+                            expanded = showPendingMenu,
+                            onDismissRequest = { showPendingMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("拷贝到本处") },
+                                onClick = {
+                                    showPendingMenu = false
+                                    onCopyHere(currentUri)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("移动到本处") },
+                                onClick = {
+                                    showPendingMenu = false
+                                    onMoveHere(currentUri)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("待处理列表 (${pendingList.size})") },
+                                onClick = {
+                                    showPendingMenu = false
+                                    onShowPendingList(true)
+                                }
+                            )
+                        }
+                    }
                     IconButton(onClick = onChangeRoot) {
                         Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
                     }
@@ -266,21 +382,82 @@ fun FileBrowserScreen(
                         items(items) { item ->
                             FileItem(
                                 model = item,
+                                isInPendingList = pendingList.any { it.uri == item.uri },
                                 onClick = {
                                     if (item.isDirectory) {
                                         onNavigate(item.uri.toString())
                                     } else {
-                                        val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
-                                        onOpenFile(item.uri.toString(), item.name, encrypted)
+                                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                                            data = item.uri
+                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        }
+                                        try {
+                                            context.startActivity(Intent.createChooser(intent, null))
+                                        } catch (_: android.content.ActivityNotFoundException) {
+                                            val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
+                                            onOpenFile(item.uri.toString(), item.name, encrypted)
+                                        }
                                     }
                                 },
                                 onLongClick = {
-                                    actionTarget = item
-                                    renameValue = item.name
-                                    showRenameDialog = true
+                                    contextMenuTarget = item
+                                    showContextMenu = true
                                 }
                             )
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showContextMenu && contextMenuTarget != null) {
+        val menuTarget = contextMenuTarget!!
+        Dialog(onDismissRequest = { showContextMenu = false; contextMenuTarget = null }) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                ) {
+                    Text(
+                        menuTarget.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    if (!menuTarget.isDirectory) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                val enc = menuTarget.name.endsWith(".gpg", ignoreCase = true)
+                                onOpenFile(menuTarget.uri.toString(), menuTarget.name, enc)
+                                contextMenuTarget = null
+                            }
+                        ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
+                    }
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            onAddToPendingList(menuTarget)
+                            contextMenuTarget = null
+                        }
+                    ) { Text("加入待处理列表", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            actionTarget = menuTarget
+                            renameValue = menuTarget.name
+                            showRenameDialog = true
+                            contextMenuTarget = null
+                        }
+                    ) { Text("重命名", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
+                        Text("取消", color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
@@ -321,7 +498,7 @@ fun FileBrowserScreen(
                             }
                             dir?.takeIf { it.isDirectory }?.createFile("application/octet-stream", name)
                             showCreateFileDialog = false
-                            refreshTrigger++
+                            onRefresh()
                         }
                     }
                 ) { Text("创建") }
@@ -385,6 +562,7 @@ fun FileBrowserScreen(
 @Composable
 fun FileItem(
     model: DocumentFileModel,
+    isInPendingList: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
@@ -428,6 +606,89 @@ fun FileItem(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+            }
+            if (isInPendingList) {
+                Spacer(Modifier.size(8.dp))
+                Icon(
+                    Icons.Default.PlaylistAdd,
+                    contentDescription = "已在待处理列表",
+                    Modifier.size(20.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PendingListScreen(
+    pendingList: List<DocumentFileModel>,
+    onRemove: (DocumentFileModel) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("待处理列表 (${pendingList.size})") },
+                navigationIcon = {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        if (pendingList.isEmpty()) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("列表为空", style = MaterialTheme.typography.bodyLarge)
+            }
+        } else {
+            LazyColumn(
+                Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(pendingList) { item ->
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                            contentDescription = null,
+                            Modifier.size(24.dp),
+                            tint = if (item.isDirectory) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text(
+                            item.name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { onRemove(item) }) {
+                            Icon(
+                                Icons.Default.RemoveCircle,
+                                contentDescription = "从列表移除",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                 }
             }
         }

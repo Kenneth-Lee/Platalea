@@ -45,7 +45,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 
-private const val MAX_PREVIEW_BYTES = 512 * 1024 // 512KB
+private const val MAX_PREVIEW_BYTES = 4096
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -60,6 +60,7 @@ fun ViewerScreen(
     var bytesState by remember { mutableStateOf<ByteArray?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
 
+    // 异步加载：离开界面时 LaunchedEffect 协程会被取消，未加载完也可直接返回
     LaunchedEffect(fileUri, isEncrypted) {
         bytesState = null
         loadError = null
@@ -81,7 +82,11 @@ fun ViewerScreen(
     }
 
     val content: Result<String> = remember(bytesState) {
-        bytesState?.let { Result.success(it.decodeToString()) }
+        bytesState?.let { raw ->
+            val decoded = raw.decodeToString()
+            val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
+            Result.success(trimmed)
+        }
             ?: loadError?.let { Result.failure<String>(IllegalStateException(it)) }
             ?: Result.failure(IllegalStateException("加载中…"))
     }
@@ -143,7 +148,7 @@ fun ViewerScreen(
                                     if (bytesState != null && bytesState!!.size >= MAX_PREVIEW_BYTES) {
                                         Spacer(Modifier.height(8.dp))
                                         Text(
-                                            "（仅显示前 ${MAX_PREVIEW_BYTES / 1024} KB）",
+                                            "（仅显示前 $MAX_PREVIEW_BYTES 字节）",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -184,6 +189,7 @@ fun ViewerScreen(
     }
 }
 
+/** 每行 16 字节：左侧十六进制，右侧 ASCII（不可见字符显示为点）. */
 private fun ByteArray.toHexLines(): List<String> {
     return toList().chunked(16).map { chunk: List<Byte> ->
         val hex = chunk.joinToString(" ") { b -> "%02X".format(b.toInt() and 0xFF) }
