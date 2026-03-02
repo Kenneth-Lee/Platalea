@@ -30,6 +30,40 @@ fun ContentResolver.getDisplayName(uri: Uri): String? =
 fun ContentResolver.getTypeSafe(uri: Uri): String? =
     try { getType(uri) } catch (_: Exception) { null }
 
+/**
+ * 从文件或目录的 URI 获取要打开的目录 URI。
+ * 若为文件则返回其父目录；若为目录则返回自身。
+ */
+fun getDirectoryToOpen(context: Context, uri: Uri): Uri? {
+    return try {
+        when (uri.scheme) {
+            "content" -> {
+                val doc = DocumentFile.fromSingleUri(context, uri) ?: return null
+                if (doc.isDirectory) uri
+                else if (DocumentsContract.isDocumentUri(context, uri)) {
+                    val docId = DocumentsContract.getDocumentId(uri)
+                    val lastSlash = docId.lastIndexOf('/')
+                    val parentId = when {
+                        lastSlash > 0 -> docId.substring(0, lastSlash)
+                        docId.contains(":") -> docId.substringBefore(":")  // e.g. "primary:file" -> "primary"
+                        else -> return doc.parentFile?.uri
+                    }
+                    DocumentsContract.buildDocumentUri(uri.authority ?: "com.android.externalstorage.documents", parentId)
+                } else doc.parentFile?.uri
+            }
+            "file" -> {
+                val path = uri.path ?: return null
+                val file = java.io.File(path)
+                if (file.isDirectory) uri
+                else file.parentFile?.let { Uri.fromFile(it) }
+            }
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 fun ContentResolver.deleteDocument(uri: Uri): Boolean =
     try { DocumentsContract.deleteDocument(this, uri) } catch (_: Exception) { false }
 

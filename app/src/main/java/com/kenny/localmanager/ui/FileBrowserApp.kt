@@ -84,6 +84,7 @@ import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
+import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.openInputStreamSafe
@@ -129,15 +130,24 @@ private fun normalizeContentUriString(s: String): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileBrowserApp() {
+fun FileBrowserApp(
+    initialFileUri: androidx.compose.runtime.MutableState<String?>? = null
+) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
     var rootUri by remember { mutableStateOf<String?>(null) }
+    var initialDirUri by remember { mutableStateOf<String?>(null) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+    }
+    LaunchedEffect(initialFileUri?.value) {
+        val uriStr = initialFileUri?.value ?: return@LaunchedEffect
+        initialFileUri.value = null
+        val dirUri = getDirectoryToOpen(context, Uri.parse(uriStr))?.toString()
+        if (dirUri != null) initialDirUri = normalizeContentUriString(dirUri)
     }
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -155,7 +165,7 @@ fun FileBrowserApp() {
     }
 
     when {
-        rootUri == null -> {
+        rootUri == null && initialDirUri == null -> {
             var lastBackPressTime by remember { mutableStateOf(0L) }
             BackHandler {
                 val now = System.currentTimeMillis()
@@ -195,7 +205,7 @@ fun FileBrowserApp() {
             )
         }
         else -> {
-            val currentUri = remember(rootUri) { mutableStateOf(rootUri!!) }
+            val currentUri = remember(rootUri, initialDirUri) { mutableStateOf(initialDirUri ?: rootUri!!) }
             val backStack = remember(rootUri) { mutableStateListOf<String>() }
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
