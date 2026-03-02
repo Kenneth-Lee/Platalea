@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -327,21 +328,33 @@ fun ViewerScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             val page = hexPageBytes ?: byteArrayOf()
-                            LazyVerticalGrid(
-                                columns = GridCells.Fixed(16),
-                                modifier = Modifier.weight(1f).fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            val cellSizeDp = 40.dp
+                            val gridSpacingDp = 2.dp
+                            val gridTotalWidthDp = (16 * 40 + 15 * 2).dp
+                            Row(
+                                Modifier
+                                    .weight(1f)
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
                             ) {
-                                itemsIndexed(page.toList()) { index: Int, byteValue: Byte ->
-                                    HexByteCell(
-                                        value = byteValue,
-                                        onValueChange = { newByte ->
-                                            val copy = (hexPageBytes ?: byteArrayOf()).copyOf()
-                                            if (copy.size > index) copy[index] = newByte
-                                            hexPageBytes = copy
-                                        }
-                                    )
+                                LazyVerticalGrid(
+                                    columns = GridCells.Fixed(16),
+                                    modifier = Modifier
+                                        .fillMaxHeight()
+                                        .width(gridTotalWidthDp),
+                                    horizontalArrangement = Arrangement.spacedBy(gridSpacingDp),
+                                    verticalArrangement = Arrangement.spacedBy(gridSpacingDp)
+                                ) {
+                                    itemsIndexed(page.toList()) { index: Int, byteValue: Byte ->
+                                        HexByteCell(
+                                            value = byteValue,
+                                            onValueChange = { newByte ->
+                                                val copy = (hexPageBytes ?: byteArrayOf()).copyOf()
+                                                if (copy.size > index) copy[index] = newByte
+                                                hexPageBytes = copy
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -450,8 +463,8 @@ private fun HexByteCell(
             }
         },
         modifier = Modifier
-            .width(32.dp)
-            .height(28.dp)
+            .width(40.dp)
+            .height(32.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         singleLine = true,
@@ -459,8 +472,8 @@ private fun HexByteCell(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 4.dp, vertical = 2.dp),
-                contentAlignment = Alignment.Center
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                contentAlignment = Alignment.CenterStart
             ) {
                 inner()
             }
