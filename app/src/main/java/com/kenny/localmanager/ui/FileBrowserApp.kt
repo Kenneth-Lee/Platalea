@@ -94,6 +94,9 @@ import com.kenny.localmanager.file.getTrashItemCount
 import com.kenny.localmanager.file.getTrashUriIfExists
 import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.moveToTrash
+import com.kenny.localmanager.file.quickObfuscate
+import com.kenny.localmanager.file.quickDeobfuscate
+import com.kenny.localmanager.file.isQuickObfuscatedFileName
 import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.openInputStreamSafe
@@ -274,8 +277,12 @@ fun FileBrowserApp(
             var showVerifyResultDialog by remember { mutableStateOf<Triple<ByteArray, String, String>?>(null) }
             var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
             var showChangeRootConfirm by remember { mutableStateOf(false) }
+            var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
+            var quickObfuscatePassword by remember { mutableStateOf("") }
+            var quickObfuscateInProgress by remember { mutableStateOf(false) }
             BackHandler {
                 when {
+                    quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     showVerifyResultDialog != null -> showVerifyResultDialog = null
                     gpgState != null -> {
@@ -455,6 +462,14 @@ fun FileBrowserApp(
                         gpgMethod = null
                         showGpgKeyPicker = false
                         gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                    },
+                    onRequestQuickObfuscate = { model ->
+                        quickObfuscateOp = model to true
+                        quickObfuscatePassword = ""
+                    },
+                    onRequestQuickDeobfuscate = { model ->
+                        quickObfuscateOp = model to false
+                        quickObfuscatePassword = ""
                     }
                 )
                 if (debugEnabled) {
@@ -494,6 +509,34 @@ fun FileBrowserApp(
                     context = context,
                     onDismiss = { showKeyManagementDialog = false },
                     onKeysChanged = { refreshTrigger++ }
+                )
+            }
+            quickObfuscateOp?.let { (model, isObfuscate) ->
+                QuickObfuscatePasswordDialog(
+                    isObfuscate = isObfuscate,
+                    fileName = model.name,
+                    password = quickObfuscatePassword,
+                    inProgress = quickObfuscateInProgress,
+                    onPasswordChange = { quickObfuscatePassword = it },
+                    onConfirm = { pwd ->
+                        quickObfuscateInProgress = true
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
+                                else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                            }
+                            quickObfuscateInProgress = false
+                            quickObfuscateOp = null
+                            quickObfuscatePassword = ""
+                            if (ok) {
+                                Toast.makeText(context, if (isObfuscate) "已混淆" else "已去混淆", Toast.LENGTH_SHORT).show()
+                                refreshTrigger++
+                            } else {
+                                Toast.makeText(context, if (isObfuscate) "混淆失败" else "去混淆失败", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    onDismiss = { quickObfuscateOp = null; quickObfuscatePassword = "" }
                 )
             }
             if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
@@ -831,7 +874,9 @@ fun FileBrowserScreen(
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
-    onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit
+    onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
+    onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
+    onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1141,6 +1186,29 @@ fun FileBrowserScreen(
                                 contextMenuTarget = null
                             }
                         ) { Text("恢复", color = MaterialTheme.colorScheme.primary) }
+                    }
+                    if (!menuTarget.isDirectory) {
+                        if (isQuickObfuscatedFileName(menuTarget.name)) {
+                            onRequestQuickDeobfuscate?.let { fn ->
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        fn(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("快速去混淆", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                        } else {
+                            onRequestQuickObfuscate?.let { fn ->
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        fn(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("快速混淆", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                        }
                     }
                     TextButton(
                         onClick = {
@@ -1536,6 +1604,54 @@ fun PendingListScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun QuickObfuscatePasswordDialog(
+    isObfuscate: Boolean,
+    fileName: String,
+    password: String,
+    inProgress: Boolean = false,
+    onPasswordChange: (String) -> Unit,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    if (isObfuscate) "快速混淆" else "快速去混淆",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密码") },
+                    singleLine = true,
+                    enabled = !inProgress
+                )
+                if (inProgress) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(8.dp))
+                    Text(if (isObfuscate) "混淆中…" else "去混淆中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
+                    Button(onClick = { onConfirm(password) }, enabled = !inProgress) { Text("确定") }
                 }
             }
         }
