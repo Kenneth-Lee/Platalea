@@ -67,6 +67,19 @@ fun getDirectoryToOpen(context: Context, uri: Uri): Uri? {
 fun ContentResolver.deleteDocument(uri: Uri): Boolean =
     try { DocumentsContract.deleteDocument(this, uri) } catch (_: Exception) { false }
 
+/**
+ * 在目录中查找指定名称的子文档。
+ * @return 子文档的 Uri，不存在返回 null
+ */
+fun findChildByName(context: Context, parentUri: Uri, childName: String): Uri? {
+    val parent = if (parentUri.toString().contains("/tree/")) {
+        DocumentFile.fromTreeUri(context, parentUri)
+    } else {
+        DocumentFile.fromSingleUri(context, parentUri)
+    } ?: return null
+    return parent.listFilesSafe().find { it.name == childName }?.uri
+}
+
 fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
     try {
         DocumentsContract.renameDocument(this, uri, newName)

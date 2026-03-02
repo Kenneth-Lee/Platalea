@@ -84,6 +84,7 @@ import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
+import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.listFilesSafe
@@ -137,6 +138,9 @@ fun FileBrowserApp(
     val prefs = remember { Preferences(context) }
     var rootUri by remember { mutableStateOf<String?>(null) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
+    var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
+    var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
+    var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -146,8 +150,7 @@ fun FileBrowserApp(
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
         initialFileUri.value = null
-        val dirUri = getDirectoryToOpen(context, Uri.parse(uriStr))?.toString()
-        if (dirUri != null) initialDirUri = normalizeContentUriString(dirUri)
+        pendingSaveFileUri = uriStr
     }
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -164,8 +167,45 @@ fun FileBrowserApp(
         }
     }
 
+    LaunchedEffect(pendingSaveFileUri, rootUri) {
+        val sourceUriStr = pendingSaveFileUri ?: return@LaunchedEffect
+        val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@LaunchedEffect
+        if (showOverwriteConfirm != null || saveInProgress) return@LaunchedEffect
+        val ctx = context
+        val sourceUri = Uri.parse(sourceUriStr)
+        val sourceDoc = DocumentFile.fromSingleUri(ctx, sourceUri) ?: run {
+            pendingSaveFileUri = null
+            Toast.makeText(ctx, "无法读取文件", Toast.LENGTH_SHORT).show()
+            return@LaunchedEffect
+        }
+        val fileName = sourceDoc.name ?: run {
+            pendingSaveFileUri = null
+            Toast.makeText(ctx, "无法获取文件名", Toast.LENGTH_SHORT).show()
+            return@LaunchedEffect
+        }
+        val targetUri = Uri.parse(targetRoot)
+        val existingUri = findChildByName(ctx, targetUri, fileName)
+        if (existingUri != null) {
+            showOverwriteConfirm = sourceUriStr to fileName
+        } else {
+            saveInProgress = true
+            val treeUri = Uri.parse(targetRoot)
+            val copied = withContext(Dispatchers.IO) {
+                copyDocumentTo(ctx, sourceUri, targetUri, treeUri)
+            }
+            saveInProgress = false
+            pendingSaveFileUri = null
+            if (copied != null) {
+                initialDirUri = normalizeContentUriString(targetRoot)
+                Toast.makeText(ctx, "已保存到当前目录", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(ctx, "保存失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     when {
-        rootUri == null && initialDirUri == null -> {
+        rootUri == null && initialDirUri == null && showOverwriteConfirm == null -> {
             var lastBackPressTime by remember { mutableStateOf(0L) }
             BackHandler {
                 val now = System.currentTimeMillis()
@@ -181,7 +221,7 @@ fun FileBrowserApp(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        "选择根目录以浏览文件",
+                        if (pendingSaveFileUri != null) "从其他应用打开文件，请选择保存位置" else "选择根目录以浏览文件",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -189,7 +229,7 @@ fun FileBrowserApp(
                     Button(onClick = { treeLauncher.launch(null) }) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, Modifier.size(20.dp))
                         Spacer(Modifier.size(8.dp))
-                        Text("选择根目录")
+                        Text(if (pendingSaveFileUri != null) "选择保存位置" else "选择根目录")
                     }
                 }
             }
@@ -254,8 +294,11 @@ fun FileBrowserApp(
             }
             val copyMoveLog: ((String) -> Unit)? = if (debugEnabled) { { logDebug(it) } } else null
             Column(Modifier.fillMaxSize()) {
-                if (gpgPubEncryptInProgress) {
+                if (gpgPubEncryptInProgress || saveInProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
+                    if (saveInProgress) {
+                        Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+                    }
                 }
                 FileBrowserScreen(
                     modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
@@ -608,6 +651,48 @@ fun FileBrowserApp(
                 }
             }
         }
+    }
+    showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
+        val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@let
+        AlertDialog(
+            onDismissRequest = {
+                showOverwriteConfirm = null
+                pendingSaveFileUri = null
+                initialDirUri = targetRoot
+            },
+            title = { Text("文件已存在") },
+            text = { Text("$fileName 已存在于当前目录，是否覆盖？") },
+            confirmButton = {
+                Button(onClick = {
+                    val ctx = context
+                    scope.launch {
+                        saveInProgress = true
+                        val targetUri = Uri.parse(targetRoot)
+                        val existingUri = findChildByName(ctx, targetUri, fileName)
+                        if (existingUri != null) ctx.contentResolver.deleteDocument(existingUri)
+                        val copied = withContext(Dispatchers.IO) {
+                            copyDocumentTo(ctx, Uri.parse(sourceUriStr), targetUri, targetUri)
+                        }
+                        saveInProgress = false
+                        showOverwriteConfirm = null
+                        pendingSaveFileUri = null
+                        if (copied != null) {
+                            initialDirUri = targetRoot
+                            Toast.makeText(ctx, "已覆盖保存", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "保存失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }) { Text("覆盖") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showOverwriteConfirm = null
+                    pendingSaveFileUri = null
+                    initialDirUri = targetRoot
+                }) { Text("不覆盖") }
+            }
+        )
     }
 }
 
