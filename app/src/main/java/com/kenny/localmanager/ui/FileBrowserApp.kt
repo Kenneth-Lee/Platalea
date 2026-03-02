@@ -280,11 +280,10 @@ fun FileBrowserApp(
             var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
             var quickObfuscatePassword by remember { mutableStateOf("") }
             var quickObfuscateInProgress by remember { mutableStateOf(false) }
-            var copyMoveInProgress by remember { mutableStateOf(false) }
-            var copyMoveProgress by remember { mutableStateOf<Triple<Int, Int, String>?>(null) } // current, total, label
+            var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
             BackHandler {
                 when {
-                    copyMoveInProgress -> { } // 不响应返回，防止误触
+                    progressOp != null -> { } // 不响应返回，防止误触
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     showVerifyResultDialog != null -> showVerifyResultDialog = null
@@ -322,18 +321,26 @@ fun FileBrowserApp(
                 }
             }
             val copyMoveLog: ((String) -> Unit)? = if (debugEnabled) { { logDebug(it) } } else null
+            suspend fun runWithProgress(
+                label: String,
+                total: Int? = null,
+                block: suspend ((Int) -> Unit) -> Unit
+            ) {
+                progressOp = OperationProgress(label, 0, total)
+                delay(50)
+                try {
+                    val setProgress: (Int) -> Unit = { i -> progressOp = OperationProgress(label, i, total) }
+                    block(setProgress)
+                } finally {
+                    progressOp = null
+                }
+            }
             Column(Modifier.fillMaxSize()) {
                 if (gpgPubEncryptInProgress || saveInProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
                 }
-                if (copyMoveInProgress) {
-                    CopyMoveProgressDialog(
-                        current = copyMoveProgress?.first ?: 0,
-                        total = copyMoveProgress?.second ?: 0,
-                        label = copyMoveProgress?.third ?: ""
-                    )
-                }
+                progressOp?.let { OperationProgressDialog(it) }
                 FileBrowserScreen(
                     modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
                     currentUri = currentUri.value,
@@ -365,12 +372,14 @@ fun FileBrowserApp(
                         {
                             scope.launch {
                                 val root = Uri.parse(normalizeContentUriString(r))
-                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                if (ok) {
-                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                    refreshTrigger++
-                                } else {
-                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                runWithProgress("清空回收站", null) { _ ->
+                                    val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                    if (ok) {
+                                        Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         }
@@ -379,12 +388,14 @@ fun FileBrowserApp(
                         { model ->
                             scope.launch {
                                 val root = Uri.parse(normalizeContentUriString(r))
-                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                if (ok) {
-                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
-                                    refreshTrigger++
-                                } else {
-                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                runWithProgress("恢复", null) { _ ->
+                                    val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
+                                    if (ok) {
+                                        Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         }
@@ -401,77 +412,65 @@ fun FileBrowserApp(
                     onAddToPendingList = { pendingList.add(it) },
                     onRemoveFromPendingList = { pendingList.remove(it) },
                     onCopyHere = {
-                        var targetDirUri = currentUri.value
-                        targetDirUri = normalizeContentUriString(targetDirUri)
+                        val targetDirUri = normalizeContentUriString(currentUri.value)
                         copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
                         val ctx = context
                         val list = pendingList.toList()
                         val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                         scope.launch {
-                            copyMoveInProgress = true
-                            copyMoveProgress = Triple(0, list.size, "拷贝")
-                            delay(50) // 让进度条先渲染一帧
-                            val (ok, fail) = withContext(Dispatchers.IO) {
-                                var o = 0
-                                var f = 0
-                                list.forEachIndexed { index, model ->
-                                    if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
-                                    else f++
-                                    withContext(Dispatchers.Main.immediate) {
-                                        copyMoveProgress = Triple(index + 1, list.size, "拷贝")
+                            runWithProgress("拷贝", list.size) { setProgress ->
+                                val (ok, fail) = withContext(Dispatchers.IO) {
+                                    var o = 0
+                                    var f = 0
+                                    list.forEachIndexed { index, model ->
+                                        if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
+                                        else f++
+                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
                                     }
+                                    Pair(o, f)
                                 }
-                                Pair(o, f)
+                                copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
+                                if (fail == 0 && ok > 0) {
+                                    pendingList.clear()
+                                    Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                                } else if (ok > 0) {
+                                    Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
+                                }
+                                refreshTrigger++
                             }
-                            copyMoveInProgress = false
-                            copyMoveProgress = null
-                            copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
-                            if (fail == 0 && ok > 0) {
-                                pendingList.clear()
-                                Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                            } else if (ok > 0) {
-                                Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
-                            }
-                            refreshTrigger++
                         }
                     },
                     onMoveHere = {
-                        var targetDirUri = currentUri.value
-                        targetDirUri = normalizeContentUriString(targetDirUri)
+                        val targetDirUri = normalizeContentUriString(currentUri.value)
                         copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
                         val ctx = context
                         val list = pendingList.toList()
                         val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                         scope.launch {
-                            copyMoveInProgress = true
-                            copyMoveProgress = Triple(0, list.size, "移动")
-                            delay(50) // 让进度条先渲染一帧
-                            val (ok, fail) = withContext(Dispatchers.IO) {
-                                var o = 0
-                                var f = 0
-                                list.forEachIndexed { index, model ->
-                                    if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
-                                    else f++
-                                    withContext(Dispatchers.Main.immediate) {
-                                        copyMoveProgress = Triple(index + 1, list.size, "移动")
+                            runWithProgress("移动", list.size) { setProgress ->
+                                val (ok, fail) = withContext(Dispatchers.IO) {
+                                    var o = 0
+                                    var f = 0
+                                    list.forEachIndexed { index, model ->
+                                        if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
+                                        else f++
+                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
                                     }
+                                    Pair(o, f)
                                 }
-                                Pair(o, f)
+                                copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
+                                if (fail == 0 && ok > 0) {
+                                    pendingList.clear()
+                                    Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                                } else if (ok > 0) {
+                                    Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
+                                }
+                                refreshTrigger++
                             }
-                            copyMoveInProgress = false
-                            copyMoveProgress = null
-                            copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
-                            if (fail == 0 && ok > 0) {
-                                pendingList.clear()
-                                Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                            } else if (ok > 0) {
-                                Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
-                            }
-                            refreshTrigger++
                         }
                     },
                     onShowPendingList = { showPendingList = it },
@@ -494,6 +493,27 @@ fun FileBrowserApp(
                     onRequestQuickDeobfuscate = { model ->
                         quickObfuscateOp = model to false
                         quickObfuscatePassword = ""
+                    },
+                    onConfirmDelete = { model, deletePermanently ->
+                        scope.launch {
+                            val label = if (deletePermanently) "删除" else "移到回收站"
+                            runWithProgress(label, null) { _ ->
+                                val ok = withContext(Dispatchers.IO) {
+                                    if (deletePermanently) {
+                                        context.contentResolver.deleteDocument(model.uri)
+                                    } else {
+                                        val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
+                                        moveToTrash(context, model.uri, root, root)
+                                    }
+                                }
+                                if (ok) {
+                                    Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                }
+                                refreshTrigger++
+                            }
+                        }
                     }
                 )
                 if (debugEnabled) {
@@ -658,11 +678,13 @@ fun FileBrowserApp(
                     confirmButton = {
                         Button(onClick = {
                             scope.launch {
-                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
                                 showChangeRootConfirm = false
-                                if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                treeLauncher.launch(null)
-                                refreshTrigger++
+                                runWithProgress("清空回收站", null) { _ ->
+                                    val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                    if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                    treeLauncher.launch(null)
+                                    refreshTrigger++
+                                }
                             }
                         }) { Text("清空后更换") }
                     },
@@ -860,6 +882,30 @@ fun FileBrowserApp(
     }
 }
 
+/** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
+private data class OperationProgress(val label: String, val current: Int = 0, val total: Int? = null)
+
+@Composable
+private fun OperationProgressDialog(progress: OperationProgress) {
+    Dialog(onDismissRequest = { }) {
+        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
+            Column(Modifier.padding(24.dp)) {
+                Text("${progress.label} 中…", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(16.dp))
+                if (progress.total != null && progress.total > 0) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), progress = { progress.current.toFloat() / progress.total })
+                    Spacer(Modifier.height(8.dp))
+                    Text("${progress.current} / ${progress.total} 项", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Text("处理中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
 private sealed class GpgOpState(val isDecrypt: Boolean, val fileModel: DocumentFileModel, val dirUri: String) {
     class Decrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(true, fileModel, dirUri)
     class Encrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(false, fileModel, dirUri)
@@ -900,7 +946,8 @@ fun FileBrowserScreen(
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
     onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
-    onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null
+    onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null,
+    onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1426,19 +1473,8 @@ fun FileBrowserScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val ok = if (hasRoot && !deletePermanently) {
-                            val root = android.net.Uri.parse(normalizeContentUriString(rootUri!!))
-                            moveToTrash(context, target.uri, root, root)
-                        } else {
-                            context.contentResolver.deleteDocument(target.uri)
-                        }
-                        if (ok) {
-                            Toast.makeText(context, if (hasRoot && !deletePermanently) "已移到回收站" else "已删除", Toast.LENGTH_SHORT).show()
-                            onRefresh()
-                        } else {
-                            Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
-                        }
                         showDeleteConfirm = null
+                        onConfirmDelete?.invoke(target, deletePermanently)
                     }
                 ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "删除", color = MaterialTheme.colorScheme.error) }
             },
@@ -1628,39 +1664,6 @@ fun PendingListScreen(
                             )
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CopyMoveProgressDialog(current: Int, total: Int, label: String) {
-    Dialog(onDismissRequest = { }) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(
-                    "$label 中…",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                if (total > 0) {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth(),
-                        progress = { current.toFloat() / total }
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text("$current / $total 项", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    Text("处理中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
