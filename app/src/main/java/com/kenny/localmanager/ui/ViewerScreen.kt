@@ -2,8 +2,6 @@ package com.kenny.localmanager.ui
 
 import android.net.Uri
 import androidx.compose.foundation.background
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,18 +12,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -33,19 +42,28 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.file.openInputStreamSafe
+import com.kenny.localmanager.file.readBytesFromOffset
+import com.kenny.localmanager.file.writeBytesAtOffset
+import com.kenny.localmanager.file.writeBytesFull
 import com.kenny.localmanager.gpg.GpgHelper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import android.widget.Toast
 
 private const val MAX_PREVIEW_BYTES = 4096
+private const val PAGE_SIZE = 4096
+private const val MAX_TEXT_EDIT_BYTES = 512 * 1024
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,16 +74,31 @@ fun ViewerScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var viewMode by remember { mutableStateOf(0) } // 0 = text, 1 = hex
     var bytesState by remember { mutableStateOf<ByteArray?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    var refreshKey by remember { mutableStateOf(0) }
 
-    // 异步加载：离开界面时 LaunchedEffect 协程会被取消，未加载完也可直接返回
-    LaunchedEffect(fileUri, isEncrypted) {
+    // 编辑模式状态
+    var isEditMode by remember { mutableStateOf(false) }
+    var textEditContent by remember { mutableStateOf<String?>(null) }
+    var textEditLoading by remember { mutableStateOf(false) }
+    var hexPageIndex by remember { mutableStateOf(0) }
+    var hexPageBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var hexPageLoading by remember { mutableStateOf(false) }
+    var fileSize by remember { mutableStateOf(0L) }
+    var saveInProgress by remember { mutableStateOf(false) }
+
+    val uri = remember(fileUri) { Uri.parse(fileUri) }
+    val canEdit = !isEncrypted
+
+    // 初始加载 / 刷新
+    LaunchedEffect(fileUri, isEncrypted, refreshKey) {
+        if (isEditMode) return@LaunchedEffect
         bytesState = null
         loadError = null
         withContext(Dispatchers.IO) {
-            val uri = Uri.parse(fileUri)
             val cr = context.contentResolver
             cr.openInputStreamSafe(uri)?.use { raw ->
                 val bytes = if (isEncrypted) {
@@ -81,6 +114,43 @@ fun ViewerScreen(
         }
     }
 
+    // 进入文本编辑时加载全文
+    LaunchedEffect(isEditMode, viewMode) {
+        if (!isEditMode || viewMode != 0 || isEncrypted) return@LaunchedEffect
+        textEditLoading = true
+        textEditContent = null
+        withContext(Dispatchers.IO) {
+            val cr = context.contentResolver
+            cr.openInputStreamSafe(uri)?.use { raw ->
+                val bytes = raw.readBytes(MAX_TEXT_EDIT_BYTES)
+                val decoded = bytes.decodeToString()
+                val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
+                textEditContent = trimmed
+            }
+        }
+        textEditLoading = false
+    }
+
+    // 进入十六进制编辑时获取文件大小；切换页时加载该页
+    LaunchedEffect(isEditMode, viewMode, hexPageIndex) {
+        if (!isEditMode || viewMode != 1 || isEncrypted) return@LaunchedEffect
+        hexPageLoading = true
+        withContext(Dispatchers.IO) {
+            val doc = DocumentFile.fromSingleUri(context, uri)
+            val size = doc?.length() ?: 0L
+            fileSize = size
+            val offset = hexPageIndex * PAGE_SIZE.toLong()
+            if (offset < size) {
+                val cr = context.contentResolver
+                val page = cr.readBytesFromOffset(uri, offset, PAGE_SIZE) ?: byteArrayOf()
+                hexPageBytes = page
+            } else {
+                hexPageBytes = byteArrayOf()
+            }
+        }
+        hexPageLoading = false
+    }
+
     val content: Result<String> = remember(bytesState) {
         bytesState?.let { raw ->
             val decoded = raw.decodeToString()
@@ -91,6 +161,8 @@ fun ViewerScreen(
             ?: Result.failure(IllegalStateException("加载中…"))
     }
     val hexLines = remember(bytesState) { bytesState?.toHexLines() ?: emptyList() }
+
+    val totalHexPages = if (fileSize > 0) ((fileSize + PAGE_SIZE - 1) / PAGE_SIZE).toInt() else 1
 
     Scaffold(
         topBar = {
@@ -104,21 +176,61 @@ fun ViewerScreen(
                     }
                 },
                 actions = {
-                    SingleChoiceSegmentedButtonRow(
-                        modifier = Modifier.padding(end = 8.dp)
-                    ) {
-                        SegmentedButton(
-                            selected = viewMode == 0,
-                            onClick = { viewMode = 0 },
-                            shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
-                            icon = {}
-                        ) { Text("文本") }
-                        SegmentedButton(
-                            selected = viewMode == 1,
-                            onClick = { viewMode = 1 },
-                            shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
-                            icon = {}
-                        ) { Text("十六进制") }
+                    if (isEditMode) {
+                        TextButton(
+                            onClick = {
+                                isEditMode = false
+                                textEditContent = null
+                                hexPageBytes = null
+                            }
+                        ) { Text("放弃") }
+                        TextButton(
+                            onClick = {
+                                saveInProgress = true
+                                scope.launch {
+                                    val ok = withContext(Dispatchers.IO) {
+                                        if (viewMode == 0) {
+                                            val text = textEditContent ?: ""
+                                            context.contentResolver.writeBytesFull(uri, text.toByteArray(Charsets.UTF_8))
+                                        } else {
+                                            val page = hexPageBytes ?: return@withContext false
+                                            writeBytesAtOffset(context, uri, hexPageIndex * PAGE_SIZE.toLong(), page)
+                                        }
+                                    }
+                                    saveInProgress = false
+                                    if (ok) {
+                                        Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                                        isEditMode = false
+                                        textEditContent = null
+                                        hexPageBytes = null
+                                        refreshKey++
+                                        bytesState = null
+                                    } else {
+                                        Toast.makeText(context, "保存失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text(if (saveInProgress) "保存中…" else "保存") }
+                    } else {
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.padding(end = 4.dp)) {
+                            SegmentedButton(
+                                selected = viewMode == 0,
+                                onClick = { viewMode = 0 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                icon = {}
+                            ) { Text("文本") }
+                            SegmentedButton(
+                                selected = viewMode == 1,
+                                onClick = { viewMode = 1 },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                icon = {}
+                            ) { Text("十六进制") }
+                        }
+                        if (canEdit) {
+                            IconButton(onClick = { isEditMode = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "编辑")
+                            }
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -129,8 +241,93 @@ fun ViewerScreen(
         }
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
-            when (viewMode) {
-                0 -> {
+            when {
+                isEditMode && viewMode == 0 -> {
+                    if (textEditLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        val text = textEditContent ?: ""
+                        Column(Modifier.fillMaxSize().padding(16.dp)) {
+                            OutlinedTextField(
+                                value = text,
+                                onValueChange = { new ->
+                                    // 修复：部分 IME 在回车时会把当前行再发一遍，导致出现两行相同内容
+                                    val lastLine = text.lines().lastOrNull().orEmpty()
+                                    textEditContent = if (lastLine.isNotEmpty() && new == text + "\n" + lastLine) {
+                                        text + "\n"
+                                    } else {
+                                        new
+                                    }
+                                },
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
+                                maxLines = Int.MAX_VALUE,
+                                singleLine = false
+                            )
+                            if (text.isEmpty()) {
+                                Text(
+                                    "（空文件）",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+                isEditMode && viewMode == 1 -> {
+                    if (hexPageLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        Column(Modifier.fillMaxSize().padding(16.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("页（每页 ${PAGE_SIZE} 字节）", style = MaterialTheme.typography.bodyMedium)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = { if (hexPageIndex > 0) hexPageIndex-- },
+                                        enabled = hexPageIndex > 0
+                                    ) { Text("◀") }
+                                    Text(
+                                        " ${hexPageIndex + 1} / $totalHexPages ",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontFamily = FontFamily.Monospace
+                                    )
+                                    IconButton(
+                                        onClick = { if (hexPageIndex < totalHexPages - 1) hexPageIndex++ },
+                                        enabled = hexPageIndex < totalHexPages - 1
+                                    ) { Text("▶") }
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            val page = hexPageBytes ?: byteArrayOf()
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(16),
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                itemsIndexed(page.toList()) { index: Int, byteValue: Byte ->
+                                    HexByteCell(
+                                        value = byteValue,
+                                        onValueChange = { newByte ->
+                                            val copy = (hexPageBytes ?: byteArrayOf()).copyOf()
+                                            if (copy.size > index) copy[index] = newByte
+                                            hexPageBytes = copy
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                viewMode == 0 -> {
                     content.fold(
                         onSuccess = { text ->
                             SelectionContainer {
@@ -166,7 +363,7 @@ fun ViewerScreen(
                         }
                     )
                 }
-                1 -> {
+                else -> {
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -187,6 +384,41 @@ fun ViewerScreen(
             }
         }
     }
+}
+
+@Composable
+private fun HexByteCell(
+    value: Byte,
+    onValueChange: (Byte) -> Unit
+) {
+    var text by remember(value) { mutableStateOf("%02X".format(value.toInt() and 0xFF)) }
+    BasicTextField(
+        value = text,
+        onValueChange = { new ->
+            val filtered = new.uppercase().filter { it in '0'..'9' || it in 'A'..'F' }.take(2)
+            text = filtered
+            if (filtered.length == 2) {
+                val intVal = filtered.toInt(16)
+                onValueChange(intVal.toByte())
+            }
+        },
+        modifier = Modifier
+            .width(32.dp)
+            .height(28.dp)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        singleLine = true,
+        decorationBox = { inner ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                inner()
+            }
+        }
+    )
 }
 
 /** 每行 16 字节：左侧十六进制，右侧 ASCII（不可见字符显示为点）. */

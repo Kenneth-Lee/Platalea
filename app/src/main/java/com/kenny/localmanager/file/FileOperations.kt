@@ -3,10 +3,13 @@ package com.kenny.localmanager.file
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.FileOutputStream
+import java.nio.ByteBuffer
 
 fun ContentResolver.openInputStreamSafe(uri: Uri): InputStream? =
     try { openInputStream(uri) } catch (_: Exception) { null }
@@ -34,6 +37,51 @@ fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
     try {
         DocumentsContract.renameDocument(this, uri, newName)
     } catch (_: Exception) { null }
+
+/**
+ * 从指定偏移读取最多 maxLen 字节。
+ * @return 读到的字节数组，失败或到达末尾返回 null 或不足 maxLen 的数组
+ */
+fun ContentResolver.readBytesFromOffset(uri: Uri, offset: Long, maxLen: Int): ByteArray? =
+    try {
+        openInputStream(uri)?.use { input ->
+            var remaining = offset
+            while (remaining > 0) {
+                val skipped = input.skip(remaining)
+                if (skipped <= 0) break
+                remaining -= skipped
+            }
+            val buf = ByteArray(maxLen)
+            val n = input.read(buf)
+            if (n <= 0) byteArrayOf() else buf.copyOf(n)
+        }
+    } catch (_: Exception) { null }
+
+/**
+ * 在指定偏移处写入字节（覆盖该位置起的内容）。需要 provider 支持 "rw" 模式。
+ * @return 是否成功
+ */
+fun writeBytesAtOffset(context: Context, uri: Uri, offset: Long, bytes: ByteArray): Boolean =
+    try {
+        context.contentResolver.openFileDescriptor(uri, "rw")?.use { pfd ->
+            FileOutputStream(pfd.fileDescriptor).use { out ->
+                out.channel.use { ch ->
+                    ch.position(offset)
+                    ch.write(ByteBuffer.wrap(bytes))
+                }
+            }
+            true
+        } ?: false
+    } catch (_: Exception) { false }
+
+/**
+ * 覆盖写入整个文件内容。
+ * @return 是否成功
+ */
+fun ContentResolver.writeBytesFull(uri: Uri, bytes: ByteArray): Boolean =
+    try {
+        openOutputStream(uri)?.use { it.write(bytes) } != null
+    } catch (_: Exception) { false }
 
 /**
  * 在目标目录下创建新文件并写入字节内容。
@@ -92,6 +140,7 @@ private fun resolveParentDocumentUri(targetParentUri: Uri, treeUri: Uri?): Uri? 
 
 /**
  * 在 parentDocUri 下创建文件并写入内容；若失败返回 null。
+ * 若无法打开源或写入目标则返回 null（避免产生空文件）。
  */
 private fun createFileUnder(
     context: Context,
@@ -108,10 +157,23 @@ private fun createFileUnder(
         log?.invoke("  createDocument 异常: ${e.message}")
         null
     } ?: return null
-    cr.openInputStreamSafe(sourceUri)?.use { input ->
-        cr.openOutputStream(newFileUri)?.use { output ->
-            input.copyTo(output)
+    val input = cr.openInputStreamSafe(sourceUri)
+    if (input == null) {
+        log?.invoke("  无法打开源文件(空): $name")
+        try { DocumentsContract.deleteDocument(cr, newFileUri) } catch (_: Exception) { }
+        return null
+    }
+    var written = false
+    input.use { inp ->
+        cr.openOutputStreamSafe(newFileUri)?.use { out ->
+            inp.copyTo(out)
+            written = true
         }
+    }
+    if (!written) {
+        log?.invoke("  无法写入目标: $name")
+        try { DocumentsContract.deleteDocument(cr, newFileUri) } catch (_: Exception) { }
+        return null
     }
     return newFileUri
 }
@@ -139,6 +201,7 @@ fun copyDocumentTo(
     }
     for (parentDocUri in parentCandidates) {
         if (source.isDirectory) {
+            log?.invoke("  [拷贝目录] $name 尝试 parent=$parentDocUri")
             val newDirUri = try {
                 DocumentsContract.createDocument(
                     cr,
@@ -151,8 +214,64 @@ fun copyDocumentTo(
                 null
             }
             if (newDirUri != null) {
-                source.listFilesSafe().forEach { child ->
-                    copyDocumentTo(context, child.uri, newDirUri, treeUri, log)
+                var children = source.listFilesSafe().toList()
+                if (children.isEmpty() && treeUri != null) {
+                    // 部分 provider 对 document URI 的 listFiles() 返回空，用树查询列举子项
+                    val parentId = try { DocumentsContract.getDocumentId(sourceUri) } catch (_: Exception) { null }
+                    if (parentId != null) {
+                        val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+                        val list = mutableListOf<Triple<Uri, String, String>>() // uri, displayName, mimeType
+                        try {
+                            cr.query(
+                                childUri,
+                                arrayOf(
+                                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                                ),
+                                null, null, null
+                            )?.use { c ->
+                                val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                val mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                if (idIdx >= 0 && nameIdx >= 0 && mimeIdx >= 0) {
+                                    while (c.moveToNext()) {
+                                        val id = c.getString(idIdx) ?: continue
+                                        list.add(
+                                            Triple(
+                                                DocumentsContract.buildDocumentUriUsingTree(treeUri, id),
+                                                c.getString(nameIdx) ?: "",
+                                                c.getString(mimeIdx) ?: "application/octet-stream"
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                        } catch (_: Exception) { }
+                        if (list.isNotEmpty()) {
+                            log?.invoke("  [拷贝目录] $name 通过树查询子项数=${list.size}")
+                            list.forEach { (childUri, cName, mimeType) ->
+                                log?.invoke("    子项: $cName isDir=${mimeType == DocumentsContract.Document.MIME_TYPE_DIR}")
+                                if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
+                                    val res = copyDocumentTo(context, childUri, newDirUri, treeUri, log)
+                                    if (res == null) log?.invoke("    子项失败: $cName")
+                                } else {
+                                    val created = createFileUnder(context, newDirUri, mimeType, cName.ifEmpty { "<无名>" }, childUri, log)
+                                    if (created == null) log?.invoke("    子项失败: $cName")
+                                }
+                            }
+                            return newDirUri
+                        }
+                    }
+                    log?.invoke("  [拷贝目录] $name 子项数=0 (listFiles 空且树查询无结果)")
+                } else {
+                    log?.invoke("  [拷贝目录] $name 已建目录，子项数=${children.size}")
+                    children.forEach { child ->
+                        val cName = child.name ?: "<无名>"
+                        log?.invoke("    子项: $cName isDir=${child.isDirectory}")
+                        val res = copyDocumentTo(context, child.uri, newDirUri, treeUri, log)
+                        if (res == null) log?.invoke("    子项失败: $cName")
+                    }
                 }
                 return newDirUri
             }
@@ -185,17 +304,24 @@ fun moveDocumentTo(
     val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
     // 目录：系统 moveDocument 可能不迁移子节点导致内容丢失，统一用拷贝后删除
     if (source.isDirectory) {
+        val dirName = source.name ?: sourceUri.lastPathSegment ?: "?"
+        log?.invoke("[移动-目录] $dirName 开始递归拷贝 -> $targetParentUri")
         val copied = copyDocumentTo(context, sourceUri, targetParentUri, treeUri, log)
-        return if (copied != null) {
-            val deleted = try {
-                DocumentsContract.deleteDocument(cr, sourceUri)
-            } catch (e: Exception) {
-                log?.invoke("  删除源目录异常: ${e.message}")
-                false
-            }
-            if (deleted) log?.invoke("  目录(递归拷贝后删除) 成功")
-            deleted
-        } else false
+        if (copied == null) {
+            log?.invoke("[移动-目录] $dirName 拷贝失败，不删除源")
+            return false
+        }
+        log?.invoke("[移动-目录] $dirName 拷贝完成，正在删除源...")
+        var deleted = false
+        try {
+            DocumentsContract.deleteDocument(cr, sourceUri)
+            deleted = true
+        } catch (e: Exception) {
+            log?.invoke("  删除源目录异常: ${e.message}")
+        }
+        if (deleted) log?.invoke("[移动-目录] $dirName 完成(已删除源)")
+        else log?.invoke("[移动-目录] $dirName 拷贝成功但删除源失败")
+        return deleted
     }
     val sourceParent = source.parentFile?.uri
     if (sourceParent != null) {

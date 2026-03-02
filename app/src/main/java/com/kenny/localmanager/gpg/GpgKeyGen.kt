@@ -51,10 +51,11 @@ fun getGpgKeyDir(context: android.content.Context): File {
 /**
  * 在默认存储下生成并保存 PGP 密钥对（公钥 + 私钥）。
  * @param identity 用户标识，如 "Name <email@example.com>"
- * @return 成功返回 true
+ * @param passphrase 密钥保护密码，可为空（无密码密钥）
+ * @return Pair(成功, 失败时的错误信息)
  */
-fun generateDefaultKey(context: android.content.Context, identity: String, passphrase: CharArray): Boolean {
-    if (passphrase.isEmpty() || identity.isBlank()) return false
+fun generateDefaultKey(context: android.content.Context, identity: String, passphrase: CharArray): Pair<Boolean, String?> {
+    if (identity.isBlank()) return Pair(false, "用户标识不能为空")
     return try {
         Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) ?: Security.addProvider(BouncyCastleProvider())
         val keyDir = getGpgKeyDir(context)
@@ -63,9 +64,15 @@ fun generateDefaultKey(context: android.content.Context, identity: String, passp
         kpg.initialize(KEY_SIZE)
         val contentSignerBuilder = JcaPGPContentSignerBuilder(PublicKeyAlgorithmTags.RSA_GENERAL, SIG_HASH)
             .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-        val secretKeyEncryptor = JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1Calc)
-            .setProvider(BouncyCastleProvider.PROVIDER_NAME)
-            .build(passphrase)
+        val secretKeyEncryptor = if (passphrase.isEmpty()) {
+            JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.NULL, sha1Calc)
+                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                .build(passphrase)
+        } else {
+            JcePBESecretKeyEncryptorBuilder(SymmetricKeyAlgorithmTags.AES_256, sha1Calc)
+                .setProvider(BouncyCastleProvider.PROVIDER_NAME)
+                .build(passphrase)
+        }
         val now = Date()
         val primaryKP: KeyPair = kpg.generateKeyPair()
         val primaryKey: PGPKeyPair = JcaPGPKeyPair(PGPPublicKey.RSA_GENERAL, primaryKP, now)
@@ -110,8 +117,8 @@ fun generateDefaultKey(context: android.content.Context, identity: String, passp
         FileOutputStream(File(keyDir, "pubring.gpg")).use { fOut ->
             ArmoredOutputStream(fOut).use { publicKeys.encode(it) }
         }
-        true
-    } catch (_: Exception) {
-        false
+        Pair(true, null)
+    } catch (e: Exception) {
+        Pair(false, e.message ?: e.javaClass.simpleName)
     }
 }

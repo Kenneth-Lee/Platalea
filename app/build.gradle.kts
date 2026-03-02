@@ -35,6 +35,11 @@ android {
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
 }
 
 dependencies {
@@ -51,6 +56,7 @@ dependencies {
     implementation("org.bouncycastle:bcpg-jdk18on:1.77")
     implementation("org.bouncycastle:bcutil-jdk18on:1.77")
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
+    implementation("org.pgpainless:pgpainless-core:1.7.6")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
