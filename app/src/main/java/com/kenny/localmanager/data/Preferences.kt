@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -13,6 +14,8 @@ private val Context.dataStore: DataStore<androidx.datastore.preferences.core.Pre
 
 private val ROOT_URI = stringPreferencesKey("root_uri")
 private val DEBUG_ENABLED = booleanPreferencesKey("debug_enabled")
+private val HIDE_DOT_FILES = booleanPreferencesKey("hide_dot_files")
+private val VIEWER_PREVIEW_BYTES = intPreferencesKey("viewer_preview_bytes")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -21,6 +24,14 @@ class Preferences(private val context: Context) {
 
     val debugEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[DEBUG_ENABLED] ?: false
+    }
+
+    val hideDotFiles: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[HIDE_DOT_FILES] ?: false
+    }
+
+    val viewerPreviewBytes: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[VIEWER_PREVIEW_BYTES] ?: 4096
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -33,6 +44,18 @@ class Preferences(private val context: Context) {
     suspend fun setDebugEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[DEBUG_ENABLED] = enabled
+        }
+    }
+
+    suspend fun setHideDotFiles(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[HIDE_DOT_FILES] = enabled
+        }
+    }
+
+    suspend fun setViewerPreviewBytes(bytes: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[VIEWER_PREVIEW_BYTES] = bytes
         }
     }
 }

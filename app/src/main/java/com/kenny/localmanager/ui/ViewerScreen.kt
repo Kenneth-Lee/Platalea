@@ -61,9 +61,24 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import android.widget.Toast
 
-private const val MAX_PREVIEW_BYTES = 4096
 private const val PAGE_SIZE = 4096
 private const val MAX_TEXT_EDIT_BYTES = 512 * 1024
+
+/** 将字节数格式化为 1K、2M、3G、4T 等易读形式 */
+private fun formatByteCount(bytes: Long): String {
+    if (bytes <= 0) return "0"
+    val tb = 1024L * 1024 * 1024 * 1024
+    val gb = 1024L * 1024 * 1024
+    val mb = 1024L * 1024
+    val kb = 1024L
+    return when {
+        bytes >= tb -> String.format("%.1fT", bytes.toDouble() / tb)
+        bytes >= gb -> String.format("%.1fG", bytes.toDouble() / gb)
+        bytes >= mb -> String.format("%.1fM", bytes.toDouble() / mb)
+        bytes >= kb -> String.format("%.1fK", bytes.toDouble() / kb)
+        else -> "${bytes}B"
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,6 +86,7 @@ fun ViewerScreen(
     fileUri: String,
     fileName: String,
     isEncrypted: Boolean,
+    previewLength: Int = 4096,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -94,11 +110,15 @@ fun ViewerScreen(
     val canEdit = !isEncrypted
 
     // 初始加载 / 刷新
-    LaunchedEffect(fileUri, isEncrypted, refreshKey) {
+    LaunchedEffect(fileUri, isEncrypted, previewLength, refreshKey) {
         if (isEditMode) return@LaunchedEffect
         bytesState = null
         loadError = null
         withContext(Dispatchers.IO) {
+            if (!isEncrypted) {
+                val doc = DocumentFile.fromSingleUri(context, uri)
+                fileSize = doc?.length() ?: 0L
+            }
             val cr = context.contentResolver
             cr.openInputStreamSafe(uri)?.use { raw ->
                 val bytes = if (isEncrypted) {
@@ -107,7 +127,7 @@ fun ViewerScreen(
                         return@withContext
                     }
                 } else {
-                    raw.readBytes(MAX_PREVIEW_BYTES)
+                    raw.readBytes(previewLength)
                 }
                 bytesState = bytes
             } ?: run { loadError = "无法打开文件" }
@@ -342,10 +362,17 @@ fun ViewerScreen(
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontFamily = FontFamily.Monospace
                                     )
-                                    if (bytesState != null && bytesState!!.size >= MAX_PREVIEW_BYTES) {
+                                    if (bytesState != null && bytesState!!.size >= previewLength) {
                                         Spacer(Modifier.height(8.dp))
+                                        val remaining = if (fileSize > 0 && fileSize > previewLength) {
+                                            fileSize - previewLength
+                                        } else null
                                         Text(
-                                            "（仅显示前 $MAX_PREVIEW_BYTES 字节）",
+                                            if (remaining != null) {
+                                                "内容未完整显示，还有 ${formatByteCount(remaining)} 未显示"
+                                            } else {
+                                                "内容未完整显示，已显示前 ${formatByteCount(previewLength.toLong())}，后续内容未加载"
+                                            },
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -367,17 +394,37 @@ fun ViewerScreen(
                     Column(
                         Modifier
                             .fillMaxSize()
-                            .horizontalScroll(rememberScrollState())
-                            .verticalScroll(rememberScrollState())
                             .padding(16.dp)
                     ) {
-                        hexLines.forEach { line ->
+                        if (bytesState != null && bytesState!!.size >= previewLength) {
+                            val remaining = if (fileSize > 0 && fileSize > previewLength) {
+                                fileSize - previewLength
+                            } else null
                             Text(
-                                line,
+                                if (remaining != null) {
+                                    "内容未完整显示，还有 ${formatByteCount(remaining)} 未显示"
+                                } else {
+                                    "内容未完整显示，已显示前 ${formatByteCount(previewLength.toLong())}，后续内容未加载"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Spacer(Modifier.height(8.dp))
+                        }
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .horizontalScroll(rememberScrollState())
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            hexLines.forEach { line ->
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = FontFamily.Monospace,
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                                )
+                            }
                         }
                     }
                 }

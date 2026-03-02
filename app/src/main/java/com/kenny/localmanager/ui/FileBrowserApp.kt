@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -149,8 +150,12 @@ fun FileBrowserApp(
     var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var viewerPreviewBytes by remember { mutableStateOf(4096) }
     val scope = rememberCoroutineScope()
 
+    LaunchedEffect(prefs) {
+        prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
+    }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
     }
@@ -248,6 +253,7 @@ fun FileBrowserApp(
                 fileUri = uri,
                 fileName = name,
                 isEncrypted = isEncrypted,
+                previewLength = viewerPreviewBytes,
                 onBack = { viewingFile = null }
             )
         }
@@ -292,9 +298,13 @@ fun FileBrowserApp(
                 }
             }
             var debugEnabled by remember { mutableStateOf(false) }
+            var hideDotFiles by remember { mutableStateOf(false) }
             val debugLog = remember { mutableStateListOf<String>() }
             LaunchedEffect(prefs) {
                 prefs.debugEnabled.collect { debugEnabled = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.hideDotFiles.collect { hideDotFiles = it }
             }
             fun logDebug(msg: String) {
                 scope.launch(Dispatchers.Main.immediate) {
@@ -364,6 +374,7 @@ fun FileBrowserApp(
                             }
                         }
                     },
+                    hideDotFiles = hideDotFiles,
                     isViewingTrash = rootUri?.let { r ->
                         val root = Uri.parse(normalizeContentUriString(r))
                         val trashUri = getTrashUriIfExists(context, root, root)
@@ -471,6 +482,10 @@ fun FileBrowserApp(
                     onDismiss = { showConfigDialog = false },
                     debugEnabled = debugEnabled,
                     onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } },
+                    hideDotFiles = hideDotFiles,
+                    onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
+                    viewerPreviewBytes = viewerPreviewBytes,
+                    onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true }
                 )
             }
@@ -806,6 +821,7 @@ fun FileBrowserScreen(
     onEmptyTrash: (() -> Unit)? = null,
     onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
     isViewingTrash: Boolean = false,
+    hideDotFiles: Boolean = false,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
@@ -868,11 +884,15 @@ fun FileBrowserScreen(
         loading = false
     }
 
-    val filteredItems = remember(items, filterText, filterVisible) {
-        if (!filterVisible || filterText.isBlank()) items
-        else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
-            items.filter { regex.containsMatchIn(it.name) }
-        } ?: items
+    val filteredItems = remember(items, filterText, filterVisible, hideDotFiles) {
+        var list = items
+        if (hideDotFiles) list = list.filter { !it.name.startsWith(".") }
+        if (filterVisible && filterText.isNotBlank()) {
+            list = runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
+                list.filter { regex.containsMatchIn(it.name) }
+            } ?: list
+        }
+        list
     }
 
     var showFabMenu by remember { mutableStateOf(false) }
@@ -933,9 +953,6 @@ fun FileBrowserScreen(
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
-                        IconButton(onClick = onChangeRoot) {
-                            Icon(Icons.Default.FolderOpen, contentDescription = "更换根目录")
-                        }
                         IconButton(onClick = { showOverflowMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "菜单")
                         }
@@ -943,6 +960,13 @@ fun FileBrowserScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("更换根目录") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onChangeRoot()
+                                }
+                            )
                             onEmptyTrash?.let { empty ->
                                 DropdownMenuItem(
                                     text = { Text("清空回收站") },
@@ -1680,11 +1704,18 @@ fun GpgPublicKeyPickerDialog(
     }
 }
 
+private const val MIN_PREVIEW_BYTES = 1024
+private const val MAX_PREVIEW_BYTES = 10 * 1024 * 1024
+
 @Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
     onDebugEnabledChange: (Boolean) -> Unit,
+    hideDotFiles: Boolean,
+    onHideDotFilesChange: (Boolean) -> Unit,
+    viewerPreviewBytes: Int,
+    onViewerPreviewBytesChange: (Int) -> Unit,
     onManageKeys: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -1703,6 +1734,35 @@ fun ConfigDialog(
                     Text("显示调试窗口", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
                 }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("不显示 . 开头的文件", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Switch(checked = hideDotFiles, onCheckedChange = onHideDotFilesChange)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("内部查看器预览长度（字节）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = viewerPreviewBytes.toString(),
+                        onValueChange = { s ->
+                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(MIN_PREVIEW_BYTES, MAX_PREVIEW_BYTES)?.let { onViewerPreviewBytesChange(it) }
+                        },
+                        modifier = Modifier.width(120.dp),
+                        singleLine = true
+                    )
+                }
+                Text(
+                    "范围：$MIN_PREVIEW_BYTES～${MAX_PREVIEW_BYTES / (1024 * 1024)}M",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("管理密钥") }
                 Spacer(Modifier.height(24.dp))
