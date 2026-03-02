@@ -71,6 +71,67 @@ fun ContentResolver.deleteDocument(uri: Uri): Boolean =
 private const val TRASH_DIR_NAME = ".Trash"
 
 /**
+ * 获取根目录下回收站 URI（不创建）。不存在返回 null。
+ */
+fun getTrashUriIfExists(context: Context, rootUri: Uri, treeUri: Uri?): Uri? {
+    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    return findChildByName(context, parentDocUri, TRASH_DIR_NAME)
+}
+
+/**
+ * 回收站中的项目数量。
+ */
+fun getTrashItemCount(context: Context, rootUri: Uri, treeUri: Uri?): Int {
+    val trashUri = getTrashUriIfExists(context, rootUri, treeUri) ?: return 0
+    val parent = if (trashUri.toString().contains("/tree/")) {
+        DocumentFile.fromTreeUri(context, trashUri)
+    } else {
+        DocumentFile.fromSingleUri(context, trashUri)
+    } ?: return 0
+    return parent.listFilesSafe().size
+}
+
+/**
+ * 递归删除文档（目录先删子项）。
+ */
+private fun deleteDocumentRecursive(context: Context, uri: Uri, treeUri: Uri?): Boolean {
+    val cr = context.contentResolver
+    val doc = if (uri.toString().contains("/tree/")) {
+        DocumentFile.fromTreeUri(context, uri)
+    } else {
+        DocumentFile.fromSingleUri(context, uri)
+    } ?: return false
+    if (doc.isDirectory) {
+        doc.listFilesSafe().forEach { child ->
+            deleteDocumentRecursive(context, child.uri, treeUri)
+        }
+    }
+    return try {
+        DocumentsContract.deleteDocument(cr, uri)
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/**
+ * 清空回收站：递归删除回收站内所有内容。
+ * @return 成功返回 true
+ */
+fun emptyTrash(context: Context, rootUri: Uri, treeUri: Uri? = null): Boolean {
+    val trashUri = getTrashUriIfExists(context, rootUri, treeUri) ?: return true
+    val parent = if (trashUri.toString().contains("/tree/")) {
+        DocumentFile.fromTreeUri(context, trashUri)
+    } else {
+        DocumentFile.fromSingleUri(context, trashUri)
+    } ?: return false
+    var allOk = true
+    parent.listFilesSafe().forEach { child ->
+        if (!deleteDocumentRecursive(context, child.uri, treeUri)) allOk = false
+    }
+    return allOk
+}
+
+/**
  * 在根目录下获取或创建回收站目录。
  * @param rootUri 根目录 URI（如 OpenDocumentTree 返回的）
  * @return 回收站目录的 document URI，失败返回 null
@@ -123,7 +184,31 @@ fun moveToTrash(
                 log?.invoke("  moveToTrash: 无法创建目录 $destName")
                 return false
             } ?: return false
-            val children = source.listFilesSafe().toList()
+            var children = source.listFilesSafe().toList()
+            if (children.isEmpty() && treeUri != null) {
+                val parentId = try { DocumentsContract.getDocumentId(sourceUri) } catch (_: Exception) { null }
+                if (parentId != null) {
+                    val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+                    val list = mutableListOf<DocumentFile>()
+                    try {
+                        cr.query(childUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME, DocumentsContract.Document.COLUMN_MIME_TYPE), null, null, null)
+                            ?.use { c ->
+                                val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                                val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                                val mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                                if (idIdx >= 0 && nameIdx >= 0 && mimeIdx >= 0) {
+                                    while (c.moveToNext()) {
+                                        val id = c.getString(idIdx) ?: continue
+                                        val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                                        val doc = DocumentFile.fromSingleUri(context, docUri) ?: continue
+                                        list.add(doc)
+                                    }
+                                }
+                            }
+                    } catch (_: Exception) { }
+                    if (list.isNotEmpty()) children = list
+                }
+            }
             var allOk = true
             children.forEach { child ->
                 if (copyDocumentTo(context, child.uri, newDirUri, treeUri, log) == null) {
@@ -155,6 +240,93 @@ fun moveToTrash(
                 }
             } else false
         }
+    }
+}
+
+/**
+ * 判断 uri 是否在 parentUri 目录下（或就是 parentUri 自身）。
+ */
+fun isInsideDirectory(uri: Uri, parentUri: Uri): Boolean {
+    return try {
+        val id = DocumentsContract.getDocumentId(uri)
+        val parentId = DocumentsContract.getDocumentId(parentUri)
+        id == parentId || id.startsWith("$parentId/")
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/**
+ * 从回收站恢复到根目录（.Trash 的父目录）。若有同名则附加时间戳。
+ * @return 成功返回 true
+ */
+fun restoreFromTrash(
+    context: Context,
+    sourceUri: Uri,
+    rootUri: Uri,
+    treeUri: Uri? = null,
+    log: ((String) -> Unit)? = null
+): Boolean {
+    val trashUri = getTrashUriIfExists(context, rootUri, treeUri) ?: return false
+    if (!isInsideDirectory(sourceUri, trashUri)) return false
+    val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
+    if (source.name == TRASH_DIR_NAME) return false
+    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    val name = source.name ?: "unknown"
+    val baseName = name.substringBeforeLast(".")
+    val ext = if (name.contains(".")) ".${name.substringAfterLast(".")}" else ""
+    var destName = name
+    while (findChildByName(context, parentDocUri, destName) != null) {
+        destName = "${baseName}_${System.currentTimeMillis()}$ext"
+    }
+    return if (source.isDirectory) {
+        val newDirUri = try {
+            DocumentsContract.createDocument(context.contentResolver, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, destName)
+        } catch (_: Exception) { null } ?: return false
+        var children = source.listFilesSafe().toList()
+        if (children.isEmpty() && treeUri != null) {
+            val parentId = try { DocumentsContract.getDocumentId(sourceUri) } catch (_: Exception) { null }
+            if (parentId != null) {
+                val cr = context.contentResolver
+                val childUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId)
+                val list = mutableListOf<DocumentFile>()
+                try {
+                    cr.query(childUri, arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID), null, null, null)?.use { c ->
+                        val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                        if (idIdx >= 0) {
+                            while (c.moveToNext()) {
+                                val id = c.getString(idIdx) ?: continue
+                                val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                                DocumentFile.fromSingleUri(context, docUri)?.let { list.add(it) }
+                            }
+                        }
+                    }
+                } catch (_: Exception) { }
+                if (list.isNotEmpty()) children = list
+            }
+        }
+        var allOk = true
+        children.forEach { child ->
+            if (copyDocumentTo(context, child.uri, newDirUri, treeUri, log) == null) allOk = false
+        }
+        if (allOk) {
+            try {
+                DocumentsContract.deleteDocument(context.contentResolver, sourceUri)
+                true
+            } catch (_: Exception) { false }
+        } else false
+    } else {
+        val mime = context.contentResolver.getTypeSafe(sourceUri) ?: "application/octet-stream"
+        val created = createFileUnder(context, parentDocUri, mime, destName, sourceUri, log)
+        if (created != null) {
+            try {
+                DocumentsContract.deleteDocument(context.contentResolver, sourceUri)
+                true
+            } catch (_: Exception) {
+                try { DocumentsContract.deleteDocument(context.contentResolver, created) } catch (_: Exception) { }
+                false
+            }
+        } else false
     }
 }
 

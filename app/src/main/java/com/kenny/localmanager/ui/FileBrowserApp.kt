@@ -87,7 +87,12 @@ import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
+import com.kenny.localmanager.file.emptyTrash
+import com.kenny.localmanager.file.getTrashItemCount
+import com.kenny.localmanager.file.getTrashUriIfExists
+import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.moveToTrash
+import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
@@ -261,8 +266,10 @@ fun FileBrowserApp(
             var selectedSigningKeyId by remember { mutableStateOf<Long?>(null) }
             var showVerifyResultDialog by remember { mutableStateOf<Triple<ByteArray, String, String>?>(null) }
             var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
+            var showChangeRootConfirm by remember { mutableStateOf(false) }
             BackHandler {
                 when {
+                    showChangeRootConfirm -> showChangeRootConfirm = false
                     showVerifyResultDialog != null -> showVerifyResultDialog = null
                     gpgState != null -> {
                         if (showGpgKeyPicker) showGpgKeyPicker = false
@@ -317,7 +324,50 @@ fun FileBrowserApp(
                         }
                     },
                     canGoBack = backStack.isNotEmpty(),
-                    onChangeRoot = { treeLauncher.launch(null) },
+                    onChangeRoot = {
+                        val r = rootUri
+                        if (r == null) {
+                            treeLauncher.launch(null)
+                            return@FileBrowserScreen
+                        }
+                        val root = Uri.parse(normalizeContentUriString(r))
+                        val count = getTrashItemCount(context, root, root)
+                        if (count > 0) showChangeRootConfirm = true
+                        else treeLauncher.launch(null)
+                    },
+                    onEmptyTrash = rootUri?.let { r ->
+                        {
+                            scope.launch {
+                                val root = Uri.parse(normalizeContentUriString(r))
+                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                if (ok) {
+                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    onRestoreFromTrash = rootUri?.let { r ->
+                        { model ->
+                            scope.launch {
+                                val root = Uri.parse(normalizeContentUriString(r))
+                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
+                                if (ok) {
+                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    },
+                    isViewingTrash = rootUri?.let { r ->
+                        val root = Uri.parse(normalizeContentUriString(r))
+                        val trashUri = getTrashUriIfExists(context, root, root)
+                        trashUri != null && (currentUri.value == trashUri.toString() || isInsideDirectory(Uri.parse(currentUri.value), trashUri))
+                    } ?: false,
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, isEncrypted)
                     },
@@ -514,6 +564,35 @@ fun FileBrowserApp(
                         gpgMethod = null
                     }
                 }
+            }
+            if (showChangeRootConfirm && rootUri != null) {
+                val r = rootUri!!
+                val root = Uri.parse(normalizeContentUriString(r))
+                AlertDialog(
+                    onDismissRequest = { showChangeRootConfirm = false },
+                    title = { Text("更换根目录") },
+                    text = { Text("当前根目录的回收站不为空，是否清空后再更换？") },
+                    confirmButton = {
+                        Button(onClick = {
+                            scope.launch {
+                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                showChangeRootConfirm = false
+                                if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                treeLauncher.launch(null)
+                                refreshTrigger++
+                            }
+                        }) { Text("清空后更换") }
+                    },
+                    dismissButton = {
+                        Row {
+                            TextButton(onClick = {
+                                showChangeRootConfirm = false
+                                treeLauncher.launch(null)
+                            }) { Text("直接更换") }
+                            TextButton(onClick = { showChangeRootConfirm = false }) { Text("取消") }
+                        }
+                    }
+                )
             }
             showVerifyResultDialog?.let { (plain, dirUri, outName) ->
                 AlertDialog(
@@ -723,6 +802,9 @@ fun FileBrowserScreen(
     onBack: () -> Unit,
     canGoBack: Boolean,
     onChangeRoot: () -> Unit,
+    onEmptyTrash: (() -> Unit)? = null,
+    onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
+    isViewingTrash: Boolean = false,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
@@ -853,6 +935,15 @@ fun FileBrowserScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            onEmptyTrash?.let { empty ->
+                                DropdownMenuItem(
+                                    text = { Text("清空回收站") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        empty()
+                                    }
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("配置") },
                                 onClick = {
@@ -1000,6 +1091,15 @@ fun FileBrowserScreen(
                                 }
                             ) { Text("GnuPG 加密", color = MaterialTheme.colorScheme.onSurface) }
                         }
+                    }
+                    if (isViewingTrash && onRestoreFromTrash != null) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onRestoreFromTrash(menuTarget)
+                                contextMenuTarget = null
+                            }
+                        ) { Text("恢复", color = MaterialTheme.colorScheme.primary) }
                     }
                     TextButton(
                         onClick = {
