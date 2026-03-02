@@ -68,6 +68,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -832,22 +833,29 @@ fun FileBrowserScreen(
     var showPendingMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
     var filterText by remember { mutableStateOf("") }
+    var filterVisible by remember { mutableStateOf(true) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         loading = true
         error = null
         try {
             val uri = Uri.parse(currentUri)
-            val doc = if (currentUri.contains("/tree/")) {
-                DocumentFile.fromTreeUri(context, uri)
-            } else {
-                DocumentFile.fromSingleUri(context, uri)
+            var doc: DocumentFile? = null
+            for (attempt in 0..3) {
+                doc = if (currentUri.contains("/tree/")) {
+                    DocumentFile.fromTreeUri(context, uri)
+                } else {
+                    DocumentFile.fromSingleUri(context, uri)
+                }
+                if (doc?.exists() == true) break
+                if (attempt < 3) delay(100L * (attempt + 1))
             }
-            if (doc == null || !doc.exists()) {
+            val resolved = doc
+            if (resolved == null || !resolved.exists()) {
                 error = "无法访问该目录"
                 items = emptyList()
             } else {
-                items = doc.listFilesSafe()
+                items = resolved.listFilesSafe()
                     .mapNotNull { it.toModel() }
                     .sortedWith(
                         compareBy<DocumentFileModel> { !it.isDirectory }.thenBy { it.name.lowercase() }
@@ -860,8 +868,8 @@ fun FileBrowserScreen(
         loading = false
     }
 
-    val filteredItems = remember(items, filterText) {
-        if (filterText.isBlank()) items
+    val filteredItems = remember(items, filterText, filterVisible) {
+        if (!filterVisible || filterText.isBlank()) items
         else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
             items.filter { regex.containsMatchIn(it.name) }
         } ?: items
@@ -945,6 +953,13 @@ fun FileBrowserScreen(
                                 )
                             }
                             DropdownMenuItem(
+                                text = { Text(if (filterVisible) "隐藏过滤条件" else "显示过滤条件") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    filterVisible = !filterVisible
+                                }
+                            )
+                            DropdownMenuItem(
                                 text = { Text("配置") },
                                 onClick = {
                                     showOverflowMenu = false
@@ -958,23 +973,25 @@ fun FileBrowserScreen(
                         titleContentColor = MaterialTheme.colorScheme.onSurface
                     )
                 )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = filterText,
-                        onValueChange = { filterText = it },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        placeholder = { Text("正则过滤文件名，留空显示全部") },
-                        label = null
-                    )
-                    if (filterText.isNotEmpty()) {
-                        IconButton(onClick = { filterText = "" }) {
-                            Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                if (filterVisible) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = filterText,
+                            onValueChange = { filterText = it },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            placeholder = { Text("正则过滤文件名，留空显示全部") },
+                            label = null
+                        )
+                        if (filterText.isNotEmpty()) {
+                            IconButton(onClick = { filterText = "" }) {
+                                Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                            }
                         }
                     }
                 }
