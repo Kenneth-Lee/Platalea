@@ -242,6 +242,33 @@ fun parseSecretKeyRingFromStream(input: InputStream): PGPSecretKeyRing? {
     }
 }
 
+/** 读取私钥文件内容（用于导出）。失败返回 null。 */
+fun getSecretKeyRingBytes(context: android.content.Context): ByteArray? {
+    val file = File(getGpgKeyDir(context), "secring.gpg")
+    if (!file.exists()) return null
+    return try { file.readBytes() } catch (_: Exception) { null }
+}
+
+/** 读取公钥文件全部内容（用于导出全部）。失败返回 null。 */
+fun getAllPublicKeyRingsBytes(context: android.content.Context): ByteArray? {
+    val file = File(getGpgKeyDir(context), "pubring.gpg")
+    if (!file.exists()) return null
+    return try { file.readBytes() } catch (_: Exception) { null }
+}
+
+/** 将指定 keyId 的公钥环编码为 ASCII 装甲字节（用于导出单个公钥）。失败返回 null。 */
+fun getSinglePublicKeyRingBytes(context: android.content.Context, keyId: Long): ByteArray? {
+    val ring = loadPublicKeyRings(context)?.getPublicKeyRing(keyId) ?: return null
+    return try {
+        java.io.ByteArrayOutputStream().use { out ->
+            ArmoredOutputStream(out).use { ring.encode(it) }
+            out.toByteArray()
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
 /** 从输入流解析公钥环，支持 ASCII 装甲或二进制。失败返回 null。 */
 fun parsePublicKeyRingFromStream(input: InputStream): PGPPublicKeyRing? {
     return try {

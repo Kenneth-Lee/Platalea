@@ -104,6 +104,9 @@ import com.kenny.localmanager.gpg.listSigningSecretKeys
 import com.kenny.localmanager.gpg.deleteAllPublicKeys
 import com.kenny.localmanager.gpg.deletePublicKeyById
 import com.kenny.localmanager.gpg.deleteSecretKeys
+import com.kenny.localmanager.gpg.getAllPublicKeyRingsBytes
+import com.kenny.localmanager.gpg.getSecretKeyRingBytes
+import com.kenny.localmanager.gpg.getSinglePublicKeyRingBytes
 import com.kenny.localmanager.gpg.mergePublicKeyRing
 import com.kenny.localmanager.gpg.parsePublicKeyRingFromStream
 import com.kenny.localmanager.gpg.parseSecretKeyRingFromStream
@@ -197,7 +200,6 @@ fun FileBrowserApp() {
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
-            var showGenerateKeyDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
             var refreshTrigger by remember { mutableStateOf(0) }
             var lastBackPressTime by remember { mutableStateOf(0L) }
@@ -216,7 +218,6 @@ fun FileBrowserApp() {
                         else if (gpgMethod != null) gpgMethod = null
                         else { gpgState = null; gpgPassword = "" }
                     }
-                    showGenerateKeyDialog -> showGenerateKeyDialog = false
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
                     showPendingList -> showPendingList = false
@@ -364,7 +365,6 @@ fun FileBrowserApp() {
                     onDismiss = { showConfigDialog = false },
                     debugEnabled = debugEnabled,
                     onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } },
-                    onGenerateKey = { showConfigDialog = false; showGenerateKeyDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true }
                 )
             }
@@ -373,26 +373,6 @@ fun FileBrowserApp() {
                     context = context,
                     onDismiss = { showKeyManagementDialog = false },
                     onKeysChanged = { refreshTrigger++ }
-                )
-            }
-            if (showGenerateKeyDialog) {
-                GenerateKeyDialog(
-                    onDismiss = { showGenerateKeyDialog = false },
-                    onConfirm = { identity, passphrase ->
-                        showGenerateKeyDialog = false
-                        scope.launch {
-                            val (ok, errMsg) = withContext(Dispatchers.IO) {
-                                generateDefaultKey(context, identity, passphrase)
-                            }
-                            if (ok) {
-                                logDebug("[GPG] 密钥生成成功: identity=\"$identity\"")
-                                Toast.makeText(context, "默认密钥已生成，保存在应用存储", Toast.LENGTH_SHORT).show()
-                            } else {
-                                logDebug("[GPG] 密钥生成失败: ${errMsg ?: "未知错误"}")
-                                Toast.makeText(context, "生成失败: ${errMsg ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }
                 )
             }
             if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
@@ -1452,7 +1432,6 @@ fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
     onDebugEnabledChange: (Boolean) -> Unit,
-    onGenerateKey: () -> Unit,
     onManageKeys: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -1472,14 +1451,18 @@ fun ConfigDialog(
                     Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
                 }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onGenerateKey, modifier = Modifier.fillMaxWidth()) { Text("生成默认 GnuPG 密钥") }
-                Spacer(Modifier.height(8.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("管理密钥") }
                 Spacer(Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }
         }
     }
+}
+
+private sealed class PendingDelete {
+    object Secret : PendingDelete()
+    object AllPublic : PendingDelete()
+    data class SinglePublic(val keyId: Long) : PendingDelete()
 }
 
 @Composable
@@ -1494,6 +1477,12 @@ fun KeyManagementDialog(
     var loading by remember { mutableStateOf(true) }
     var refreshTrigger by remember { mutableStateOf(0) }
     var importAsPrivate by remember { mutableStateOf(true) }
+    var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
+    var deleteConfirmInput by remember { mutableStateOf("") }
+    var pendingExportFilename by remember { mutableStateOf("") }
+    var pendingExportSecret by remember { mutableStateOf(false) }
+    var pendingExportKeyId by remember { mutableStateOf<Long?>(null) }
+    var showGenerateKeyDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val keyImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
@@ -1521,6 +1510,30 @@ fun KeyManagementDialog(
             }
         }
     }
+    val keyExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pgp-keys")) { uri ->
+        if (uri != null && pendingExportFilename.isNotEmpty()) {
+            scope.launch {
+                val bytes = withContext(Dispatchers.IO) {
+                    when {
+                        pendingExportSecret -> getSecretKeyRingBytes(context)
+                        pendingExportKeyId != null -> getSinglePublicKeyRingBytes(context, pendingExportKeyId!!)
+                        else -> getAllPublicKeyRingsBytes(context)
+                    }
+                }
+                if (bytes != null) {
+                    withContext(Dispatchers.IO) {
+                        context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+                    }
+                    Toast.makeText(context, "导出成功", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
+                }
+                pendingExportFilename = ""
+                pendingExportKeyId = null
+                pendingExportSecret = false
+            }
+        }
+    }
     LaunchedEffect(refreshTrigger) {
         loading = true
         withContext(Dispatchers.IO) {
@@ -1541,6 +1554,8 @@ fun KeyManagementDialog(
             Column(Modifier.padding(24.dp)) {
                 Text("GnuPG 密钥管理", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text("私钥仅保留一个；公钥可多个。生成密钥对或导入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = { showGenerateKeyDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("生成密钥对") }
                 Spacer(Modifier.height(16.dp))
                 if (loading) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -1553,14 +1568,13 @@ fun KeyManagementDialog(
                             Row {
                                 TextButton(onClick = { importAsPrivate = false; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text("导入公钥") }
                                 if (publicKeys.isNotEmpty()) {
+                                    TextButton(onClick = { pendingDelete = PendingDelete.AllPublic; deleteConfirmInput = "" }) { Text("删除全部") }
                                     TextButton(onClick = {
-                                        scope.launch {
-                                            withContext(Dispatchers.IO) { deleteAllPublicKeys(context) }
-                                            Toast.makeText(context, "已删除所有公钥", Toast.LENGTH_SHORT).show()
-                                            refreshTrigger++
-                                            onKeysChanged()
-                                        }
-                                    }) { Text("删除全部") }
+                                        pendingExportFilename = "pubring.asc"
+                                        pendingExportSecret = false
+                                        pendingExportKeyId = null
+                                        keyExportLauncher.launch("pubring.asc")
+                                    }) { Text("导出全部") }
                                 }
                             }
                         }
@@ -1569,14 +1583,16 @@ fun KeyManagementDialog(
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                                 val keyId = k.keyId
-                                if (keyId != null && publicKeys.size > 1) {
+                                if (keyId != null) {
                                     TextButton(onClick = {
-                                        scope.launch {
-                                            val (ok, err) = withContext(Dispatchers.IO) { deletePublicKeyById(context, keyId) }
-                                            if (ok) { Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show(); refreshTrigger++; onKeysChanged() }
-                                            else Toast.makeText(context, "删除失败: $err", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }) { Text("删", style = MaterialTheme.typography.labelSmall) }
+                                        pendingExportFilename = "pubkey_${k.keyIdHex.replace("0x", "")}.asc"
+                                        pendingExportSecret = false
+                                        pendingExportKeyId = keyId
+                                        keyExportLauncher.launch(pendingExportFilename)
+                                    }) { Text("导出", style = MaterialTheme.typography.labelSmall) }
+                                    if (publicKeys.size > 1) {
+                                        TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text("删", style = MaterialTheme.typography.labelSmall) }
+                                    }
                                 }
                             }
                         }
@@ -1587,13 +1603,12 @@ fun KeyManagementDialog(
                                 TextButton(onClick = { importAsPrivate = true; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text("导入私钥") }
                                 if (secretKeys.isNotEmpty()) {
                                     TextButton(onClick = {
-                                        scope.launch {
-                                            withContext(Dispatchers.IO) { deleteSecretKeys(context) }
-                                            Toast.makeText(context, "已删除私钥", Toast.LENGTH_SHORT).show()
-                                            refreshTrigger++
-                                            onKeysChanged()
-                                        }
-                                    }) { Text("删除") }
+                                        pendingExportFilename = "secring.asc"
+                                        pendingExportSecret = true
+                                        pendingExportKeyId = null
+                                        keyExportLauncher.launch("secring.asc")
+                                    }) { Text("导出私钥") }
+                                    TextButton(onClick = { pendingDelete = PendingDelete.Secret; deleteConfirmInput = "" }) { Text("删除") }
                                 }
                             }
                         }
@@ -1614,48 +1629,131 @@ fun KeyManagementDialog(
             }
         }
     }
+    pendingDelete?.let { pending ->
+        val (title, message) = when (pending) {
+            is PendingDelete.Secret -> "确认删除私钥" to "将删除当前私钥，且无法恢复。请输入 yes 确认删除。"
+            is PendingDelete.AllPublic -> "确认删除所有公钥" to "将删除全部公钥，且无法恢复。请输入 yes 确认删除。"
+            is PendingDelete.SinglePublic -> "确认删除公钥" to "将删除该公钥，且无法恢复。请输入 yes 确认删除。"
+        }
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null; deleteConfirmInput = "" },
+            title = { Text(title) },
+            text = {
+                Column {
+                    Text(message)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = deleteConfirmInput,
+                        onValueChange = { deleteConfirmInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("输入 yes") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (deleteConfirmInput.trim().lowercase() != "yes") return@Button
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) {
+                                when (pending) {
+                                    is PendingDelete.Secret -> deleteSecretKeys(context)
+                                    is PendingDelete.AllPublic -> deleteAllPublicKeys(context)
+                                    is PendingDelete.SinglePublic -> deletePublicKeyById(context, pending.keyId).first
+                                }
+                            }
+                            if (ok) {
+                                Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                                refreshTrigger++
+                                onKeysChanged()
+                            } else {
+                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                            }
+                            pendingDelete = null
+                            deleteConfirmInput = ""
+                        }
+                    },
+                    enabled = deleteConfirmInput.trim().lowercase() == "yes"
+                ) { Text("确认删除") }
+            },
+            dismissButton = { TextButton(onClick = { pendingDelete = null; deleteConfirmInput = "" }) { Text("取消") } }
+        )
+    }
+    if (showGenerateKeyDialog) {
+        GenerateKeyDialog(
+            context = context,
+            onDismiss = { showGenerateKeyDialog = false },
+            onSuccess = { refreshTrigger++; onKeysChanged() }
+        )
+    }
 }
 
 @Composable
 fun GenerateKeyDialog(
+    context: Context,
     onDismiss: () -> Unit,
-    onConfirm: (identity: String, passphrase: CharArray) -> Unit
+    onSuccess: () -> Unit = {}
 ) {
     var identity by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
-    Dialog(onDismissRequest = onDismiss) {
+    var generatingInProgress by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    Dialog(onDismissRequest = { if (!generatingInProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text("生成默认密钥", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text("生成密钥对", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = identity,
-                    onValueChange = { identity = it },
+                    onValueChange = { if (!generatingInProgress) identity = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("用户标识（如：姓名 <email@example.com>）") },
-                    singleLine = true
+                    singleLine = true,
+                    enabled = !generatingInProgress
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = passphrase,
-                    onValueChange = { passphrase = it },
+                    onValueChange = { if (!generatingInProgress) passphrase = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("密钥保护密码（可留空表示无密码）") },
-                    singleLine = true
+                    singleLine = true,
+                    enabled = !generatingInProgress
                 )
+                if (generatingInProgress) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(8.dp))
+                    Text("生成中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(onClick = onDismiss, enabled = !generatingInProgress) { Text("取消") }
                     Button(
                         onClick = {
-                            if (identity.isNotBlank()) {
-                                onConfirm(identity.trim(), passphrase.toCharArray())
+                            if (identity.isNotBlank() && !generatingInProgress) {
+                                generatingInProgress = true
+                                scope.launch {
+                                    val (ok, errMsg) = withContext(Dispatchers.IO) {
+                                        generateDefaultKey(context, identity.trim(), passphrase.toCharArray())
+                                    }
+                                    generatingInProgress = false
+                                    if (ok) {
+                                        Toast.makeText(context, "密钥已生成", Toast.LENGTH_SHORT).show()
+                                        onSuccess()
+                                        onDismiss()
+                                    } else {
+                                        Toast.makeText(context, "生成失败: ${errMsg ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
                             }
-                        }
+                        },
+                        enabled = !generatingInProgress
                     ) { Text("生成") }
                 }
             }
