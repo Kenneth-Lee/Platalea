@@ -17,6 +17,7 @@ fun ContentResolver.openInputStreamSafe(uri: Uri): InputStream? =
 fun ContentResolver.openOutputStreamSafe(uri: Uri): OutputStream? =
     try { openOutputStream(uri) } catch (_: Exception) { null }
 
+@Suppress("USELESS_ELVIS")
 fun DocumentFile.listFilesSafe(): Array<DocumentFile> =
     try { listFiles() ?: emptyArray() } catch (_: Exception) { emptyArray() }
 
@@ -66,6 +67,96 @@ fun getDirectoryToOpen(context: Context, uri: Uri): Uri? {
 
 fun ContentResolver.deleteDocument(uri: Uri): Boolean =
     try { DocumentsContract.deleteDocument(this, uri) } catch (_: Exception) { false }
+
+private const val TRASH_DIR_NAME = ".Trash"
+
+/**
+ * 在根目录下获取或创建回收站目录。
+ * @param rootUri 根目录 URI（如 OpenDocumentTree 返回的）
+ * @return 回收站目录的 document URI，失败返回 null
+ */
+fun getOrCreateTrashUri(context: Context, rootUri: Uri, treeUri: Uri?): Uri? {
+    val cr = context.contentResolver
+    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    val existing = findChildByName(context, parentDocUri, TRASH_DIR_NAME)
+    if (existing != null) return existing
+    return try {
+        DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, TRASH_DIR_NAME)
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/**
+ * 将文件或目录移到回收站（根目录下的 .Trash）。若目标已存在同名则附加时间戳避免覆盖。
+ * @return 成功返回 true
+ */
+fun moveToTrash(
+    context: Context,
+    sourceUri: Uri,
+    rootUri: Uri,
+    treeUri: Uri? = null,
+    log: ((String) -> Unit)? = null
+): Boolean {
+    val cr = context.contentResolver
+    val trashUri = getOrCreateTrashUri(context, rootUri, treeUri) ?: run {
+        log?.invoke("  moveToTrash: 无法创建回收站目录")
+        return false
+    }
+    val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
+    if (source.name == TRASH_DIR_NAME) {
+        log?.invoke("  moveToTrash: 不能将回收站移入自身")
+        return false
+    }
+    val name = source.name ?: "unknown"
+    val baseName = name.substringBeforeLast(".")
+    val ext = if (name.contains(".")) ".${name.substringAfterLast(".")}" else ""
+    var destName = name
+    while (findChildByName(context, trashUri, destName) != null) {
+        destName = "${baseName}_${System.currentTimeMillis()}$ext"
+    }
+    return when {
+        source.isDirectory -> {
+            val newDirUri = try {
+                DocumentsContract.createDocument(cr, trashUri, DocumentsContract.Document.MIME_TYPE_DIR, destName)
+            } catch (_: Exception) {
+                log?.invoke("  moveToTrash: 无法创建目录 $destName")
+                return false
+            } ?: return false
+            val children = source.listFilesSafe().toList()
+            var allOk = true
+            children.forEach { child ->
+                if (copyDocumentTo(context, child.uri, newDirUri, treeUri, log) == null) {
+                    allOk = false
+                    log?.invoke("  moveToTrash: 子项拷贝失败 ${child.name}")
+                }
+            }
+            if (allOk) {
+                try {
+                    DocumentsContract.deleteDocument(cr, sourceUri)
+                    true
+                } catch (_: Exception) {
+                    log?.invoke("  moveToTrash: 拷贝成功但删除源目录失败")
+                    false
+                }
+            } else false
+        }
+        else -> {
+            val mime = cr.getTypeSafe(sourceUri) ?: "application/octet-stream"
+            val created = createFileUnder(context, trashUri, mime, destName, sourceUri, log)
+            if (created != null) {
+                try {
+                    DocumentsContract.deleteDocument(cr, sourceUri)
+                    true
+                } catch (_: Exception) {
+                    try { DocumentsContract.deleteDocument(cr, created) } catch (_: Exception) { }
+                    log?.invoke("  moveToTrash: 拷贝成功但删除源失败，已回滚")
+                    false
+                }
+            } else false
+        }
+    }
+}
 
 /**
  * 在目录中查找指定名称的子文档。

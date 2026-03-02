@@ -87,6 +87,7 @@ import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
+import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
@@ -305,6 +306,7 @@ fun FileBrowserApp(
                     currentUri = currentUri.value,
                     refreshTrigger = refreshTrigger,
                     pendingList = pendingList,
+                    rootUri = rootUri,
                     onNavigate = { uri ->
                         backStack.add(currentUri.value)
                         currentUri.value = normalizeContentUriString(uri)
@@ -576,7 +578,7 @@ fun FileBrowserApp(
                                             } ?: false
                                         }
                                         gpgMethod == GpgMethod.Sign && op is GpgOpState.Encrypt -> {
-                                            val encOp = op as GpgOpState.Encrypt
+                                            val encOp = op
                                             val keyId = selectedSigningKeyId!!
                                             val secretRings = loadSecretKeyRings(ctx)
                                             val secretRing = findSecretKeyRing(secretRings, keyId)
@@ -716,6 +718,7 @@ fun FileBrowserScreen(
     currentUri: String,
     refreshTrigger: Int,
     pendingList: List<DocumentFileModel>,
+    rootUri: String?,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     canGoBack: Boolean,
@@ -1091,9 +1094,11 @@ fun FileBrowserScreen(
                             } else {
                                 DocumentFile.fromSingleUri(context, uri)
                             }
-                            dir?.takeIf { it.isDirectory }?.createFile("application/octet-stream", name)
-                            showCreateFileDialog = false
-                            onRefresh()
+                            when {
+                                dir == null || !dir.isDirectory -> Toast.makeText(context, "无法访问目录", Toast.LENGTH_SHORT).show()
+                                dir.createFile("application/octet-stream", name) == null -> Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                                else -> { showCreateFileDialog = false; onRefresh() }
+                            }
                         }
                     }
                 ) { Text("创建") }
@@ -1136,9 +1141,11 @@ fun FileBrowserScreen(
                             } else {
                                 DocumentFile.fromSingleUri(context, uri)
                             }
-                            dir?.takeIf { it.isDirectory }?.createDirectory(name)
-                            showCreateDirDialog = false
-                            onRefresh()
+                            when {
+                                dir == null || !dir.isDirectory -> Toast.makeText(context, "无法访问目录", Toast.LENGTH_SHORT).show()
+                                dir.createDirectory(name) == null -> Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                                else -> { showCreateDirDialog = false; onRefresh() }
+                            }
                         }
                     }
                 ) { Text("创建") }
@@ -1151,22 +1158,56 @@ fun FileBrowserScreen(
 
     if (showDeleteConfirm != null) {
         val target = showDeleteConfirm!!
+        var deletePermanently by remember { mutableStateOf(false) }
+        val hasRoot = rootUri != null
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = null },
             title = { Text("确认删除") },
-            text = { Text("确定删除「${target.name}」吗？此操作不可恢复。", color = MaterialTheme.colorScheme.onSurface) },
+            text = {
+                Column {
+                    Text("确定删除「${target.name}」吗？", color = MaterialTheme.colorScheme.onSurface)
+                    if (hasRoot) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.RadioButton(
+                                selected = !deletePermanently,
+                                onClick = { deletePermanently = false }
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            androidx.compose.material3.RadioButton(
+                                selected = deletePermanently,
+                                onClick = { deletePermanently = true }
+                            )
+                            Spacer(Modifier.size(8.dp))
+                            Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                        }
+                    } else {
+                        Spacer(Modifier.height(8.dp))
+                        Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (context.contentResolver.deleteDocument(target.uri)) {
-                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                        val ok = if (hasRoot && !deletePermanently) {
+                            val root = android.net.Uri.parse(normalizeContentUriString(rootUri!!))
+                            moveToTrash(context, target.uri, root, root)
+                        } else {
+                            context.contentResolver.deleteDocument(target.uri)
+                        }
+                        if (ok) {
+                            Toast.makeText(context, if (hasRoot && !deletePermanently) "已移到回收站" else "已删除", Toast.LENGTH_SHORT).show()
                             onRefresh()
                         } else {
-                            Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
                         }
                         showDeleteConfirm = null
                     }
-                ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "删除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = null }) { Text("取消") }
@@ -1674,20 +1715,18 @@ fun KeyManagementDialog(
                             }
                         }
                         if (publicKeys.isEmpty()) Text("无", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        else publicKeys.forEachIndexed { i, k ->
+                        else publicKeys.forEachIndexed { _, k ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                                 val keyId = k.keyId
-                                if (keyId != null) {
-                                    TextButton(onClick = {
+                                TextButton(onClick = {
                                         pendingExportFilename = "pubkey_${k.keyIdHex.replace("0x", "")}.asc"
                                         pendingExportSecret = false
                                         pendingExportKeyId = keyId
                                         keyExportLauncher.launch(pendingExportFilename)
-                                    }) { Text("导出", style = MaterialTheme.typography.labelSmall) }
-                                    if (publicKeys.size > 1) {
-                                        TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text("删", style = MaterialTheme.typography.labelSmall) }
-                                    }
+                                }) { Text("导出", style = MaterialTheme.typography.labelSmall) }
+                                if (publicKeys.size > 1) {
+                                    TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text("删", style = MaterialTheme.typography.labelSmall) }
                                 }
                             }
                         }
