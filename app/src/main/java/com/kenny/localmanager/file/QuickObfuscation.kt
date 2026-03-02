@@ -9,7 +9,7 @@ import javax.crypto.spec.PBEKeySpec
 
 private const val EXTENSION = ".qx"
 private const val HEADER_SIZE = 4096
-private const val KDF_ITERATIONS = 10000
+private const val KDF_ITERATIONS = 1000  // 快速混淆仅需轻量拉伸，10000 次在大文件时明显卡顿
 private val FIXED_SALT = "LocalManagerQuickObfuscation".toByteArray(Charsets.UTF_8)
 
 /** 快速混淆使用的扩展名 */

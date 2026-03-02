@@ -280,8 +280,11 @@ fun FileBrowserApp(
             var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
             var quickObfuscatePassword by remember { mutableStateOf("") }
             var quickObfuscateInProgress by remember { mutableStateOf(false) }
+            var copyMoveInProgress by remember { mutableStateOf(false) }
+            var copyMoveProgress by remember { mutableStateOf<Triple<Int, Int, String>?>(null) } // current, total, label
             BackHandler {
                 when {
+                    copyMoveInProgress -> { } // 不响应返回，防止误触
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     showVerifyResultDialog != null -> showVerifyResultDialog = null
@@ -322,9 +325,14 @@ fun FileBrowserApp(
             Column(Modifier.fillMaxSize()) {
                 if (gpgPubEncryptInProgress || saveInProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
-                    if (saveInProgress) {
-                        Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
-                    }
+                    Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+                }
+                if (copyMoveInProgress) {
+                    CopyMoveProgressDialog(
+                        current = copyMoveProgress?.first ?: 0,
+                        total = copyMoveProgress?.second ?: 0,
+                        label = copyMoveProgress?.third ?: ""
+                    )
                 }
                 FileBrowserScreen(
                     modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
@@ -400,15 +408,23 @@ fun FileBrowserApp(
                         val list = pendingList.toList()
                         val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                         scope.launch {
+                            copyMoveInProgress = true
+                            copyMoveProgress = Triple(0, list.size, "拷贝")
+                            delay(50) // 让进度条先渲染一帧
                             val (ok, fail) = withContext(Dispatchers.IO) {
                                 var o = 0
                                 var f = 0
-                                list.forEach { model ->
+                                list.forEachIndexed { index, model ->
                                     if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
                                     else f++
+                                    withContext(Dispatchers.Main.immediate) {
+                                        copyMoveProgress = Triple(index + 1, list.size, "拷贝")
+                                    }
                                 }
                                 Pair(o, f)
                             }
+                            copyMoveInProgress = false
+                            copyMoveProgress = null
                             copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
                             if (fail == 0 && ok > 0) {
                                 pendingList.clear()
@@ -429,15 +445,23 @@ fun FileBrowserApp(
                         val list = pendingList.toList()
                         val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                         scope.launch {
+                            copyMoveInProgress = true
+                            copyMoveProgress = Triple(0, list.size, "移动")
+                            delay(50) // 让进度条先渲染一帧
                             val (ok, fail) = withContext(Dispatchers.IO) {
                                 var o = 0
                                 var f = 0
-                                list.forEach { model ->
+                                list.forEachIndexed { index, model ->
                                     if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
                                     else f++
+                                    withContext(Dispatchers.Main.immediate) {
+                                        copyMoveProgress = Triple(index + 1, list.size, "移动")
+                                    }
                                 }
                                 Pair(o, f)
                             }
+                            copyMoveInProgress = false
+                            copyMoveProgress = null
                             copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
                             if (fail == 0 && ok > 0) {
                                 pendingList.clear()
@@ -1604,6 +1628,39 @@ fun PendingListScreen(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CopyMoveProgressDialog(current: Int, total: Int, label: String) {
+    Dialog(onDismissRequest = { }) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    "$label 中…",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                if (total > 0) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        progress = { current.toFloat() / total }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text("$current / $total 项", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(8.dp))
+                    Text("处理中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
