@@ -64,6 +64,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Switch
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -309,9 +310,20 @@ fun FileBrowserApp(
             var batchObfuscateInProgress by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
             val currentDirPath = remember(currentUri.value, rootUri) { pathFromRoot(context, rootUri, currentUri.value) }
+            val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
+            var ftpPort by remember { mutableStateOf(2121) }
+            var ftpPassword by remember { mutableStateOf<String?>(null) }
+            var showFtpScreen by remember { mutableStateOf(false) }
+            LaunchedEffect(prefs) {
+                prefs.ftpPort.collect { ftpPort = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.ftpPassword.collect { ftpPassword = it }
+            }
             BackHandler {
                 when {
                     progressOp != null -> { } // 不响应返回，防止误触
+                    showFtpScreen -> { ftpManager.stop(); showFtpScreen = false }
                     batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
@@ -427,6 +439,15 @@ fun FileBrowserApp(
                     }
                 }
             }
+            if (showFtpScreen && rootUri != null) {
+                FtpScreen(
+                    manager = ftpManager,
+                    rootUri = rootUri!!,
+                    port = ftpPort,
+                    password = ftpPassword,
+                    onDismiss = { ftpManager.stop(); showFtpScreen = false }
+                )
+            } else {
             Column(Modifier.fillMaxSize()) {
                 if (gpgPubEncryptInProgress || saveInProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -544,6 +565,10 @@ fun FileBrowserApp(
                                 refreshTrigger++
                             }
                         }
+                    },
+                    onOpenFtp = {
+                        if (rootUri != null) showFtpScreen = true
+                        else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
                     }
                 )
                 if (debugEnabled) {
@@ -686,7 +711,12 @@ fun FileBrowserApp(
                     onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
                     viewerPreviewBytes = viewerPreviewBytes,
                     onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
-                    onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true }
+                    ftpPassword = ftpPassword ?: "",
+                    onFtpPasswordChange = { s ->
+                        ftpPassword = s.ifBlank { null }
+                        scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
+                    },
+                    onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
                 )
             }
             if (showKeyManagementDialog) {
@@ -1114,6 +1144,7 @@ fun FileBrowserApp(
                     )
                 }
             }
+            }
         }
     }
     showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
@@ -1236,6 +1267,7 @@ fun FileBrowserScreen(
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
+    onOpenFtp: () -> Unit = {},
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
     onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
@@ -1361,6 +1393,13 @@ fun FileBrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     filterVisible = !filterVisible
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("FTP 数据交换") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenFtp()
                                 }
                             )
                             DropdownMenuItem(
@@ -2307,8 +2346,11 @@ fun ConfigDialog(
     onHideDotFilesChange: (Boolean) -> Unit,
     viewerPreviewBytes: Int,
     onViewerPreviewBytesChange: (Int) -> Unit,
+    ftpPassword: String,
+    onFtpPasswordChange: (String) -> Unit,
     onManageKeys: () -> Unit
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -2355,7 +2397,21 @@ fun ConfigDialog(
                     modifier = Modifier.padding(top = 4.dp)
                 )
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("管理密钥") }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(140.dp))
+                    OutlinedTextField(
+                        value = ftpPassword,
+                        onValueChange = onFtpPasswordChange,
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("留空则无需密码") }
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }

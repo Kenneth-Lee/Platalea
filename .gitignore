@@ -4,6 +4,7 @@ build/
 
 # Android
 *.apk
+app/release.keystore
 *.ap_
 *.aab
 *.dex

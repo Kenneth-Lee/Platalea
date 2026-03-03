@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,8 +15,27 @@ android {
         versionCode = 1
         versionName = "1.0"
     }
+    signingConfigs {
+        create("release") {
+            val propFile = rootProject.file("local.properties")
+            if (propFile.exists()) {
+                val props = Properties()
+                propFile.inputStream().use { props.load(it) }
+                storeFile = rootProject.file(props.getProperty("RELEASE_STORE_FILE", "app/release.keystore"))
+                storePassword = props.getProperty("RELEASE_STORE_PASSWORD", "localmanager")
+                keyAlias = props.getProperty("RELEASE_KEY_ALIAS", "localmanager")
+                keyPassword = props.getProperty("RELEASE_KEY_PASSWORD", "localmanager")
+            } else {
+                storeFile = file("release.keystore")
+                storePassword = "localmanager"
+                keyAlias = "localmanager"
+                keyPassword = "localmanager"
+            }
+        }
+    }
     buildTypes {
         release {
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -38,6 +59,7 @@ android {
     packaging {
         resources {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+            excludes += "META-INF/DEPENDENCIES"
         }
     }
 }
@@ -59,6 +81,7 @@ dependencies {
     implementation("org.pgpainless:pgpainless-core:1.7.6")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.apache.ftpserver:ftpserver-core:1.2.1")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
