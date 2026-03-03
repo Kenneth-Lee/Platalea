@@ -40,9 +40,14 @@ import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
@@ -127,6 +132,7 @@ import com.kenny.localmanager.gpg.saveSecretKeyRing
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -138,6 +144,23 @@ import kotlinx.coroutines.flow.collect
 private fun normalizeContentUriString(s: String): String {
     if (!s.startsWith("content://")) return s
     return s.replace("android ", "android.")
+}
+
+/** 从根目录算起的相对路径（用于待处理列表显示当前目录） */
+private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
+    if (rootUri == null) return currentUri
+    val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(normalizeContentUriString(rootUri))) ?: return currentUri
+    val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
+        else DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
+    val current = currentDoc ?: return currentUri
+    val parts = mutableListOf<String>()
+    var c: DocumentFile? = current
+    while (c != null) {
+        if (c.uri == rootDoc.uri) break
+        parts.add(0, c.name ?: "?")
+        c = c.parentFile
+    }
+    return "/" + parts.joinToString("/")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -265,6 +288,7 @@ fun FileBrowserApp(
             val backStack = remember(rootUri) { mutableStateListOf<String>() }
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
+            var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
             var refreshTrigger by remember { mutableStateOf(0) }
@@ -280,10 +304,15 @@ fun FileBrowserApp(
             var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
             var quickObfuscatePassword by remember { mutableStateOf("") }
             var quickObfuscateInProgress by remember { mutableStateOf(false) }
+            var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
+            var batchObfuscatePassword by remember { mutableStateOf("") }
+            var batchObfuscateInProgress by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
+            val currentDirPath = remember(currentUri.value, rootUri) { pathFromRoot(context, rootUri, currentUri.value) }
             BackHandler {
                 when {
                     progressOp != null -> { } // 不响应返回，防止误触
+                    batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     showVerifyResultDialog != null -> showVerifyResultDialog = null
@@ -294,6 +323,7 @@ fun FileBrowserApp(
                     }
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
+                    showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
                     backStack.isNotEmpty() -> currentUri.value = backStack.removeAt(backStack.lastIndex)
                     else -> {
@@ -333,6 +363,68 @@ fun FileBrowserApp(
                     block(setProgress)
                 } finally {
                     progressOp = null
+                }
+            }
+            val doCopyHere: () -> Unit = {
+                val targetDirUri = normalizeContentUriString(currentUri.value)
+                copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
+                val ctx = context
+                val list = pendingList.toList()
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                scope.launch {
+                    runWithProgress("拷贝", list.size) { setProgress ->
+                        val (ok, fail) = withContext(Dispatchers.IO) {
+                            var o = 0
+                            var f = 0
+                            list.forEachIndexed { index, model ->
+                                if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
+                                else f++
+                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                            }
+                            Pair(o, f)
+                        }
+                        copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
+                        if (fail == 0 && ok > 0) {
+                            pendingList.clear()
+                            Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                        } else if (ok > 0) {
+                            Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
+                        }
+                        refreshTrigger++
+                    }
+                }
+            }
+            val doMoveHere: () -> Unit = {
+                val targetDirUri = normalizeContentUriString(currentUri.value)
+                copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
+                val ctx = context
+                val list = pendingList.toList()
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                scope.launch {
+                    runWithProgress("移动", list.size) { setProgress ->
+                        val (ok, fail) = withContext(Dispatchers.IO) {
+                            var o = 0
+                            var f = 0
+                            list.forEachIndexed { index, model ->
+                                if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
+                                else f++
+                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                            }
+                            Pair(o, f)
+                        }
+                        copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
+                        if (fail == 0 && ok > 0) {
+                            pendingList.clear()
+                            Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                        } else if (ok > 0) {
+                            Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
+                        }
+                        refreshTrigger++
+                    }
                 }
             }
             Column(Modifier.fillMaxSize()) {
@@ -411,68 +503,6 @@ fun FileBrowserApp(
                     },
                     onAddToPendingList = { pendingList.add(it) },
                     onRemoveFromPendingList = { pendingList.remove(it) },
-                    onCopyHere = {
-                        val targetDirUri = normalizeContentUriString(currentUri.value)
-                        copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
-                        val ctx = context
-                        val list = pendingList.toList()
-                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        scope.launch {
-                            runWithProgress("拷贝", list.size) { setProgress ->
-                                val (ok, fail) = withContext(Dispatchers.IO) {
-                                    var o = 0
-                                    var f = 0
-                                    list.forEachIndexed { index, model ->
-                                        if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
-                                        else f++
-                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                    }
-                                    Pair(o, f)
-                                }
-                                copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
-                                if (fail == 0 && ok > 0) {
-                                    pendingList.clear()
-                                    Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                                } else if (ok > 0) {
-                                    Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
-                                }
-                                refreshTrigger++
-                            }
-                        }
-                    },
-                    onMoveHere = {
-                        val targetDirUri = normalizeContentUriString(currentUri.value)
-                        copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
-                        val ctx = context
-                        val list = pendingList.toList()
-                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        scope.launch {
-                            runWithProgress("移动", list.size) { setProgress ->
-                                val (ok, fail) = withContext(Dispatchers.IO) {
-                                    var o = 0
-                                    var f = 0
-                                    list.forEachIndexed { index, model ->
-                                        if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
-                                        else f++
-                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                    }
-                                    Pair(o, f)
-                                }
-                                copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
-                                if (fail == 0 && ok > 0) {
-                                    pendingList.clear()
-                                    Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                                } else if (ok > 0) {
-                                    Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
-                                }
-                                refreshTrigger++
-                            }
-                        }
-                    },
                     onShowPendingList = { showPendingList = it },
                     onRefresh = { refreshTrigger++ },
                     onOpenConfig = { showConfigDialog = true },
@@ -532,8 +562,119 @@ fun FileBrowserApp(
             if (showPendingList) {
                 PendingListScreen(
                     pendingList = pendingList,
+                    currentDirPath = currentDirPath,
                     onRemove = { pendingList.remove(it) },
+                    onCopyHere = doCopyHere,
+                    onMoveHere = doMoveHere,
+                    onRequestDelete = { showPendingDeleteConfirm = true },
+                    onRequestBatchObfuscate = {
+                        val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
+                        if (list.isEmpty()) Toast.makeText(context, "没有可混淆的文件（请勿选已 .qx 或文件夹）", Toast.LENGTH_SHORT).show()
+                        else batchObfuscateOp = list to true
+                    },
+                    onRequestBatchDeobfuscate = {
+                        val list = pendingList.filter { !it.isDirectory && isQuickObfuscatedFileName(it.name) }
+                        if (list.isEmpty()) Toast.makeText(context, "没有可去混淆的文件（请只选 .qx 文件）", Toast.LENGTH_SHORT).show()
+                        else batchObfuscateOp = list to false
+                    },
+                    onRequestBatchGpgEncrypt = {
+                        if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
+                            Toast.makeText(context, "列表中存在 .gpg 文件，无法批量加密", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val list = pendingList.filter { !it.isDirectory }
+                            if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
+                            else gpgState = GpgOpState.BatchEncrypt(list, currentUri.value)
+                        }
+                    },
+                    onRequestBatchGpgDecrypt = {
+                        if (pendingList.any { !it.name.endsWith(".gpg", ignoreCase = true) }) {
+                            Toast.makeText(context, "列表中存在非 .gpg 文件，无法批量解密", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val list = pendingList.filter { !it.isDirectory }
+                            if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
+                            else gpgState = GpgOpState.BatchDecrypt(list, currentUri.value)
+                        }
+                    },
+                    onClearList = { pendingList.clear() },
                     onDismiss = { showPendingList = false }
+                )
+            }
+            if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
+                val toDelete = pendingList.toList()
+                var deletePermanently by remember { mutableStateOf(false) }
+                val hasRoot = rootUri != null
+                AlertDialog(
+                    onDismissRequest = { showPendingDeleteConfirm = false },
+                    title = { Text("确认删除") },
+                    text = {
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            Text("确定要删除以下 ${toDelete.size} 项吗？", color = MaterialTheme.colorScheme.onSurface)
+                            if (hasRoot) {
+                                Spacer(Modifier.height(12.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    androidx.compose.material3.RadioButton(
+                                        selected = !deletePermanently,
+                                        onClick = { deletePermanently = false }
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    androidx.compose.material3.RadioButton(
+                                        selected = deletePermanently,
+                                        onClick = { deletePermanently = true }
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            } else {
+                                Spacer(Modifier.height(8.dp))
+                                Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            toDelete.forEach { item ->
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                        contentDescription = null,
+                                        Modifier.size(20.dp),
+                                        tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.size(8.dp))
+                                    Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val label = if (deletePermanently) "删除" else "移到回收站"
+                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                    runWithProgress(label, toDelete.size) { setProgress ->
+                                        withContext(Dispatchers.IO) {
+                                            toDelete.forEachIndexed { index, model ->
+                                                if (deletePermanently) {
+                                                    context.contentResolver.deleteDocument(model.uri)
+                                                } else {
+                                                    if (root != null) moveToTrash(context, model.uri, root, root)
+                                                }
+                                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                            }
+                                        }
+                                    }
+                                    toDelete.forEach { pendingList.remove(it) }
+                                    refreshTrigger++
+                                    showPendingDeleteConfirm = false
+                                    showPendingList = false
+                                    Toast.makeText(context, if (deletePermanently) "已删除 ${toDelete.size} 项" else "已移到回收站 ${toDelete.size} 项", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                        ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "确定删除") }
+                    },
+                    dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
                 )
             }
             if (showConfigDialog) {
@@ -583,6 +724,36 @@ fun FileBrowserApp(
                     onDismiss = { quickObfuscateOp = null; quickObfuscatePassword = "" }
                 )
             }
+            batchObfuscateOp?.let { (list, isObfuscate) ->
+                QuickObfuscatePasswordDialog(
+                    isObfuscate = isObfuscate,
+                    fileName = "共 ${list.size} 个文件",
+                    password = batchObfuscatePassword,
+                    inProgress = batchObfuscateInProgress,
+                    onPasswordChange = { batchObfuscatePassword = it },
+                    onConfirm = { pwd ->
+                        batchObfuscateInProgress = true
+                        scope.launch {
+                            runWithProgress(if (isObfuscate) "混淆" else "去混淆", list.size) { setProgress ->
+                                withContext(Dispatchers.IO) {
+                                    list.forEachIndexed { index, model ->
+                                        if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
+                                        else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                    }
+                                }
+                            }
+                            batchObfuscateInProgress = false
+                            batchObfuscateOp = null
+                            batchObfuscatePassword = ""
+                            Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
+                            pendingList.clear()
+                            refreshTrigger++
+                        }
+                    },
+                    onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
+                )
+            }
             if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
                 val op = gpgState!!
                 val pubRings = loadPublicKeyRings(context)
@@ -592,11 +763,11 @@ fun FileBrowserApp(
                 val hasAnyPubKeys = listPublicKeyInfos(pubRings).isNotEmpty()
                 GpgMethodDialog(
                     isDecrypt = op.isDecrypt,
-                    fileName = op.fileModel.name,
+                    fileName = op.displayName,
                     hasPublicKeys = hasPubKeys,
-                    hasAnyPublicKeysForVerify = hasAnyPubKeys,
+                    hasAnyPublicKeysForVerify = hasAnyPubKeys && op !is GpgOpState.BatchDecrypt && op !is GpgOpState.BatchEncrypt,
                     hasSecretKeys = decKeys.isNotEmpty(),
-                    hasSigningKeys = listSigningSecretKeys(secRings).isNotEmpty(),
+                    hasSigningKeys = listSigningSecretKeys(secRings).isNotEmpty() && op !is GpgOpState.BatchEncrypt,
                     onSymmetric = { gpgMethod = GpgMethod.Symmetric },
                     onPublicKey = { showGpgKeyPicker = true },
                     onSecretKey = { gpgMethod = GpgMethod.SecretKeyDec },
@@ -605,41 +776,79 @@ fun FileBrowserApp(
                     onDismiss = { gpgState = null; gpgMethod = null; showGpgKeyPicker = false }
                 )
             }
-            if (gpgState != null && showGpgKeyPicker && gpgState is GpgOpState.Encrypt) {
-                val op = gpgState!! as GpgOpState.Encrypt
+            if (gpgState != null && showGpgKeyPicker && (gpgState is GpgOpState.Encrypt || gpgState is GpgOpState.BatchEncrypt)) {
+                val op = gpgState!!
                 val pubRings = loadPublicKeyRings(context)
                 val keys = listEncryptionPublicKeys(pubRings)
                 GpgPublicKeyPickerDialog(
                     keys = keys,
-                    fileName = op.fileModel.name,
+                    fileName = op.displayName,
                     onConfirm = { keyId, keyDesc ->
                         showGpgKeyPicker = false
                         val pubKeyRing = findPublicKeyRing(pubRings, keyId)
                         if (pubKeyRing != null) {
-                            val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
-                            val baseName = op.fileModel.name.removeSuffix(".gpg")
-                            val outName = if (safeName.isNotEmpty()) "${baseName}_$safeName.gpg" else "${baseName}.gpg"
-                            gpgPubEncryptInProgress = true
-                            scope.launch {
-                                try {
-                                    val ok = withContext(Dispatchers.IO) {
-                                        context.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
-                                            val plain = input.readBytes()
-                                            val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, op.fileModel.name)
-                                            if (encrypted != null) {
-                                                val dirUri = normalizeContentUriString(op.dirUri)
-                                                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                                createFileWithBytes(context, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                            } else false
-                                        } ?: false
+                            when (op) {
+                                is GpgOpState.Encrypt -> {
+                                    val encOp = op
+                                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
+                                    val baseName = encOp.fileModel.name.removeSuffix(".gpg")
+                                    val outName = if (safeName.isNotEmpty()) "${baseName}_$safeName.gpg" else "${baseName}.gpg"
+                                    gpgPubEncryptInProgress = true
+                                    scope.launch {
+                                        try {
+                                            val ok = withContext(Dispatchers.IO) {
+                                                context.contentResolver.openInputStreamSafe(encOp.fileModel.uri)?.use { input ->
+                                                    val plain = input.readBytes()
+                                                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, encOp.fileModel.name)
+                                                    if (encrypted != null) {
+                                                        val dirUri = normalizeContentUriString(encOp.dirUri)
+                                                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                                        createFileWithBytes(context, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                                    } else false
+                                                } ?: false
+                                            }
+                                            if (ok) Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
+                                            else Toast.makeText(context, "加密失败", Toast.LENGTH_SHORT).show()
+                                            gpgState = null
+                                            refreshTrigger++
+                                        } finally {
+                                            gpgPubEncryptInProgress = false
+                                        }
                                     }
-                                    if (ok) Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
-                                    else Toast.makeText(context, "加密失败", Toast.LENGTH_SHORT).show()
-                                    gpgState = null
-                                    refreshTrigger++
-                                } finally {
-                                    gpgPubEncryptInProgress = false
                                 }
+                                is GpgOpState.BatchEncrypt -> {
+                                    val batchOp = op
+                                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
+                                    val dirUri = normalizeContentUriString(batchOp.dirUri)
+                                    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                    gpgPubEncryptInProgress = true
+                                    scope.launch {
+                                        try {
+                                            runWithProgress("公钥加密", batchOp.list.size) { setProgress ->
+                                                withContext(Dispatchers.IO) {
+                                                    batchOp.list.forEachIndexed { index, fileModel ->
+                                                        context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                                                            val plain = input.readBytes()
+                                                            val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name)
+                                                            if (encrypted != null) {
+                                                                val outName = if (safeName.isNotEmpty()) "${fileModel.name}_$safeName.gpg" else "${fileModel.name}.gpg"
+                                                                createFileWithBytes(context, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                                            }
+                                                        }
+                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                                    }
+                                                }
+                                            }
+                                            Toast.makeText(context, "已公钥加密 ${batchOp.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                            pendingList.clear()
+                                            gpgState = null
+                                            refreshTrigger++
+                                        } finally {
+                                            gpgPubEncryptInProgress = false
+                                        }
+                                    }
+                                }
+                                else -> { }
                             }
                         }
                     },
@@ -725,7 +934,7 @@ fun FileBrowserApp(
                 if (gpgMethod == GpgMethod.Symmetric || gpgMethod == GpgMethod.SecretKeyDec || (gpgMethod == GpgMethod.Sign && op is GpgOpState.Encrypt && selectedSigningKeyId != null)) {
                     GpgPasswordDialog(
                         isDecrypt = op.isDecrypt,
-                        fileName = op.fileModel.name,
+                        fileName = op.displayName,
                         password = gpgPassword,
                         passwordLabel = if (gpgMethod == GpgMethod.SecretKeyDec || gpgMethod == GpgMethod.Sign) "密钥密码" else "密码",
                         inProgress = gpgInProgress,
@@ -738,90 +947,159 @@ fun FileBrowserApp(
                             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                             scope.launch {
                                 try {
-                                    val ok = withContext(Dispatchers.IO) {
-                                    when {
-                                        op.isDecrypt && gpgMethod == GpgMethod.SecretKeyDec -> {
-                                            val secretRings = loadSecretKeyRings(ctx)
-                                            if (secretRings == null) false
-                                            else ctx.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
-                                                val encBytes = input.readBytes()
-                                                val decrypted = GpgHelper.decryptWithSecretKey(
-                                                    java.io.ByteArrayInputStream(encBytes),
-                                                    secretRings, pwd.toCharArray()
-                                                ) { e ->
-                                                    logDebug("[GPG] 私钥解密失败: ${op.fileModel.name}")
-                                                    logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                    e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                    logDebug("  输入: ${encBytes.size} bytes, 密钥密码长度: ${pwd.length}")
+                                    val ok = when (op) {
+                                        is GpgOpState.BatchDecrypt -> {
+                                            runWithProgress("解密", op.list.size) { setProgress ->
+                                                withContext(Dispatchers.IO) {
+                                                    op.list.forEachIndexed { index, fileModel ->
+                                                        when (gpgMethod) {
+                                                            GpgMethod.SecretKeyDec -> {
+                                                                val secretRings = loadSecretKeyRings(ctx)
+                                                                if (secretRings != null) {
+                                                                    ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                                                                        val encBytes = input.readBytes()
+                                                                        val decrypted = GpgHelper.decryptWithSecretKey(
+                                                                            java.io.ByteArrayInputStream(encBytes),
+                                                                            secretRings, pwd.toCharArray()
+                                                                        ) { _ -> }
+                                                                        if (decrypted != null) {
+                                                                            val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
+                                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            else -> {
+                                                                ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                                                                    val encBytes = input.readBytes()
+                                                                    val decrypted = GpgHelper.decryptSymmetric(
+                                                                        java.io.ByteArrayInputStream(encBytes),
+                                                                        pwd.toCharArray()
+                                                                    ) { _ -> }
+                                                                    if (decrypted != null) {
+                                                                        val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
+                                                                        createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                                    }
                                                 }
-                                                if (decrypted != null) {
-                                                    logDebug("[GPG] 私钥解密成功: ${op.fileModel.name}, 输出=${decrypted.size} bytes")
-                                                    val outName = op.fileModel.name.removeSuffix(".gpg").ifEmpty { op.fileModel.name + ".dec" }
-                                                    createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                } else false
-                                            } ?: false
+                                            }
+                                            true
                                         }
-                                        gpgMethod == GpgMethod.Sign && op is GpgOpState.Encrypt -> {
-                                            val encOp = op
-                                            val keyId = selectedSigningKeyId!!
-                                            val secretRings = loadSecretKeyRings(ctx)
-                                            val secretRing = findSecretKeyRing(secretRings, keyId)
-                                            if (secretRing == null) false
-                                            else ctx.contentResolver.openInputStreamSafe(encOp.fileModel.uri)?.use { input ->
-                                                val plain = input.readBytes()
-                                                val signed = GpgHelper.signWithSecretKey(
-                                                    plain, secretRing, pwd.toCharArray(), encOp.fileModel.name
-                                                ) { e ->
-                                                    logDebug("[GPG] 私钥签名失败: ${encOp.fileModel.name}")
-                                                    logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                        is GpgOpState.BatchEncrypt -> {
+                                            runWithProgress("加密", op.list.size) { setProgress ->
+                                                withContext(Dispatchers.IO) {
+                                                    op.list.forEachIndexed { index, fileModel ->
+                                                        ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                                                            val plain = input.readBytes()
+                                                            val encrypted = GpgHelper.encryptSymmetric(
+                                                                plain, pwd.toCharArray(), fileModel.name
+                                                            ) { _ -> }
+                                                            if (encrypted != null) {
+                                                                val outName = fileModel.name + ".gpg"
+                                                                createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                                            }
+                                                        }
+                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                                    }
                                                 }
-                                                if (signed != null) {
-                                                    val outName = encOp.fileModel.name + ".sig"
-                                                    createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", signed)
-                                                } else false
-                                            } ?: false
+                                            }
+                                            true
                                         }
-                                        op.isDecrypt -> {
-                                            ctx.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
-                                                val encBytes = input.readBytes()
-                                                val decrypted = GpgHelper.decryptSymmetric(
-                                                    java.io.ByteArrayInputStream(encBytes),
-                                                    pwd.toCharArray()
-                                                ) { e ->
-                                                    logDebug("[GPG] 对称解密失败: ${op.fileModel.name}")
-                                                    logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                    e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                    logDebug("  输入: ${encBytes.size} bytes, 密码长度: ${pwd.length}")
+                                        else -> withContext(Dispatchers.IO) {
+                                            when {
+                                                op.isDecrypt && gpgMethod == GpgMethod.SecretKeyDec -> {
+                                                    val secretRings = loadSecretKeyRings(ctx)
+                                                    if (secretRings == null) false
+                                                    else ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
+                                                        val encBytes = input.readBytes()
+                                                        val decrypted = GpgHelper.decryptWithSecretKey(
+                                                            java.io.ByteArrayInputStream(encBytes),
+                                                            secretRings, pwd.toCharArray()
+                                                        ) { e ->
+                                                            logDebug("[GPG] 私钥解密失败: ${(op as GpgOpState.Decrypt).fileModel.name}")
+                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
+                                                            logDebug("  输入: ${encBytes.size} bytes, 密钥密码长度: ${pwd.length}")
+                                                        }
+                                                        if (decrypted != null) {
+                                                            logDebug("[GPG] 私钥解密成功: ${(op as GpgOpState.Decrypt).fileModel.name}, 输出=${decrypted.size} bytes")
+                                                            val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
+                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                                        } else false
+                                                    } ?: false
                                                 }
-                                                if (decrypted != null) {
-                                                    logDebug("[GPG] 对称解密成功: ${op.fileModel.name}, 算法=AES256/S2K=SHA-1(与加密一致), 输入=${encBytes.size} bytes, 输出=${decrypted.size} bytes, 密码长度=${pwd.length}")
-                                                    val outName = op.fileModel.name.removeSuffix(".gpg").ifEmpty { op.fileModel.name + ".dec" }
-                                                    createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                } else false
-                                            } ?: false
-                                        }
-                                        else -> {
-                                            ctx.contentResolver.openInputStreamSafe(op.fileModel.uri)?.use { input ->
-                                                val plain = input.readBytes()
-                                                val encrypted = GpgHelper.encryptSymmetric(
-                                                    plain, pwd.toCharArray(), op.fileModel.name
-                                                ) { e ->
-                                                    logDebug("[GPG] 对称加密失败: ${op.fileModel.name}")
-                                                    logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                    e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                    logDebug("  明文: ${plain.size} bytes, 密码长度: ${pwd.length}")
+                                                gpgMethod == GpgMethod.Sign && op is GpgOpState.Encrypt -> {
+                                                    val encOp = op
+                                                    val keyId = selectedSigningKeyId!!
+                                                    val secretRings = loadSecretKeyRings(ctx)
+                                                    val secretRing = findSecretKeyRing(secretRings, keyId)
+                                                    if (secretRing == null) false
+                                                    else ctx.contentResolver.openInputStreamSafe(encOp.fileModel.uri)?.use { input ->
+                                                        val plain = input.readBytes()
+                                                        val signed = GpgHelper.signWithSecretKey(
+                                                            plain, secretRing, pwd.toCharArray(), encOp.fileModel.name
+                                                        ) { e ->
+                                                            logDebug("[GPG] 私钥签名失败: ${encOp.fileModel.name}")
+                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                                        }
+                                                        if (signed != null) {
+                                                            val outName = encOp.fileModel.name + ".sig"
+                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", signed)
+                                                        } else false
+                                                    } ?: false
                                                 }
-                                                if (encrypted != null) {
-                                                    logDebug("[GPG] 对称加密成功: ${op.fileModel.name}, 算法=AES256, S2K=SHA-1, 明文=${plain.size} bytes, 密文=${encrypted.size} bytes, 密码长度=${pwd.length}")
-                                                    val outName = op.fileModel.name + ".gpg"
-                                                    createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                                } else false
-                                            } ?: false
+                                                op.isDecrypt -> {
+                                                    ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
+                                                        val encBytes = input.readBytes()
+                                                        val decrypted = GpgHelper.decryptSymmetric(
+                                                            java.io.ByteArrayInputStream(encBytes),
+                                                            pwd.toCharArray()
+                                                        ) { e ->
+                                                            logDebug("[GPG] 对称解密失败: ${(op as GpgOpState.Decrypt).fileModel.name}")
+                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
+                                                            logDebug("  输入: ${encBytes.size} bytes, 密码长度: ${pwd.length}")
+                                                        }
+                                                        if (decrypted != null) {
+                                                            logDebug("[GPG] 对称解密成功: ${(op as GpgOpState.Decrypt).fileModel.name}, 算法=AES256/S2K=SHA-1(与加密一致), 输入=${encBytes.size} bytes, 输出=${decrypted.size} bytes, 密码长度=${pwd.length}")
+                                                            val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
+                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                                        } else false
+                                                    } ?: false
+                                                }
+                                                else -> {
+                                                    ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Encrypt).fileModel.uri)?.use { input ->
+                                                        val plain = input.readBytes()
+                                                        val encrypted = GpgHelper.encryptSymmetric(
+                                                            plain, pwd.toCharArray(), (op as GpgOpState.Encrypt).fileModel.name
+                                                        ) { e ->
+                                                            logDebug("[GPG] 对称加密失败: ${(op as GpgOpState.Encrypt).fileModel.name}")
+                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
+                                                            logDebug("  明文: ${plain.size} bytes, 密码长度: ${pwd.length}")
+                                                        }
+                                                        if (encrypted != null) {
+                                                            logDebug("[GPG] 对称加密成功: ${(op as GpgOpState.Encrypt).fileModel.name}, 算法=AES256, S2K=SHA-1, 明文=${plain.size} bytes, 密文=${encrypted.size} bytes, 密码长度=${pwd.length}")
+                                                            val outName = (op as GpgOpState.Encrypt).fileModel.name + ".gpg"
+                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                                        } else false
+                                                    } ?: false
+                                                }
+                                            }
                                         }
                                     }
-                                }
-                                    if (ok) Toast.makeText(ctx, if (op.isDecrypt) "解密完成" else if (gpgMethod == GpgMethod.Sign) "签名完成" else "加密完成", Toast.LENGTH_SHORT).show()
-                                    else Toast.makeText(ctx, if (op.isDecrypt) "解密失败（开启「显示调试窗口」可查看详情）" else "加密/签名失败", Toast.LENGTH_LONG).show()
+                                    if (ok) {
+                                        Toast.makeText(ctx, when (op) {
+                                            is GpgOpState.BatchDecrypt -> "已解密 ${op.list.size} 个文件"
+                                            is GpgOpState.BatchEncrypt -> "已加密 ${op.list.size} 个文件"
+                                            else -> if (op.isDecrypt) "解密完成" else if (gpgMethod == GpgMethod.Sign) "签名完成" else "加密完成"
+                                        }, Toast.LENGTH_SHORT).show()
+                                        if (op is GpgOpState.BatchDecrypt || op is GpgOpState.BatchEncrypt) pendingList.clear()
+                                    } else Toast.makeText(ctx, if (op.isDecrypt) "解密失败（开启「显示调试窗口」可查看详情）" else "加密/签名失败", Toast.LENGTH_LONG).show()
                                     gpgState = null
                                     gpgMethod = null
                                     gpgPassword = ""
@@ -906,9 +1184,26 @@ private fun OperationProgressDialog(progress: OperationProgress) {
     }
 }
 
-private sealed class GpgOpState(val isDecrypt: Boolean, val fileModel: DocumentFileModel, val dirUri: String) {
-    class Decrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(true, fileModel, dirUri)
-    class Encrypt(fileModel: DocumentFileModel, dirUri: String) : GpgOpState(false, fileModel, dirUri)
+private sealed class GpgOpState {
+    abstract val isDecrypt: Boolean
+    abstract val dirUri: String
+    abstract val displayName: String
+    data class Decrypt(val fileModel: DocumentFileModel, override val dirUri: String) : GpgOpState() {
+        override val isDecrypt = true
+        override val displayName get() = fileModel.name
+    }
+    data class Encrypt(val fileModel: DocumentFileModel, override val dirUri: String) : GpgOpState() {
+        override val isDecrypt = false
+        override val displayName get() = fileModel.name
+    }
+    data class BatchDecrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
+        override val isDecrypt = true
+        override val displayName get() = "共 ${list.size} 个文件"
+    }
+    data class BatchEncrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
+        override val isDecrypt = false
+        override val displayName get() = "共 ${list.size} 个文件"
+    }
 }
 
 /** 加密/解密方式：对称(密码)、公钥加密、私钥解密、验证签名、私钥签名 */
@@ -938,8 +1233,6 @@ fun FileBrowserScreen(
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
-    onCopyHere: () -> Unit,
-    onMoveHere: () -> Unit,
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
@@ -962,7 +1255,6 @@ fun FileBrowserScreen(
     var showCreateDirDialog by remember { mutableStateOf(false) }
     var newFileName by remember { mutableStateOf("") }
     var newDirName by remember { mutableStateOf("") }
-    var showPendingMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
     var filterText by remember { mutableStateOf("") }
     var filterVisible by remember { mutableStateOf(true) }
@@ -1035,36 +1327,8 @@ fun FileBrowserScreen(
                         }
                     },
                     actions = {
-                        if (pendingList.isNotEmpty()) {
-                            IconButton(onClick = { showPendingMenu = true }) {
-                                Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
-                            }
-                            DropdownMenu(
-                                expanded = showPendingMenu,
-                                onDismissRequest = { showPendingMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("拷贝到本处") },
-                                    onClick = {
-                                        showPendingMenu = false
-                                        onCopyHere()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("移动到本处") },
-                                    onClick = {
-                                        showPendingMenu = false
-                                        onMoveHere()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("待处理列表 (${pendingList.size})") },
-                                    onClick = {
-                                        showPendingMenu = false
-                                        onShowPendingList(true)
-                                    }
-                                )
-                            }
+                        IconButton(onClick = { onShowPendingList(true) }) {
+                            Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
                         }
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
@@ -1194,6 +1458,10 @@ fun FileBrowserScreen(
                                 onLongClick = {
                                     contextMenuTarget = item
                                     showContextMenu = true
+                                },
+                                onDoubleClick = {
+                                    if (pendingList.any { it.uri == item.uri }) onRemoveFromPendingList(item)
+                                    else onAddToPendingList(item)
                                 }
                             )
                         }
@@ -1539,17 +1807,37 @@ fun FileItem(
     model: DocumentFileModel,
     isInPendingList: Boolean = false,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    onDoubleClick: (() -> Unit)? = null
 ) {
+    val scope = rememberCoroutineScope()
+    var pendingClickJob by remember { mutableStateOf<Job?>(null) }
     val icon = when {
         model.isDirectory -> Icons.Default.Folder
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
         else -> Icons.Default.InsertDriveFile
     }
+    val clickableOnClick: () -> Unit = if (onDoubleClick != null) {
+        {
+            if (pendingClickJob != null) {
+                pendingClickJob?.cancel()
+                pendingClickJob = null
+                onDoubleClick()
+            } else {
+                pendingClickJob = scope.launch {
+                    delay(300)
+                    pendingClickJob = null
+                    onClick()
+                }
+            }
+        }
+    } else {
+        { onClick() }
+    }
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .combinedClickable(onClick = clickableOnClick, onLongClick = onLongClick)
             .padding(4.dp),
         colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
@@ -1600,9 +1888,19 @@ fun FileItem(
 @Composable
 fun PendingListScreen(
     pendingList: List<DocumentFileModel>,
+    currentDirPath: String = "",
     onRemove: (DocumentFileModel) -> Unit,
+    onCopyHere: () -> Unit = {},
+    onMoveHere: () -> Unit = {},
+    onRequestDelete: () -> Unit = {},
+    onRequestBatchObfuscate: () -> Unit = {},
+    onRequestBatchDeobfuscate: () -> Unit = {},
+    onRequestBatchGpgEncrypt: () -> Unit = {},
+    onRequestBatchGpgDecrypt: () -> Unit = {},
+    onClearList: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
+    var showHelpDialog by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1610,6 +1908,11 @@ fun PendingListScreen(
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { showHelpDialog = true }) {
+                        Icon(Icons.Default.Info, contentDescription = "说明")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1629,10 +1932,61 @@ fun PendingListScreen(
                 Text("列表为空", style = MaterialTheme.typography.bodyLarge)
             }
         } else {
+            Column(Modifier.fillMaxSize().padding(padding)) {
+                Text(
+                    "当前目录：$currentDirPath",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onCopyHere) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到本处")
+                    }
+                    IconButton(onClick = onMoveHere) {
+                        Icon(Icons.Default.DriveFileMove, contentDescription = "移动到本处")
+                    }
+                    IconButton(onClick = onRequestDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "删除",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    IconButton(onClick = onClearList) {
+                        Icon(Icons.Default.Clear, contentDescription = "清空列表")
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onRequestBatchObfuscate) {
+                        Icon(Icons.Default.Lock, contentDescription = "混淆")
+                    }
+                    IconButton(onClick = onRequestBatchDeobfuscate) {
+                        Icon(Icons.Default.LockOpen, contentDescription = "去混淆")
+                    }
+                    IconButton(onClick = onRequestBatchGpgEncrypt) {
+                        Icon(Icons.Default.Lock, contentDescription = "加密", tint = MaterialTheme.colorScheme.primary)
+                    }
+                    IconButton(onClick = onRequestBatchGpgDecrypt) {
+                        Icon(Icons.Default.LockOpen, contentDescription = "解密", tint = MaterialTheme.colorScheme.primary)
+                    }
+                }
             LazyColumn(
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding),
+                Modifier.weight(1f),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -1666,7 +2020,68 @@ fun PendingListScreen(
                     }
                 }
             }
+            }
         }
+    }
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = { showHelpDialog = false },
+            title = { Text("操作说明") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("拷贝：将列表中所有项拷贝到当前目录（原文件保留）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.DriveFileMove, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("移动：将列表中所有项移动到当前目录（原位置删除）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Delete, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
+                        Spacer(Modifier.size(8.dp))
+                        Text("删除：可将列表中所有项移到回收站（可恢复），或直接永久删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("混淆：对列表中非 .qx 文件进行快速混淆（需同一密码）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("去混淆：对列表中 .qx 文件进行快速去混淆", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.size(8.dp))
+                        Text("加密：对列表中非 .gpg 文件进行 GPG 加密，可选对称加密（密码）或公钥加密（选一个公钥，全部用该密钥加密）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.LockOpen, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.size(8.dp))
+                        Text("解密：对列表中 .gpg 文件进行 GPG 解密（列表必须全是 .gpg）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Clear, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("清空列表：移除列表中全部项", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = { TextButton(onClick = { showHelpDialog = false }) { Text("知道了") } }
+        )
     }
 }
 
