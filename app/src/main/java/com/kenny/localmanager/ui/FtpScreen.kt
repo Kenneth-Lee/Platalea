@@ -65,6 +65,7 @@ fun FtpScreen(
     currentDirUri: String,
     port: Int,
     password: String?,
+    timeoutMinutes: Int = 0,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -101,6 +102,7 @@ fun FtpScreen(
     }
 
     LaunchedEffect(Unit) {
+        manager.clearLog()
         try {
             val ip = withContext(Dispatchers.IO) { getLocalIpAddress() }
             localIp = ip
@@ -130,6 +132,17 @@ fun FtpScreen(
             }
         } catch (e: Throwable) {
             Log.e("FtpScreen", "polling failed", e)
+        }
+    }
+
+    LaunchedEffect(timeoutMinutes) {
+        if (timeoutMinutes > 0) {
+            var remaining = timeoutMinutes
+            while (remaining > 0) {
+                delay(60_000)
+                remaining--
+                if (remaining <= 0) onDismiss()
+            }
         }
     }
 

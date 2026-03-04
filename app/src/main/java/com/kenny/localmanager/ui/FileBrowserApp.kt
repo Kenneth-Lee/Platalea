@@ -77,12 +77,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -311,12 +313,20 @@ fun FileBrowserApp(
             val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
             var ftpPort by remember { mutableStateOf(2121) }
             var ftpPassword by remember { mutableStateOf<String?>(null) }
+            var ftpTimeoutMinutes by remember { mutableStateOf(0) }
+            var filterVisible by remember { mutableStateOf(true) }
             var showFtpScreen by remember { mutableStateOf(false) }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
             LaunchedEffect(prefs) {
                 prefs.ftpPassword.collect { ftpPassword = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.ftpTimeoutMinutes.collect { ftpTimeoutMinutes = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.filterVisible.collect { filterVisible = it }
             }
             BackHandler {
                 when {
@@ -444,6 +454,7 @@ fun FileBrowserApp(
                     currentDirUri = currentUri.value,
                     port = ftpPort,
                     password = ftpPassword,
+                    timeoutMinutes = ftpTimeoutMinutes,
                     onDismiss = { ftpManager.stop(); showFtpScreen = false }
                 )
             } else {
@@ -512,6 +523,8 @@ fun FileBrowserApp(
                             }
                         }
                     },
+                    filterVisible = filterVisible,
+                    onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
                     hideDotFiles = hideDotFiles,
                     isViewingTrash = rootUri?.let { r ->
                         val root = Uri.parse(normalizeContentUriString(r))
@@ -715,6 +728,8 @@ fun FileBrowserApp(
                         ftpPassword = s.ifBlank { null }
                         scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
                     },
+                    ftpTimeoutMinutes = ftpTimeoutMinutes,
+                    onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
                 )
             }
@@ -1174,6 +1189,21 @@ private sealed class GpgMethod {
     object SecretKeyDec : GpgMethod()
 }
 
+private enum class FileSortOrder(val label: String) {
+    NAME("名称"),
+    TIME("更新时间"),
+    SIZE("大小")
+}
+
+private fun fileListComparator(sortOrder: FileSortOrder): Comparator<DocumentFileModel> {
+    val dirFirst = compareBy<DocumentFileModel> { !it.isDirectory }
+    return when (sortOrder) {
+        FileSortOrder.NAME -> dirFirst.thenBy { it.name.lowercase() }
+        FileSortOrder.TIME -> dirFirst.thenByDescending { it.lastModified }
+        FileSortOrder.SIZE -> dirFirst.thenByDescending { it.size }.thenBy { it.name.lowercase() }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserScreen(
@@ -1189,6 +1219,8 @@ fun FileBrowserScreen(
     onEmptyTrash: (() -> Unit)? = null,
     onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
     isViewingTrash: Boolean = false,
+    filterVisible: Boolean = true,
+    onFilterVisibleChange: (Boolean) -> Unit = {},
     hideDotFiles: Boolean = false,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
@@ -1218,7 +1250,8 @@ fun FileBrowserScreen(
     var newDirName by remember { mutableStateOf("") }
     var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
     var filterText by remember { mutableStateOf("") }
-    var filterVisible by remember { mutableStateOf(true) }
+    var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
+    var showSortMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         loading = true
@@ -1240,11 +1273,7 @@ fun FileBrowserScreen(
                 error = "无法访问该目录"
                 items = emptyList()
             } else {
-                items = resolved.listFilesSafe()
-                    .mapNotNull { it.toModel() }
-                    .sortedWith(
-                        compareBy<DocumentFileModel> { !it.isDirectory }.thenBy { it.name.lowercase() }
-                    )
+                items = resolved.listFilesSafe().mapNotNull { it.toModel() }
             }
         } catch (e: Exception) {
             error = e.message ?: "加载失败"
@@ -1253,8 +1282,11 @@ fun FileBrowserScreen(
         loading = false
     }
 
-    val filteredItems = remember(items, filterText, filterVisible, hideDotFiles) {
-        var list = items
+    val sortedItems = remember(items, sortOrder) {
+        items.sortedWith(fileListComparator(sortOrder))
+    }
+    val filteredItems = remember(sortedItems, filterText, filterVisible, hideDotFiles) {
+        var list = sortedItems
         if (hideDotFiles) list = list.filter { !it.name.startsWith(".") }
         if (filterVisible && filterText.isNotBlank()) {
             list = runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
@@ -1321,8 +1353,12 @@ fun FileBrowserScreen(
                                 text = { Text(if (filterVisible) "隐藏过滤条件" else "显示过滤条件") },
                                 onClick = {
                                     showOverflowMenu = false
-                                    filterVisible = !filterVisible
+                                    onFilterVisibleChange(!filterVisible)
                                 }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("排序：${sortOrder.label}") },
+                                onClick = { showOverflowMenu = false; showSortMenu = true }
                             )
                             DropdownMenuItem(
                                 text = { Text("FTP 数据交换") },
@@ -1364,6 +1400,22 @@ fun FileBrowserScreen(
                             IconButton(onClick = { filterText = "" }) {
                                 Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
                             }
+                        }
+                    }
+                }
+                Box(Modifier.fillMaxWidth()) {
+                    DropdownMenu(
+                        expanded = showSortMenu,
+                        onDismissRequest = { showSortMenu = false }
+                    ) {
+                        FileSortOrder.entries.forEach { order ->
+                            DropdownMenuItem(
+                                text = { Text(order.label) },
+                                onClick = {
+                                    sortOrder = order
+                                    showSortMenu = false
+                                }
+                            )
                         }
                     }
                 }
@@ -1791,6 +1843,12 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
         else -> Icons.Default.InsertDriveFile
     }
+    val iconTint = when {
+        model.isDirectory -> MaterialTheme.colorScheme.primary
+        model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
+        model.name.endsWith(".qx", ignoreCase = true) -> Color.Blue
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     val clickableOnClick: () -> Unit = if (onDoubleClick != null) {
         {
             if (pendingClickJob != null) {
@@ -1826,8 +1884,7 @@ fun FileItem(
                 icon,
                 contentDescription = null,
                 Modifier.size(32.dp),
-                tint = if (model.isDirectory) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
+                tint = iconTint
             )
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
@@ -2271,6 +2328,8 @@ fun ConfigDialog(
     onViewerPreviewBytesChange: (Int) -> Unit,
     ftpPassword: String,
     onFtpPasswordChange: (String) -> Unit,
+    ftpTimeoutMinutes: Int,
+    onFtpTimeoutMinutesChange: (Int) -> Unit,
     onManageKeys: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -2330,9 +2389,27 @@ fun ConfigDialog(
                         onValueChange = onFtpPasswordChange,
                         modifier = Modifier.weight(1f),
                         singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
                         placeholder = { Text("留空则无需密码") }
                     )
                 }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("FTP 倒计时（分钟）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = ftpTimeoutMinutes.toString(),
+                        onValueChange = { s ->
+                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onFtpTimeoutMinutesChange(it) }
+                        },
+                        modifier = Modifier.width(100.dp),
+                        singleLine = true,
+                        placeholder = { Text("0=不退出") }
+                    )
+                }
+                Text("0 表示不自动退出", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(24.dp))

@@ -18,6 +18,8 @@ private val HIDE_DOT_FILES = booleanPreferencesKey("hide_dot_files")
 private val VIEWER_PREVIEW_BYTES = intPreferencesKey("viewer_preview_bytes")
 private val FTP_PORT = intPreferencesKey("ftp_port")
 private val FTP_PASSWORD = stringPreferencesKey("ftp_password")
+private val FTP_TIMEOUT_MINUTES = intPreferencesKey("ftp_timeout_minutes")
+private val FILTER_VISIBLE = booleanPreferencesKey("filter_visible")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -42,6 +44,14 @@ class Preferences(private val context: Context) {
 
     val ftpPassword: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[FTP_PASSWORD]
+    }
+
+    val ftpTimeoutMinutes: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[FTP_TIMEOUT_MINUTES] ?: 0
+    }
+
+    val filterVisible: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[FILTER_VISIBLE] ?: true
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -79,6 +89,18 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (password.isNullOrBlank()) prefs.remove(FTP_PASSWORD)
             else prefs[FTP_PASSWORD] = password
+        }
+    }
+
+    suspend fun setFtpTimeoutMinutes(minutes: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[FTP_TIMEOUT_MINUTES] = minutes.coerceIn(0, 1440)
+        }
+    }
+
+    suspend fun setFilterVisible(visible: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[FILTER_VISIBLE] = visible
         }
     }
 }
