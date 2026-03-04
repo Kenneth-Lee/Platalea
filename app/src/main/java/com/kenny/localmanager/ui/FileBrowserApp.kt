@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -140,6 +141,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/** 文件列表项副标题：大小与修改时间（与排序方式对应，便于对照）。 */
+private fun fileItemSubtitle(model: DocumentFileModel): String {
+    val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
+    return if (model.displaySize.isNotEmpty()) "${model.displaySize}  $dateStr" else dateStr
+}
 
 /** 规范化 content URI 字符串，修正 authority 中可能被错误成空格的句点（如 android .externalstorage -> android.externalstorage） */
 private fun normalizeContentUriString(s: String): String {
@@ -524,7 +534,6 @@ fun FileBrowserApp(
                         }
                     },
                     filterVisible = filterVisible,
-                    onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
                     hideDotFiles = hideDotFiles,
                     isViewingTrash = rootUri?.let { r ->
                         val root = Uri.parse(normalizeContentUriString(r))
@@ -719,6 +728,8 @@ fun FileBrowserApp(
                     onDismiss = { showConfigDialog = false },
                     debugEnabled = debugEnabled,
                     onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } },
+                    filterVisible = filterVisible,
+                    onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
                     hideDotFiles = hideDotFiles,
                     onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
                     viewerPreviewBytes = viewerPreviewBytes,
@@ -1220,7 +1231,6 @@ fun FileBrowserScreen(
     onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
     isViewingTrash: Boolean = false,
     filterVisible: Boolean = true,
-    onFilterVisibleChange: (Boolean) -> Unit = {},
     hideDotFiles: Boolean = false,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onAddToPendingList: (DocumentFileModel) -> Unit,
@@ -1326,6 +1336,25 @@ fun FileBrowserScreen(
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
+                        Box {
+                            IconButton(onClick = { showSortMenu = true }) {
+                                Icon(Icons.Default.Sort, contentDescription = "排序")
+                            }
+                            DropdownMenu(
+                                expanded = showSortMenu,
+                                onDismissRequest = { showSortMenu = false }
+                            ) {
+                                FileSortOrder.entries.forEach { order ->
+                                    DropdownMenuItem(
+                                        text = { Text(order.label) },
+                                        onClick = {
+                                            sortOrder = order
+                                            showSortMenu = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
                         IconButton(onClick = { showOverflowMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "菜单")
                         }
@@ -1349,17 +1378,6 @@ fun FileBrowserScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text(if (filterVisible) "隐藏过滤条件" else "显示过滤条件") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onFilterVisibleChange(!filterVisible)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("排序：${sortOrder.label}") },
-                                onClick = { showOverflowMenu = false; showSortMenu = true }
-                            )
                             DropdownMenuItem(
                                 text = { Text("FTP 数据交换") },
                                 onClick = {
@@ -1400,22 +1418,6 @@ fun FileBrowserScreen(
                             IconButton(onClick = { filterText = "" }) {
                                 Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
                             }
-                        }
-                    }
-                }
-                Box(Modifier.fillMaxWidth()) {
-                    DropdownMenu(
-                        expanded = showSortMenu,
-                        onDismissRequest = { showSortMenu = false }
-                    ) {
-                        FileSortOrder.entries.forEach { order ->
-                            DropdownMenuItem(
-                                text = { Text(order.label) },
-                                onClick = {
-                                    sortOrder = order
-                                    showSortMenu = false
-                                }
-                            )
                         }
                     }
                 }
@@ -1894,13 +1896,11 @@ fun FileItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                if (model.displaySize.isNotEmpty()) {
-                    Text(
-                        model.displaySize,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                Text(
+                    text = fileItemSubtitle(model),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             if (isInPendingList) {
                 Spacer(Modifier.size(8.dp))
@@ -2322,6 +2322,8 @@ fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
     onDebugEnabledChange: (Boolean) -> Unit,
+    filterVisible: Boolean,
+    onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
     onHideDotFilesChange: (Boolean) -> Unit,
     viewerPreviewBytes: Int,
@@ -2348,6 +2350,14 @@ fun ConfigDialog(
                 ) {
                     Text("显示调试窗口", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("显示过滤条件", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Switch(checked = filterVisible, onCheckedChange = onFilterVisibleChange)
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(
