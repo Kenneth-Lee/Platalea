@@ -302,6 +302,7 @@ fun FileBrowserApp(
             var showPendingList by remember { mutableStateOf(false) }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
+            var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
             var refreshTrigger by remember { mutableStateOf(0) }
             LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
@@ -352,6 +353,7 @@ fun FileBrowserApp(
                     }
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
+                    showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
                     backStack.isNotEmpty() -> currentUri.value = backStack.removeAt(backStack.lastIndex)
@@ -548,6 +550,7 @@ fun FileBrowserApp(
                     onShowPendingList = { showPendingList = it },
                     onRefresh = { refreshTrigger++ },
                     onOpenConfig = { showConfigDialog = true },
+                    onOpenAbout = { showAboutDialog = true },
                     onRequestGpgDecrypt = { fileModel, dirUri ->
                         gpgMethod = null
                         showGpgKeyPicker = false
@@ -722,6 +725,9 @@ fun FileBrowserApp(
                     },
                     dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
                 )
+            }
+            if (showAboutDialog) {
+                AboutDialog(onDismiss = { showAboutDialog = false })
             }
             if (showConfigDialog) {
                 ConfigDialog(
@@ -1206,12 +1212,17 @@ private enum class FileSortOrder(val label: String) {
     SIZE("大小")
 }
 
-private fun fileListComparator(sortOrder: FileSortOrder): Comparator<DocumentFileModel> {
+private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Comparator<DocumentFileModel> {
     val dirFirst = compareBy<DocumentFileModel> { !it.isDirectory }
+    val nameThen = compareBy<DocumentFileModel> { it.name.lowercase() }
     return when (sortOrder) {
-        FileSortOrder.NAME -> dirFirst.thenBy { it.name.lowercase() }
-        FileSortOrder.TIME -> dirFirst.thenByDescending { it.lastModified }
-        FileSortOrder.SIZE -> dirFirst.thenByDescending { it.size }.thenBy { it.name.lowercase() }
+        FileSortOrder.NAME -> dirFirst.then(if (ascending) nameThen else nameThen.reversed())
+        FileSortOrder.TIME -> dirFirst.then(
+            if (ascending) compareBy { it.lastModified } else compareByDescending { it.lastModified }
+        ).then(nameThen)
+        FileSortOrder.SIZE -> dirFirst.then(
+            if (ascending) compareBy { it.size } else compareByDescending { it.size }
+        ).then(nameThen)
     }
 }
 
@@ -1238,6 +1249,7 @@ fun FileBrowserScreen(
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
+    onOpenAbout: () -> Unit = {},
     onOpenFtp: () -> Unit = {},
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
@@ -1261,6 +1273,7 @@ fun FileBrowserScreen(
     var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
     var filterText by remember { mutableStateOf("") }
     var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
+    var sortAscending by remember { mutableStateOf(true) }
     var showSortMenu by remember { mutableStateOf(false) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
@@ -1292,8 +1305,8 @@ fun FileBrowserScreen(
         loading = false
     }
 
-    val sortedItems = remember(items, sortOrder) {
-        items.sortedWith(fileListComparator(sortOrder))
+    val sortedItems = remember(items, sortOrder, sortAscending) {
+        items.sortedWith(fileListComparator(sortOrder, sortAscending))
     }
     val filteredItems = remember(sortedItems, filterText, filterVisible, hideDotFiles) {
         var list = sortedItems
@@ -1345,10 +1358,17 @@ fun FileBrowserScreen(
                                 onDismissRequest = { showSortMenu = false }
                             ) {
                                 FileSortOrder.entries.forEach { order ->
+                                    val isCurrent = sortOrder == order
+                                    val direction = if (isCurrent) (if (sortAscending) " ↑" else " ↓") else ""
                                     DropdownMenuItem(
-                                        text = { Text(order.label) },
+                                        text = { Text(order.label + direction) },
                                         onClick = {
-                                            sortOrder = order
+                                            if (isCurrent) {
+                                                sortAscending = !sortAscending
+                                            } else {
+                                                sortOrder = order
+                                                sortAscending = true
+                                            }
                                             showSortMenu = false
                                         }
                                     )
@@ -1390,6 +1410,13 @@ fun FileBrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenConfig()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("关于") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenAbout()
                                 }
                             )
                         }
@@ -2309,6 +2336,58 @@ fun GpgPublicKeyPickerDialog(
                         if (kid != null) onConfirm(kid, desc)
                     }) { Text("加密") }
                 }
+            }
+        }
+    }
+}
+
+private val ABOUT_USAGE_TIPS = listOf(
+    "内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。",
+    "在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。",
+    "双击文件可以把文件加入待处理列表进行批处理。",
+    "混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。",
+    "在配置中打开「显示过滤条件」，可以用正则表达式过滤文件名，还可以把所有过滤结果加入待处理列表。",
+    "FTP数据交换功能可以启动一个ftp服务器，而且保持手机不休眠，所以记得主动退出它，或者设置一个自动退出时间。",
+    "FTP传输（就算有密码保护）也是不安全的，请不要在不可靠的网络环境中使用。",
+)
+
+@Composable
+fun AboutDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val versionName = remember {
+        runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+        }.getOrElse { "" }
+    }
+    val versionWarn = remember(versionName) {
+        versionName.replace(Regex("[^0-9.]"), "").takeIf { s -> s.isNotEmpty() }?.toFloatOrNull()?.let { v -> v <= 1.0f } == true
+    }
+    val tip = remember { ABOUT_USAGE_TIPS.random() }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text("Local Manager", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(8.dp))
+                Text("作者：柱子哥 <Kenneth-Lee-2012@qq.com>", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("版本：$versionName", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (versionWarn) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "本软件没有经过严肃的测试，请自担使用风险，作者不对任何数据破坏负责。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("随机提示（每次打开都更新）", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(4.dp))
+                Text(tip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(24.dp))
+                TextButton(onClick = onDismiss) { Text("关闭") }
             }
         }
     }
