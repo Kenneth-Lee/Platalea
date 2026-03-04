@@ -92,62 +92,30 @@ class FtpServerManager(private val context: Context) {
         treeUri: Uri,
         currentDirUri: String?
     ): Pair<DocumentFile?, String> {
-        addLog("[LIST调试] resolveInitialWorkingDir: currentDirUri=${currentDirUri?.take(80)}")
-        val cur = currentDirUri?.trim()?.takeIf { it.isNotEmpty() } ?: run {
-            addLog("[LIST调试] 使用树根: currentDirUri 为空")
-            return Pair(null, "/")
-        }
-        if (cur == treeUri.toString()) {
-            addLog("[LIST调试] 使用树根: currentDirUri == treeUri")
-            return Pair(null, "/")
-        }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            addLog("[LIST调试] 使用树根: API=${Build.VERSION.SDK_INT} < 26")
-            return Pair(null, "/")
-        }
+        val cur = currentDirUri?.trim()?.takeIf { it.isNotEmpty() } ?: return Pair(null, "/")
+        if (cur == treeUri.toString()) return Pair(null, "/")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return Pair(null, "/")
         return try {
             val pathResult = DocumentsContract.findDocumentPath(context.contentResolver, Uri.parse(cur))
-            if (pathResult == null) {
-                addLog("[LIST调试] 使用树根: findDocumentPath 返回 null")
-                return Pair(null, "/")
-            }
-            val segmentIds = pathResult.path
-            addLog("[LIST调试] findDocumentPath: rootId=${pathResult.rootId} pathSize=${segmentIds?.size ?: 0}")
-            if (segmentIds == null || segmentIds.isEmpty()) {
-                addLog("[LIST调试] 使用树根: path 为空")
-                return Pair(null, "/")
-            }
+                ?: return Pair(null, "/")
+            val segmentIds = pathResult.path ?: return Pair(null, "/")
+            if (segmentIds.isEmpty()) return Pair(null, "/")
             val rootId = DocumentsContract.getDocumentId(rootDoc.uri)
-            if (pathResult.rootId != null && pathResult.rootId != rootId) {
-                addLog("[LIST调试] 使用树根: rootId 不匹配 pathRoot=${pathResult.rootId} ourRoot=$rootId")
-                return Pair(null, "/")
-            }
+            if (pathResult.rootId != null && pathResult.rootId != rootId) return Pair(null, "/")
             var current: DocumentFile? = rootDoc
             val pathNames = mutableListOf<String>().apply { add(rootDoc.name ?: "") }
             val startIndex = if (segmentIds.isNotEmpty() && segmentIds[0] == rootId) 1 else 0
-            addLog("[LIST调试] 遍历 path startIndex=$startIndex segmentCount=${segmentIds.size}")
             for (i in startIndex until segmentIds.size) {
                 val docId = segmentIds[i]
                 current = current?.listFilesSafe()?.find { DocumentsContract.getDocumentId(it.uri) == docId }
-                if (current == null) {
-                    addLog("[LIST调试] 使用树根: 第 ${i} 段 docId=$docId 找不到子节点")
-                    return Pair(null, "/")
-                }
+                    ?: return Pair(null, "/")
                 pathNames.add(current.name ?: "")
             }
-            if (current == null || !current.isDirectory) {
-                addLog("[LIST调试] 使用树根: 最终节点非目录 exists=${current?.exists()} isDir=${current?.isDirectory}")
-                return Pair(null, "/")
-            }
-            if (pathNames.size <= 1) {
-                addLog("[LIST调试] 使用树根: pathNames.size=${pathNames.size}")
-                return Pair(null, "/")
-            }
+            if (current == null || !current.isDirectory || pathNames.size <= 1) return Pair(null, "/")
             val workingPath = "/" + pathNames.drop(1).joinToString("/")
-            addLog("[LIST调试] 初始工作目录: path=$workingPath docName=${current.name} uri=${current.uri}")
             Pair(current, workingPath)
         } catch (e: Exception) {
-            addLog("[LIST调试] 使用树根: 异常 ${e.javaClass.simpleName}: ${e.message}")
+            addLog("初始工作目录使用根目录（解析异常: ${e.message ?: e.javaClass.simpleName}）")
             Pair(null, "/")
         }
     }
@@ -184,12 +152,7 @@ class FtpServerManager(private val context: Context) {
     private fun createLoggingFtplet(): Ftplet = object : Ftplet {
         override fun init(ftpletContext: FtpletContext?) {}
         override fun destroy() {}
-        override fun beforeCommand(session: FtpSession?, request: FtpRequest?): FtpletResult {
-            when (request?.command?.uppercase()) {
-                "LIST", "NLST" -> addLog("list ${request.argument?.takeIf { it.isNotBlank() } ?: "."}")
-            }
-            return FtpletResult.DEFAULT
-        }
+        override fun beforeCommand(session: FtpSession?, request: FtpRequest?): FtpletResult = FtpletResult.DEFAULT
         override fun afterCommand(session: FtpSession?, request: FtpRequest?, reply: FtpReply?): FtpletResult {
             val cmd = request?.command?.uppercase()
             val arg = request?.argument ?: ""
@@ -223,10 +186,8 @@ class FtpServerManager(private val context: Context) {
     ): FileSystemFactory {
         return object : FileSystemFactory {
             @Throws(FtpException::class)
-            override fun createFileSystemView(user: org.apache.ftpserver.ftplet.User): FileSystemView {
-                onLog("[LIST调试] createFileSystemView: rootName=${rootDoc.name} initialPath=$initialWorkingPath hasInitialDoc=${initialWorkingDoc != null} initialDocName=${initialWorkingDoc?.name}")
-                return DocumentFileSystemView(ctx, rootDoc, initialWorkingDoc, initialWorkingPath, onLog)
-            }
+            override fun createFileSystemView(user: org.apache.ftpserver.ftplet.User): FileSystemView =
+                DocumentFileSystemView(ctx, rootDoc, initialWorkingDoc, initialWorkingPath, onLog)
         }
     }
 
