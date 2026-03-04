@@ -1,10 +1,6 @@
 package com.kenny.localmanager.ui
 
-import android.annotation.SuppressLint
-import android.graphics.Color
 import android.net.Uri
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -51,7 +47,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -63,13 +58,10 @@ import com.kenny.localmanager.gpg.GpgHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.commonmark.parser.Parser
-import org.commonmark.renderer.html.HtmlRenderer
 import java.io.ByteArrayOutputStream
 import android.widget.Toast
 
 private const val MAX_PREVIEW_BYTES = 4096
-private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val PAGE_SIZE = 4096
 private const val MAX_TEXT_EDIT_BYTES = 512 * 1024
 
@@ -79,18 +71,13 @@ fun ViewerScreen(
     fileUri: String,
     fileName: String,
     isEncrypted: Boolean,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onOpenMarkdownView: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val isMarkdown = remember(fileName) { fileName.endsWith(".md", ignoreCase = true) }
-    var viewMode by remember(fileName) {
-        mutableStateOf(if (fileName.endsWith(".md", ignoreCase = true)) 2 else 0)
-    } // 0 = text, 1 = hex, 2 = markdown(仅 .md)
+    var viewMode by remember { mutableStateOf(0) } // 0 = text, 1 = hex
     var bytesState by remember { mutableStateOf<ByteArray?>(null) }
-    var mdContent by remember { mutableStateOf<String?>(null) }
-    var mdLoadError by remember { mutableStateOf<String?>(null) }
-    var mdLoading by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var refreshKey by remember { mutableStateOf(0) }
 
@@ -165,31 +152,6 @@ fun ViewerScreen(
         hexPageLoading = false
     }
 
-    // 进入 Markdown 渲染时加载全文
-    LaunchedEffect(fileUri, isEncrypted, viewMode, refreshKey) {
-        if (viewMode != 2 || !isMarkdown) return@LaunchedEffect
-        mdLoading = true
-        mdContent = null
-        mdLoadError = null
-        withContext(Dispatchers.IO) {
-            val cr = context.contentResolver
-            cr.openInputStreamSafe(uri)?.use { raw ->
-                val bytes = if (isEncrypted) {
-                    GpgHelper.decryptStream(raw) ?: run {
-                        mdLoadError = "解密失败或需要密码"
-                        return@withContext
-                    }
-                } else {
-                    raw.readBytes(MAX_MARKDOWN_BYTES)
-                }
-                val decoded = bytes.decodeToString()
-                val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
-                mdContent = trimmed
-            } ?: run { mdLoadError = "无法打开文件" }
-        }
-        mdLoading = false
-    }
-
     val content: Result<String> = remember(bytesState) {
         bytesState?.let { raw ->
             val decoded = raw.decodeToString()
@@ -252,29 +214,23 @@ fun ViewerScreen(
                         ) { Text(if (saveInProgress) "保存中…" else "保存") }
                     } else {
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.padding(end = 4.dp)) {
-                            val count = if (isMarkdown) 3 else 2
                             SegmentedButton(
                                 selected = viewMode == 0,
                                 onClick = { viewMode = 0 },
-                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = count),
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                                 icon = {}
                             ) { Text("文本") }
                             SegmentedButton(
                                 selected = viewMode == 1,
                                 onClick = { viewMode = 1 },
-                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = count),
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                                 icon = {}
                             ) { Text("十六进制") }
-                            if (isMarkdown) {
-                                SegmentedButton(
-                                    selected = viewMode == 2,
-                                    onClick = { viewMode = 2 },
-                                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = count),
-                                    icon = {}
-                                ) { Text("渲染") }
-                            }
                         }
-                        if (canEdit && viewMode != 2) {
+                        if (onOpenMarkdownView != null) {
+                            TextButton(onClick = onOpenMarkdownView) { Text("Markdown 渲染") }
+                        }
+                        if (canEdit) {
                             IconButton(onClick = { isEditMode = true }) {
                                 Icon(Icons.Default.Edit, contentDescription = "编辑")
                             }
@@ -375,26 +331,6 @@ fun ViewerScreen(
                         }
                     }
                 }
-                viewMode == 2 && isMarkdown -> {
-                    if (mdLoading) {
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    } else when {
-                        mdLoadError != null -> Text(
-                            mdLoadError!!,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(16.dp)
-                        )
-                        mdContent != null -> MarkdownRenderView(
-                            markdown = mdContent!!,
-                            backgroundColor = MaterialTheme.colorScheme.surface,
-                            textColor = MaterialTheme.colorScheme.onSurface
-                        )
-                        else -> {}
-                    }
-                }
                 viewMode == 0 -> {
                     content.fold(
                         onSuccess = { text ->
@@ -452,68 +388,6 @@ fun ViewerScreen(
             }
         }
     }
-}
-
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun MarkdownRenderView(
-    markdown: String,
-    backgroundColor: androidx.compose.ui.graphics.Color,
-    textColor: androidx.compose.ui.graphics.Color
-) {
-    val bgHex = "#%02x%02x%02x".format(
-        (backgroundColor.red * 255).toInt(),
-        (backgroundColor.green * 255).toInt(),
-        (backgroundColor.blue * 255).toInt()
-    )
-    val fgHex = "#%02x%02x%02x".format(
-        (textColor.red * 255).toInt(),
-        (textColor.green * 255).toInt(),
-        (textColor.blue * 255).toInt()
-    )
-    val html = remember(markdown, bgHex, fgHex) {
-        val parser = Parser.builder().build()
-        val document = parser.parse(markdown)
-        val renderer = HtmlRenderer.builder().build()
-        val bodyHtml = renderer.render(document)
-        """
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <style>
-                body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
-                h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
-                h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
-                h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
-                pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
-                pre { display: block; padding: 12px; overflow-x: auto; }
-                pre code { padding: 0; background: none; }
-                blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
-                a { color: #2196F3; }
-                ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-                table { border-collapse: collapse; width: 100%; }
-                th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
-                th { background: rgba(128,128,128,0.15); }
-            </style>
-        </head>
-        <body>$bodyHtml</body>
-        </html>
-        """.trimIndent()
-    }
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                setBackgroundColor(Color.TRANSPARENT)
-                webViewClient = WebViewClient()
-                settings.domStorageEnabled = false
-                settings.javaScriptEnabled = false
-                loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-            }
-        },
-        modifier = Modifier.fillMaxSize()
-    )
 }
 
 @Composable

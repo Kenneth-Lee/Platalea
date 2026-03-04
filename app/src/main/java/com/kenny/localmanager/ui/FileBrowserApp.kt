@@ -187,6 +187,7 @@ fun FileBrowserApp(
     var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -285,6 +286,19 @@ fun FileBrowserApp(
                 }
             }
         }
+        markdownViewFile != null -> {
+            val (uri, name, isEncrypted) = markdownViewFile!!
+            BackHandler { markdownViewFile = null }
+            MarkdownViewerScreen(
+                initialFileUri = uri,
+                initialFileName = name,
+                isEncrypted = isEncrypted,
+                onBack = { markdownViewFile = null },
+                onOpenFile = { openUri, openName, openEncrypted ->
+                    markdownViewFile = Triple(openUri, openName, openEncrypted)
+                }
+            )
+        }
         viewingFile != null -> {
             val (uri, name, isEncrypted) = viewingFile!!
             BackHandler { viewingFile = null }
@@ -292,7 +306,10 @@ fun FileBrowserApp(
                 fileUri = uri,
                 fileName = name,
                 isEncrypted = isEncrypted,
-                onBack = { viewingFile = null }
+                onBack = { viewingFile = null },
+                onOpenMarkdownView = if (name.endsWith(".md", ignoreCase = true)) {
+                    { markdownViewFile = viewingFile; viewingFile = null }
+                } else null
             )
         }
         else -> {
@@ -544,6 +561,9 @@ fun FileBrowserApp(
                     } ?: false,
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, isEncrypted)
+                    },
+                    onOpenMarkdownView = { uri, name, encrypted ->
+                        markdownViewFile = Triple(uri, name, encrypted)
                     },
                     onAddToPendingList = { pendingList.add(it) },
                     onRemoveFromPendingList = { pendingList.remove(it) },
@@ -1251,6 +1271,7 @@ fun FileBrowserScreen(
     onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
     onOpenFtp: () -> Unit = {},
+    onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
     onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
@@ -1548,6 +1569,15 @@ fun FileBrowserScreen(
                                 contextMenuTarget = null
                             }
                         ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
+                        if (menuTarget.name.endsWith(".md", ignoreCase = true)) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("Markdown 渲染", color = MaterialTheme.colorScheme.onSurface) }
+                        }
                         if (menuTarget.name.endsWith(".gpg", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
@@ -2343,6 +2373,7 @@ fun GpgPublicKeyPickerDialog(
 
 private val ABOUT_USAGE_TIPS = listOf(
     "内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。",
+    "可以用markdown渲染器直接查看markdown文件。"
     "在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。",
     "双击文件可以把文件加入待处理列表进行批处理。",
     "混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。",
