@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -358,7 +360,8 @@ private class ResourceResolverHolder(var currentUri: String)
 private class LinkInterceptClient(
     private val linkHolder: LinkCallbackHolder,
     private val context: android.content.Context,
-    private val currentUriHolder: ResourceResolverHolder
+    private val currentUriHolder: ResourceResolverHolder,
+    private val onPageFinished: ((WebView) -> Unit)? = null
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
@@ -373,6 +376,11 @@ private class LinkInterceptClient(
         val resp = resolveResource(context, currentUriHolder.currentUri, url)
         Log.d(MD_DEBUG, "[资源] 结果 resourceUrl=$url 返回=${resp != null}")
         return resp
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        view?.let { onPageFinished?.invoke(it) }
     }
 }
 
@@ -400,6 +408,8 @@ fun MarkdownViewerScreen(
     val linkHolder = remember { LinkCallbackHolder() }
     val currentUriHolder = remember { ResourceResolverHolder(currentUri) }
     currentUriHolder.currentUri = currentUri
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var scalePercent by remember { mutableStateOf(100) } // 50..200，页面 body.style.zoom
 
     val katexInline = remember(context) {
         try {
@@ -559,6 +569,26 @@ fun MarkdownViewerScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
+                actions = {
+                    if (htmlContent != null) {
+                        IconButton(
+                            onClick = {
+                                scalePercent = maxOf(50, scalePercent - 25)
+                                webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                        }
+                        IconButton(
+                            onClick = {
+                                scalePercent = minOf(200, scalePercent + 25)
+                                webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                     titleContentColor = MaterialTheme.colorScheme.onSurface
@@ -648,15 +678,19 @@ fun MarkdownViewerScreen(
                         factory = { ctx ->
                             WebView(ctx).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
-                                webViewClient = LinkInterceptClient(linkHolder, context, currentUriHolder)
+                                webViewClient = LinkInterceptClient(
+                                    linkHolder, context, currentUriHolder
+                                ) { w -> w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null) }
                                 settings.domStorageEnabled = false
                                 settings.javaScriptEnabled = true
+                                webViewRef.value = this
                                 loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
                         update = { webView ->
                             currentUriHolder.currentUri = currentUri
+                            webViewRef.value = webView
                             webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                         }
                     )
