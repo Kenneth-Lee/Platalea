@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -325,7 +326,7 @@ fun FileBrowserApp(
                 fileName = name,
                 isEncrypted = isEncrypted,
                 onBack = { viewingFile = null },
-                onOpenMarkdownView = if (name.endsWith(".md", ignoreCase = true)) {
+                onOpenMarkdownView = if (name.endsWith(".md", ignoreCase = true) || name.endsWith(".rst", ignoreCase = true)) {
                     { markdownViewFile = viewingFile; viewingFile = null }
                 } else null
             )
@@ -1664,14 +1665,14 @@ fun FileBrowserScreen(
                                 contextMenuTarget = null
                             }
                         ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
-                        if (menuTarget.name.endsWith(".md", ignoreCase = true)) {
+                        if (menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
                                     onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("Markdown 渲染", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text("Markdown渲染", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".gpg", ignoreCase = true)) {
                             TextButton(
@@ -1995,12 +1996,15 @@ fun FileItem(
     val icon = when {
         model.isDirectory -> Icons.Default.Folder
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
+        model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
+        model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
     }
     val iconTint = when {
         model.isDirectory -> MaterialTheme.colorScheme.primary
         model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
-        model.name.endsWith(".qx", ignoreCase = true) -> Color.Blue
+        model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
+        model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val clickableOnClick: () -> Unit = if (onDoubleClick != null) {
@@ -2467,8 +2471,9 @@ fun GpgPublicKeyPickerDialog(
 }
 
 private val ABOUT_USAGE_TIPS = listOf(
+    "你可以随时同步一个git库到本地，应用的很多其他功能也可以依靠这个库完成共享方面的功能",
     "内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。",
-    "可以用markdown渲染器直接查看markdown文件。",
+    "可以用markdown渲染器直接查看markdown文件（.md或者.rst文件）。",
     "在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。",
     "双击文件可以把文件加入待处理列表进行批处理。",
     "混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。",

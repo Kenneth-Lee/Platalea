@@ -228,7 +228,7 @@ fun ViewerScreen(
                             ) { Text("十六进制") }
                         }
                         if (onOpenMarkdownView != null) {
-                            TextButton(onClick = onOpenMarkdownView) { Text("Markdown 渲染") }
+                            TextButton(onClick = onOpenMarkdownView) { Text("Markdown渲染") }
                         }
                         if (canEdit) {
                             IconButton(onClick = { isEditMode = true }) {

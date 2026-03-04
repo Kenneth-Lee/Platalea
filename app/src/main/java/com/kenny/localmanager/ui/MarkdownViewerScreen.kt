@@ -52,6 +52,177 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
+private const val MAX_RST_BYTES = 512 * 1024
+
+/** 简易 reStructuredText → HTML，覆盖常用语法（标题、粗/斜体、代码、链接、列表、代码块）。 */
+private fun rstToHtml(rst: String): String {
+    fun escape(s: String): String = s
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+    val lines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    val out = StringBuilder()
+    var i = 0
+    fun peekUnderlineChar(line: String): Char? =
+        line.takeIf { it.isNotEmpty() && it.all { c -> c == it[0] && (c == '=' || c == '-' || c == '`' || c == '.' || c == '\'' || c == '"' || c == '~' || c == '^' || c == '_' || c == '*' || c == '#' || c == '+') } }?.get(0)
+    while (i < lines.size) {
+        val line = lines[i]
+        val next = lines.getOrNull(i + 1)
+        val under = next?.let { peekUnderlineChar(it) }
+        if (under != null && next.isNotBlank() && line.isNotBlank() && next.length >= line.length) {
+            val level = when (under) { '=', '#' -> 1; '-', '^' -> 2; '~', '"', '\'' -> 3; else -> 2 }
+            val tag = "h${level.coerceIn(1, 3)}"
+            out.append("<").append(tag).append(">").append(escape(line.trim())).append("</").append(tag).append(">")
+            i += 2
+            continue
+        }
+        if (line.trim().startsWith(".. figure::")) {
+            val pathMatch = Regex("""\.\.\s+figure\s*::\s*(?:"([^"]*)"|'([^']*)'|(\S+))""").find(line.trim())
+            val path = pathMatch?.groupValues?.let { g -> g[1].ifBlank { g[2].ifBlank { g[3] } } }?.trim()?.takeIf { it.isNotBlank() }
+            if (path != null) {
+                i++
+                var alt = ""
+                var width = ""
+                var height = ""
+                while (i < lines.size && lines[i].trimStart().startsWith(":")) {
+                    val opt = lines[i].trimStart()
+                    when {
+                        opt.startsWith(":alt:") -> alt = opt.removePrefix(":alt:").trim().replace("\"", "&quot;")
+                        opt.startsWith(":width:") -> width = opt.removePrefix(":width:").trim().takeIf { it.isNotBlank() }?.let { "width:$it" } ?: ""
+                        opt.startsWith(":height:") -> height = opt.removePrefix(":height:").trim().takeIf { it.isNotBlank() }?.let { "height:$it" } ?: ""
+                    }
+                    i++
+                }
+                if (i < lines.size && lines[i].isBlank()) i++
+                val caption = mutableListOf<String>()
+                while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
+                    if (lines[i].isNotBlank()) caption.add(rstInlineToHtml(escape(lines[i].trimStart())))
+                    i++
+                }
+                val style = listOfNotNull(width, height).filter { it.isNotBlank() }.joinToString("; ")
+                out.append("<figure>")
+                out.append("<img src=\"").append(escape(path)).append("\" alt=\"").append(alt).append("\"")
+                if (style.isNotBlank()) out.append(" style=\"").append(style).append("\"")
+                out.append(">")
+                if (caption.isNotEmpty()) out.append("<figcaption>").append(caption.joinToString(" ")).append("</figcaption>")
+                out.append("</figure>")
+            } else {
+                i++
+            }
+            continue
+        }
+        if (line.trim().startsWith(".. math::")) {
+            val restOfLine = line.trim().removePrefix(".. math::").trim()
+            val mathLines = mutableListOf<String>()
+            if (restOfLine.isNotBlank()) mathLines.add(escape(restOfLine))
+            i++
+            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
+                if (lines[i].isNotBlank()) mathLines.add(escape(lines[i].trimStart()))
+                i++
+            }
+            if (mathLines.isNotEmpty()) {
+                var latex = mathLines.joinToString(" \\\\ ").replace("&amp;", "&")
+                if (mathLines.size > 1 || latex.contains("&=") || latex.contains("&")) {
+                    latex = "\\begin{aligned}$latex\\end{aligned}"
+                }
+                out.append("""<div class="katex-display" data-latex="${escapeHtmlAttr(latex)}"></div>""")
+            }
+            continue
+        }
+        if (line.trim().startsWith(".. ") && (line.trim().length <= 3 || line.trim()[3].isWhitespace() || line.trim()[3] == ':')) {
+            i++
+            continue
+        }
+        if (line.trim().matches(Regex("^[-*•]\\s.+"))) {
+            out.append("<ul>")
+            while (i < lines.size && lines[i].trim().matches(Regex("^[-*•]\\s.+"))) {
+                out.append("<li>").append(rstInlineToHtml(escape(lines[i].trim().drop(1).trim()))).append("</li>")
+                i++
+            }
+            out.append("</ul>")
+            continue
+        }
+        if (line.trim().matches(Regex("^\\d+\\.\\s.+"))) {
+            out.append("<ol>")
+            while (i < lines.size && lines[i].trim().matches(Regex("^\\d+\\.\\s.+"))) {
+                out.append("<li>").append(rstInlineToHtml(escape(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))).append("</li>")
+                i++
+            }
+            out.append("</ol>")
+            continue
+        }
+        if (line.trim() == ".." || (line.trim().startsWith("::") && line.trim().length == 2)) {
+            i++
+            val codeLines = mutableListOf<String>()
+            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
+                if (lines[i].isNotBlank()) codeLines.add(escape(lines[i].trimStart()))
+                i++
+            }
+            if (codeLines.isNotEmpty()) {
+                out.append("<pre><code>").append(codeLines.joinToString("\n")).append("</code></pre>")
+            }
+            continue
+        }
+        if (line.isBlank()) {
+            out.append("<p></p>")
+            i++
+            continue
+        }
+        if (line.startsWith(" ") || line.startsWith("\t")) {
+            val codeLines = mutableListOf<String>()
+            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
+                if (lines[i].isNotBlank()) codeLines.add(escape(lines[i].trimStart()))
+                i++
+            }
+            if (codeLines.isNotEmpty()) out.append("<pre><code>").append(codeLines.joinToString("\n")).append("</code></pre>")
+            continue
+        }
+        // RST：仅空行分段；连续非空行合并为一段，用空格连接
+        val paraLines = mutableListOf(line)
+        while (i + 1 < lines.size && lines[i + 1].isNotBlank() && !rstLineStartsBlock(lines[i + 1], lines.getOrNull(i + 2)) { peekUnderlineChar(it) }) {
+            i++
+            paraLines.add(lines[i])
+        }
+        val paraText = paraLines.joinToString(" ")
+        out.append("<p>").append(rstInlineToHtml(escape(paraText))).append("</p>")
+        i++
+    }
+    return out.toString()
+}
+
+private fun rstLineStartsBlock(line: String, next: String?, peekUnderlineChar: (String) -> Char?): Boolean {
+    val t = line.trim()
+    if (t.startsWith(".. figure::") || t.startsWith(".. math::")) return true
+    if (t.startsWith(".. ") && (t.length <= 3 || t.getOrNull(3)?.isWhitespace() == true || t.getOrNull(3) == ':')) return true
+    if (t == ".." || (t.startsWith("::") && t.length == 2)) return true
+    if (t.matches(Regex("^[-*•]\\s.+"))) return true
+    if (t.matches(Regex("^\\d+\\.\\s.+"))) return true
+    if (line.startsWith(" ") || line.startsWith("\t")) return true
+    if (next != null && next.isNotBlank() && peekUnderlineChar(next) != null && next.length >= t.length) return true
+    return false
+}
+
+private fun escapeHtmlAttr(s: String): String = s
+    .replace("&", "&amp;")
+    .replace("\"", "&quot;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+
+private fun rstInlineToHtml(escaped: String): String {
+    var s = escaped
+    // 先处理 :math:，用 data-latex 供前端 KaTeX 显式渲染，避免 delimiter 解析问题
+    s = Regex(""":math:`([^`]+?)`""").replace(s) {
+        val latex = it.groupValues[1].replace("&amp;", "&")
+        """<span class="katex-inline" data-latex="${escapeHtmlAttr(latex)}"></span>"""
+    }
+    s = Regex("""\*\*(.+?)\*\*""").replace(s) { "<strong>${it.groupValues[1]}</strong>" }
+    s = Regex("""\*(.+?)\*""").replace(s) { "<em>${it.groupValues[1]}</em>" }
+    s = Regex("""``([^`]+?)``""").replace(s) { "<code>${it.groupValues[1]}</code>" }
+    s = Regex("""`([^`]+?) &lt;(.+?)&gt;`_""").replace(s) { """<a href="${it.groupValues[2]}">${it.groupValues[1]}</a>""" }
+    s = Regex("""`([^`]+?)`_""").replace(s) { "<a href=\"#${it.groupValues[1].replace(" ", "-")}\">${it.groupValues[1]}</a>" }
+    return s
+}
 
 private fun InputStream.readBytesUpTo(maxLen: Int): ByteArray {
     val out = ByteArrayOutputStream()
@@ -122,19 +293,49 @@ private fun resolveRelativeToCurrent(context: android.content.Context, currentUr
     return childUri.toString()
 }
 
-/** 根据当前文件 URI 解析资源 URL，返回同目录下文件的 WebResourceResponse，否则返回 null。 */
+/** 根据当前文件所在目录解析相对路径（可含子目录，如 _static/决策树.png），返回该文档的 Uri 或 null。 */
+private fun resolveResourcePath(
+    context: android.content.Context,
+    currentUri: String,
+    path: String
+): Uri? {
+    val segments = path.trim().split("/").filter { it.isNotBlank() }.map { Uri.decode(it) }.ifEmpty { return null }
+    var parentUri = getParentDirectoryUri(context, currentUri) ?: return null
+    for (j in 0 until segments.size - 1) {
+        parentUri = findChildByName(context, parentUri, segments[j]) ?: return null
+    }
+    return findChildByName(context, parentUri, segments.last())
+}
+
+/** 从资源请求 URL 中提取相对于当前文档所在目录的路径（WebView 可能请求 base + relativePath 的完整 URL）。 */
+private fun extractRelativePathFromRequest(currentUri: String, resourceUrl: String): String? {
+    val basePrefix = currentUri.substringBeforeLast("/").let { if (it.isEmpty()) return null else "$it/" }
+    if (resourceUrl.startsWith(basePrefix)) {
+        val rel = resourceUrl.substring(basePrefix.length)
+        if (rel.isNotBlank()) return Uri.decode(rel)
+    }
+    return null
+}
+
+/** 根据当前文件 URI 解析资源 URL，返回同目录或相对路径下文件的 WebResourceResponse，否则返回 null。 */
 private fun resolveResource(
     context: android.content.Context,
     currentUri: String,
     resourceUrl: String
 ): WebResourceResponse? {
-    val segment = Uri.parse(resourceUrl).lastPathSegment ?: resourceUrl.substringAfterLast('/').ifBlank { return null }
     val parentUri = getParentDirectoryUri(context, currentUri) ?: run {
         Log.d(MD_DEBUG, "[图片] 无法取父目录 currentUri=$currentUri resourceUrl=$resourceUrl")
         return null
     }
-    val childUri = findChildByName(context, parentUri, segment) ?: run {
-        Log.d(MD_DEBUG, "[图片] 父目录下未找到 name=$segment resourceUrl=$resourceUrl")
+    val relativePath = extractRelativePathFromRequest(currentUri, resourceUrl)
+    val path = if (relativePath != null) relativePath else (Uri.parse(resourceUrl).path ?: resourceUrl)
+    val segment = path.substringAfterLast('/').let { Uri.decode(it) }.ifBlank { return null }
+    val childUri = if (path.contains("/")) {
+        resolveResourcePath(context, currentUri, path)
+    } else {
+        findChildByName(context, parentUri, segment)
+    } ?: run {
+        Log.d(MD_DEBUG, "[图片] 未找到 path=$path resourceUrl=$resourceUrl")
         return null
     }
     return try {
@@ -200,6 +401,21 @@ fun MarkdownViewerScreen(
     val currentUriHolder = remember { ResourceResolverHolder(currentUri) }
     currentUriHolder.currentUri = currentUri
 
+    val katexInline = remember(context) {
+        try {
+            val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
+                .replace("</style>", "<\\/style>")
+            val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            val autoRender = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            Triple(css, katexJs, autoRender)
+        } catch (_: Exception) {
+            Triple("", "", "")
+        }
+    }
+    val (katexCss, katexJs, autoRenderJs) = katexInline
+
     LaunchedEffect(currentUri, currentEncrypted) {
         loading = true
         loadError = null
@@ -221,15 +437,20 @@ fun MarkdownViewerScreen(
                         return@withContext
                     }
                 } else {
-                    raw.readBytesUpTo(MAX_MARKDOWN_BYTES)
+                    raw.readBytesUpTo(maxOf(MAX_MARKDOWN_BYTES, MAX_RST_BYTES))
                 }
                 val decoded = bytes.decodeToString()
                 val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
-                val parser = Parser.builder().build()
-                val document = parser.parse(trimmed)
-                val renderer = HtmlRenderer.builder().build()
-                htmlContent = renderer.render(document)
-                Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length}")
+                val isRst = currentName.endsWith(".rst", ignoreCase = true)
+                htmlContent = if (isRst) {
+                    rstToHtml(trimmed)
+                } else {
+                    val parser = Parser.builder().build()
+                    val document = parser.parse(trimmed)
+                    val renderer = HtmlRenderer.builder().build()
+                    renderer.render(document)
+                }
+                Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
             }
         }
         loading = false
@@ -245,9 +466,9 @@ fun MarkdownViewerScreen(
         val targetUri = Uri.parse(resolved)
         val doc = DocumentFile.fromSingleUri(context, targetUri)
         val name = doc?.name ?: targetUri.lastPathSegment ?: "文件"
-        val isMd = name.endsWith(".md", ignoreCase = true)
-        Log.d(MD_DEBUG, "[内链] doc.exists=${doc?.exists()} name=$name isMd=$isMd")
-        if (isMd) {
+        val isRenderable = name.endsWith(".md", ignoreCase = true) || name.endsWith(".rst", ignoreCase = true)
+        Log.d(MD_DEBUG, "[内链] doc.exists=${doc?.exists()} name=$name isRenderable=$isRenderable")
+        if (isRenderable) {
             backStack = backStack + Triple(currentUri, currentName, currentEncrypted)
             currentUri = resolved
             currentName = name
@@ -354,7 +575,8 @@ fun MarkdownViewerScreen(
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
                 htmlContent != null -> {
-                    val baseUrl = currentUri.substringBeforeLast("/") + "/"
+                    val dirPrefix = currentUri.substringBeforeLast("/")
+                    val baseUrl = if (dirPrefix.isNotEmpty()) "$dirPrefix/" else "file:///"
                     val bg = MaterialTheme.colorScheme.surface
                     val fg = MaterialTheme.colorScheme.onSurface
                     val bgHex = "#%02x%02x%02x".format(
@@ -370,6 +592,7 @@ fun MarkdownViewerScreen(
                         <meta charset="UTF-8">
                         <meta name="viewport" content="width=device-width, initial-scale=1">
                         <base href="$baseUrl">
+                        <style>$katexCss</style>
                         <style>
                             body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
                             h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
@@ -378,7 +601,11 @@ fun MarkdownViewerScreen(
                             pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
                             pre { display: block; padding: 12px; overflow-x: auto; }
                             pre code { padding: 0; background: none; }
+                            .katex { font-size: 1.1em; }
                             blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
+                            figure { margin: 1em 0; }
+                            figure img { max-width: 100%; height: auto; display: block; }
+                            figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; }
                             a { color: #2196F3; }
                             ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
                             table { border-collapse: collapse; width: 100%; }
@@ -386,7 +613,35 @@ fun MarkdownViewerScreen(
                             th { background: rgba(128,128,128,0.15); }
                         </style>
                     </head>
-                    <body>${htmlContent}</body>
+                    <body>${htmlContent}
+                    <script>$katexJs</script>
+                    <script>$autoRenderJs</script>
+                    <script>
+                    document.addEventListener("DOMContentLoaded", function() {
+                        if (typeof katex !== "undefined") {
+                            document.querySelectorAll(".katex-inline").forEach(function(el) {
+                                var latex = el.getAttribute("data-latex");
+                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {}
+                            });
+                            document.querySelectorAll(".katex-display").forEach(function(el) {
+                                var latex = el.getAttribute("data-latex");
+                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {}
+                            });
+                        }
+                        if (typeof renderMathInElement === "function") {
+                            renderMathInElement(document.body, {
+                                delimiters: [
+                                    { left: "$$", right: "$$", display: true },
+                                    { left: "$", right: "$", display: false },
+                                    { left: "\\\\(", right: "\\\\)", display: false },
+                                    { left: "\\\\[", right: "\\\\]", display: true }
+                                ],
+                                throwOnError: false
+                            });
+                        }
+                    });
+                    </script>
+                    </body>
                     </html>
                     """.trimIndent()
                     AndroidView(
@@ -395,14 +650,14 @@ fun MarkdownViewerScreen(
                                 setBackgroundColor(Color.TRANSPARENT)
                                 webViewClient = LinkInterceptClient(linkHolder, context, currentUriHolder)
                                 settings.domStorageEnabled = false
-                                settings.javaScriptEnabled = false
-                                loadDataWithBaseURL(null, fullHtml, "text/html", "UTF-8", null)
+                                settings.javaScriptEnabled = true
+                                loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
                         update = { webView ->
                             currentUriHolder.currentUri = currentUri
-                            webView.loadDataWithBaseURL(null, fullHtml, "text/html", "UTF-8", null)
+                            webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                         }
                     )
                 }
