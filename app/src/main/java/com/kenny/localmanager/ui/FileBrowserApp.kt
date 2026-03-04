@@ -28,7 +28,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -188,6 +190,9 @@ fun FileBrowserApp(
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var currentUri by remember { mutableStateOf<String?>(null) }
+    val fileBrowserBackStack = remember { mutableStateListOf<String>() }
+    val fileListLazyState = rememberLazyListState()
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
@@ -197,6 +202,17 @@ fun FileBrowserApp(
     }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+    }
+    LaunchedEffect(rootUri, initialDirUri) {
+        if (rootUri != null) {
+            val normalizedRoot = normalizeContentUriString(rootUri!!)
+            val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
+            if (currentUri == null) {
+                currentUri = target
+            } else if (!currentUri!!.startsWith(normalizedRoot)) {
+                currentUri = target
+            }
+        }
     }
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
@@ -247,7 +263,9 @@ fun FileBrowserApp(
             saveInProgress = false
             pendingSaveFileUri = null
             if (copied != null) {
-                initialDirUri = normalizeContentUriString(targetRoot)
+                val dir = normalizeContentUriString(targetRoot)
+                initialDirUri = dir
+                currentUri = dir
                 saveCompletedToken++
                 Toast.makeText(ctx, "已保存到当前目录", Toast.LENGTH_SHORT).show()
             } else {
@@ -313,8 +331,7 @@ fun FileBrowserApp(
             )
         }
         else -> {
-            val currentUri = remember(rootUri, initialDirUri) { mutableStateOf(initialDirUri ?: rootUri!!) }
-            val backStack = remember(rootUri) { mutableStateListOf<String>() }
+            val displayUri = currentUri ?: initialDirUri ?: rootUri!!
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
@@ -337,7 +354,7 @@ fun FileBrowserApp(
             var batchObfuscatePassword by remember { mutableStateOf("") }
             var batchObfuscateInProgress by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
-            val currentDirPath = remember(currentUri.value, rootUri) { pathFromRoot(context, rootUri, currentUri.value) }
+            val currentDirPath = remember(displayUri, rootUri) { pathFromRoot(context, rootUri, displayUri) }
             val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
             var ftpPort by remember { mutableStateOf(2121) }
             var ftpPassword by remember { mutableStateOf<String?>(null) }
@@ -391,7 +408,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
-                    backStack.isNotEmpty() -> currentUri.value = backStack.removeAt(backStack.lastIndex)
+                    fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                     else -> {
                         val now = System.currentTimeMillis()
                         if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
@@ -432,7 +449,7 @@ fun FileBrowserApp(
                 }
             }
             val doCopyHere: () -> Unit = {
-                val targetDirUri = normalizeContentUriString(currentUri.value)
+                val targetDirUri = normalizeContentUriString(displayUri)
                 copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
                 val ctx = context
                 val list = pendingList.toList()
@@ -463,7 +480,7 @@ fun FileBrowserApp(
                 }
             }
             val doMoveHere: () -> Unit = {
-                val targetDirUri = normalizeContentUriString(currentUri.value)
+                val targetDirUri = normalizeContentUriString(displayUri)
                 copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
                 val ctx = context
                 val list = pendingList.toList()
@@ -498,7 +515,7 @@ fun FileBrowserApp(
                 FtpScreen(
                     manager = ftpManager,
                     treeRootUri = ftpRootUri,
-                    currentDirUri = currentUri.value,
+                    currentDirUri = displayUri,
                     port = ftpPort,
                     password = ftpPassword,
                     timeoutMinutes = ftpTimeoutMinutes,
@@ -513,20 +530,21 @@ fun FileBrowserApp(
                 progressOp?.let { OperationProgressDialog(it) }
                 FileBrowserScreen(
                     modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
-                    currentUri = currentUri.value,
+                    currentUri = displayUri,
                     refreshTrigger = refreshTrigger,
                     pendingList = pendingList,
                     rootUri = rootUri,
+                    listState = fileListLazyState,
                     onNavigate = { uri ->
-                        backStack.add(currentUri.value)
-                        currentUri.value = normalizeContentUriString(uri)
+                        fileBrowserBackStack.add(displayUri)
+                        currentUri = normalizeContentUriString(uri)
                     },
                     onBack = {
-                        if (backStack.isNotEmpty()) {
-                            currentUri.value = backStack.removeAt(backStack.lastIndex)
+                        if (fileBrowserBackStack.isNotEmpty()) {
+                            currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                         }
                     },
-                    canGoBack = backStack.isNotEmpty(),
+                    canGoBack = fileBrowserBackStack.isNotEmpty(),
                     onChangeRoot = {
                         val r = rootUri
                         if (r == null) {
@@ -575,7 +593,7 @@ fun FileBrowserApp(
                     isViewingTrash = rootUri?.let { r ->
                         val root = Uri.parse(normalizeContentUriString(r))
                         val trashUri = getTrashUriIfExists(context, root, root)
-                        trashUri != null && (currentUri.value == trashUri.toString() || isInsideDirectory(Uri.parse(currentUri.value), trashUri))
+                        trashUri != null && (displayUri == trashUri.toString() || isInsideDirectory(Uri.parse(displayUri), trashUri))
                     } ?: false,
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, isEncrypted)
@@ -703,7 +721,7 @@ fun FileBrowserApp(
                         } else {
                             val list = pendingList.filter { !it.isDirectory }
                             if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
-                            else gpgState = GpgOpState.BatchEncrypt(list, currentUri.value)
+                            else gpgState = GpgOpState.BatchEncrypt(list, displayUri)
                         }
                     },
                     onRequestBatchGpgDecrypt = {
@@ -712,7 +730,7 @@ fun FileBrowserApp(
                         } else {
                             val list = pendingList.filter { !it.isDirectory }
                             if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
-                            else gpgState = GpgOpState.BatchDecrypt(list, currentUri.value)
+                            else gpgState = GpgOpState.BatchDecrypt(list, displayUri)
                         }
                     },
                     onClearList = { pendingList.clear() },
@@ -1219,7 +1237,9 @@ fun FileBrowserApp(
                         showOverwriteConfirm = null
                         pendingSaveFileUri = null
                         if (copied != null) {
-                            initialDirUri = targetRoot
+                            val dir = normalizeContentUriString(targetRoot)
+                            initialDirUri = dir
+                            currentUri = dir
                             saveCompletedToken++
                             Toast.makeText(ctx, "已覆盖保存", Toast.LENGTH_SHORT).show()
                         } else {
@@ -1228,12 +1248,12 @@ fun FileBrowserApp(
                     }
                 }) { Text("覆盖") }
             },
-            dismissButton = {
-                TextButton(onClick = {
-                    showOverwriteConfirm = null
-                    pendingSaveFileUri = null
-                    initialDirUri = targetRoot
-                }) { Text("不覆盖") }
+                dismissButton = {
+                    TextButton(onClick = {
+                        showOverwriteConfirm = null
+                        pendingSaveFileUri = null
+                        initialDirUri = normalizeContentUriString(targetRoot)
+                    }) { Text("不覆盖") }
             }
         )
     }
@@ -1319,6 +1339,7 @@ fun FileBrowserScreen(
     refreshTrigger: Int,
     pendingList: List<DocumentFileModel>,
     rootUri: String?,
+    listState: LazyListState,
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     canGoBack: Boolean,
@@ -1574,7 +1595,8 @@ fun FileBrowserScreen(
                 }
                 else -> {
                     LazyColumn(
-                        Modifier.fillMaxSize(),
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
