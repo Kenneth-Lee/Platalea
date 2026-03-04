@@ -13,13 +13,15 @@ import java.io.OutputStream
  * @param doc 已存在的文件/目录；为 null 时表示尚不存在的路径（用于 STOR 创建新文件），此时需提供 parentDoc 与 newFileName。
  * @param parentDoc 仅当 doc==null 且为创建新文件时使用，表示父目录
  * @param newFileName 仅当 doc==null 时使用，表示待创建的文件名
+ * @param onLog 调试日志回调，用于 LIST 问题排查
  */
 class DocumentFileFtpFile(
     private val context: Context,
     private val doc: DocumentFile?,
     private val absolutePath: String,
     private val parentDoc: DocumentFile? = null,
-    private val newFileName: String? = null
+    private val newFileName: String? = null,
+    private val onLog: (String) -> Unit = {}
 ) : FtpFile {
 
     override fun getAbsolutePath(): String = absolutePath
@@ -33,11 +35,19 @@ class DocumentFileFtpFile(
 
     override fun isHidden(): Boolean = doc?.name?.startsWith(".") == true
 
-    override fun isDirectory(): Boolean = doc?.isDirectory == true
+    override fun isDirectory(): Boolean {
+        val result = doc?.isDirectory == true
+        if (absolutePath == "/" || absolutePath.endsWith("/.")) onLog("[LIST调试] isDirectory() path=$absolutePath => $result (doc=${doc != null})")
+        return result
+    }
 
     override fun isFile(): Boolean = doc?.isFile == true
 
-    override fun doesExist(): Boolean = doc?.exists() == true
+    override fun doesExist(): Boolean {
+        val result = doc?.exists() == true
+        if (absolutePath == "/" || absolutePath.endsWith("/.")) onLog("[LIST调试] doesExist() path=$absolutePath => $result (doc=${doc != null} uri=${doc?.uri})")
+        return result
+    }
 
     override fun isReadable(): Boolean = doc != null && doc.exists()
 
@@ -85,18 +95,30 @@ class DocumentFileFtpFile(
     }
 
     override fun listFiles(): List<FtpFile>? {
-        if (doc == null || !doc.isDirectory) return null
+        onLog("[LIST调试] listFiles() 调用 path=$absolutePath docNull=${doc == null} isDir=${doc?.isDirectory} exists=${doc?.exists()} uri=${doc?.uri}")
+        if (doc == null) {
+            onLog("[LIST调试] listFiles 返回 null: doc==null")
+            return null
+        }
+        if (!doc.isDirectory) {
+            onLog("[LIST调试] listFiles 返回 null: 非目录 isFile=${doc.isFile}")
+            return null
+        }
         return try {
-            java.util.Collections.unmodifiableList(
-                doc.listFilesSafe()
-                    .mapNotNull { child ->
-                        val name = child.name ?: ""
-                        val path = if (absolutePath == "/") "/$name" else "$absolutePath/$name"
-                        DocumentFileFtpFile(context, child, path)
-                    }
+            val arr = doc.listFilesSafe()
+            onLog("[LIST调试] listFilesSafe() 返回 ${arr.size} 项")
+            val list = java.util.Collections.unmodifiableList(
+                arr.mapNotNull { child ->
+                    val name = child.name ?: ""
+                    val path = if (absolutePath == "/") "/$name" else "$absolutePath/$name"
+                    DocumentFileFtpFile(context, child, path, onLog = onLog)
+                }
                     .sortedBy { it.name.lowercase() }
             )
+            onLog("[LIST调试] listFiles 成功 返回 ${list.size} 项")
+            list
         } catch (e: Exception) {
+            onLog("[LIST调试] listFiles 返回 null: 异常 ${e.javaClass.simpleName}: ${e.message}")
             null
         }
     }

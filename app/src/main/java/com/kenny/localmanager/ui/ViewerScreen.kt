@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -62,24 +61,9 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import android.widget.Toast
 
+private const val MAX_PREVIEW_BYTES = 4096
 private const val PAGE_SIZE = 4096
 private const val MAX_TEXT_EDIT_BYTES = 512 * 1024
-
-/** 将字节数格式化为 1K、2M、3G、4T 等易读形式 */
-private fun formatByteCount(bytes: Long): String {
-    if (bytes <= 0) return "0"
-    val tb = 1024L * 1024 * 1024 * 1024
-    val gb = 1024L * 1024 * 1024
-    val mb = 1024L * 1024
-    val kb = 1024L
-    return when {
-        bytes >= tb -> String.format("%.1fT", bytes.toDouble() / tb)
-        bytes >= gb -> String.format("%.1fG", bytes.toDouble() / gb)
-        bytes >= mb -> String.format("%.1fM", bytes.toDouble() / mb)
-        bytes >= kb -> String.format("%.1fK", bytes.toDouble() / kb)
-        else -> "${bytes}B"
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,7 +71,6 @@ fun ViewerScreen(
     fileUri: String,
     fileName: String,
     isEncrypted: Boolean,
-    previewLength: Int = 4096,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -111,15 +94,11 @@ fun ViewerScreen(
     val canEdit = !isEncrypted
 
     // 初始加载 / 刷新
-    LaunchedEffect(fileUri, isEncrypted, previewLength, refreshKey) {
+    LaunchedEffect(fileUri, isEncrypted, refreshKey) {
         if (isEditMode) return@LaunchedEffect
         bytesState = null
         loadError = null
         withContext(Dispatchers.IO) {
-            if (!isEncrypted) {
-                val doc = DocumentFile.fromSingleUri(context, uri)
-                fileSize = doc?.length() ?: 0L
-            }
             val cr = context.contentResolver
             cr.openInputStreamSafe(uri)?.use { raw ->
                 val bytes = if (isEncrypted) {
@@ -128,7 +107,7 @@ fun ViewerScreen(
                         return@withContext
                     }
                 } else {
-                    raw.readBytes(previewLength)
+                    raw.readBytes(MAX_PREVIEW_BYTES)
                 }
                 bytesState = bytes
             } ?: run { loadError = "无法打开文件" }
@@ -328,33 +307,21 @@ fun ViewerScreen(
                             }
                             Spacer(Modifier.height(8.dp))
                             val page = hexPageBytes ?: byteArrayOf()
-                            val cellSizeDp = 40.dp
-                            val gridSpacingDp = 2.dp
-                            val gridTotalWidthDp = (16 * 40 + 15 * 2).dp
-                            Row(
-                                Modifier
-                                    .weight(1f)
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState())
+                            LazyVerticalGrid(
+                                columns = GridCells.Fixed(16),
+                                modifier = Modifier.weight(1f).fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                LazyVerticalGrid(
-                                    columns = GridCells.Fixed(16),
-                                    modifier = Modifier
-                                        .fillMaxHeight()
-                                        .width(gridTotalWidthDp),
-                                    horizontalArrangement = Arrangement.spacedBy(gridSpacingDp),
-                                    verticalArrangement = Arrangement.spacedBy(gridSpacingDp)
-                                ) {
-                                    itemsIndexed(page.toList()) { index: Int, byteValue: Byte ->
-                                        HexByteCell(
-                                            value = byteValue,
-                                            onValueChange = { newByte ->
-                                                val copy = (hexPageBytes ?: byteArrayOf()).copyOf()
-                                                if (copy.size > index) copy[index] = newByte
-                                                hexPageBytes = copy
-                                            }
-                                        )
-                                    }
+                                itemsIndexed(page.toList()) { index: Int, byteValue: Byte ->
+                                    HexByteCell(
+                                        value = byteValue,
+                                        onValueChange = { newByte ->
+                                            val copy = (hexPageBytes ?: byteArrayOf()).copyOf()
+                                            if (copy.size > index) copy[index] = newByte
+                                            hexPageBytes = copy
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -375,17 +342,10 @@ fun ViewerScreen(
                                         style = MaterialTheme.typography.bodyMedium,
                                         fontFamily = FontFamily.Monospace
                                     )
-                                    if (bytesState != null && bytesState!!.size >= previewLength) {
+                                    if (bytesState != null && bytesState!!.size >= MAX_PREVIEW_BYTES) {
                                         Spacer(Modifier.height(8.dp))
-                                        val remaining = if (fileSize > 0 && fileSize > previewLength) {
-                                            fileSize - previewLength
-                                        } else null
                                         Text(
-                                            if (remaining != null) {
-                                                "内容未完整显示，还有 ${formatByteCount(remaining)} 未显示"
-                                            } else {
-                                                "内容未完整显示，已显示前 ${formatByteCount(previewLength.toLong())}，后续内容未加载"
-                                            },
+                                            "（仅显示前 $MAX_PREVIEW_BYTES 字节）",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -407,37 +367,17 @@ fun ViewerScreen(
                     Column(
                         Modifier
                             .fillMaxSize()
+                            .horizontalScroll(rememberScrollState())
+                            .verticalScroll(rememberScrollState())
                             .padding(16.dp)
                     ) {
-                        if (bytesState != null && bytesState!!.size >= previewLength) {
-                            val remaining = if (fileSize > 0 && fileSize > previewLength) {
-                                fileSize - previewLength
-                            } else null
+                        hexLines.forEach { line ->
                             Text(
-                                if (remaining != null) {
-                                    "内容未完整显示，还有 ${formatByteCount(remaining)} 未显示"
-                                } else {
-                                    "内容未完整显示，已显示前 ${formatByteCount(previewLength.toLong())}，后续内容未加载"
-                                },
+                                line,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                fontFamily = FontFamily.Monospace,
+                                modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
                             )
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        Column(
-                            Modifier
-                                .fillMaxSize()
-                                .horizontalScroll(rememberScrollState())
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            hexLines.forEach { line ->
-                                Text(
-                                    line,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = FontFamily.Monospace,
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                                )
-                            }
                         }
                     }
                 }
@@ -463,8 +403,8 @@ private fun HexByteCell(
             }
         },
         modifier = Modifier
-            .width(40.dp)
-            .height(32.dp)
+            .width(32.dp)
+            .height(28.dp)
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
         textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
         singleLine = true,
@@ -472,8 +412,8 @@ private fun HexByteCell(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                contentAlignment = Alignment.CenterStart
+                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                contentAlignment = Alignment.Center
             ) {
                 inner()
             }

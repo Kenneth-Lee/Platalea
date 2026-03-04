@@ -61,7 +61,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun FtpScreen(
     manager: FtpServerManager,
-    rootUri: String,
+    treeRootUri: String,
+    currentDirUri: String,
     port: Int,
     password: String?,
     onDismiss: () -> Unit
@@ -105,7 +106,7 @@ fun FtpScreen(
             localIp = ip
             val ok = withContext(Dispatchers.IO) {
                 try {
-                    manager.start(port, rootUri, password, ip) { }
+                    manager.start(port, treeRootUri, currentDirUri, password, ip) { }
                 } catch (e: Throwable) {
                     Log.e("FtpScreen", "manager.start failed", e)
                     false

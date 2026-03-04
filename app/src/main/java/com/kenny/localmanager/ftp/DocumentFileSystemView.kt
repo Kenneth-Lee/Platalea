@@ -10,16 +10,22 @@ import org.apache.ftpserver.ftplet.FtpFile
 
 /**
  * 基于 DocumentFile 根目录的 FileSystemView。
- * 路径分隔符为 '/'，根目录为 "/"。
+ * 路径分隔符为 '/'，根目录为 "/"。所有目录均来自树下（TreeDocumentFile），保证 listFiles() 可用。
  */
 class DocumentFileSystemView(
     private val context: Context,
-    private val rootDoc: DocumentFile
+    private val rootDoc: DocumentFile,
+    initialWorkingDoc: DocumentFile? = null,
+    initialWorkingPath: String = "/",
+    private val onLog: (String) -> Unit = {}
 ) : FileSystemView {
 
-    private var workingDir: FtpFile = DocumentFileFtpFile(context, rootDoc, "/")
+    private var workingDir: FtpFile = if (initialWorkingDoc != null && initialWorkingPath != "/")
+        DocumentFileFtpFile(context, initialWorkingDoc, initialWorkingPath, onLog = onLog)
+    else
+        DocumentFileFtpFile(context, rootDoc, "/", onLog = onLog)
 
-    override fun getHomeDirectory(): FtpFile = DocumentFileFtpFile(context, rootDoc, "/")
+    override fun getHomeDirectory(): FtpFile = DocumentFileFtpFile(context, rootDoc, "/", onLog = onLog)
 
     override fun getWorkingDirectory(): FtpFile = workingDir
 
@@ -33,11 +39,16 @@ class DocumentFileSystemView(
 
     @Throws(FtpException::class)
     override fun getFile(file: String?): FtpFile? {
-        val raw = file?.replace("\\", "/")?.trim() ?: ""
-        if (raw.isEmpty() || raw == ".") return workingDir
+        val raw = file?.replace("\\", "/")?.trim()?.trimEnd('/') ?: ""
+        onLog("[LIST调试] getFile( file=\"$file\" ) raw=\"$raw\"")
+        if (raw.isEmpty() || raw == ".") {
+            val wd = workingDir as? DocumentFileFtpFile
+            onLog("[LIST调试] getFile(.) => workingDir path=${wd?.getAbsolutePath()} isDir=${wd?.isDirectory()} exists=${wd?.doesExist()}")
+            return workingDir
+        }
         val path = if (raw.startsWith("/")) normalizePath(raw)
         else normalizePath((workingDir as DocumentFileFtpFile).getAbsolutePath().trimEnd('/') + "/" + raw)
-        if (path == "/") return DocumentFileFtpFile(context, rootDoc, "/")
+        if (path == "/") return DocumentFileFtpFile(context, rootDoc, "/", onLog = onLog)
         val parts = path.removePrefix("/").split("/").filter { it.isNotEmpty() }
         var current: DocumentFile? = rootDoc
         for (i in parts.indices) {
@@ -48,12 +59,12 @@ class DocumentFileSystemView(
                 child = current.createDirectory(name)
             }
             if (i == parts.lastIndex) {
-                return if (child != null) DocumentFileFtpFile(context, child, path)
-                else DocumentFileFtpFile(context, null, path, current, name)
+                return if (child != null) DocumentFileFtpFile(context, child, path, onLog = onLog)
+                else DocumentFileFtpFile(context, null, path, current, name, onLog = onLog)
             }
             current = child
         }
-        return if (current != null) DocumentFileFtpFile(context, current, path) else null
+        return if (current != null) DocumentFileFtpFile(context, current, path, onLog = onLog) else null
     }
 
     override fun isRandomAccessible(): Boolean = false

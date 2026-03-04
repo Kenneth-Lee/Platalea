@@ -280,7 +280,6 @@ fun FileBrowserApp(
                 fileUri = uri,
                 fileName = name,
                 isEncrypted = isEncrypted,
-                previewLength = viewerPreviewBytes,
                 onBack = { viewingFile = null }
             )
         }
@@ -439,10 +438,12 @@ fun FileBrowserApp(
                     }
                 }
             }
-            if (showFtpScreen && rootUri != null) {
+            val ftpRootUri = rootUri
+            if (showFtpScreen && ftpRootUri != null) {
                 FtpScreen(
                     manager = ftpManager,
-                    rootUri = rootUri!!,
+                    treeRootUri = ftpRootUri,
+                    currentDirUri = currentUri.value,
                     port = ftpPort,
                     password = ftpPassword,
                     onDismiss = { ftpManager.stop(); showFtpScreen = false }
@@ -1591,10 +1592,16 @@ fun FileBrowserScreen(
                     TextButton(
                         onClick = {
                             showContextMenu = false
-                            onAddToPendingList(menuTarget)
+                            if (pendingList.any { it.uri == menuTarget.uri }) onRemoveFromPendingList(menuTarget)
+                            else onAddToPendingList(menuTarget)
                             contextMenuTarget = null
                         }
-                    ) { Text("加入待处理列表", color = MaterialTheme.colorScheme.onSurface) }
+                    ) {
+                        Text(
+                            if (pendingList.any { it.uri == menuTarget.uri }) "从待处理列表移除" else "加入待处理列表",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                     TextButton(
                         onClick = {
                             showContextMenu = false
