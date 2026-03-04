@@ -20,6 +20,10 @@ private val FTP_PORT = intPreferencesKey("ftp_port")
 private val FTP_PASSWORD = stringPreferencesKey("ftp_password")
 private val FTP_TIMEOUT_MINUTES = intPreferencesKey("ftp_timeout_minutes")
 private val FILTER_VISIBLE = booleanPreferencesKey("filter_visible")
+private val GIT_REPO_URL = stringPreferencesKey("git_repo_url")
+private val GIT_USER_NAME = stringPreferencesKey("git_user_name")
+private val GIT_USER_EMAIL = stringPreferencesKey("git_user_email")
+private val GIT_HTTPS_PASSWORD = stringPreferencesKey("git_https_password")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -52,6 +56,22 @@ class Preferences(private val context: Context) {
 
     val filterVisible: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[FILTER_VISIBLE] ?: true
+    }
+
+    val gitRepoUrl: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[GIT_REPO_URL]
+    }
+
+    val gitUserName: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[GIT_USER_NAME]
+    }
+
+    val gitUserEmail: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[GIT_USER_EMAIL]
+    }
+
+    val gitHttpsPassword: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[GIT_HTTPS_PASSWORD]
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -101,6 +121,34 @@ class Preferences(private val context: Context) {
     suspend fun setFilterVisible(visible: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[FILTER_VISIBLE] = visible
+        }
+    }
+
+    suspend fun setGitRepoUrl(url: String?) {
+        context.dataStore.edit { prefs ->
+            if (url.isNullOrBlank()) prefs.remove(GIT_REPO_URL)
+            else prefs[GIT_REPO_URL] = url.trim()
+        }
+    }
+
+    suspend fun setGitUserName(name: String?) {
+        context.dataStore.edit { prefs ->
+            if (name.isNullOrBlank()) prefs.remove(GIT_USER_NAME)
+            else prefs[GIT_USER_NAME] = name.trim()
+        }
+    }
+
+    suspend fun setGitUserEmail(email: String?) {
+        context.dataStore.edit { prefs ->
+            if (email.isNullOrBlank()) prefs.remove(GIT_USER_EMAIL)
+            else prefs[GIT_USER_EMAIL] = email.trim()
+        }
+    }
+
+    suspend fun setGitHttpsPassword(password: String?) {
+        context.dataStore.edit { prefs ->
+            if (password.isNullOrBlank()) prefs.remove(GIT_HTTPS_PASSWORD)
+            else prefs[GIT_HTTPS_PASSWORD] = password
         }
     }
 }

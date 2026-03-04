@@ -73,6 +73,7 @@ fun FtpScreen(
     var logLines by remember { mutableStateOf(emptyList<String>()) }
     var isRunning by remember { mutableStateOf(false) }
     var localIp by remember { mutableStateOf<String?>(null) }
+    var remainingMinutes by remember(timeoutMinutes) { mutableStateOf(if (timeoutMinutes > 0) timeoutMinutes else null) }
 
     DisposableEffect(Unit) {
         try {
@@ -138,9 +139,11 @@ fun FtpScreen(
     LaunchedEffect(timeoutMinutes) {
         if (timeoutMinutes > 0) {
             var remaining = timeoutMinutes
+            remainingMinutes = remaining
             while (remaining > 0) {
                 delay(60_000)
                 remaining--
+                remainingMinutes = if (remaining > 0) remaining else null
                 if (remaining <= 0) onDismiss()
             }
         }
@@ -192,6 +195,15 @@ fun FtpScreen(
                         color = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                     )
                 }
+            }
+            remainingMinutes?.let { mins ->
+                Text(
+                    "剩余 $mins 分钟后自动关闭",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+                Spacer(Modifier.height(4.dp))
             }
             Spacer(Modifier.height(8.dp))
             Row(

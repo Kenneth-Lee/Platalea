@@ -60,6 +60,11 @@ android {
         resources {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
             excludes += "META-INF/DEPENDENCIES"
+            pickFirsts += "OSGI-INF/l10n/plugin.properties"
+            pickFirsts += "org/apache/sshd/sshd-version.properties"
+            pickFirsts += "plugin.properties"
+            pickFirsts += "org/apache/sshd/moduli"
+            pickFirsts += "org/apache/sshd/common/kex/*.prime"
         }
     }
 }
@@ -83,6 +88,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.1")
     implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.eclipse.jgit:org.eclipse.jgit:5.12.0.202106070339-r")
+    implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache:5.12.0.202106070339-r") {
+        exclude(group = "org.apache.sshd", module = "sshd-osgi")
+    }
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

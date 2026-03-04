@@ -344,6 +344,11 @@ fun FileBrowserApp(
             var ftpTimeoutMinutes by remember { mutableStateOf(0) }
             var filterVisible by remember { mutableStateOf(true) }
             var showFtpScreen by remember { mutableStateOf(false) }
+            var gitRepoUrl by remember { mutableStateOf<String?>(null) }
+            var gitUserName by remember { mutableStateOf<String?>(null) }
+            var gitUserEmail by remember { mutableStateOf<String?>(null) }
+            var gitHttpsPassword by remember { mutableStateOf<String?>(null) }
+            var showGitConfigDialog by remember { mutableStateOf(false) }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
@@ -355,6 +360,18 @@ fun FileBrowserApp(
             }
             LaunchedEffect(prefs) {
                 prefs.filterVisible.collect { filterVisible = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.gitRepoUrl.collect { gitRepoUrl = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.gitUserName.collect { gitUserName = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.gitUserEmail.collect { gitUserEmail = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.gitHttpsPassword.collect { gitHttpsPassword = it }
             }
             BackHandler {
                 when {
@@ -370,6 +387,7 @@ fun FileBrowserApp(
                     }
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
+                    showGitConfigDialog -> showGitConfigDialog = false
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
@@ -613,6 +631,39 @@ fun FileBrowserApp(
                     onOpenFtp = {
                         if (rootUri != null) showFtpScreen = true
                         else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                    },
+                    onOpenGit = {
+                        val r = rootUri?.let { normalizeContentUriString(it) }
+                        when {
+                            r == null -> Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                            gitRepoUrl.isNullOrBlank() -> Toast.makeText(context, "请先在配置中填写 Git 仓库地址", Toast.LENGTH_SHORT).show()
+                            !com.kenny.localmanager.git.isValidHttpsRepoUrl(gitRepoUrl!!) -> Toast.makeText(context, "请填写有效的 HTTPS 仓库地址", Toast.LENGTH_LONG).show()
+                            else -> scope.launch {
+                                runWithProgress("Git 同步…", null) { _ ->
+                                    val result = withContext(Dispatchers.IO) {
+                                        com.kenny.localmanager.git.cloneToTree(
+                                            context, r, gitRepoUrl!!,
+                                            userName = gitUserName, userEmail = gitUserEmail,
+                                            httpsPassword = gitHttpsPassword
+                                        ) { line -> logDebug(line) }
+                                    }
+                                    withContext(Dispatchers.Main.immediate) {
+                                        result.fold(
+                                            onSuccess = { msg ->
+                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                logDebug("Git 下载: $msg")
+                                                refreshTrigger++
+                                            },
+                                            onFailure = { e ->
+                                                val err = "失败: ${e.message}"
+                                                Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                                logDebug("Git 下载 $err")
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
                     }
                 )
                 if (debugEnabled) {
@@ -767,7 +818,21 @@ fun FileBrowserApp(
                     },
                     ftpTimeoutMinutes = ftpTimeoutMinutes,
                     onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
+                    onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
+                )
+            }
+            if (showGitConfigDialog) {
+                GitConfigDialog(
+                    onDismiss = { showGitConfigDialog = false },
+                    repoUrl = gitRepoUrl.orEmpty(),
+                    onRepoUrlChange = { s -> scope.launch { prefs.setGitRepoUrl(s.ifBlank { null }) } },
+                    userName = gitUserName.orEmpty(),
+                    onUserNameChange = { s -> scope.launch { prefs.setGitUserName(s.ifBlank { null }) } },
+                    userEmail = gitUserEmail.orEmpty(),
+                    onUserEmailChange = { s -> scope.launch { prefs.setGitUserEmail(s.ifBlank { null }) } },
+                    httpsPassword = gitHttpsPassword.orEmpty(),
+                    onHttpsPasswordChange = { s -> scope.launch { prefs.setGitHttpsPassword(s.ifBlank { null }) } }
                 )
             }
             if (showKeyManagementDialog) {
@@ -1271,6 +1336,7 @@ fun FileBrowserScreen(
     onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
     onOpenFtp: () -> Unit = {},
+    onOpenGit: () -> Unit = {},
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
@@ -1424,6 +1490,13 @@ fun FileBrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenFtp()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Git 同步") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenGit()
                                 }
                             )
                             DropdownMenuItem(
@@ -2373,7 +2446,7 @@ fun GpgPublicKeyPickerDialog(
 
 private val ABOUT_USAGE_TIPS = listOf(
     "内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。",
-    "可以用markdown渲染器直接查看markdown文件。"
+    "可以用markdown渲染器直接查看markdown文件。",
     "在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。",
     "双击文件可以把文件加入待处理列表进行批处理。",
     "混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。",
@@ -2442,16 +2515,23 @@ fun ConfigDialog(
     onFtpPasswordChange: (String) -> Unit,
     ftpTimeoutMinutes: Int,
     onFtpTimeoutMinutesChange: (Int) -> Unit,
+    onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
+    var localFtpPassword by remember { mutableStateOf(ftpPassword) }
+    var localFtpTimeoutMinutes by remember { mutableStateOf(ftpTimeoutMinutes.toString()) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
             tonalElevation = 6.dp
         ) {
-            Column(Modifier.padding(24.dp)) {
+            Column(
+                Modifier
+                    .padding(24.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 Text("配置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 Row(
@@ -2484,8 +2564,9 @@ fun ConfigDialog(
                 ) {
                     Text("内部查看器预览长度（字节）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     OutlinedTextField(
-                        value = viewerPreviewBytes.toString(),
+                        value = localViewerPreviewBytes,
                         onValueChange = { s ->
+                            localViewerPreviewBytes = s
                             s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(MIN_PREVIEW_BYTES, MAX_PREVIEW_BYTES)?.let { onViewerPreviewBytesChange(it) }
                         },
                         modifier = Modifier.width(120.dp),
@@ -2505,8 +2586,11 @@ fun ConfigDialog(
                 ) {
                     Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(140.dp))
                     OutlinedTextField(
-                        value = ftpPassword,
-                        onValueChange = onFtpPasswordChange,
+                        value = localFtpPassword,
+                        onValueChange = { s ->
+                            localFtpPassword = s
+                            onFtpPasswordChange(s)
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
@@ -2520,8 +2604,9 @@ fun ConfigDialog(
                 ) {
                     Text("FTP 倒计时（分钟）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     OutlinedTextField(
-                        value = ftpTimeoutMinutes.toString(),
+                        value = localFtpTimeoutMinutes,
                         onValueChange = { s ->
+                            localFtpTimeoutMinutes = s
                             s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onFtpTimeoutMinutesChange(it) }
                         },
                         modifier = Modifier.width(100.dp),
@@ -2530,6 +2615,8 @@ fun ConfigDialog(
                     )
                 }
                 Text("0 表示不自动退出", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text("Git 配置") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(24.dp))

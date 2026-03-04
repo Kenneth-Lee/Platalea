@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.FileOutputStream
@@ -328,6 +329,19 @@ fun restoreFromTrash(
             }
         } else false
     }
+}
+
+/**
+ * 若文档树根下存在指定名称的子目录则递归删除。
+ * @param treeRootUri 文档树根 URI（含 /tree/）
+ * @param childDirName 子目录名（如 ".sysgit"）
+ * @return 若存在并已删除或本不存在返回 true，失败返回 false
+ */
+fun deleteTreeChildDirIfExists(context: Context, treeRootUri: Uri, childDirName: String): Boolean {
+    val rootDocId = try { DocumentsContract.getTreeDocumentId(treeRootUri) } catch (_: Exception) { return true }
+    val rootDocUri = DocumentsContract.buildDocumentUriUsingTree(treeRootUri, rootDocId) ?: return true
+    val childUri = findChildByName(context, rootDocUri, childDirName) ?: return true
+    return deleteDocumentRecursive(context, childUri, treeRootUri)
 }
 
 /**
@@ -660,4 +674,59 @@ fun moveDocumentTo(
             false
         }
     } else false
+}
+
+/**
+ * 将本地目录（如 JGit clone 的临时目录）递归复制到文档树根下的指定子目录。
+ * @param treeRootUri 文档树根 URI（含 /tree/）
+ * @param sourceDir 本地源目录
+ * @param destDirName 目标子目录名（如 ".sysgit"）
+ * @return 成功返回 true
+ */
+fun copyLocalDirToTree(
+    context: Context,
+    treeRootUri: Uri,
+    sourceDir: File,
+    destDirName: String,
+    log: ((String) -> Unit)? = null
+): Boolean {
+    if (!sourceDir.isDirectory) return false
+    val cr = context.contentResolver
+    val rootDocId = try { DocumentsContract.getTreeDocumentId(treeRootUri) } catch (_: Exception) { null } ?: return false
+    val parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeRootUri, rootDocId) ?: return false
+    val destUri = try {
+        DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, destDirName)
+    } catch (e: Exception) {
+        log?.invoke("创建目录 $destDirName 失败: ${e.message}")
+        return false
+    } ?: return false
+    return copyLocalDirRecursive(context, destUri, sourceDir, log)
+}
+
+private fun copyLocalDirRecursive(context: Context, parentDocUri: Uri, sourceDir: File, log: ((String) -> Unit)?): Boolean {
+    val cr = context.contentResolver
+    val list = sourceDir.listFiles() ?: return true
+    for (f in list) {
+        val name = f.name ?: continue
+        if (name == "." || name == "..") continue
+        try {
+            if (f.isDirectory) {
+                val childUri = DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, name)
+                    ?: continue
+                if (!copyLocalDirRecursive(context, childUri, f, log)) return false
+            } else {
+                val mime = "application/octet-stream"
+                val newUri = DocumentsContract.createDocument(cr, parentDocUri, mime, name) ?: continue
+                f.inputStream().use { inp ->
+                    cr.openOutputStream(newUri)?.use { out ->
+                        inp.copyTo(out)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log?.invoke("复制 $name 失败: ${e.message}")
+            return false
+        }
+    }
+    return true
 }
