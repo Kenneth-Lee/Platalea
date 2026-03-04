@@ -41,7 +41,7 @@ fun loadSecretKeyRings(context: android.content.Context): PGPSecretKeyRingCollec
     }
 }
 
-/** 枚举公钥环中可用于加密的密钥（加密用途），返回 (keyId, 简短描述)。 */
+/** 枚举公钥环中可用于加密的密钥（加密用途），返回 (keyId, 简短描述)。同一环内主钥+子钥会列出多条。 */
 fun listEncryptionPublicKeys(rings: PGPPublicKeyRingCollection?): List<Pair<Long, String>> {
     if (rings == null) return emptyList()
     val list = mutableListOf<Pair<Long, String>>()
@@ -53,6 +53,22 @@ fun listEncryptionPublicKeys(rings: PGPPublicKeyRingCollection?): List<Pair<Long
                 val desc = uids.firstOrNull()?.toString()?.take(60) ?: "0x${id.toString(16)}"
                 list.add(id to desc)
             }
+        }
+    }
+    return list.distinctBy { it.first }
+}
+
+/** 按公钥环枚举可用于加密的密钥，每个环只一条（与密钥管理器数量一致）。返回 (主钥 keyId, 描述)，用于 findPublicKeyRing。 */
+fun listEncryptionPublicKeyRings(rings: PGPPublicKeyRingCollection?): List<Pair<Long, String>> {
+    if (rings == null) return emptyList()
+    val list = mutableListOf<Pair<Long, String>>()
+    rings.keyRings.forEach { ring ->
+        val primary = ring.publicKey ?: return@forEach
+        val hasEncryption = ring.publicKeys.asSequence().any { it.isEncryptionKey }
+        if (hasEncryption) {
+            val uids = primary.userIDs.asSequence().toList()
+            val desc = uids.firstOrNull()?.toString()?.take(60) ?: "0x${primary.keyID.toString(16)}"
+            list.add(primary.keyID to desc)
         }
     }
     return list.distinctBy { it.first }

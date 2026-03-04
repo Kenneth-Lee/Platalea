@@ -5,14 +5,12 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.openpgp.PGPPublicKey
 import org.bouncycastle.openpgp.PGPPublicKeyRing
 import org.bouncycastle.openpgp.PGPPublicKeyRingCollection
-import org.bouncycastle.openpgp.PGPSecretKeyRing
 import org.pgpainless.PGPainless
 import org.pgpainless.decryption_verification.ConsumerOptions
 import org.pgpainless.decryption_verification.DecryptionStream
 import org.pgpainless.encryption_signing.EncryptionOptions
 import org.pgpainless.encryption_signing.EncryptionStream
 import org.pgpainless.encryption_signing.ProducerOptions
-import org.pgpainless.encryption_signing.SigningOptions
 import org.pgpainless.key.protection.SecretKeyRingProtector
 import org.pgpainless.util.Passphrase
 import java.io.ByteArrayOutputStream
@@ -191,57 +189,4 @@ object GpgHelper {
         }
     }
 
-    /**
-     * 仅验证签名（不解密），使用已加载的公钥环。适用于仅签名或内联签名的消息。
-     * @return Pair(明文内容, 是否验证通过)，验证失败或非签名消息时 second 为 false，first 可能为非 null 的明文)
-     */
-    fun verifySignature(
-        input: ByteArray,
-        publicKeyRings: PGPPublicKeyRingCollection?
-    ): Pair<ByteArray?, Boolean> {
-        if (publicKeyRings == null || publicKeyRings.size() == 0) return Pair(null, false)
-        return try {
-            val opts = ConsumerOptions.get().addVerificationCerts(publicKeyRings)
-            val decStream: DecryptionStream = PGPainless.decryptAndOrVerify()
-                .onInputStream(input.inputStream())
-                .withOptions(opts)
-            val plain = decStream.use { it.readBytes() }
-            val verified = decStream.metadata.isVerifiedSigned()
-            Pair(plain, verified)
-        } catch (_: Exception) {
-            Pair(null, false)
-        }
-    }
-
-    /**
-     * 使用私钥对内容做内联签名（PGPainless）。
-     * @return 签名后的 ASCII 装甲数据，失败返回 null
-     */
-    fun signWithSecretKey(
-        plain: ByteArray,
-        secretKeyRing: PGPSecretKeyRing,
-        passphrase: CharArray,
-        literalFileName: String,
-        onError: ((Throwable) -> Unit)? = null
-    ): ByteArray? {
-        val pass = Passphrase(passphrase)
-        return try {
-            val protector = SecretKeyRingProtector.unlockAnyKeyWith(pass)
-            val signOpts = SigningOptions.get().addInlineSignature(protector, secretKeyRing)
-            val producerOpts = ProducerOptions.sign(signOpts)
-                .setAsciiArmor(true)
-                .setFileName(literalFileName)
-            val out = ByteArrayOutputStream()
-            PGPainless.encryptAndOrSign()
-                .onOutputStream(out)
-                .withOptions(producerOpts)
-                .use { encStream -> encStream.write(plain) }
-            out.toByteArray()
-        } catch (e: Exception) {
-            onError?.invoke(e)
-            null
-        } finally {
-            pass.clear()
-        }
-    }
 }
