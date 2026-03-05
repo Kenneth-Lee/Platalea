@@ -115,6 +115,9 @@ import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
+import com.kenny.localmanager.file.compressToZip
+import com.kenny.localmanager.file.unzipToParent
+import com.kenny.localmanager.file.isZipEncrypted
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.generateDefaultKey
@@ -367,6 +370,17 @@ fun FileBrowserApp(
             var gitUserEmail by remember { mutableStateOf<String?>(null) }
             var gitHttpsPassword by remember { mutableStateOf<String?>(null) }
             var showGitConfigDialog by remember { mutableStateOf(false) }
+            var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var zipUnzipPassword by remember { mutableStateOf("") }
+            var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var zipCompressPassword by remember { mutableStateOf("") }
+            LaunchedEffect(zipUnzipTarget) {
+                zipUnzipEncrypted = null
+                zipUnzipPassword = ""
+                val target = zipUnzipTarget ?: return@LaunchedEffect
+                zipUnzipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+            }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
@@ -409,6 +423,8 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
+                    zipUnzipTarget != null -> zipUnzipTarget = null
+                    zipCompressTarget != null -> zipCompressTarget = null
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                     else -> {
                         val now = System.currentTimeMillis()
@@ -599,6 +615,17 @@ fun FileBrowserApp(
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, isEncrypted)
                     },
+                    onOpenWithOtherApp = { uri, name ->
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            data = Uri.parse(uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        try {
+                            context.startActivity(Intent.createChooser(intent, null))
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                        }
+                    },
                     onOpenMarkdownView = { uri, name, encrypted ->
                         markdownViewFile = Triple(uri, name, encrypted)
                     },
@@ -683,7 +710,9 @@ fun FileBrowserApp(
                                 }
                             }
                         }
-                    }
+                    },
+                    onUnzipRequest = { zipUnzipTarget = it },
+                    onCompressToZipRequest = { zipCompressTarget = it }
                 )
                 if (debugEnabled) {
                     DebugPanel(
@@ -734,7 +763,7 @@ fun FileBrowserApp(
                             else gpgState = GpgOpState.BatchDecrypt(list, displayUri)
                         }
                     },
-                    onClearList = { pendingList.clear() },
+                    onClearFilteredList = { toRemove -> toRemove.forEach { pendingList.remove(it) } },
                     onDismiss = { showPendingList = false }
                 )
             }
@@ -917,6 +946,125 @@ fun FileBrowserApp(
                         }
                     },
                     onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
+                )
+            }
+            zipUnzipTarget?.let { target ->
+                val parentDirUri = Uri.parse(displayUri)
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                val encrypted = zipUnzipEncrypted
+                AlertDialog(
+                    onDismissRequest = { zipUnzipTarget = null; zipUnzipPassword = "" },
+                    title = { Text("解压 ZIP") },
+                    text = {
+                        Column {
+                            Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
+                            if (encrypted == true) {
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = zipUnzipPassword,
+                                    onValueChange = { zipUnzipPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("密码（加密 ZIP）") },
+                                    singleLine = true
+                                )
+                            } else if (encrypted == null) {
+                                Spacer(Modifier.height(8.dp))
+                                Text("正在检测…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (encrypted == true && zipUnzipPassword.isBlank()) return@Button
+                                scope.launch {
+                                    progressOp = OperationProgress("解压", 0, null)
+                                    delay(50)
+                                    val pwd = if (encrypted == true) zipUnzipPassword.toCharArray() else null
+                                    val ok = withContext(Dispatchers.IO) {
+                                        unzipToParent(
+                                            context,
+                                            target.uri,
+                                            parentDirUri,
+                                            treeUri,
+                                            pwd
+                                        ) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("解压", cur, tot) }
+                                        }
+                                    }
+                                    // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
+                                    delay(120)
+                                    progressOp = null
+                                    zipUnzipTarget = null
+                                    zipUnzipPassword = ""
+                                    zipUnzipEncrypted = null
+                                    if (ok) {
+                                        Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, "解压失败（请检查密码或文件）", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("解压") }
+                    },
+                    dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text("取消") } }
+                )
+            }
+            zipCompressTarget?.let { target ->
+                val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
+                val parentDirUri = Uri.parse(displayUri)
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                AlertDialog(
+                    onDismissRequest = { zipCompressTarget = null; zipCompressPassword = "" },
+                    title = { Text("压缩为 ZIP") },
+                    text = {
+                        Column {
+                            Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = zipCompressPassword,
+                                onValueChange = { zipCompressPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("密码（留空则不加密）") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    progressOp = OperationProgress("压缩", 0, 1)
+                                    delay(50)
+                                    val pwd = zipCompressPassword.ifBlank { null }?.toCharArray()
+                                    val ok = withContext(Dispatchers.IO) {
+                                        compressToZip(
+                                            context,
+                                            listOf(target.uri),
+                                            parentDirUri,
+                                            treeUri,
+                                            suggestedZipName,
+                                            pwd
+                                        ) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                        }
+                                    }
+                                    delay(120)
+                                    progressOp = null
+                                    zipCompressTarget = null
+                                    zipCompressPassword = ""
+                                    if (ok) {
+                                        Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("压缩") }
+                    },
+                    dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
                 )
             }
             if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
@@ -1351,6 +1499,7 @@ fun FileBrowserScreen(
     filterVisible: Boolean = true,
     hideDotFiles: Boolean = false,
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
+    onOpenWithOtherApp: (uri: String, name: String) -> Unit = { _, _ -> },
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
     onShowPendingList: (Boolean) -> Unit,
@@ -1364,7 +1513,9 @@ fun FileBrowserScreen(
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
     onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
     onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null,
-    onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null
+    onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
+    onUnzipRequest: (DocumentFileModel) -> Unit = {},
+    onCompressToZipRequest: (DocumentFileModel) -> Unit = {}
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1498,6 +1649,15 @@ fun FileBrowserScreen(
                                     onChangeRoot()
                                 }
                             )
+                            DropdownMenuItem(
+                                text = { Text("把当前过滤结果全部加入待处理列表") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
+                                    toAdd.forEach { onAddToPendingList(it) }
+                                    Toast.makeText(context, "已加入 ${toAdd.size} 项到待处理列表", Toast.LENGTH_SHORT).show()
+                                }
+                            )
                             onEmptyTrash?.let { empty ->
                                 DropdownMenuItem(
                                     text = { Text("清空回收站") },
@@ -1609,15 +1769,15 @@ fun FileBrowserScreen(
                                     if (item.isDirectory) {
                                         onNavigate(item.uri.toString())
                                     } else {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            data = item.uri
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        try {
-                                            context.startActivity(Intent.createChooser(intent, null))
-                                        } catch (_: android.content.ActivityNotFoundException) {
-                                            val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
-                                            onOpenFile(item.uri.toString(), item.name, encrypted)
+                                        when {
+                                            item.name.endsWith(".zip", ignoreCase = true) ->
+                                                onUnzipRequest(item)
+                                            item.name.endsWith(".md", ignoreCase = true) || item.name.endsWith(".rst", ignoreCase = true) ->
+                                                onOpenMarkdownView(item.uri.toString(), item.name, false)
+                                            else -> {
+                                                val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
+                                                onOpenFile(item.uri.toString(), item.name, encrypted)
+                                            }
                                         }
                                     }
                                 },
@@ -1660,6 +1820,13 @@ fun FileBrowserScreen(
                         TextButton(
                             onClick = {
                                 showContextMenu = false
+                                onOpenWithOtherApp(menuTarget.uri.toString(), menuTarget.name)
+                                contextMenuTarget = null
+                            }
+                        ) { Text("用其他应用打开", color = MaterialTheme.colorScheme.onSurface) }
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
                                 val enc = menuTarget.name.endsWith(".gpg", ignoreCase = true)
                                 onOpenFile(menuTarget.uri.toString(), menuTarget.name, enc)
                                 contextMenuTarget = null
@@ -1672,7 +1839,16 @@ fun FileBrowserScreen(
                                     onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("Markdown渲染", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text("渲染 (Markdown/RST)", color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                        if (menuTarget.name.endsWith(".zip", ignoreCase = true)) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onUnzipRequest(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("解压 (ZIP)", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".gpg", ignoreCase = true)) {
                             TextButton(
@@ -1724,6 +1900,13 @@ fun FileBrowserScreen(
                             }
                         }
                     }
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            onCompressToZipRequest(menuTarget)
+                            contextMenuTarget = null
+                        }
+                    ) { Text("压缩为 ZIP", color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -2084,10 +2267,15 @@ fun PendingListScreen(
     onRequestBatchDeobfuscate: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
-    onClearList: () -> Unit = {},
+    onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     var showHelpDialog by remember { mutableStateOf(false) }
+    var filterText by remember { mutableStateOf("") }
+    val filteredPendingItems = if (filterText.isBlank()) pendingList
+    else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
+        pendingList.filter { regex.containsMatchIn(it.name) }
+    } ?: pendingList
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2131,6 +2319,26 @@ fun PendingListScreen(
                 Row(
                     Modifier
                         .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = filterText,
+                        onValueChange = { filterText = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text("正则过滤文件名，留空显示全部") },
+                        label = null
+                    )
+                    if (filterText.isNotEmpty()) {
+                        IconButton(onClick = { filterText = "" }) {
+                            Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                        }
+                    }
+                }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
                         .padding(horizontal = 4.dp, vertical = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -2148,8 +2356,8 @@ fun PendingListScreen(
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
-                    IconButton(onClick = onClearList) {
-                        Icon(Icons.Default.Clear, contentDescription = "清空列表")
+                    IconButton(onClick = { onClearFilteredList(filteredPendingItems) }) {
+                        Icon(Icons.Default.Clear, contentDescription = "清空当前过滤结果")
                     }
                 }
                 Row(
@@ -2177,7 +2385,7 @@ fun PendingListScreen(
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                items(pendingList) { item ->
+                items(filteredPendingItems) { item ->
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -2261,7 +2469,7 @@ fun PendingListScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Clear, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
-                        Text("清空列表：移除列表中全部项", style = MaterialTheme.typography.bodyMedium)
+                        Text("清空列表：仅移除当前过滤结果中的项（未设过滤时即全部）。拷贝/移动/删除/混淆/加解密等批处理仍针对整个列表。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
