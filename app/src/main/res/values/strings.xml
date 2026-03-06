@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Local Manager</string>
+    <string name="playback_channel_name">后台播放</string>
+    <string name="playback_notification_title">MP3 播放</string>
+    <string name="playback_stop">停止</string>
+    <string name="playback_prev">上一首</string>
+    <string name="playback_next">下一首</string>
 </resources>

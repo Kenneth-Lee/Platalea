@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.compose.material.icons.filled.ArrowBack
 import android.app.Activity
 import androidx.activity.compose.BackHandler
@@ -80,6 +81,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
@@ -102,7 +104,6 @@ import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
-import com.kenny.localmanager.file.getTrashItemCount
 import com.kenny.localmanager.file.getTrashUriIfExists
 import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.moveToTrash
@@ -118,6 +119,15 @@ import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.isZipEncrypted
+import com.kenny.localmanager.player.PlaybackService
+import com.kenny.localmanager.player.PlaybackState
+import com.kenny.localmanager.player.ACTION_NEXT
+import com.kenny.localmanager.player.ACTION_PLAY
+import com.kenny.localmanager.player.ACTION_PREV
+import com.kenny.localmanager.player.ACTION_STOP
+import com.kenny.localmanager.player.EXTRA_DIR_URI
+import com.kenny.localmanager.player.EXTRA_NAMES
+import com.kenny.localmanager.player.EXTRA_URIS
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.generateDefaultKey
@@ -358,7 +368,25 @@ fun FileBrowserApp(
             var batchObfuscatePassword by remember { mutableStateOf("") }
             var batchObfuscateInProgress by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
-            val currentDirPath = remember(displayUri, rootUri) { pathFromRoot(context, rootUri, displayUri) }
+            var currentDirPath by remember { mutableStateOf("") }
+            LaunchedEffect(displayUri, rootUri) {
+                currentDirPath = withContext(Dispatchers.IO) {
+                    pathFromRoot(context, rootUri, displayUri)
+                }
+            }
+            var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
+            LaunchedEffect(rootUri) {
+                cachedTrashUri = rootUri?.let { r ->
+                    withContext(Dispatchers.IO) {
+                        val root = Uri.parse(normalizeContentUriString(r))
+                        getTrashUriIfExists(context, root, root)
+                    }
+                }
+            }
+            var dirCache by remember { mutableStateOf<Map<String, CachedDir>>(emptyMap()) }
+            LaunchedEffect(rootUri) {
+                dirCache = emptyMap()
+            }
             val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
             var ftpPort by remember { mutableStateOf(2121) }
             var ftpPassword by remember { mutableStateOf<String?>(null) }
@@ -375,6 +403,10 @@ fun FileBrowserApp(
             var zipUnzipPassword by remember { mutableStateOf("") }
             var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var zipCompressPassword by remember { mutableStateOf("") }
+            var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
+            LaunchedEffect(Unit) {
+                PlaybackService.playbackState.collect { playbackState = it }
+            }
             LaunchedEffect(zipUnzipTarget) {
                 zipUnzipEncrypted = null
                 zipUnzipPassword = ""
@@ -549,6 +581,8 @@ fun FileBrowserApp(
                     modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
                     currentUri = displayUri,
                     refreshTrigger = refreshTrigger,
+                    dirCache = dirCache,
+                    onCacheDir = { uri, items, total -> dirCache = dirCache + (uri to CachedDir(items, total)) },
                     pendingList = pendingList,
                     rootUri = rootUri,
                     listState = fileListLazyState,
@@ -568,10 +602,22 @@ fun FileBrowserApp(
                             treeLauncher.launch(null)
                             return@FileBrowserScreen
                         }
-                        val root = Uri.parse(normalizeContentUriString(r))
-                        val count = getTrashItemCount(context, root, root)
-                        if (count > 0) showChangeRootConfirm = true
-                        else treeLauncher.launch(null)
+                        scope.launch {
+                            val count = withContext(Dispatchers.IO) {
+                                cachedTrashUri?.let { trash ->
+                                    val doc = if (trash.toString().contains("/tree/")) {
+                                        DocumentFile.fromTreeUri(context, trash)
+                                    } else {
+                                        DocumentFile.fromSingleUri(context, trash)
+                                    }
+                                    doc?.listFilesSafe()?.size ?: 0
+                                } ?: 0
+                            }
+                            withContext(Dispatchers.Main.immediate) {
+                                if (count > 0) showChangeRootConfirm = true
+                                else treeLauncher.launch(null)
+                            }
+                        }
                     },
                     onEmptyTrash = rootUri?.let { r ->
                         {
@@ -607,11 +653,7 @@ fun FileBrowserApp(
                     },
                     filterVisible = filterVisible,
                     hideDotFiles = hideDotFiles,
-                    isViewingTrash = rootUri?.let { r ->
-                        val root = Uri.parse(normalizeContentUriString(r))
-                        val trashUri = getTrashUriIfExists(context, root, root)
-                        trashUri != null && (displayUri == trashUri.toString() || isInsideDirectory(Uri.parse(displayUri), trashUri))
-                    } ?: false,
+                    isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, isEncrypted)
                     },
@@ -712,7 +754,34 @@ fun FileBrowserApp(
                         }
                     },
                     onUnzipRequest = { zipUnzipTarget = it },
-                    onCompressToZipRequest = { zipCompressTarget = it }
+                    onCompressToZipRequest = { zipCompressTarget = it },
+                    playbackState = playbackState,
+                    onStopPlayback = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayPrev = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayNext = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayAllMp3Request = { list ->
+                        if (list.isEmpty()) {
+                            Toast.makeText(context, "当前目录没有 MP3 文件", Toast.LENGTH_SHORT).show()
+                            return@FileBrowserScreen
+                        }
+                        val intent = Intent(context, PlaybackService::class.java).apply {
+                            action = ACTION_PLAY
+                            putStringArrayListExtra(EXTRA_URIS, ArrayList(list.map { it.uri.toString() }))
+                            putStringArrayListExtra(EXTRA_NAMES, ArrayList(list.map { it.name }))
+                            putExtra(EXTRA_DIR_URI, displayUri)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                        Toast.makeText(context, "开始播放 ${list.size} 首", Toast.LENGTH_SHORT).show()
+                    }
                 )
                 if (debugEnabled) {
                     DebugPanel(
@@ -1460,6 +1529,10 @@ private sealed class GpgMethod {
     object SecretKeyDec : GpgMethod()
 }
 
+private const val MAX_DIR_ITEMS = 128
+
+internal data class CachedDir(val items: List<DocumentFileModel>, val totalCount: Int?)
+
 private enum class FileSortOrder(val label: String) {
     NAME("名称"),
     TIME("更新时间"),
@@ -1482,10 +1555,12 @@ private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Co
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileBrowserScreen(
+internal fun FileBrowserScreen(
     modifier: Modifier = Modifier,
     currentUri: String,
     refreshTrigger: Int,
+    dirCache: Map<String, CachedDir>,
+    onCacheDir: (uri: String, items: List<DocumentFileModel>, totalCount: Int?) -> Unit,
     pendingList: List<DocumentFileModel>,
     rootUri: String?,
     listState: LazyListState,
@@ -1515,7 +1590,12 @@ fun FileBrowserScreen(
     onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
-    onCompressToZipRequest: (DocumentFileModel) -> Unit = {}
+    onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
+    playbackState: PlaybackState? = null,
+    onStopPlayback: () -> Unit = {},
+    onPlayPrev: () -> Unit = {},
+    onPlayNext: () -> Unit = {},
+    onPlayAllMp3Request: (List<DocumentFileModel>) -> Unit = {}
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1535,32 +1615,112 @@ fun FileBrowserScreen(
     var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
     var sortAscending by remember { mutableStateOf(true) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var dirTotalCount by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
+        val normalizedUri = normalizeContentUriString(currentUri)
+        val cached = dirCache[normalizedUri]
+        if (cached != null) {
+            items = cached.items
+            dirTotalCount = cached.totalCount
+            loading = false
+            error = null
+            launch {
+                try {
+                    val result = withContext(Dispatchers.IO) {
+                        val uri = Uri.parse(currentUri)
+                        var doc: DocumentFile? = null
+                        for (attempt in 0..3) {
+                            doc = if (currentUri.contains("/tree/")) {
+                                DocumentFile.fromTreeUri(context, uri)
+                            } else {
+                                DocumentFile.fromSingleUri(context, uri)
+                            }
+                            if (doc?.exists() == true) break
+                            if (attempt < 3) delay(100L * (attempt + 1))
+                        }
+                        val d = doc
+                        when {
+                            d == null || !d.exists() -> Pair(null, null)
+                            else -> {
+                                val arr = d.listFilesSafe()
+                                val total = arr.size
+                                if (total > MAX_DIR_ITEMS) {
+                                    val limited = arr.asSequence().take(MAX_DIR_ITEMS).mapNotNull { it.toModel() }.toList()
+                                    Pair(limited, total)
+                                } else {
+                                    Pair(arr.mapNotNull { it.toModel() }, null)
+                                }
+                            }
+                        }
+                    }
+                    when {
+                        result.first == null -> {
+                            error = "无法访问该目录"
+                            items = emptyList()
+                            dirTotalCount = null
+                        }
+                        else -> {
+                            items = result.first!!
+                            dirTotalCount = result.second
+                            onCacheDir(normalizedUri, result.first!!, result.second)
+                        }
+                    }
+                } catch (e: Exception) {
+                    error = e.message ?: "加载失败"
+                    items = emptyList()
+                    dirTotalCount = null
+                }
+            }
+            return@LaunchedEffect
+        }
         loading = true
         error = null
+        dirTotalCount = null
         try {
-            val uri = Uri.parse(currentUri)
-            var doc: DocumentFile? = null
-            for (attempt in 0..3) {
-                doc = if (currentUri.contains("/tree/")) {
-                    DocumentFile.fromTreeUri(context, uri)
-                } else {
-                    DocumentFile.fromSingleUri(context, uri)
+            val result = withContext(Dispatchers.IO) {
+                val uri = Uri.parse(currentUri)
+                var doc: DocumentFile? = null
+                for (attempt in 0..3) {
+                    doc = if (currentUri.contains("/tree/")) {
+                        DocumentFile.fromTreeUri(context, uri)
+                    } else {
+                        DocumentFile.fromSingleUri(context, uri)
+                    }
+                    if (doc?.exists() == true) break
+                    if (attempt < 3) delay(100L * (attempt + 1))
                 }
-                if (doc?.exists() == true) break
-                if (attempt < 3) delay(100L * (attempt + 1))
+                val d = doc
+                when {
+                    d == null || !d.exists() -> Pair(null, null)
+                    else -> {
+                        val arr = d.listFilesSafe()
+                        val total = arr.size
+                        if (total > MAX_DIR_ITEMS) {
+                            val limited = arr.asSequence().take(MAX_DIR_ITEMS).mapNotNull { it.toModel() }.toList()
+                            Pair(limited, total)
+                        } else {
+                            Pair(arr.mapNotNull { it.toModel() }, null)
+                        }
+                    }
+                }
             }
-            val resolved = doc
-            if (resolved == null || !resolved.exists()) {
-                error = "无法访问该目录"
-                items = emptyList()
-            } else {
-                items = resolved.listFilesSafe().mapNotNull { it.toModel() }
+            when {
+                result.first == null -> {
+                    error = "无法访问该目录"
+                    items = emptyList()
+                    dirTotalCount = null
+                }
+                else -> {
+                    items = result.first!!
+                    dirTotalCount = result.second
+                    onCacheDir(normalizedUri, result.first!!, result.second)
+                }
             }
         } catch (e: Exception) {
             error = e.message ?: "加载失败"
             items = emptyList()
+            dirTotalCount = null
         }
         loading = false
     }
@@ -1578,6 +1738,7 @@ fun FileBrowserScreen(
         }
         list
     }
+    val displayItems = filteredItems
 
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -1668,6 +1829,37 @@ fun FileBrowserScreen(
                                 )
                             }
                             DropdownMenuItem(
+                                text = { Text("播放本目录 MP3") },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    val mp3List = filteredItems.filter { !it.isDirectory && it.name.endsWith(".mp3", ignoreCase = true) }
+                                    onPlayAllMp3Request(mp3List)
+                                }
+                            )
+                            playbackState?.let { state ->
+                                DropdownMenuItem(
+                                    text = { Text("停止播放") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onStopPlayback()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("上一首") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onPlayPrev()
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("下一首") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onPlayNext()
+                                    }
+                                )
+                            }
+                            DropdownMenuItem(
                                 text = { Text("FTP 数据交换") },
                                 onClick = {
                                     showOverflowMenu = false
@@ -1724,6 +1916,22 @@ fun FileBrowserScreen(
                         }
                     }
                 }
+                playbackState?.let { state ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(Icons.Default.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "正在播放: ${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
             }
         },
         floatingActionButton = {
@@ -1755,13 +1963,34 @@ fun FileBrowserScreen(
                     }
                 }
                 else -> {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        items(filteredItems) { item ->
+                    Column(Modifier.fillMaxSize()) {
+                        dirTotalCount?.let {
+                            "仅显示前 $MAX_DIR_ITEMS 项（未扫描完）；过滤与操作仅针对当前列表"
+                        }?.let { hint ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    hint,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                        items(
+                            count = displayItems.size,
+                            key = { displayItems[it].uri.toString() }
+                        ) { index ->
+                            val item = displayItems[index]
                             FileItem(
                                 model = item,
                                 isInPendingList = pendingList.any { it.uri == item.uri },
@@ -1790,6 +2019,7 @@ fun FileBrowserScreen(
                                     else onAddToPendingList(item)
                                 }
                             )
+                        }
                         }
                     }
                 }

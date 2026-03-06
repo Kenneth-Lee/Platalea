@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
@@ -24,6 +25,9 @@ private val GIT_REPO_URL = stringPreferencesKey("git_repo_url")
 private val GIT_USER_NAME = stringPreferencesKey("git_user_name")
 private val GIT_USER_EMAIL = stringPreferencesKey("git_user_email")
 private val GIT_HTTPS_PASSWORD = stringPreferencesKey("git_https_password")
+private val PLAYER_LAST_DIR_URI = stringPreferencesKey("player_last_dir_uri")
+private val PLAYER_LAST_INDEX = intPreferencesKey("player_last_index")
+private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_ms")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -72,6 +76,18 @@ class Preferences(private val context: Context) {
 
     val gitHttpsPassword: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[GIT_HTTPS_PASSWORD]
+    }
+
+    val playerLastDirUri: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[PLAYER_LAST_DIR_URI]
+    }
+
+    val playerLastIndex: Flow<Int> = context.dataStore.data.map { prefs ->
+        prefs[PLAYER_LAST_INDEX] ?: 0
+    }
+
+    val playerLastPositionMs: Flow<Long> = context.dataStore.data.map { prefs ->
+        prefs[PLAYER_LAST_POSITION_MS] ?: 0L
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -149,6 +165,20 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (password.isNullOrBlank()) prefs.remove(GIT_HTTPS_PASSWORD)
             else prefs[GIT_HTTPS_PASSWORD] = password
+        }
+    }
+
+    suspend fun setPlayerLastState(dirUri: String?, index: Int, positionMs: Long) {
+        context.dataStore.edit { prefs ->
+            if (dirUri == null) {
+                prefs.remove(PLAYER_LAST_DIR_URI)
+                prefs.remove(PLAYER_LAST_INDEX)
+                prefs.remove(PLAYER_LAST_POSITION_MS)
+            } else {
+                prefs[PLAYER_LAST_DIR_URI] = dirUri
+                prefs[PLAYER_LAST_INDEX] = index.coerceAtLeast(0)
+                prefs[PLAYER_LAST_POSITION_MS] = positionMs.coerceAtLeast(0L)
+            }
         }
     }
 }
