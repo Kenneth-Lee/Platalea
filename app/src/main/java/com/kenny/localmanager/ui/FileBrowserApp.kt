@@ -773,18 +773,6 @@ fun FileBrowserApp(
                     onUnzipRequest = { zipUnzipTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     playbackState = playbackState,
-                    onStopPlayback = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onPlayPrev = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onPlayNext = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
                 if (debugEnabled) {
@@ -1644,9 +1632,6 @@ internal fun FileBrowserScreen(
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     playbackState: PlaybackState? = null,
-    onStopPlayback: () -> Unit = {},
-    onPlayPrev: () -> Unit = {},
-    onPlayNext: () -> Unit = {},
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -1823,29 +1808,6 @@ internal fun FileBrowserScreen(
                                     onOpenPlaybackScreen()
                                 }
                             )
-                            playbackState?.let { state ->
-                                DropdownMenuItem(
-                                    text = { Text("停止播放") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onStopPlayback()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("上一首") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onPlayPrev()
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("下一首") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onPlayNext()
-                                    }
-                                )
-                            }
                             DropdownMenuItem(
                                 text = { Text("FTP 数据交换") },
                                 onClick = {
@@ -2724,6 +2686,10 @@ fun PlaybackScreen(
     }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
+
+    BackHandler(enabled = selectedPlaylistId != null) {
+        selectedPlaylistId = null
+    }
 
     fun startPlaylist(pl: Playlist) {
         val intent = Intent(context, PlaybackService::class.java).apply {
