@@ -26,6 +26,7 @@ private val GIT_REPO_URL = stringPreferencesKey("git_repo_url")
 private val GIT_USER_NAME = stringPreferencesKey("git_user_name")
 private val GIT_USER_EMAIL = stringPreferencesKey("git_user_email")
 private val GIT_HTTPS_PASSWORD = stringPreferencesKey("git_https_password")
+private val GIT_CONFIG_APPLIED = booleanPreferencesKey("git_config_applied")
 private val PLAYER_LAST_DIR_URI = stringPreferencesKey("player_last_dir_uri")
 private val PLAYER_LAST_INDEX = intPreferencesKey("player_last_index")
 private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_ms")
@@ -79,6 +80,10 @@ class Preferences(private val context: Context) {
 
     val gitHttpsPassword: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[GIT_HTTPS_PASSWORD]
+    }
+
+    val gitConfigApplied: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[GIT_CONFIG_APPLIED] ?: false
     }
 
     val playerLastDirUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -168,6 +173,12 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (password.isNullOrBlank()) prefs.remove(GIT_HTTPS_PASSWORD)
             else prefs[GIT_HTTPS_PASSWORD] = password
+        }
+    }
+
+    suspend fun setGitConfigApplied(applied: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[GIT_CONFIG_APPLIED] = applied
         }
     }
 

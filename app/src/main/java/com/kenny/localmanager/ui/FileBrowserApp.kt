@@ -165,6 +165,9 @@ import com.kenny.localmanager.gpg.parseSecretKeyRingFromStream
 import com.kenny.localmanager.gpg.saveSecretKeyRing
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
+import com.kenny.localmanager.git.cloneToTree
+import com.kenny.localmanager.git.commitAndPush
+import com.kenny.localmanager.git.copyFileToShare
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -410,11 +413,10 @@ fun FileBrowserApp(
             var ftpTimeoutMinutes by remember { mutableStateOf(0) }
             var filterVisible by remember { mutableStateOf(true) }
             var showFtpScreen by remember { mutableStateOf(false) }
-            var gitRepoUrl by remember { mutableStateOf<String?>(null) }
-            var gitUserName by remember { mutableStateOf<String?>(null) }
-            var gitUserEmail by remember { mutableStateOf<String?>(null) }
-            var gitHttpsPassword by remember { mutableStateOf<String?>(null) }
             var showGitConfigDialog by remember { mutableStateOf(false) }
+            var showPubkeyShareScreen by remember { mutableStateOf(false) }
+            var showFileShareScreen by remember { mutableStateOf(false) }
+            var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipUnzipPassword by remember { mutableStateOf("") }
@@ -442,22 +444,11 @@ fun FileBrowserApp(
             LaunchedEffect(prefs) {
                 prefs.filterVisible.collect { filterVisible = it }
             }
-            LaunchedEffect(prefs) {
-                prefs.gitRepoUrl.collect { gitRepoUrl = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.gitUserName.collect { gitUserName = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.gitUserEmail.collect { gitUserEmail = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.gitHttpsPassword.collect { gitHttpsPassword = it }
-            }
             BackHandler {
                 when {
                     progressOp != null -> { } // 不响应返回，防止误触
                     showFtpScreen -> { ftpManager.stop(); showFtpScreen = false }
+                    showFileShareScreen -> showFileShareScreen = false
                     batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     showChangeRootConfirm -> showChangeRootConfirm = false
@@ -738,38 +729,12 @@ fun FileBrowserApp(
                         if (rootUri != null) showFtpScreen = true
                         else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
                     },
-                    onOpenGit = {
-                        val r = rootUri?.let { normalizeContentUriString(it) }
-                        when {
-                            r == null -> Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-                            gitRepoUrl.isNullOrBlank() -> Toast.makeText(context, "请先在配置中填写 Git 仓库地址", Toast.LENGTH_SHORT).show()
-                            !com.kenny.localmanager.git.isValidHttpsRepoUrl(gitRepoUrl!!) -> Toast.makeText(context, "请填写有效的 HTTPS 仓库地址", Toast.LENGTH_LONG).show()
-                            else -> scope.launch {
-                                runWithProgress("Git 同步…", null) { _ ->
-                                    val result = withContext(Dispatchers.IO) {
-                                        com.kenny.localmanager.git.cloneToTree(
-                                            context, r, gitRepoUrl!!,
-                                            userName = gitUserName, userEmail = gitUserEmail,
-                                            httpsPassword = gitHttpsPassword
-                                        ) { line -> logDebug(line) }
-                                    }
-                                    withContext(Dispatchers.Main.immediate) {
-                                        result.fold(
-                                            onSuccess = { msg ->
-                                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                                logDebug("Git 下载: $msg")
-                                                refreshTrigger++
-                                            },
-                                            onFailure = { e ->
-                                                val err = "失败: ${e.message}"
-                                                Toast.makeText(context, err, Toast.LENGTH_LONG).show()
-                                                logDebug("Git 下载 $err")
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                    onOpenFileShare = {
+                        if (rootUri != null) showFileShareScreen = true
+                        else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                    },
+                    onShareFileToGit = { model ->
+                        shareFileToGitTarget = model
                     },
                     onUnzipRequest = { zipUnzipTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
@@ -984,22 +949,114 @@ fun FileBrowserApp(
             }
             if (showGitConfigDialog) {
                 GitConfigDialog(
-                    onDismiss = { showGitConfigDialog = false },
-                    repoUrl = gitRepoUrl.orEmpty(),
-                    onRepoUrlChange = { s -> scope.launch { prefs.setGitRepoUrl(s.ifBlank { null }) } },
-                    userName = gitUserName.orEmpty(),
-                    onUserNameChange = { s -> scope.launch { prefs.setGitUserName(s.ifBlank { null }) } },
-                    userEmail = gitUserEmail.orEmpty(),
-                    onUserEmailChange = { s -> scope.launch { prefs.setGitUserEmail(s.ifBlank { null }) } },
-                    httpsPassword = gitHttpsPassword.orEmpty(),
-                    onHttpsPasswordChange = { s -> scope.launch { prefs.setGitHttpsPassword(s.ifBlank { null }) } }
+                    prefs = prefs,
+                    rootUri = rootUri?.let { normalizeContentUriString(it) },
+                    onDismiss = {
+                        showGitConfigDialog = false
+                        refreshTrigger++
+                    }
                 )
             }
             if (showKeyManagementDialog) {
                 KeyManagementDialog(
                     context = context,
                     onDismiss = { showKeyManagementDialog = false },
-                    onKeysChanged = { refreshTrigger++ }
+                    onKeysChanged = { refreshTrigger++ },
+                    onOpenPubkeyShare = {
+                        showKeyManagementDialog = false
+                        showPubkeyShareScreen = true
+                    }
+                )
+            }
+            if (showPubkeyShareScreen) {
+                PubkeyShareScreen(
+                    prefs = prefs,
+                    rootUri = rootUri?.let { normalizeContentUriString(it) },
+                    onDismiss = {
+                        showPubkeyShareScreen = false
+                        refreshTrigger++
+                    }
+                )
+            }
+            if (showFileShareScreen) {
+                FileShareScreen(
+                    prefs = prefs,
+                    rootUri = rootUri?.let { normalizeContentUriString(it) },
+                    onDismiss = {
+                        showFileShareScreen = false
+                        refreshTrigger++
+                    }
+                )
+            }
+            // 共享文件到 Git
+            shareFileToGitTarget?.let { model ->
+                AlertDialog(
+                    onDismissRequest = { shareFileToGitTarget = null },
+                    title = { Text("共享到 Git") },
+                    text = { Text("确定要将「${model.name}」共享到 .sysgit/share/ 吗？\n将自动同步、复制并推送。") },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            val target = model
+                            shareFileToGitTarget = null
+                            val r = rootUri?.let { normalizeContentUriString(it) }
+                            if (r == null) {
+                                Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                                return@TextButton
+                            }
+                            scope.launch {
+                                runWithProgress("共享到 Git", null) { updateProgress ->
+                                    val repoUrl = prefs.gitRepoUrl.first() ?: ""
+                                    val userName = prefs.gitUserName.first() ?: ""
+                                    val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
+                                    if (repoUrl.isBlank()) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "请先配置 Git 仓库", Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@runWithProgress
+                                    }
+                                    // 同步
+                                    val syncResult = withContext(Dispatchers.IO) {
+                                        cloneToTree(context, r, repoUrl,
+                                            userName = userName.ifBlank { null },
+                                            httpsPassword = httpsPassword.ifBlank { null })
+                                    }
+                                    if (syncResult.isFailure) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "同步失败: ${syncResult.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@runWithProgress
+                                    }
+                                    // 复制到 share
+                                    val copied = withContext(Dispatchers.IO) {
+                                        copyFileToShare(context, r, target.uri, target.name)
+                                    }
+                                    if (!copied) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(context, "复制到 share 目录失败", Toast.LENGTH_SHORT).show()
+                                        }
+                                        return@runWithProgress
+                                    }
+                                    // 提交推送
+                                    val pushResult = withContext(Dispatchers.IO) {
+                                        commitAndPush(context, r, repoUrl,
+                                            commitMessage = "共享文件: ${target.name}",
+                                            userName = userName.ifBlank { null },
+                                            httpsPassword = httpsPassword.ifBlank { null })
+                                    }
+                                    withContext(Dispatchers.Main) {
+                                        if (pushResult.isSuccess) {
+                                            Toast.makeText(context, "已共享并推送", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "推送失败: ${pushResult.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            }
+                        }) { Text("共享") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { shareFileToGitTarget = null }) { Text("取消") }
+                    }
                 )
             }
             quickObfuscateOp?.let { (model, isObfuscate) ->
@@ -1623,7 +1680,8 @@ internal fun FileBrowserScreen(
     onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
     onOpenFtp: () -> Unit = {},
-    onOpenGit: () -> Unit = {},
+    onOpenFileShare: () -> Unit = {},
+    onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
@@ -1818,10 +1876,10 @@ internal fun FileBrowserScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("Git 同步") },
+                                text = { Text("Git 文件共享") },
                                 onClick = {
                                     showOverflowMenu = false
-                                    onOpenGit()
+                                    onOpenFileShare()
                                 }
                             )
                             DropdownMenuItem(
@@ -2075,6 +2133,15 @@ internal fun FileBrowserScreen(
                             contextMenuTarget = null
                         }
                     ) { Text("压缩为 ZIP", color = MaterialTheme.colorScheme.onSurface) }
+                    if (!menuTarget.isDirectory && onShareFileToGit != null) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onShareFileToGit.invoke(menuTarget)
+                                contextMenuTarget = null
+                            }
+                        ) { Text("共享到 Git", color = MaterialTheme.colorScheme.onSurface) }
+                    }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -3520,7 +3587,8 @@ private sealed class PendingDelete {
 fun KeyManagementDialog(
     context: Context,
     onDismiss: () -> Unit,
-    onKeysChanged: () -> Unit = {}
+    onKeysChanged: () -> Unit = {},
+    onOpenPubkeyShare: (() -> Unit)? = null
 ) {
     var publicKeys by remember { mutableStateOf<List<KeyInfo>>(emptyList()) }
     var secretKeys by remember { mutableStateOf<List<KeyInfo>>(emptyList()) }
@@ -3607,6 +3675,10 @@ fun KeyManagementDialog(
                 Text("私钥仅保留一个；公钥可多个。生成密钥对或导入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = { showGenerateKeyDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("生成密钥对") }
+                if (onOpenPubkeyShare != null) {
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(onClick = { onDismiss(); onOpenPubkeyShare() }, modifier = Modifier.fillMaxWidth()) { Text("公钥分享 (Git 同步)") }
+                }
                 Spacer(Modifier.height(16.dp))
                 if (loading) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

@@ -5,12 +5,15 @@ import android.content.Context
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+
+private const val TAG = "FileOperations"
 
 fun ContentResolver.openInputStreamSafe(uri: Uri): InputStream? =
     try { openInputStream(uri) } catch (_: Exception) { null }
@@ -758,17 +761,26 @@ fun copyLocalDirToTree(
 private fun copyLocalDirRecursive(context: Context, parentDocUri: Uri, sourceDir: File, log: ((String) -> Unit)?): Boolean {
     val cr = context.contentResolver
     val list = sourceDir.listFiles() ?: return true
+    Log.d(TAG, "copyLocalDirRecursive: ${sourceDir.name} has ${list.size} items: ${list.map { it.name }}")
     for (f in list) {
         val name = f.name ?: continue
         if (name == "." || name == "..") continue
         try {
             if (f.isDirectory) {
                 val childUri = DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, name)
-                    ?: continue
+                if (childUri == null) {
+                    Log.e(TAG, "copyLocalDirRecursive: failed to create dir: $name")
+                    continue
+                }
                 if (!copyLocalDirRecursive(context, childUri, f, log)) return false
             } else {
                 val mime = "application/octet-stream"
-                val newUri = DocumentsContract.createDocument(cr, parentDocUri, mime, name) ?: continue
+                val newUri = DocumentsContract.createDocument(cr, parentDocUri, mime, name)
+                if (newUri == null) {
+                    Log.e(TAG, "copyLocalDirRecursive: failed to create file: $name")
+                    continue
+                }
+                Log.d(TAG, "copyLocalDirRecursive: created file $name")
                 f.inputStream().use { inp ->
                     cr.openOutputStream(newUri)?.use { out ->
                         inp.copyTo(out)
@@ -776,8 +788,63 @@ private fun copyLocalDirRecursive(context: Context, parentDocUri: Uri, sourceDir
                 }
             }
         } catch (e: Exception) {
+            Log.e(TAG, "copyLocalDirRecursive: exception copying $name: ${e.message}")
             log?.invoke("复制 $name 失败: ${e.message}")
             return false
+        }
+    }
+    return true
+}
+
+/**
+ * 将文档树目录复制到本地文件系统目录（覆盖式，用于 git 同步回本地）。
+ * 会清空目标目录中与源目录同名的文件/子目录，但保留 .git 目录。
+ * @param sourceDoc 源文档目录
+ * @param destDir 目标本地目录（必须已存在）
+ */
+fun copyTreeDirToLocal(
+    context: Context,
+    sourceDoc: DocumentFile,
+    destDir: File,
+    log: ((String) -> Unit)? = null
+): Boolean {
+    if (!sourceDoc.isDirectory || !destDir.isDirectory) {
+        Log.d(TAG, "copyTreeDirToLocal: invalid dirs - source.isDir=${sourceDoc.isDirectory}, dest.isDir=${destDir.isDirectory}")
+        return false
+    }
+    val cr = context.contentResolver
+    val children = sourceDoc.listFilesSafe()
+    Log.d(TAG, "copyTreeDirToLocal: ${sourceDoc.name} -> ${destDir.name}, ${children.size} children")
+    for (child in children) {
+        val name = child.name ?: continue
+        if (name == "." || name == ".." || name == ".git") continue
+        val destFile = File(destDir, name)
+        try {
+            if (child.isDirectory) {
+                if (destFile.exists() && !destFile.isDirectory) destFile.delete()
+                if (!destFile.exists()) destFile.mkdirs()
+                if (!copyTreeDirToLocal(context, child, destFile, log)) return false
+            } else {
+                if (destFile.exists() && destFile.isDirectory) destFile.deleteRecursively()
+                cr.openInputStream(child.uri)?.use { inp ->
+                    destFile.outputStream().use { out ->
+                        inp.copyTo(out)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log?.invoke("复制 $name 失败: ${e.message}")
+            return false
+        }
+    }
+    // 删除本地多余的文件（源目录中不存在的）
+    val sourceNames = children.mapNotNull { it.name }.toSet()
+    Log.d(TAG, "copyTreeDirToLocal: sourceNames in ${sourceDoc.name} = $sourceNames")
+    destDir.listFiles()?.forEach { localFile ->
+        val n = localFile.name
+        if (n != ".git" && n !in sourceNames) {
+            Log.d(TAG, "copyTreeDirToLocal: deleting extra local file: $n")
+            localFile.deleteRecursively()
         }
     }
     return true
