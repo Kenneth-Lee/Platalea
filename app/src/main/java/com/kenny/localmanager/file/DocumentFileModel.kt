@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 
 data class DocumentFileModel(
-    val documentFile: DocumentFile,
     val name: String,
     val isDirectory: Boolean,
     val uri: Uri,
@@ -23,7 +22,6 @@ data class DocumentFileModel(
 
 fun DocumentFile.toModel(): DocumentFileModel? = takeIf { it.exists() }?.let { doc ->
     DocumentFileModel(
-        documentFile = doc,
         name = doc.name ?: "",
         isDirectory = doc.isDirectory,
         uri = doc.uri,

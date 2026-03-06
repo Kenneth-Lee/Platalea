@@ -121,6 +121,7 @@ import com.kenny.localmanager.file.quickObfuscate
 import com.kenny.localmanager.file.quickDeobfuscate
 import com.kenny.localmanager.file.isQuickObfuscatedFileName
 import com.kenny.localmanager.file.restoreFromTrash
+import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
@@ -598,7 +599,7 @@ fun FileBrowserApp(
                     currentUri = displayUri,
                     refreshTrigger = refreshTrigger,
                     dirCache = dirCache,
-                    onCacheDir = { uri, items, total -> dirCache = dirCache + (uri to CachedDir(items, total)) },
+                    onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
                     pendingList = pendingList,
                     rootUri = rootUri,
                     listState = fileListLazyState,
@@ -1582,9 +1583,7 @@ private sealed class GpgMethod {
     object SecretKeyDec : GpgMethod()
 }
 
-private const val MAX_DIR_ITEMS = 128
-
-internal data class CachedDir(val items: List<DocumentFileModel>, val totalCount: Int?)
+internal data class CachedDir(val items: List<DocumentFileModel>)
 
 private enum class FileSortOrder(val label: String) {
     NAME("名称"),
@@ -1613,7 +1612,7 @@ internal fun FileBrowserScreen(
     currentUri: String,
     refreshTrigger: Int,
     dirCache: Map<String, CachedDir>,
-    onCacheDir: (uri: String, items: List<DocumentFileModel>, totalCount: Int?) -> Unit,
+    onCacheDir: (uri: String, items: List<DocumentFileModel>) -> Unit,
     pendingList: List<DocumentFileModel>,
     rootUri: String?,
     listState: LazyListState,
@@ -1668,112 +1667,48 @@ internal fun FileBrowserScreen(
     var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
     var sortAscending by remember { mutableStateOf(true) }
     var showSortMenu by remember { mutableStateOf(false) }
-    var dirTotalCount by remember { mutableStateOf<Int?>(null) }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         val normalizedUri = normalizeContentUriString(currentUri)
         val cached = dirCache[normalizedUri]
         if (cached != null) {
             items = cached.items
-            dirTotalCount = cached.totalCount
             loading = false
             error = null
             launch {
                 try {
                     val result = withContext(Dispatchers.IO) {
-                        val uri = Uri.parse(currentUri)
-                        var doc: DocumentFile? = null
-                        for (attempt in 0..3) {
-                            doc = if (currentUri.contains("/tree/")) {
-                                DocumentFile.fromTreeUri(context, uri)
-                            } else {
-                                DocumentFile.fromSingleUri(context, uri)
-                            }
-                            if (doc?.exists() == true) break
-                            if (attempt < 3) delay(100L * (attempt + 1))
-                        }
-                        val d = doc
-                        when {
-                            d == null || !d.exists() -> Pair(null, null)
-                            else -> {
-                                val arr = d.listFilesSafe()
-                                val total = arr.size
-                                if (total > MAX_DIR_ITEMS) {
-                                    val limited = arr.asSequence().take(MAX_DIR_ITEMS).mapNotNull { it.toModel() }.toList()
-                                    Pair(limited, total)
-                                } else {
-                                    Pair(arr.mapNotNull { it.toModel() }, null)
-                                }
-                            }
-                        }
+                        val list = listChildrenFast(context, currentUri)
+                        list.ifEmpty { null }
                     }
-                    when {
-                        result.first == null -> {
+                    when (result) {
+                        null -> {
                             error = "无法访问该目录"
                             items = emptyList()
-                            dirTotalCount = null
                         }
                         else -> {
-                            items = result.first!!
-                            dirTotalCount = result.second
-                            onCacheDir(normalizedUri, result.first!!, result.second)
+                            items = result
+                            onCacheDir(normalizedUri, result)
                         }
                     }
                 } catch (e: Exception) {
                     error = e.message ?: "加载失败"
                     items = emptyList()
-                    dirTotalCount = null
                 }
             }
             return@LaunchedEffect
         }
         loading = true
         error = null
-        dirTotalCount = null
         try {
             val result = withContext(Dispatchers.IO) {
-                val uri = Uri.parse(currentUri)
-                var doc: DocumentFile? = null
-                for (attempt in 0..3) {
-                    doc = if (currentUri.contains("/tree/")) {
-                        DocumentFile.fromTreeUri(context, uri)
-                    } else {
-                        DocumentFile.fromSingleUri(context, uri)
-                    }
-                    if (doc?.exists() == true) break
-                    if (attempt < 3) delay(100L * (attempt + 1))
-                }
-                val d = doc
-                when {
-                    d == null || !d.exists() -> Pair(null, null)
-                    else -> {
-                        val arr = d.listFilesSafe()
-                        val total = arr.size
-                        if (total > MAX_DIR_ITEMS) {
-                            val limited = arr.asSequence().take(MAX_DIR_ITEMS).mapNotNull { it.toModel() }.toList()
-                            Pair(limited, total)
-                        } else {
-                            Pair(arr.mapNotNull { it.toModel() }, null)
-                        }
-                    }
-                }
+                listChildrenFast(context, currentUri)
             }
-            when {
-                result.first == null -> {
-                    error = "无法访问该目录"
-                    items = emptyList()
-                    dirTotalCount = null
-                }
-                else -> {
-                    items = result.first!!
-                    dirTotalCount = result.second
-                    onCacheDir(normalizedUri, result.first!!, result.second)
-                }
-            }
+            items = result
+            onCacheDir(normalizedUri, result)
         } catch (e: Exception) {
             error = e.message ?: "加载失败"
             items = emptyList()
-            dirTotalCount = null
         }
         loading = false
     }
@@ -2019,22 +1954,6 @@ internal fun FileBrowserScreen(
                 }
                 else -> {
                     Column(Modifier.fillMaxSize()) {
-                        dirTotalCount?.let {
-                            "仅显示前 $MAX_DIR_ITEMS 项（未扫描完）；过滤与操作仅针对当前列表"
-                        }?.let { hint ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    hint,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
-                        }
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),

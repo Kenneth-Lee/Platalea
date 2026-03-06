@@ -22,6 +22,58 @@ fun ContentResolver.openOutputStreamSafe(uri: Uri): OutputStream? =
 fun DocumentFile.listFilesSafe(): Array<DocumentFile> =
     try { listFiles() ?: emptyArray() } catch (_: Exception) { emptyArray() }
 
+/**
+ * Fast directory listing using a single ContentResolver cursor query.
+ * Much faster than DocumentFile.listFiles() which issues per-file queries.
+ */
+fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileModel> {
+    val treeUri = Uri.parse(treeUriStr)
+    val docId = if (treeUriStr.contains("/document/")) {
+        DocumentsContract.getDocumentId(treeUri)
+    } else {
+        DocumentsContract.getTreeDocumentId(treeUri)
+    }
+    val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, docId)
+    val projection = arrayOf(
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE,
+        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        DocumentsContract.Document.COLUMN_SIZE
+    )
+    val result = mutableListOf<DocumentFileModel>()
+    try {
+        context.contentResolver.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            val modifiedIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val sizeIdx = cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+            while (cursor.moveToNext()) {
+                val childDocId = cursor.getString(idIdx) ?: continue
+                val name = cursor.getString(nameIdx) ?: continue
+                val mime = cursor.getString(mimeIdx) ?: ""
+                val lastModified = cursor.getLong(modifiedIdx)
+                val size = cursor.getLong(sizeIdx)
+                val isDir = mime == DocumentsContract.Document.MIME_TYPE_DIR
+                val childUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, childDocId)
+                result.add(
+                    DocumentFileModel(
+                        name = name,
+                        isDirectory = isDir,
+                        uri = childUri,
+                        lastModified = lastModified,
+                        size = size
+                    )
+                )
+            }
+        }
+    } catch (_: Exception) {
+        // Fall back handled by caller
+    }
+    return result
+}
+
 fun ContentResolver.getDisplayName(uri: Uri): String? =
     try {
         query(uri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { c ->
