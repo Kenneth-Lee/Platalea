@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore: DataStore<androidx.datastore.preferences.core.Preferences> by preferencesDataStore(name = "settings")
@@ -28,6 +29,8 @@ private val GIT_HTTPS_PASSWORD = stringPreferencesKey("git_https_password")
 private val PLAYER_LAST_DIR_URI = stringPreferencesKey("player_last_dir_uri")
 private val PLAYER_LAST_INDEX = intPreferencesKey("player_last_index")
 private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_ms")
+private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist_id")
+private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -180,5 +183,67 @@ class Preferences(private val context: Context) {
                 prefs[PLAYER_LAST_POSITION_MS] = positionMs.coerceAtLeast(0L)
             }
         }
+    }
+
+    val playerLastPlaylistId: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[PLAYER_LAST_PLAYLIST_ID]
+    }
+
+    val playlists: Flow<List<Playlist>> = context.dataStore.data.map { prefs ->
+        Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
+    }
+
+    suspend fun getPlaylistById(id: String): Playlist? =
+        playlists.first().find { it.id == id }
+
+    suspend fun addPlaylist(playlist: Playlist) {
+        context.dataStore.edit { prefs ->
+            val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "") + playlist
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
+        }
+    }
+
+    suspend fun removePlaylist(id: String) {
+        context.dataStore.edit { prefs ->
+            val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "").filter { it.id != id }
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
+        }
+    }
+
+    suspend fun updatePlaylistOrder(orderedIds: List<String>) {
+        context.dataStore.edit { prefs ->
+            val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
+            val byId = list.associateBy { it.id }
+            val ordered = orderedIds.mapNotNull { byId[it] }
+            val rest = list.filter { it.id !in orderedIds.toSet() }
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(ordered + rest)
+        }
+    }
+
+    /** 更新播放列表内容（曲目顺序/删除等），按 id 替换同 id 的列表。 */
+    suspend fun updatePlaylist(playlist: Playlist) {
+        context.dataStore.edit { prefs ->
+            val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "").map {
+                if (it.id == playlist.id) playlist else it
+            }
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
+        }
+    }
+
+    /** 按播放列表 ID 保存/读取进度（与目录进度分开）。 */
+    suspend fun setPlayerLastStateForPlaylist(playlistId: String, index: Int, positionMs: Long) {
+        context.dataStore.edit { prefs ->
+            prefs[PLAYER_LAST_PLAYLIST_ID] = playlistId
+            prefs[PLAYER_LAST_INDEX] = index.coerceAtLeast(0)
+            prefs[PLAYER_LAST_POSITION_MS] = positionMs.coerceAtLeast(0L)
+        }
+    }
+
+    suspend fun getPlayerResumeStateForPlaylist(playlistId: String): Pair<Int, Long>? {
+        val prefs = context.dataStore.data.first()
+        if (prefs[PLAYER_LAST_PLAYLIST_ID] != playlistId) return null
+        val idx = prefs[PLAYER_LAST_INDEX] ?: 0
+        val pos = prefs[PLAYER_LAST_POSITION_MS] ?: 0L
+        return idx to pos
     }
 }

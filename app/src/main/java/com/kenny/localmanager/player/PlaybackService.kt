@@ -34,10 +34,14 @@ const val ACTION_PLAY = "com.kenny.localmanager.player.PLAY"
 const val ACTION_STOP = "com.kenny.localmanager.player.STOP"
 const val ACTION_PREV = "com.kenny.localmanager.player.PREV"
 const val ACTION_NEXT = "com.kenny.localmanager.player.NEXT"
+const val ACTION_SEEK = "com.kenny.localmanager.player.SEEK"
 
 const val EXTRA_URIS = "uris"
 const val EXTRA_NAMES = "names"
 const val EXTRA_DIR_URI = "dir_uri"
+const val EXTRA_PLAYLIST_ID = "playlist_id"
+const val EXTRA_START_INDEX = "start_index"
+const val EXTRA_POSITION_MS = "position_ms"
 
 class PlaybackService : Service() {
 
@@ -53,6 +57,8 @@ class PlaybackService : Service() {
     private var playlistUris: List<String> = emptyList()
     private var playlistNames: List<String> = emptyList()
     private var dirUri: String = ""
+    private var playlistId: String? = null
+    private var playlistName: String? = null
     private var currentIndex = AtomicInteger(0)
     private var progressUpdateRunnable: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -74,14 +80,35 @@ class PlaybackService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_PLAY -> {
-                val uris = intent.getStringArrayListExtra(EXTRA_URIS) ?: return START_NOT_STICKY
-                val names = intent.getStringArrayListExtra(EXTRA_NAMES) ?: return START_NOT_STICKY
-                val dir = intent.getStringExtra(EXTRA_DIR_URI) ?: ""
-                startPlayback(uris, names, dir)
+                val plId = intent.getStringExtra(EXTRA_PLAYLIST_ID)
+                val startIndexHint = intent.getIntExtra(EXTRA_START_INDEX, -1)
+                if (plId != null) {
+                    scope.launch {
+                        val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) }
+                        if (pl != null) {
+                            startPlayback(pl.uris, pl.names, dir = "", playlistId = pl.id, playlistName = pl.name, startIndexHint = startIndexHint)
+                        } else {
+                            stopSelf()
+                        }
+                    }
+                } else {
+                    val uris = intent.getStringArrayListExtra(EXTRA_URIS) ?: return START_NOT_STICKY
+                    val names = intent.getStringArrayListExtra(EXTRA_NAMES) ?: return START_NOT_STICKY
+                    val dir = intent.getStringExtra(EXTRA_DIR_URI) ?: ""
+                    startPlayback(uris, names, dir, null, null)
+                }
             }
             ACTION_STOP -> stopPlayback()
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
+            ACTION_SEEK -> {
+                val posMs = intent.getIntExtra(EXTRA_POSITION_MS, 0)
+                mediaPlayer?.let { mp ->
+                    val target = posMs.coerceIn(0, mp.duration)
+                    mp.seekTo(target)
+                    updateState(positionMs = target)
+                }
+            }
         }
         return START_STICKY
     }
@@ -97,7 +124,14 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun startPlayback(uris: List<String>, names: List<String>, dir: String) {
+    private fun startPlayback(
+        uris: List<String>,
+        names: List<String>,
+        dir: String,
+        playlistId: String?,
+        playlistName: String?,
+        startIndexHint: Int = -1
+    ) {
         if (uris.isEmpty()) {
             stopSelf()
             return
@@ -105,6 +139,8 @@ class PlaybackService : Service() {
         playlistUris = uris
         playlistNames = names
         dirUri = dir
+        this.playlistId = playlistId
+        this.playlistName = playlistName
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
@@ -114,7 +150,18 @@ class PlaybackService : Service() {
         scope.launch {
             var startIndex = 0
             var startPositionMs = 0
-            if (dir.isNotEmpty()) {
+            if (playlistId != null) {
+                if (startIndexHint in uris.indices) {
+                    startIndex = startIndexHint
+                    startPositionMs = 0
+                } else {
+                    val resume = withContext(Dispatchers.IO) { prefs.getPlayerResumeStateForPlaylist(playlistId) }
+                    if (resume != null && resume.first in uris.indices) {
+                        startIndex = resume.first
+                        startPositionMs = resume.second.toInt().coerceAtLeast(0)
+                    }
+                }
+            } else if (dir.isNotEmpty()) {
                 val lastDir = withContext(Dispatchers.IO) { prefs.playerLastDirUri.first() }
                 val lastIndex = withContext(Dispatchers.IO) { prefs.playerLastIndex.first() }
                 val lastPos = withContext(Dispatchers.IO) { prefs.playerLastPositionMs.first() }
@@ -207,7 +254,9 @@ class PlaybackService : Service() {
             trackName = trackName,
             positionMs = positionMs,
             durationMs = durationMs,
-            isPlaying = isPlaying
+            isPlaying = isPlaying,
+            playlistId = playlistId,
+            playlistName = playlistName
         )
     }
 
@@ -244,7 +293,11 @@ class PlaybackService : Service() {
         scope.launch(Dispatchers.IO) {
             val idx = currentIndex.get()
             val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
-            prefs.setPlayerLastState(dirUri, idx, pos)
+            if (playlistId != null) {
+                prefs.setPlayerLastStateForPlaylist(playlistId!!, idx, pos)
+            } else {
+                prefs.setPlayerLastState(dirUri, idx, pos)
+            }
         }
     }
 
@@ -252,13 +305,21 @@ class PlaybackService : Service() {
         handler.removeCallbacks(progressUpdateRunnable ?: return)
         savePosition()
         scope.launch(Dispatchers.IO) {
-            prefs.setPlayerLastState(dirUri, currentIndex.get(), (mediaPlayer?.currentPosition ?: 0).toLong())
+            val idx = currentIndex.get()
+            val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
+            if (playlistId != null) {
+                prefs.setPlayerLastStateForPlaylist(playlistId!!, idx, pos)
+            } else {
+                prefs.setPlayerLastState(dirUri, idx, pos)
+            }
         }
         mediaPlayer?.release()
         mediaPlayer = null
         playlistUris = emptyList()
         playlistNames = emptyList()
         dirUri = ""
+        playlistId = null
+        playlistName = null
         PlaybackService._playbackState.value = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

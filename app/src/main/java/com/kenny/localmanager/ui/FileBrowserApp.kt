@@ -50,6 +50,13 @@ import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.QueueMusic
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -60,6 +67,8 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -96,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
+import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
@@ -127,6 +137,10 @@ import com.kenny.localmanager.player.ACTION_PREV
 import com.kenny.localmanager.player.ACTION_STOP
 import com.kenny.localmanager.player.EXTRA_DIR_URI
 import com.kenny.localmanager.player.EXTRA_NAMES
+import com.kenny.localmanager.player.ACTION_SEEK
+import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
+import com.kenny.localmanager.player.EXTRA_POSITION_MS
+import com.kenny.localmanager.player.EXTRA_START_INDEX
 import com.kenny.localmanager.player.EXTRA_URIS
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
@@ -348,6 +362,7 @@ fun FileBrowserApp(
             val displayUri = currentUri ?: initialDirUri ?: rootUri!!
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
+            var showPlaybackScreen by remember { mutableStateOf(false) }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
@@ -455,6 +470,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
+                    showPlaybackScreen -> showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     zipCompressTarget != null -> zipCompressTarget = null
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
@@ -768,20 +784,7 @@ fun FileBrowserApp(
                         val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                     },
-                    onPlayAllMp3Request = { list ->
-                        if (list.isEmpty()) {
-                            Toast.makeText(context, "当前目录没有 MP3 文件", Toast.LENGTH_SHORT).show()
-                            return@FileBrowserScreen
-                        }
-                        val intent = Intent(context, PlaybackService::class.java).apply {
-                            action = ACTION_PLAY
-                            putStringArrayListExtra(EXTRA_URIS, ArrayList(list.map { it.uri.toString() }))
-                            putStringArrayListExtra(EXTRA_NAMES, ArrayList(list.map { it.name }))
-                            putExtra(EXTRA_DIR_URI, displayUri)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                        Toast.makeText(context, "开始播放 ${list.size} 首", Toast.LENGTH_SHORT).show()
-                    }
+                    onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
                 if (debugEnabled) {
                     DebugPanel(
@@ -832,8 +835,58 @@ fun FileBrowserApp(
                             else gpgState = GpgOpState.BatchDecrypt(list, displayUri)
                         }
                     },
-                    onClearFilteredList = { toRemove -> toRemove.forEach { pendingList.remove(it) } },
+                    onClearFilteredList = { toRemove ->
+                        val snapshot = toRemove.toList()
+                        pendingList.removeAll(snapshot)
+                    },
+                    onAddToPlayback = { audioList ->
+                        if (audioList.isEmpty()) return@PendingListScreen
+                        val playlist = Playlist(
+                            id = java.util.UUID.randomUUID().toString(),
+                            name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
+                            uris = audioList.map { it.uri.toString() },
+                            names = audioList.map { it.name }
+                        )
+                        scope.launch {
+                            withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
+                            val intent = Intent(context, PlaybackService::class.java).apply {
+                                action = ACTION_PLAY
+                                putExtra(EXTRA_PLAYLIST_ID, playlist.id)
+                            }
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                            pendingList.clear()
+                            Toast.makeText(context, "已加入播放 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
+                            showPlaybackScreen = true
+                            showPendingList = false
+                        }
+                    },
                     onDismiss = { showPendingList = false }
+                )
+            }
+            if (showPlaybackScreen) {
+                PlaybackScreen(
+                    prefs = prefs,
+                    playbackState = playbackState,
+                    onStopPlayback = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayPrev = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayNext = {
+                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onSeek = { positionMs ->
+                        val intent = Intent(context, PlaybackService::class.java).apply {
+                            action = ACTION_SEEK
+                            putExtra(EXTRA_POSITION_MS, positionMs)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onDismiss = { showPlaybackScreen = false }
                 )
             }
             if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
@@ -1595,7 +1648,7 @@ internal fun FileBrowserScreen(
     onStopPlayback: () -> Unit = {},
     onPlayPrev: () -> Unit = {},
     onPlayNext: () -> Unit = {},
-    onPlayAllMp3Request: (List<DocumentFileModel>) -> Unit = {}
+    onOpenPlaybackScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1829,11 +1882,10 @@ internal fun FileBrowserScreen(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("播放本目录 MP3") },
+                                text = { Text("播放器") },
                                 onClick = {
                                     showOverflowMenu = false
-                                    val mp3List = filteredItems.filter { !it.isDirectory && it.name.endsWith(".mp3", ignoreCase = true) }
-                                    onPlayAllMp3Request(mp3List)
+                                    onOpenPlaybackScreen()
                                 }
                             )
                             playbackState?.let { state ->
@@ -1918,7 +1970,10 @@ internal fun FileBrowserScreen(
                 }
                 playbackState?.let { state ->
                     Row(
-                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 6.dp)
+                            .clickable { onOpenPlaybackScreen() },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.Default.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
@@ -2498,8 +2553,10 @@ fun PendingListScreen(
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
     onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
+    onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     var showHelpDialog by remember { mutableStateOf(false) }
     var filterText by remember { mutableStateOf("") }
     val filteredPendingItems = if (filterText.isBlank()) pendingList
@@ -2588,6 +2645,18 @@ fun PendingListScreen(
                     }
                     IconButton(onClick = { onClearFilteredList(filteredPendingItems) }) {
                         Icon(Icons.Default.Clear, contentDescription = "清空当前过滤结果")
+                    }
+                    val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && (it.name.endsWith(".mp3", ignoreCase = true) || it.name.endsWith(".ogg", ignoreCase = true)) }
+                    IconButton(
+                        onClick = {
+                            if (audioFromFiltered.isEmpty()) {
+                                Toast.makeText(context, "当前列表没有 MP3 或 OGG 文件", Toast.LENGTH_SHORT).show()
+                            } else {
+                                onAddToPlayback(audioFromFiltered)
+                            }
+                        }
+                    ) {
+                        Icon(Icons.Default.QueueMusic, contentDescription = "加入播放")
                     }
                 }
                 Row(
@@ -2702,11 +2771,327 @@ fun PendingListScreen(
                         Text("清空列表：仅移除当前过滤结果中的项（未设过滤时即全部）。拷贝/移动/删除/混淆/加解密等批处理仍针对整个列表。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("加入播放：将当前列表中所有 MP3/OGG 文件加入为新播放列表并开始播放，可在「播放器」中切换、删除或排序播放列表。", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = { TextButton(onClick = { showHelpDialog = false }) { Text("知道了") } }
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PlaybackScreen(
+    prefs: Preferences,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit,
+    onPlayPrev: () -> Unit,
+    onPlayNext: () -> Unit,
+    onSeek: (positionMs: Int) -> Unit = {},
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+    var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(prefs) {
+        prefs.playlists.collect { playlists = it }
+    }
+    val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
+    if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
+
+    fun startPlaylist(pl: Playlist) {
+        val intent = Intent(context, PlaybackService::class.java).apply {
+            action = ACTION_PLAY
+            putExtra(EXTRA_PLAYLIST_ID, pl.id)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    }
+
+    fun startPlaylistFromIndex(pl: Playlist, index: Int) {
+        val intent = Intent(context, PlaybackService::class.java).apply {
+            action = ACTION_PLAY
+            putExtra(EXTRA_PLAYLIST_ID, pl.id)
+            putExtra(EXTRA_START_INDEX, index)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(selectedPlaylist?.name ?: "播放器")
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        if (selectedPlaylist != null) selectedPlaylistId = null
+                        else onDismiss()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        if (selectedPlaylist != null) {
+            val pl = selectedPlaylist
+            if (pl.uris.isEmpty()) {
+                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                    Text("列表已空", style = MaterialTheme.typography.bodyLarge)
+                }
+            } else {
+                LazyColumn(
+                    Modifier.fillMaxSize().padding(padding),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    items(pl.uris.size) { i ->
+                        val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
+                        val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { startPlaylistFromIndex(pl, i) }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                "${i + 1}.",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.width(28.dp)
+                            )
+                            Text(
+                                name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                                color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (isCurrentTrack) {
+                                Text(
+                                    "正在播放",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(horizontal = 4.dp)
+                                )
+                            }
+                            IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "从此处播放", Modifier.size(24.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (i > 0) scope.launch {
+                                        val uris = pl.uris.toMutableList()
+                                        val names = pl.names.toMutableList()
+                                        uris.add(i - 1, uris.removeAt(i))
+                                        names.add(i - 1, names.removeAt(i))
+                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                    }
+                                },
+                                enabled = i > 0
+                            ) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = "上移", Modifier.size(20.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (i < pl.uris.size - 1) scope.launch {
+                                        val uris = pl.uris.toMutableList()
+                                        val names = pl.names.toMutableList()
+                                        uris.add(i + 1, uris.removeAt(i))
+                                        names.add(i + 1, names.removeAt(i))
+                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                    }
+                                },
+                                enabled = i < pl.uris.size - 1
+                            ) {
+                                Icon(Icons.Default.ArrowDownward, contentDescription = "下移", Modifier.size(20.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        val uris = pl.uris.toMutableList().apply { removeAt(i) }
+                                        val names = pl.names.toMutableList().apply { removeAt(i) }
+                                        if (uris.isEmpty()) {
+                                            prefs.removePlaylist(pl.id)
+                                            selectedPlaylistId = null
+                                        } else {
+                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                        }
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "删除", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+        Column(Modifier.fillMaxSize().padding(padding)) {
+            playbackState?.let { state ->
+                var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
+                var seekDragging by remember { mutableStateOf(false) }
+                LaunchedEffect(state.positionMs, state.durationMs) {
+                    if (!seekDragging) seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
+                }
+                Card(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            state.playlistName ?: "当前播放",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            "${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (state.durationMs > 0) {
+                            Spacer(Modifier.height(4.dp))
+                            Slider(
+                                value = seekSliderPosition,
+                                onValueChange = {
+                                    seekDragging = true
+                                    seekSliderPosition = it
+                                },
+                                onValueChangeFinished = {
+                                    onSeek(seekSliderPosition.toInt().coerceIn(0, state.durationMs))
+                                    seekDragging = false
+                                },
+                                valueRange = 0f..maxOf(1f, state.durationMs.toFloat()),
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = SliderDefaults.colors(
+                                    thumbColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    activeTrackColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    inactiveTrackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.3f)
+                                )
+                            )
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            IconButton(onClick = onPlayPrev) {
+                                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首")
+                            }
+                            IconButton(onClick = onPlayNext) {
+                                Icon(Icons.Default.SkipNext, contentDescription = "下一首")
+                            }
+                            Spacer(Modifier.weight(1f))
+                            TextButton(onClick = onStopPlayback) {
+                                Text("停止播放", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+            Text(
+                "播放列表",
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+            )
+            if (playlists.isEmpty()) {
+                Box(
+                    Modifier.fillMaxSize().weight(1f),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("暂无播放列表。在待处理列表中勾选 MP3/OGG 后点击「加入播放」。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                LazyColumn(
+                    Modifier.weight(1f),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(playlists.size) { i ->
+                        val pl = playlists[i]
+                        val isCurrent = playbackState?.playlistId == pl.id
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { startPlaylist(pl) }
+                                .padding(4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            IconButton(
+                                onClick = { startPlaylist(pl) },
+                                modifier = Modifier.size(40.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.PlayArrow,
+                                    contentDescription = "播放",
+                                    tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Column(Modifier.weight(1f)) {
+                                Text(pl.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("${pl.trackCount} 首", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = { selectedPlaylistId = pl.id }) {
+                                Icon(Icons.Default.List, contentDescription = "查看列表音乐", Modifier.size(24.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (i > 0) scope.launch {
+                                        val ids = playlists.map { it.id }.toMutableList()
+                                        ids.removeAt(i)
+                                        ids.add(i - 1, pl.id)
+                                        prefs.updatePlaylistOrder(ids)
+                                    }
+                                },
+                                enabled = i > 0
+                            ) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
+                            }
+                            IconButton(
+                                onClick = {
+                                    if (i < playlists.size - 1) scope.launch {
+                                        val ids = playlists.map { it.id }.toMutableList()
+                                        ids.removeAt(i)
+                                        ids.add(i + 1, pl.id)
+                                        prefs.updatePlaylistOrder(ids)
+                                    }
+                                },
+                                enabled = i < playlists.size - 1
+                            ) {
+                                Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
+                            }
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        if (playbackState?.playlistId == pl.id) {
+                                            onStopPlayback()
+                                        }
+                                        prefs.removePlaylist(pl.id)
+                                    }
+                                }
+                            ) {
+                                Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }
     }
 }
 
