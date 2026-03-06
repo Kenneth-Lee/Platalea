@@ -105,6 +105,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
+import android.provider.DocumentsContract
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
@@ -1648,6 +1649,7 @@ internal fun FileBrowserScreen(
     var newFileName by remember { mutableStateOf("") }
     var newDirName by remember { mutableStateOf("") }
     var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
+    var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
     var filterText by remember { mutableStateOf("") }
     var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
     var sortAscending by remember { mutableStateOf(true) }
@@ -2089,12 +2091,10 @@ internal fun FileBrowserScreen(
                     TextButton(
                         onClick = {
                             showContextMenu = false
-                            actionTarget = menuTarget
-                            renameValue = menuTarget.name
-                            showRenameDialog = true
+                            showFileDetail = menuTarget
                             contextMenuTarget = null
                         }
-                    ) { Text("重命名", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text("详细信息", color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -2328,6 +2328,155 @@ internal fun FileBrowserScreen(
                 TextButton(onClick = { showRenameDialog = false; actionTarget = null }) { Text("取消") }
             }
         )
+    }
+
+    if (showFileDetail != null) {
+        val detailTarget = showFileDetail!!
+        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+        var detailRenameValue by remember(detailTarget.uri) { mutableStateOf(detailTarget.name) }
+        var detailMeta by remember(detailTarget.uri) { mutableStateOf<Map<String, String>>(emptyMap()) }
+        val detailRenameFocus = remember { FocusRequester() }
+
+        LaunchedEffect(detailTarget.uri) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val uri = detailTarget.uri
+                    val projection = arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                    )
+                    val meta = mutableMapOf<String, String>()
+                    context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            for (i in 0 until cursor.columnCount) {
+                                val colName = cursor.getColumnName(i)
+                                val value = cursor.getString(i) ?: continue
+                                meta[colName] = value
+                            }
+                        }
+                    }
+                    detailMeta = meta
+                } catch (_: Exception) {}
+            }
+        }
+
+        val docId = detailMeta[DocumentsContract.Document.COLUMN_DOCUMENT_ID]
+        val fullPath = if (docId != null) {
+            val parts = docId.split(":", limit = 2)
+            if (parts.size == 2) "/${parts[1]}" else docId
+        } else {
+            detailTarget.uri.path ?: detailTarget.uri.toString()
+        }
+        val mimeType = detailMeta[DocumentsContract.Document.COLUMN_MIME_TYPE] ?: ""
+        val sizeStr = detailTarget.displaySize.ifEmpty {
+            detailMeta[DocumentsContract.Document.COLUMN_SIZE]?.toLongOrNull()?.let { sz ->
+                when {
+                    sz < 1024 -> "$sz B"
+                    sz < 1024 * 1024 -> "%.1f KB".format(sz / 1024.0)
+                    sz < 1024 * 1024 * 1024 -> "%.1f MB".format(sz / (1024.0 * 1024))
+                    else -> "%.1f GB".format(sz / (1024.0 * 1024 * 1024))
+                }
+            } ?: ""
+        }
+        val fmt = remember {
+            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
+        }
+        val lastModifiedStr = if (detailTarget.lastModified > 0) fmt.format(java.util.Date(detailTarget.lastModified)) else ""
+        val lastModifiedFromMeta = detailMeta[DocumentsContract.Document.COLUMN_LAST_MODIFIED]?.toLongOrNull()
+        val lastModifiedMetaStr = if (lastModifiedFromMeta != null && lastModifiedFromMeta > 0) fmt.format(java.util.Date(lastModifiedFromMeta)) else ""
+        val displayModified = lastModifiedStr.ifEmpty { lastModifiedMetaStr }
+
+        Dialog(onDismissRequest = { showFileDetail = null }) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text("详细信息", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(16.dp))
+
+                    Text("完整路径", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SelectionContainer(modifier = Modifier.weight(1f)) {
+                            Text(fullPath, style = MaterialTheme.typography.bodyMedium)
+                        }
+                        IconButton(onClick = {
+                            clipboardManager?.setPrimaryClip(ClipData.newPlainText("路径", fullPath))
+                            Toast.makeText(context, "已复制路径", Toast.LENGTH_SHORT).show()
+                        }) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "复制路径", Modifier.size(20.dp))
+                        }
+                    }
+
+                    Spacer(Modifier.height(12.dp))
+                    Text("重命名", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = detailRenameValue,
+                            onValueChange = { detailRenameValue = it },
+                            singleLine = true,
+                            modifier = Modifier
+                                .weight(1f)
+                                .focusRequester(detailRenameFocus),
+                            textStyle = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        TextButton(
+                            onClick = {
+                                val newName = detailRenameValue.trim()
+                                if (newName.isNotEmpty() && newName != detailTarget.name) {
+                                    try {
+                                        context.contentResolver.renameDocument(detailTarget.uri, newName)
+                                        items = items.map { if (it.uri == detailTarget.uri) it.copy(name = newName) else it }
+                                        showFileDetail = showFileDetail?.copy(name = newName)
+                                        Toast.makeText(context, "已重命名", Toast.LENGTH_SHORT).show()
+                                    } catch (_: Exception) {
+                                        Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            enabled = detailRenameValue.trim().let { it.isNotEmpty() && it != detailTarget.name }
+                        ) { Text("确定") }
+                    }
+
+                    Spacer(Modifier.height(16.dp))
+                    Text("文件属性", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+
+                    @Composable
+                    fun MetaRow(label: String, value: String) {
+                        if (value.isNotEmpty()) {
+                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+                                Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(80.dp))
+                                SelectionContainer(modifier = Modifier.weight(1f)) {
+                                    Text(value, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+
+                    MetaRow("类型", if (detailTarget.isDirectory) "文件夹" else mimeType.ifEmpty { "文件" })
+                    if (!detailTarget.isDirectory) MetaRow("大小", sizeStr)
+                    MetaRow("修改时间", displayModified)
+
+                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { showFileDetail = null }) { Text("关闭") }
+                    }
+                }
+            }
+        }
     }
 }
 
