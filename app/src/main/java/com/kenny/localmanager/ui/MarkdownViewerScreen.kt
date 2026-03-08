@@ -699,3 +699,168 @@ fun MarkdownViewerScreen(
         }
     }
 }
+
+/** 密码保护文件查看器：从内存中的解密字节直接渲染 md/rst，不产生本地文件。退出时清除 WebView 缓存。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PassContentViewerScreen(
+    innerFileName: String,
+    decryptedBytes: ByteArray,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var scalePercent by remember { mutableStateOf(100) }
+
+    val katexInline = remember(context) {
+        try {
+            val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
+                .replace("</style>", "<\\/style>")
+            val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            val autoRender = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            Triple(css, katexJs, autoRender)
+        } catch (_: Exception) {
+            Triple("", "", "")
+        }
+    }
+    val (katexCss, katexJs, autoRenderJs) = katexInline
+
+    val htmlContent = remember(decryptedBytes, innerFileName) {
+        val decoded = decryptedBytes.decodeToString()
+        val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
+        val isRst = innerFileName.endsWith(".rst", ignoreCase = true)
+        if (isRst) rstToHtml(trimmed)
+        else {
+            val parser = org.commonmark.parser.Parser.builder().build()
+            val document = parser.parse(trimmed)
+            val renderer = org.commonmark.renderer.html.HtmlRenderer.builder().build()
+            renderer.render(document)
+        }
+    }
+
+    val doBack = {
+        webViewRef.value?.clearCache(true)
+        onBack()
+    }
+
+    BackHandler { doBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(innerFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { doBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    IconButton(
+                        onClick = {
+                            scalePercent = maxOf(50, scalePercent - 25)
+                            webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                        }
+                    ) {
+                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                    }
+                    IconButton(
+                        onClick = {
+                            scalePercent = minOf(200, scalePercent + 25)
+                            webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                        }
+                    ) {
+                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            val bg = MaterialTheme.colorScheme.surface
+            val fg = MaterialTheme.colorScheme.onSurface
+            val bgHex = "#%02x%02x%02x".format(
+                (bg.red * 255).toInt(), (bg.green * 255).toInt(), (bg.blue * 255).toInt()
+            )
+            val fgHex = "#%02x%02x%02x".format(
+                (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
+            )
+            val fullHtml = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <style>$katexCss</style>
+                <style>
+                    body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
+                    h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
+                    h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
+                    h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
+                    pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
+                    pre { display: block; padding: 12px; overflow-x: auto; }
+                    pre code { padding: 0; background: none; }
+                    .katex { font-size: 1.1em; }
+                    blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
+                    a { color: #2196F3; }
+                    ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
+                    table { border-collapse: collapse; width: 100%; }
+                    th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
+                    th { background: rgba(128,128,128,0.15); }
+                </style>
+            </head>
+            <body>$htmlContent
+            <script>$katexJs</script>
+            <script>$autoRenderJs</script>
+            <script>
+            document.addEventListener("DOMContentLoaded", function() {
+                if (typeof katex !== "undefined") {
+                    document.querySelectorAll(".katex-inline").forEach(function(el) {
+                        var latex = el.getAttribute("data-latex");
+                        if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {}
+                    });
+                    document.querySelectorAll(".katex-display").forEach(function(el) {
+                        var latex = el.getAttribute("data-latex");
+                        if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {}
+                    });
+                }
+                if (typeof renderMathInElement === "function") {
+                    renderMathInElement(document.body, {
+                        delimiters: [
+                            { left: "$$", right: "$$", display: true },
+                            { left: "$", right: "$", display: false },
+                            { left: "\\(", right: "\\)", display: false },
+                            { left: "\\[", right: "\\]", display: true }
+                        ],
+                        throwOnError: false
+                    });
+                }
+            });
+            </script>
+            </body>
+            </html>
+            """.trimIndent()
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        setBackgroundColor(Color.TRANSPARENT)
+                        settings.domStorageEnabled = false
+                        settings.javaScriptEnabled = true
+                        settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                        webViewRef.value = this
+                        loadDataWithBaseURL("about:blank", fullHtml, "text/html", "UTF-8", null)
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                update = { webView ->
+                    webViewRef.value = webView
+                }
+            )
+        }
+    }
+}

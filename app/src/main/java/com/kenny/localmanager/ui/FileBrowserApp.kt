@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -57,6 +58,7 @@ import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -223,6 +225,7 @@ fun FileBrowserApp(
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -350,6 +353,15 @@ fun FileBrowserApp(
                 }
             )
         }
+        passContentView != null -> {
+            val content = passContentView!!
+            BackHandler { passContentView = null }
+            PassContentViewerScreen(
+                innerFileName = content.innerFileName,
+                decryptedBytes = content.decryptedBytes,
+                onBack = { passContentView = null }
+            )
+        }
         viewingFile != null -> {
             val (uri, name, isEncrypted) = viewingFile!!
             BackHandler { viewingFile = null }
@@ -387,6 +399,11 @@ fun FileBrowserApp(
             var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
             var batchObfuscatePassword by remember { mutableStateOf("") }
             var batchObfuscateInProgress by remember { mutableStateOf(false) }
+            var passProtectTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var passProtectInProgress by remember { mutableStateOf(false) }
+            var passViewTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var passViewPassword by remember { mutableStateOf("") }
+            var passViewInProgress by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
             var currentDirPath by remember { mutableStateOf("") }
             LaunchedEffect(displayUri, rootUri) {
@@ -417,11 +434,17 @@ fun FileBrowserApp(
             var showPubkeyShareScreen by remember { mutableStateOf(false) }
             var showFileShareScreen by remember { mutableStateOf(false) }
             var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            val shareGitLogs = remember { mutableStateListOf<String>() }
+            var shareGitInProgress by remember { mutableStateOf(false) }
+            var shareGitDone by remember { mutableStateOf(false) }
             var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipUnzipPassword by remember { mutableStateOf("") }
             var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var zipCompressPassword by remember { mutableStateOf("") }
+            var showPendingCompressToZip by remember { mutableStateOf(false) }
+            var pendingCompressZipName by remember { mutableStateOf("") }
+            var pendingCompressPassword by remember { mutableStateOf("") }
             var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
             LaunchedEffect(Unit) {
                 PlaybackService.playbackState.collect { playbackState = it }
@@ -451,6 +474,8 @@ fun FileBrowserApp(
                     showFileShareScreen -> showFileShareScreen = false
                     batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
+                    passProtectTarget != null -> { passProtectTarget = null }
+                    passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     gpgState != null -> {
                         if (showGpgKeyPicker) showGpgKeyPicker = false
@@ -466,6 +491,7 @@ fun FileBrowserApp(
                     showPlaybackScreen -> showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     zipCompressTarget != null -> zipCompressTarget = null
+                    showPendingCompressToZip -> showPendingCompressToZip = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                     else -> {
                         val now = System.currentTimeMillis()
@@ -738,6 +764,11 @@ fun FileBrowserApp(
                     },
                     onUnzipRequest = { zipUnzipTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
+                    onRequestPassProtect = { model -> passProtectTarget = model },
+                    onRequestPassView = { model ->
+                        passViewTarget = model
+                        passViewPassword = ""
+                    },
                     playbackState = playbackState,
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
@@ -788,6 +819,16 @@ fun FileBrowserApp(
                             val list = pendingList.filter { !it.isDirectory }
                             if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
                             else gpgState = GpgOpState.BatchDecrypt(list, displayUri)
+                        }
+                    },
+                    onRequestCompressToZip = {
+                        if (pendingList.isEmpty()) {
+                            Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                            pendingCompressZipName = "archive_$ts.zip"
+                            pendingCompressPassword = ""
+                            showPendingCompressToZip = true
                         }
                     },
                     onClearFilteredList = { toRemove ->
@@ -1003,59 +1044,103 @@ fun FileBrowserApp(
                                 Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
                                 return@TextButton
                             }
+                            shareGitLogs.clear()
+                            shareGitInProgress = true
+                            shareGitDone = false
                             scope.launch {
-                                runWithProgress("共享到 Git", null) { updateProgress ->
-                                    val repoUrl = prefs.gitRepoUrl.first() ?: ""
-                                    val userName = prefs.gitUserName.first() ?: ""
-                                    val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
-                                    if (repoUrl.isBlank()) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "请先配置 Git 仓库", Toast.LENGTH_SHORT).show()
-                                        }
-                                        return@runWithProgress
-                                    }
-                                    // 同步
-                                    val syncResult = withContext(Dispatchers.IO) {
-                                        cloneToTree(context, r, repoUrl,
-                                            userName = userName.ifBlank { null },
-                                            httpsPassword = httpsPassword.ifBlank { null })
-                                    }
-                                    if (syncResult.isFailure) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "同步失败: ${syncResult.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                        return@runWithProgress
-                                    }
-                                    // 复制到 share
-                                    val copied = withContext(Dispatchers.IO) {
-                                        copyFileToShare(context, r, target.uri, target.name)
-                                    }
-                                    if (!copied) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(context, "复制到 share 目录失败", Toast.LENGTH_SHORT).show()
-                                        }
-                                        return@runWithProgress
-                                    }
-                                    // 提交推送
-                                    val pushResult = withContext(Dispatchers.IO) {
-                                        commitAndPush(context, r, repoUrl,
-                                            commitMessage = "共享文件: ${target.name}",
-                                            userName = userName.ifBlank { null },
-                                            httpsPassword = httpsPassword.ifBlank { null })
-                                    }
-                                    withContext(Dispatchers.Main) {
-                                        if (pushResult.isSuccess) {
-                                            Toast.makeText(context, "已共享并推送", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "推送失败: ${pushResult.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
+                                val repoUrl = prefs.gitRepoUrl.first() ?: ""
+                                val userName = prefs.gitUserName.first() ?: ""
+                                val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
+                                if (repoUrl.isBlank()) {
+                                    shareGitLogs.add("错误: 请先配置 Git 仓库")
+                                    shareGitInProgress = false
+                                    shareGitDone = true
+                                    return@launch
                                 }
+                                // 同步
+                                shareGitLogs.add("正在同步仓库...")
+                                val syncResult = withContext(Dispatchers.IO) {
+                                    cloneToTree(context, r, repoUrl,
+                                        userName = userName.ifBlank { null },
+                                        httpsPassword = httpsPassword.ifBlank { null },
+                                        log = { msg -> shareGitLogs.add(msg) })
+                                }
+                                if (syncResult.isFailure) {
+                                    shareGitLogs.add("错误: 同步失败 - ${syncResult.exceptionOrNull()?.message}")
+                                    shareGitInProgress = false
+                                    shareGitDone = true
+                                    return@launch
+                                }
+                                // 复制到 share
+                                shareGitLogs.add("正在复制文件到 share 目录...")
+                                val copied = withContext(Dispatchers.IO) {
+                                    copyFileToShare(context, r, target.uri, target.name)
+                                }
+                                if (!copied) {
+                                    shareGitLogs.add("错误: 复制到 share 目录失败")
+                                    shareGitInProgress = false
+                                    shareGitDone = true
+                                    return@launch
+                                }
+                                shareGitLogs.add("文件已复制到 .sysgit/share/")
+                                // 提交推送
+                                shareGitLogs.add("正在提交并推送...")
+                                val pushResult = withContext(Dispatchers.IO) {
+                                    commitAndPush(context, r, repoUrl,
+                                        commitMessage = "共享文件: ${target.name}",
+                                        userName = userName.ifBlank { null },
+                                        httpsPassword = httpsPassword.ifBlank { null },
+                                        log = { msg -> shareGitLogs.add(msg) })
+                                }
+                                if (pushResult.isSuccess) {
+                                    shareGitLogs.add("已共享并推送成功")
+                                } else {
+                                    shareGitLogs.add("错误: 推送失败 - ${pushResult.exceptionOrNull()?.message}")
+                                }
+                                shareGitInProgress = false
+                                shareGitDone = true
                             }
                         }) { Text("共享") }
                     },
                     dismissButton = {
                         TextButton(onClick = { shareFileToGitTarget = null }) { Text("取消") }
+                    }
+                )
+            }
+            // 共享到 Git 日志窗口
+            if (shareGitLogs.isNotEmpty() && (shareGitInProgress || shareGitDone)) {
+                AlertDialog(
+                    onDismissRequest = { if (!shareGitInProgress) { shareGitDone = false; shareGitLogs.clear() } },
+                    title = { Text("共享到 Git") },
+                    text = {
+                        val logScrollState = rememberScrollState()
+                        LaunchedEffect(shareGitLogs.size) {
+                            logScrollState.animateScrollTo(logScrollState.maxValue)
+                        }
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 200.dp)
+                                .verticalScroll(logScrollState)
+                        ) {
+                            for (line in shareGitLogs) {
+                                Text(
+                                    line,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                        MaterialTheme.colorScheme.error
+                                    else
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        if (shareGitInProgress) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text("关闭") }
+                        }
                     }
                 )
             }
@@ -1116,6 +1201,132 @@ fun FileBrowserApp(
                     },
                     onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
                 )
+            }
+            // ---- 密码保护：加密 md/rst -> .pass ----
+            passProtectTarget?.let { model ->
+                AlertDialog(
+                    onDismissRequest = { if (!passProtectInProgress) passProtectTarget = null },
+                    title = { Text("密码保护") },
+                    text = { Text("将 ${model.name} 用默认公钥加密为 ${model.name}.pass，原文件将被删除。") },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                passProtectInProgress = true
+                                val ctx = context
+                                val dirUri = normalizeContentUriString(displayUri)
+                                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                scope.launch {
+                                    val ok = withContext(Dispatchers.IO) {
+                                        val secRings = loadSecretKeyRings(ctx)
+                                        if (secRings == null) {
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(ctx, "未找到默认密钥，请先生成密钥对", Toast.LENGTH_LONG).show()
+                                            }
+                                            return@withContext false
+                                        }
+                                        val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID
+                                        if (defaultKeyId == null) {
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(ctx, "未找到默认密钥", Toast.LENGTH_LONG).show()
+                                            }
+                                            return@withContext false
+                                        }
+                                        val pubRings = loadPublicKeyRings(ctx)
+                                        val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId)
+                                        if (pubKeyRing == null) {
+                                            withContext(Dispatchers.Main) {
+                                                Toast.makeText(ctx, "未找到默认公钥", Toast.LENGTH_LONG).show()
+                                            }
+                                            return@withContext false
+                                        }
+                                        val plain = ctx.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
+                                            ?: return@withContext false
+                                        val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, model.name)
+                                            ?: return@withContext false
+                                        val outName = model.name + ".pass"
+                                        val created = createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                        if (created) {
+                                            ctx.contentResolver.deleteDocument(model.uri)
+                                        }
+                                        created
+                                    }
+                                    passProtectInProgress = false
+                                    passProtectTarget = null
+                                    if (ok) {
+                                        Toast.makeText(ctx, "已加密为 ${model.name}.pass", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(ctx, "密码保护失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            enabled = !passProtectInProgress
+                        ) { Text(if (passProtectInProgress) "加密中…" else "确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { passProtectTarget = null },
+                            enabled = !passProtectInProgress
+                        ) { Text("取消") }
+                    }
+                )
+            }
+            // ---- 密码保护：查看 .pass 文件 ----
+            passViewTarget?.let { model ->
+                val secRings = loadSecretKeyRings(context)
+                if (secRings == null) {
+                    AlertDialog(
+                        onDismissRequest = { passViewTarget = null },
+                        title = { Text("查看密码") },
+                        text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                        confirmButton = {
+                            Button(onClick = { passViewTarget = null }) { Text("确定") }
+                        }
+                    )
+                } else {
+                    GpgPasswordDialog(
+                        isDecrypt = true,
+                        fileName = model.name,
+                        password = passViewPassword,
+                        passwordLabel = "密钥密码",
+                        inProgress = passViewInProgress,
+                        onPasswordChange = { if (!passViewInProgress) passViewPassword = it },
+                        onConfirm = { pwd ->
+                            if (passViewInProgress) return@GpgPasswordDialog
+                            passViewInProgress = true
+                            val ctx = context
+                            scope.launch {
+                                val decrypted = withContext(Dispatchers.IO) {
+                                    val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                                    ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                        GpgHelper.decryptWithSecretKey(
+                                            input, rings, pwd.toCharArray()
+                                        ) { e ->
+                                            logDebug("[PASS] 解密失败: ${model.name}")
+                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                        }
+                                    }
+                                }
+                                passViewInProgress = false
+                                if (decrypted != null) {
+                                    passViewTarget = null
+                                    passViewPassword = ""
+                                    // 根据内层扩展名确定渲染方式
+                                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                                    passContentView = PassDecryptedContent(innerName, decrypted)
+                                } else {
+                                    Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onDismiss = {
+                            if (!passViewInProgress) {
+                                passViewTarget = null
+                                passViewPassword = ""
+                            }
+                        }
+                    )
+                }
             }
             zipUnzipTarget?.let { target ->
                 val parentDirUri = Uri.parse(displayUri)
@@ -1234,6 +1445,83 @@ fun FileBrowserApp(
                         ) { Text("压缩") }
                     },
                     dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
+                )
+            }
+            if (showPendingCompressToZip && pendingList.isNotEmpty()) {
+                val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+                AlertDialog(
+                    onDismissRequest = { showPendingCompressToZip = false },
+                    title = { Text("压缩待处理列表为 ZIP") },
+                    text = {
+                        Column {
+                            Text(
+                                "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到根目录。",
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = pendingCompressZipName,
+                                onValueChange = { pendingCompressZipName = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("文件名") },
+                                singleLine = true
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = pendingCompressPassword,
+                                onValueChange = { pendingCompressPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("密码（留空则不加密）") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            enabled = pendingCompressZipName.isNotBlank(),
+                            onClick = {
+                                val zipName = pendingCompressZipName.trim().let {
+                                    if (it.endsWith(".zip", ignoreCase = true)) it else "$it.zip"
+                                }
+                                val items = pendingList.toList()
+                                val pwd = pendingCompressPassword.ifBlank { null }?.toCharArray()
+                                showPendingCompressToZip = false
+                                scope.launch {
+                                    progressOp = OperationProgress("压缩", 0, items.size)
+                                    delay(50)
+                                    val ok = withContext(Dispatchers.IO) {
+                                        compressToZip(
+                                            context,
+                                            items.map { it.uri },
+                                            rootDirUri,
+                                            rootTreeUri,
+                                            zipName,
+                                            pwd
+                                        ) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) {
+                                                progressOp = OperationProgress("压缩", cur, tot)
+                                            }
+                                        }
+                                    }
+                                    delay(120)
+                                    progressOp = null
+                                    pendingCompressZipName = ""
+                                    pendingCompressPassword = ""
+                                    if (ok) {
+                                        pendingList.clear()
+                                        Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("压缩") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPendingCompressToZip = false }) { Text("取消") }
+                    }
                 )
             }
             if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
@@ -1601,6 +1889,9 @@ private fun OperationProgressDialog(progress: OperationProgress) {
     }
 }
 
+/** 密码保护解密后的内容，暂存于内存中供渲染。 */
+private data class PassDecryptedContent(val innerFileName: String, val decryptedBytes: ByteArray)
+
 private sealed class GpgOpState {
     abstract val isDecrypt: Boolean
     abstract val dirUri: String
@@ -1690,6 +1981,8 @@ internal fun FileBrowserScreen(
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
+    onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
+    onRequestPassView: (DocumentFileModel) -> Unit = {},
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -1997,6 +2290,8 @@ internal fun FileBrowserScreen(
                                         when {
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
+                                            item.name.endsWith(".pass", ignoreCase = true) ->
+                                                onRequestPassView(item)
                                             item.name.endsWith(".md", ignoreCase = true) || item.name.endsWith(".rst", ignoreCase = true) ->
                                                 onOpenMarkdownView(item.uri.toString(), item.name, false)
                                             else -> {
@@ -2084,7 +2379,7 @@ internal fun FileBrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text("GnuPG 解密", color = MaterialTheme.colorScheme.onSurface) }
-                        } else {
+                        } else if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -2092,6 +2387,25 @@ internal fun FileBrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text("GnuPG 加密", color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                        if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true))
+                            && onRequestPassProtect != null) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestPassProtect(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("密码保护", color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                        if (menuTarget.name.endsWith(".pass", ignoreCase = true)) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestPassView(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("查看密码", color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
@@ -2561,6 +2875,7 @@ fun FileItem(
     val icon = when {
         model.isDirectory -> Icons.Default.Folder
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
+        model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
@@ -2568,6 +2883,7 @@ fun FileItem(
     val iconTint = when {
         model.isDirectory -> MaterialTheme.colorScheme.primary
         model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
+        model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -2649,6 +2965,7 @@ fun PendingListScreen(
     onRequestBatchDeobfuscate: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
+    onRequestCompressToZip: () -> Unit = {},
     onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
     onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
     onDismiss: () -> Unit
@@ -2775,6 +3092,9 @@ fun PendingListScreen(
                     IconButton(onClick = onRequestBatchGpgDecrypt) {
                         Icon(Icons.Default.LockOpen, contentDescription = "解密", tint = MaterialTheme.colorScheme.primary)
                     }
+                    IconButton(onClick = onRequestCompressToZip) {
+                        Icon(Icons.Default.Archive, contentDescription = "压缩为 ZIP")
+                    }
                 }
             LazyColumn(
                 Modifier.weight(1f),
@@ -2872,6 +3192,12 @@ fun PendingListScreen(
                         Icon(Icons.Default.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
                         Text("加入播放：将当前列表中所有 MP3/OGG 文件加入为新播放列表并开始播放，可在「播放器」中切换、删除或排序播放列表。", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("压缩：将待处理列表中所有文件和目录压缩为一个 ZIP 文件，保存到根目录，支持设置密码。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

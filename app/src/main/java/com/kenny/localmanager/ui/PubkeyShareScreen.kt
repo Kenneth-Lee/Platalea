@@ -11,11 +11,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -29,7 +33,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -39,6 +42,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -87,7 +91,7 @@ fun PubkeyShareScreen(
     var httpsPassword by remember { mutableStateOf("") }
 
     var syncState by remember { mutableStateOf<SyncState>(SyncState.Idle) }
-    var syncMessage by remember { mutableStateOf("") }
+    val syncLogs = remember { mutableStateListOf<String>() }
 
     var remotePubkeys by remember { mutableStateOf<List<RemotePubkeyInfo>>(emptyList()) }
     var localPubkeys by remember { mutableStateOf<List<KeyInfo>>(emptyList()) }
@@ -115,7 +119,8 @@ fun PubkeyShareScreen(
             return
         }
         syncState = SyncState.Syncing
-        syncMessage = "正在同步..."
+        syncLogs.clear()
+        syncLogs.add("正在同步...")
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -125,17 +130,17 @@ fun PubkeyShareScreen(
                     userName = userName.ifBlank { null },
                     userEmail = null,
                     httpsPassword = httpsPassword.ifBlank { null },
-                    log = { msg -> syncMessage = msg }
+                    log = { msg -> syncLogs.add(msg) }
                 )
             }
             if (result.isSuccess) {
                 // 去重公钥文件
-                syncMessage = "检查重复公钥..."
+                syncLogs.add("检查重复公钥...")
                 val deletedCount = withContext(Dispatchers.IO) {
-                    deduplicateRemotePubkeys(context, rootUri) { msg -> syncMessage = msg }
+                    deduplicateRemotePubkeys(context, rootUri) { msg -> syncLogs.add(msg) }
                 }
                 if (deletedCount > 0) {
-                    syncMessage = "清理了 $deletedCount 个重复公钥，正在推送..."
+                    syncLogs.add("清理了 $deletedCount 个重复公钥，正在推送...")
                     val pushResult = withContext(Dispatchers.IO) {
                         commitAndPush(
                             context = context,
@@ -144,7 +149,7 @@ fun PubkeyShareScreen(
                             commitMessage = "清理重复公钥",
                             userName = userName.ifBlank { null },
                             httpsPassword = httpsPassword.ifBlank { null },
-                            log = { msg -> syncMessage = msg }
+                            log = { msg -> syncLogs.add(msg) }
                         )
                     }
                     if (pushResult.isFailure) {
@@ -154,6 +159,7 @@ fun PubkeyShareScreen(
                     }
                 }
                 syncState = SyncState.Success("同步成功")
+                syncLogs.add("同步成功")
                 // 加载公钥列表
                 withContext(Dispatchers.IO) {
                     remotePubkeys = listRemotePubkeys(context, rootUri)
@@ -173,7 +179,8 @@ fun PubkeyShareScreen(
             return
         }
         syncState = SyncState.Syncing
-        syncMessage = "正在提交..."
+        syncLogs.clear()
+        syncLogs.add("正在提交...")
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 commitAndPush(
@@ -183,7 +190,7 @@ fun PubkeyShareScreen(
                     commitMessage = message,
                     userName = userName.ifBlank { null },
                     httpsPassword = httpsPassword.ifBlank { null },
-                    log = { msg -> syncMessage = msg }
+                    log = { msg -> syncLogs.add(msg) }
                 )
             }
             if (result.isSuccess) {
@@ -224,7 +231,7 @@ fun PubkeyShareScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // 同步状态
+            // 同步状态 + 刷新按钮
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -236,7 +243,7 @@ fun PubkeyShareScreen(
                     is SyncState.Syncing -> {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text(syncMessage, color = MaterialTheme.colorScheme.primary)
+                        Text("同步中…", color = MaterialTheme.colorScheme.primary)
                     }
                     is SyncState.Success -> {
                         Text(state.message, color = MaterialTheme.colorScheme.primary)
@@ -254,11 +261,33 @@ fun PubkeyShareScreen(
                 }
             }
 
-            if (syncState is SyncState.Syncing) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            // Git 日志窗口
+            if (syncLogs.isNotEmpty()) {
+                val logScrollState = rememberScrollState()
+                LaunchedEffect(syncLogs.size) {
+                    logScrollState.animateScrollTo(logScrollState.maxValue)
+                }
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                        .padding(vertical = 4.dp)
+                        .verticalScroll(logScrollState)
+                ) {
+                    for (line in syncLogs) {
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
 
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

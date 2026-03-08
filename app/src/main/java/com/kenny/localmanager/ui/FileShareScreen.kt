@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -26,7 +29,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -36,6 +38,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -82,7 +85,7 @@ fun FileShareScreen(
     var httpsPassword by remember { mutableStateOf("") }
 
     var syncState by remember { mutableStateOf<ShareSyncState>(ShareSyncState.Idle) }
-    var syncMessage by remember { mutableStateOf("") }
+    val syncLogs = remember { mutableStateListOf<String>() }
 
     var sharedFiles by remember { mutableStateOf<List<SharedFileInfo>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -107,7 +110,8 @@ fun FileShareScreen(
             return
         }
         syncState = ShareSyncState.Syncing
-        syncMessage = "正在同步..."
+        syncLogs.clear()
+        syncLogs.add("正在同步...")
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -117,11 +121,12 @@ fun FileShareScreen(
                     userName = userName.ifBlank { null },
                     userEmail = null,
                     httpsPassword = httpsPassword.ifBlank { null },
-                    log = { msg -> syncMessage = msg }
+                    log = { msg -> syncLogs.add(msg) }
                 )
             }
             if (result.isSuccess) {
                 syncState = ShareSyncState.Success("同步成功")
+                syncLogs.add("同步成功")
                 withContext(Dispatchers.IO) {
                     sharedFiles = listSharedFiles(context, rootUri)
                 }
@@ -140,7 +145,8 @@ fun FileShareScreen(
             return
         }
         syncState = ShareSyncState.Syncing
-        syncMessage = "正在提交..."
+        syncLogs.clear()
+        syncLogs.add("正在提交...")
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 commitAndPush(
@@ -150,7 +156,7 @@ fun FileShareScreen(
                     commitMessage = message,
                     userName = userName.ifBlank { null },
                     httpsPassword = httpsPassword.ifBlank { null },
-                    log = { msg -> syncMessage = msg }
+                    log = { msg -> syncLogs.add(msg) }
                 )
             }
             if (result.isSuccess) {
@@ -192,7 +198,7 @@ fun FileShareScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // 同步状态
+            // 同步状态 + 刷新按钮
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -204,7 +210,7 @@ fun FileShareScreen(
                     is ShareSyncState.Syncing -> {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text(syncMessage, color = MaterialTheme.colorScheme.primary)
+                        Text("同步中…", color = MaterialTheme.colorScheme.primary)
                     }
                     is ShareSyncState.Success -> {
                         Text(state.message, color = MaterialTheme.colorScheme.primary)
@@ -222,11 +228,33 @@ fun FileShareScreen(
                 }
             }
 
-            if (syncState is ShareSyncState.Syncing) {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(vertical = 8.dp))
+            // Git 日志窗口
+            if (syncLogs.isNotEmpty()) {
+                val logScrollState = rememberScrollState()
+                LaunchedEffect(syncLogs.size) {
+                    logScrollState.animateScrollTo(logScrollState.maxValue)
+                }
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                        .padding(vertical = 4.dp)
+                        .verticalScroll(logScrollState)
+                ) {
+                    for (line in syncLogs) {
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(8.dp))
 
             if (loading) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

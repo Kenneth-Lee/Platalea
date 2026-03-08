@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -15,7 +16,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -66,7 +67,7 @@ fun GitConfigDialog(
     var configApplied by remember { mutableStateOf(false) }
     var configDirty by remember { mutableStateOf(false) }
     var syncStatus by remember { mutableStateOf<SyncStatus>(SyncStatus.Idle) }
-    var progressText by remember { mutableStateOf("") }
+    val syncLogs = remember { mutableStateListOf<String>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     // 加载保存的配置
@@ -107,7 +108,8 @@ fun GitConfigDialog(
         }
         saveConfig()
         syncStatus = SyncStatus.Syncing
-        progressText = "正在连接..."
+        syncLogs.clear()
+        syncLogs.add("正在连接...")
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -117,7 +119,7 @@ fun GitConfigDialog(
                     userName = userName.ifBlank { null },
                     userEmail = userEmail.ifBlank { null },
                     httpsPassword = httpsPassword.ifBlank { null },
-                    log = { msg -> progressText = msg }
+                    log = { msg -> syncLogs.add(msg) }
                 )
             }
             if (result.isSuccess) {
@@ -143,8 +145,9 @@ fun GitConfigDialog(
                 }
             }
             configApplied = false
-            prefs.setGitConfigApplied(false)
             syncStatus = SyncStatus.Idle
+            syncLogs.clear()
+            prefs.setGitConfigApplied(false)
             Toast.makeText(context, "已删除本地仓库", Toast.LENGTH_SHORT).show()
         }
         showDeleteConfirm = false
@@ -173,7 +176,7 @@ fun GitConfigDialog(
                         onValueChange = { repoUrl = it; markConfigDirty() },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("https://gitcode.com/用户/仓库.git") }
+                        placeholder = { Text("https://gitcode.com/用户/仓库.git", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -186,7 +189,7 @@ fun GitConfigDialog(
                         onValueChange = { httpsPassword = it; markConfigDirty() },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("私有库需填令牌/密码") }
+                        placeholder = { Text("私有库需填令牌/密码", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -199,7 +202,7 @@ fun GitConfigDialog(
                         onValueChange = { userName = it; markConfigDirty() },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("本地 commit 显示名") }
+                        placeholder = { Text("本地 commit 显示名", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -212,7 +215,7 @@ fun GitConfigDialog(
                         onValueChange = { userEmail = it; markConfigDirty() },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("本地 commit 邮箱") }
+                        placeholder = { Text("本地 commit 邮箱", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
 
@@ -248,18 +251,30 @@ fun GitConfigDialog(
                     }
                 }
 
-                // 进度/错误信息
-                if (syncStatus is SyncStatus.Syncing || syncStatus is SyncStatus.Error) {
+                // 进度/错误信息（log 窗口）
+                if (syncLogs.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
-                    if (syncStatus is SyncStatus.Syncing) {
-                        LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Spacer(Modifier.height(4.dp))
+                    val logScrollState = rememberScrollState()
+                    LaunchedEffect(syncLogs.size) {
+                        logScrollState.animateScrollTo(logScrollState.maxValue)
                     }
-                    Text(
-                        text = if (syncStatus is SyncStatus.Syncing) progressText else (syncStatus as? SyncStatus.Error)?.message ?: "",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (syncStatus is SyncStatus.Error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 120.dp)
+                            .verticalScroll(logScrollState)
+                    ) {
+                        for (line in syncLogs) {
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
 
                 Spacer(Modifier.height(24.dp))
