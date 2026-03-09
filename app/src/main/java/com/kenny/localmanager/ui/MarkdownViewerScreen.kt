@@ -439,6 +439,13 @@ fun MarkdownViewerScreen(
     }
     val (katexCss, katexJs, autoRenderJs) = katexInline
 
+    val mermaidJs = remember(context) {
+        try {
+            context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+        } catch (_: Exception) { "" }
+    }
+
     LaunchedEffect(currentUri, currentEncrypted) {
         loading = true
         loadError = null
@@ -660,6 +667,7 @@ fun MarkdownViewerScreen(
                     <body>${htmlContent}
                     <script>$katexJs</script>
                     <script>$autoRenderJs</script>
+                    <script>$mermaidJs</script>
                     <script>
                     document.addEventListener("DOMContentLoaded", function() {
                         if (typeof katex !== "undefined") {
@@ -682,6 +690,17 @@ fun MarkdownViewerScreen(
                                 ],
                                 throwOnError: false
                             });
+                        }
+                        if (typeof mermaid !== "undefined") {
+                            mermaid.initialize({ startOnLoad: false, theme: 'default' });
+                            document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) {
+                                var pre = codeEl.parentElement;
+                                var div = document.createElement("div");
+                                div.className = "mermaid";
+                                div.textContent = codeEl.textContent;
+                                pre.parentNode.replaceChild(div, pre);
+                            });
+                            mermaid.run();
                         }
                     });
                     </script>
@@ -740,6 +759,13 @@ fun PassContentViewerScreen(
         }
     }
     val (katexCss, katexJs, autoRenderJs) = katexInline
+
+    val mermaidJs = remember(context) {
+        try {
+            context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+        } catch (_: Exception) { "" }
+    }
 
     val htmlContent = remember(decryptedBytes, innerFileName) {
         val decoded = decryptedBytes.decodeToString()
@@ -832,6 +858,7 @@ fun PassContentViewerScreen(
             <body>$htmlContent
             <script>$katexJs</script>
             <script>$autoRenderJs</script>
+            <script>$mermaidJs</script>
             <script>
             document.addEventListener("DOMContentLoaded", function() {
                 if (typeof katex !== "undefined") {
@@ -854,6 +881,17 @@ fun PassContentViewerScreen(
                         ],
                         throwOnError: false
                     });
+                }
+                if (typeof mermaid !== "undefined") {
+                    mermaid.initialize({ startOnLoad: false, theme: 'default' });
+                    document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) {
+                        var pre = codeEl.parentElement;
+                        var div = document.createElement("div");
+                        div.className = "mermaid";
+                        div.textContent = codeEl.textContent;
+                        pre.parentNode.replaceChild(div, pre);
+                    });
+                    mermaid.run();
                 }
             });
             </script>
@@ -928,6 +966,13 @@ fun MdZipViewerScreen(
         }
     }
     val (katexCss, katexJs, autoRenderJs) = katexInline
+
+    val mermaidJs = remember(context) {
+        try {
+            context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+        } catch (_: Exception) { "" }
+    }
 
     Log.d(MDZIP_DEBUG, "打开 zipFileName=$zipFileName contentDir=${contentDir.absolutePath} initialTargetFile=${initialTargetFile.absolutePath}")
     logDebug?.invoke("[MDZIP] 打开 zipFileName=$zipFileName")
@@ -1175,6 +1220,7 @@ fun MdZipViewerScreen(
                     <body>${htmlContent}
                     <script>$katexJs</script>
                     <script>$autoRenderJs</script>
+                    <script>$mermaidJs</script>
                     <script>
                     document.addEventListener("DOMContentLoaded", function() {
                         if (typeof katex !== "undefined") {
@@ -1197,6 +1243,17 @@ fun MdZipViewerScreen(
                                 ],
                                 throwOnError: false
                             });
+                        }
+                        if (typeof mermaid !== "undefined") {
+                            mermaid.initialize({ startOnLoad: false, theme: 'default' });
+                            document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) {
+                                var pre = codeEl.parentElement;
+                                var div = document.createElement("div");
+                                div.className = "mermaid";
+                                div.textContent = codeEl.textContent;
+                                pre.parentNode.replaceChild(div, pre);
+                            });
+                            mermaid.run();
                         }
                     });
                     </script>
