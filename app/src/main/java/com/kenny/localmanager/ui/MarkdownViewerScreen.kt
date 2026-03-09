@@ -51,6 +51,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
+import com.kenny.localmanager.file.listHtmlZipContentFiles
 import com.kenny.localmanager.file.listMdZipContentFiles
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.gpg.GpgHelper
@@ -1405,6 +1406,236 @@ private fun MdZipNoTargetScreen(
                 LazyColumn(
                     modifier = Modifier.fillMaxWidth()
                 ) {
+                    items(fileList) { filePath ->
+                        Text(
+                            text = filePath,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (filePath.endsWith("/")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---- .html.zip 查看器 ----
+
+private const val HTMLZIP_DEBUG = "HtmlZipViewer"
+
+/** .html.zip 查看器：解压到缓存后用 WebView 渲染 index.html，支持目录内跳转与 cache 资源。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HtmlZipViewerScreen(
+    initialIndexFile: File?,
+    contentDir: File,
+    zipFileName: String,
+    onBack: () -> Unit,
+    logDebug: ((String) -> Unit)? = null
+) {
+    if (initialIndexFile == null) {
+        HtmlZipNoIndexScreen(
+            contentDir = contentDir,
+            zipFileName = zipFileName,
+            onBack = onBack,
+            logDebug = logDebug
+        )
+        return
+    }
+
+    val context = LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
+
+    logDebug?.invoke("[HTMLZIP] 打开 zipFileName=$zipFileName indexFile=${initialIndexFile.absolutePath}")
+
+    BackHandler {
+        val w = webViewRef.value
+        if (w != null && w.canGoBack()) w.goBack() else onBack()
+    }
+
+    if (pendingExternalUrl != null) {
+        AlertDialog(
+            onDismissRequest = { pendingExternalUrl = null },
+            title = { Text("打开链接") },
+            text = { Text("将用浏览器打开该链接。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingExternalUrl?.let { u ->
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(u))
+                            context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        } catch (_: Exception) {}
+                    }
+                    pendingExternalUrl = null
+                }) { Text("打开") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("不打开") }
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        val w = webViewRef.value
+                        if (w != null && w.canGoBack()) w.goBack() else onBack()
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        setBackgroundColor(Color.TRANSPARENT)
+                        @SuppressLint("SetJavaScriptEnabled")
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.allowFileAccess = true
+                        settings.allowContentAccess = true
+                        webViewClient = HtmlZipWebViewClient(contentDir) { url ->
+                            pendingExternalUrl = url
+                        }
+                        webViewRef.value = this
+                        loadUrl("file://${initialIndexFile.absolutePath}")
+                    }
+                },
+                modifier = Modifier.fillMaxSize(),
+                update = { webView ->
+                    webViewRef.value = webView
+                }
+            )
+        }
+    }
+}
+
+/** WebViewClient：允许 file 协议下 contentDir 内跳转，外链弹窗；子资源从 cache 提供。 */
+private class HtmlZipWebViewClient(
+    private val contentDir: File,
+    private val onExternalUrl: (String) -> Unit
+) : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString() ?: return false
+        if (!request.isForMainFrame) return false
+        val scheme = request.url?.scheme?.lowercase() ?: ""
+        when {
+            scheme == "http" || scheme == "https" || scheme == "mailto" -> {
+                onExternalUrl(url)
+                return true
+            }
+            scheme == "file" -> {
+                val path = request.url?.path ?: return false
+                val file = File(path)
+                if (file.exists() && file.absolutePath.startsWith(contentDir.absolutePath)) {
+                    return false
+                }
+            }
+        }
+        return false
+    }
+
+    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+        val url = request?.url ?: return null
+        if (request.isForMainFrame) return null
+        if (url.scheme == "file") {
+            val path = url.path ?: return null
+            val file = File(path)
+            if (file.exists() && file.isFile && file.absolutePath.startsWith(contentDir.absolutePath)) {
+                return try {
+                    val mime = when {
+                        file.name.endsWith(".png", true) -> "image/png"
+                        file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
+                        file.name.endsWith(".gif", true) -> "image/gif"
+                        file.name.endsWith(".svg", true) -> "image/svg+xml"
+                        file.name.endsWith(".webp", true) -> "image/webp"
+                        file.name.endsWith(".css", true) -> "text/css"
+                        file.name.endsWith(".js", true) -> "application/javascript"
+                        file.name.endsWith(".woff", true) -> "font/woff"
+                        file.name.endsWith(".woff2", true) -> "font/woff2"
+                        file.name.endsWith(".ttf", true) -> "font/ttf"
+                        else -> "application/octet-stream"
+                    }
+                    WebResourceResponse(mime, "UTF-8", FileInputStream(file))
+                } catch (_: Exception) { null }
+            }
+        }
+        return null
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HtmlZipNoIndexScreen(
+    contentDir: File,
+    zipFileName: String,
+    onBack: () -> Unit,
+    logDebug: ((String) -> Unit)? = null
+) {
+    val fileList = remember(contentDir) { listHtmlZipContentFiles(contentDir) }
+    logDebug?.invoke("[HTMLZIP] 未找到 index.html，显示目录内容，数量=${fileList.size}")
+    BackHandler { onBack() }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { onBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+        ) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "未找到 index.html",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "压缩包中未找到 index.html、README.html 或其它 .html 文件。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "压缩包内容：",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            if (fileList.isEmpty()) {
+                Text(
+                    text = "（空目录）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth()) {
                     items(fileList) { filePath ->
                         Text(
                             text = filePath,

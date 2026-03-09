@@ -450,3 +450,88 @@ private fun unwrapSingleChildDir(dir: File): File {
     }
     return dir
 }
+
+// ---- .html.zip 压缩 HTML 查看 ----
+
+/** 解压 .html.zip 到缓存目录后的结果。 */
+data class HtmlZipExtractResult(
+    val cacheDir: File,
+    val contentDir: File,
+    val indexFile: File?,  // null 表示未找到 index.html
+    val isEncrypted: Boolean
+)
+
+/** 获取 .html.zip 的缓存目录，基于 URI 哈希。 */
+fun getHtmlZipCacheDir(context: Context, zipUri: Uri): File {
+    val key = zipUri.toString().hashCode().toUInt().toString(16)
+    return File(context.cacheDir, "html_zip_cache/$key")
+}
+
+/** 读取 .html.zip 缓存时间戳（毫秒），无缓存返回 0。 */
+fun getHtmlZipCacheTimestamp(cacheDir: File): Long {
+    val tsFile = File(cacheDir, ".cache_ts")
+    return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
+}
+
+/** 在已有缓存目录中查找入口 HTML 文件（index.html、README.html 或第一个 .html）。 */
+fun findHtmlZipIndexFile(contentDir: File): File? {
+    if (!contentDir.exists() || !contentDir.isDirectory) return null
+    val effectiveDir = unwrapSingleChildDir(contentDir)
+    for (name in listOf("index.html", "README.html", "Index.html", "readme.html")) {
+        findFileByName(effectiveDir, name)?.let { return it }
+    }
+    val firstHtml = collectFilesWithExtension(effectiveDir, "html").firstOrNull()?.second
+    return firstHtml
+}
+
+/** 缓存是否标记为加密来源（.html.zip）。 */
+fun isHtmlZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
+
+/** 解压 .html.zip 到缓存目录，查找 index.html。
+ * @return 解压结果（indexFile 可能为 null），解压失败返回 null */
+fun extractHtmlZipToCache(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String
+): HtmlZipExtractResult? {
+    val cacheDir = getHtmlZipCacheDir(context, zipUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+        }
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        zip.extractAll(contentDir.path)
+        tmpZip.delete()
+        val indexFile = findHtmlZipIndexFile(contentDir)
+        if (indexFile == null) {
+            Log.w(TAG, "extractHtmlZipToCache: no index.html found in $zipUri")
+        }
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+        return HtmlZipExtractResult(cacheDir, contentDir, indexFile, encrypted)
+    } catch (e: Exception) {
+        Log.e(TAG, "extractHtmlZipToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    } finally {
+        if (tmpZip.exists()) tmpZip.delete()
+    }
+}
+
+/** 清理 .html.zip 缓存。 */
+fun cleanHtmlZipCache(context: Context, zipUri: Uri) {
+    getHtmlZipCacheDir(context, zipUri).deleteRecursively()
+}
+
+/** 递归列出 .html.zip 内容目录中的所有文件（相对路径）。 */
+fun listHtmlZipContentFiles(contentDir: File): List<String> = listMdZipContentFiles(contentDir)

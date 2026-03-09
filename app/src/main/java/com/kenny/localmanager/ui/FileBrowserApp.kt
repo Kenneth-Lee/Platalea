@@ -143,6 +143,12 @@ import com.kenny.localmanager.file.getMdZipCacheTimestamp
 import com.kenny.localmanager.file.findMdZipCacheTarget
 import com.kenny.localmanager.file.isMdZipCacheEncrypted
 import com.kenny.localmanager.file.cleanMdZipCache
+import com.kenny.localmanager.file.cleanHtmlZipCache
+import com.kenny.localmanager.file.getHtmlZipCacheDir
+import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
+import com.kenny.localmanager.file.findHtmlZipIndexFile
+import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
+import com.kenny.localmanager.file.extractHtmlZipToCache
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.ACTION_NEXT
@@ -237,6 +243,7 @@ fun FileBrowserApp(
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
+    var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -392,6 +399,23 @@ fun FileBrowserApp(
                 logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
             )
         }
+        htmlZipViewState != null -> {
+            val state = htmlZipViewState!!
+            BackHandler {
+                if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
+                htmlZipViewState = null
+            }
+            HtmlZipViewerScreen(
+                initialIndexFile = state.indexFile,
+                contentDir = state.contentDir,
+                zipFileName = state.zipFileName,
+                onBack = {
+                    if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
+                    htmlZipViewState = null
+                },
+                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+            )
+        }
         passContentView != null -> {
             val content = passContentView!!
             BackHandler { passContentView = null }
@@ -485,6 +509,10 @@ fun FileBrowserApp(
             var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var mdZipPassword by remember { mutableStateOf("") }
             var mdZipInProgress by remember { mutableStateOf(false) }
+            var htmlZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var htmlZipPassword by remember { mutableStateOf("") }
+            var htmlZipInProgress by remember { mutableStateOf(false) }
             var showPendingCompressToZip by remember { mutableStateOf(false) }
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
@@ -546,6 +574,48 @@ fun FileBrowserApp(
                     }
                 }
             }
+            LaunchedEffect(htmlZipTarget) {
+                htmlZipEncrypted = null
+                htmlZipPassword = ""
+                htmlZipInProgress = false
+                val target = htmlZipTarget ?: return@LaunchedEffect
+                val cacheDir = getHtmlZipCacheDir(context, target.uri)
+                val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
+                if (cacheTs > 0 && !isHtmlZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                    val contentDir = java.io.File(cacheDir, "content")
+                    if (contentDir.exists() && contentDir.listFiles()?.isNotEmpty() == true) {
+                        val cachedIndex = findHtmlZipIndexFile(contentDir)
+                        htmlZipTarget = null
+                        htmlZipViewState = HtmlZipViewState(
+                            indexFile = cachedIndex,
+                            contentDir = contentDir,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false
+                        )
+                        return@LaunchedEffect
+                    }
+                    cacheDir.deleteRecursively()
+                }
+                htmlZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                if (htmlZipEncrypted == false) {
+                    htmlZipInProgress = true
+                    val result = withContext(Dispatchers.IO) { extractHtmlZipToCache(context, target.uri, null, target.name) }
+                    htmlZipInProgress = false
+                    htmlZipTarget = null
+                    if (result != null) {
+                        htmlZipViewState = HtmlZipViewState(
+                            indexFile = result.indexFile,
+                            contentDir = result.contentDir,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false
+                        )
+                    } else {
+                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
@@ -582,6 +652,7 @@ fun FileBrowserApp(
                     showPlaybackScreen -> showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
+                    htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
                     zipCompressTarget != null -> zipCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
@@ -833,6 +904,7 @@ fun FileBrowserApp(
                     },
                     onUnzipRequest = { zipUnzipTarget = it },
                     onRequestMdZipView = { mdZipTarget = it },
+                    onRequestHtmlZipView = { htmlZipTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
                     onRequestPassView = { model ->
@@ -1560,6 +1632,81 @@ fun FileBrowserApp(
                     )
                 }
             }
+            // ---- .html.zip 密码输入对话框 ----
+            htmlZipTarget?.let { target ->
+                val encrypted = htmlZipEncrypted
+                if (encrypted == true) {
+                    AlertDialog(
+                        onDismissRequest = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } },
+                        title = { Text("查看压缩 HTML") },
+                        text = {
+                            Column {
+                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = htmlZipPassword,
+                                    onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("ZIP 密码") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !htmlZipInProgress
+                                )
+                                if (htmlZipInProgress) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (htmlZipInProgress || htmlZipPassword.isBlank()) return@Button
+                                    htmlZipInProgress = true
+                                    val pwd = htmlZipPassword.toCharArray()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            extractHtmlZipToCache(context, target.uri, pwd, target.name)
+                                        }
+                                        htmlZipInProgress = false
+                                        if (result != null) {
+                                            htmlZipTarget = null
+                                            htmlZipPassword = ""
+                                            htmlZipViewState = HtmlZipViewState(
+                                                indexFile = result.indexFile,
+                                                contentDir = result.contentDir,
+                                                zipFileName = target.name,
+                                                zipUri = target.uri,
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) { Text("确定") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
+                            ) { Text("取消") }
+                        }
+                    )
+                } else if (encrypted == null) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("查看压缩 HTML") },
+                        text = {
+                            Column {
+                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
             zipCompressTarget?.let { target ->
                 val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
                 val parentDirUri = Uri.parse(displayUri)
@@ -2074,6 +2221,19 @@ private data class MdZipViewState(
     val isEncrypted: Boolean
 )
 
+/** 判断文件名是否为压缩 HTML 文件（.html.zip）。 */
+private fun isCompressedHtml(name: String): Boolean =
+    name.endsWith(".html.zip", ignoreCase = true)
+
+/** .html.zip 查看器状态。 */
+private data class HtmlZipViewState(
+    val indexFile: java.io.File?,
+    val contentDir: java.io.File,
+    val zipFileName: String,
+    val zipUri: Uri,
+    val isEncrypted: Boolean
+)
+
 private sealed class GpgOpState {
     abstract val isDecrypt: Boolean
     abstract val dirUri: String
@@ -2162,6 +2322,7 @@ internal fun FileBrowserScreen(
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
+    onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
@@ -2472,6 +2633,8 @@ internal fun FileBrowserScreen(
                                         when {
                                             isCompressedMarkdown(item.name) ->
                                                 onRequestMdZipView(item)
+                                            isCompressedHtml(item.name) ->
+                                                onRequestHtmlZipView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
                                             item.name.endsWith(".pass", ignoreCase = true) ->
@@ -2555,6 +2718,15 @@ internal fun FileBrowserScreen(
                                         contextMenuTarget = null
                                     }
                                 ) { Text("查看压缩 Markdown", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                            if (isCompressedHtml(menuTarget.name)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRequestHtmlZipView(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("查看压缩 HTML", color = MaterialTheme.colorScheme.onSurface) }
                             }
                             TextButton(
                                 onClick = {
@@ -3071,6 +3243,7 @@ fun FileItem(
         model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
         isCompressedMarkdown(model.name) -> Icons.Default.Article
+        isCompressedHtml(model.name) -> Icons.Default.Article
         model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
