@@ -59,6 +59,7 @@ import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Article
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -133,6 +134,12 @@ import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.isZipEncrypted
+import com.kenny.localmanager.file.extractMdZipToCache
+import com.kenny.localmanager.file.getMdZipCacheDir
+import com.kenny.localmanager.file.getMdZipCacheTimestamp
+import com.kenny.localmanager.file.findMdZipCacheTarget
+import com.kenny.localmanager.file.isMdZipCacheEncrypted
+import com.kenny.localmanager.file.cleanMdZipCache
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.ACTION_NEXT
@@ -226,12 +233,24 @@ fun FileBrowserApp(
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
+    var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+    // 调试日志（在顶层定义以便 mdZipViewState 分支可用）
+    var debugEnabledTop by remember { mutableStateOf(false) }
+    val debugLogTop = remember { mutableStateListOf<String>() }
+    LaunchedEffect(prefs) {
+        prefs.debugEnabled.collect { debugEnabledTop = it }
+    }
+    fun logDebugTop(msg: String) {
+        if (debugEnabledTop) {
+            scope.launch(Dispatchers.Main.immediate) { debugLogTop.add(msg) }
+        }
+    }
 
     LaunchedEffect(prefs) {
         prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
@@ -353,6 +372,23 @@ fun FileBrowserApp(
                 }
             )
         }
+        mdZipViewState != null -> {
+            val state = mdZipViewState!!
+            BackHandler {
+                if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
+                mdZipViewState = null
+            }
+            MdZipViewerScreen(
+                initialTargetFile = state.targetFile,
+                contentDir = state.contentDir,
+                zipFileName = state.zipFileName,
+                onBack = {
+                    if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
+                    mdZipViewState = null
+                },
+                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+            )
+        }
         passContentView != null -> {
             val content = passContentView!!
             BackHandler { passContentView = null }
@@ -442,6 +478,10 @@ fun FileBrowserApp(
             var zipUnzipPassword by remember { mutableStateOf("") }
             var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var zipCompressPassword by remember { mutableStateOf("") }
+            var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var mdZipPassword by remember { mutableStateOf("") }
+            var mdZipInProgress by remember { mutableStateOf(false) }
             var showPendingCompressToZip by remember { mutableStateOf(false) }
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
@@ -454,6 +494,48 @@ fun FileBrowserApp(
                 zipUnzipPassword = ""
                 val target = zipUnzipTarget ?: return@LaunchedEffect
                 zipUnzipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+            }
+            LaunchedEffect(mdZipTarget) {
+                mdZipEncrypted = null
+                mdZipPassword = ""
+                mdZipInProgress = false
+                val target = mdZipTarget ?: return@LaunchedEffect
+                // 先检查是否有有效缓存（非加密时）
+                val cacheDir = getMdZipCacheDir(context, target.uri)
+                val cacheTs = getMdZipCacheTimestamp(cacheDir)
+                if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                    val cachedTarget = findMdZipCacheTarget(cacheDir)
+                    if (cachedTarget != null) {
+                        mdZipTarget = null
+                        mdZipViewState = MdZipViewState(
+                            targetFile = cachedTarget,
+                            contentDir = java.io.File(cacheDir, "content"),
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false
+                        )
+                        return@LaunchedEffect
+                    }
+                }
+                mdZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                // 非加密的直接解压
+                if (mdZipEncrypted == false) {
+                    mdZipInProgress = true
+                    val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null) }
+                    mdZipInProgress = false
+                    mdZipTarget = null
+                    if (result != null) {
+                        mdZipViewState = MdZipViewState(
+                            targetFile = result.targetFile,
+                            contentDir = result.contentDir,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false
+                        )
+                    } else {
+                        Toast.makeText(context, "未找到可渲染的 md/rst 文件", Toast.LENGTH_SHORT).show()
+                    }
+                }
             }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
@@ -490,6 +572,7 @@ fun FileBrowserApp(
                     showPendingList -> showPendingList = false
                     showPlaybackScreen -> showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
+                    mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     zipCompressTarget != null -> zipCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
@@ -505,7 +588,7 @@ fun FileBrowserApp(
             }
             var debugEnabled by remember { mutableStateOf(false) }
             var hideDotFiles by remember { mutableStateOf(false) }
-            val debugLog = remember { mutableStateListOf<String>() }
+            val debugLog = debugLogTop // 使用顶层调试日志列表
             LaunchedEffect(prefs) {
                 prefs.debugEnabled.collect { debugEnabled = it }
             }
@@ -763,6 +846,7 @@ fun FileBrowserApp(
                         shareFileToGitTarget = model
                     },
                     onUnzipRequest = { zipUnzipTarget = it },
+                    onRequestMdZipView = { mdZipTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
                     onRequestPassView = { model ->
@@ -1391,6 +1475,82 @@ fun FileBrowserApp(
                     dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text("取消") } }
                 )
             }
+            // ---- .md.zip 密码输入对话框（仅加密 zip 时弹出） ----
+            mdZipTarget?.let { target ->
+                val encrypted = mdZipEncrypted
+                if (encrypted == true) {
+                    AlertDialog(
+                        onDismissRequest = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } },
+                        title = { Text("查看压缩 Markdown") },
+                        text = {
+                            Column {
+                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = mdZipPassword,
+                                    onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("ZIP 密码") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !mdZipInProgress
+                                )
+                                if (mdZipInProgress) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (mdZipInProgress || mdZipPassword.isBlank()) return@Button
+                                    mdZipInProgress = true
+                                    val pwd = mdZipPassword.toCharArray()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            extractMdZipToCache(context, target.uri, pwd)
+                                        }
+                                        mdZipInProgress = false
+                                        if (result != null) {
+                                            mdZipTarget = null
+                                            mdZipPassword = ""
+                                            mdZipViewState = MdZipViewState(
+                                                targetFile = result.targetFile,
+                                                contentDir = result.contentDir,
+                                                zipFileName = target.name,
+                                                zipUri = target.uri,
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "解压失败（请检查密码或无可渲染文件）", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) { Text("确定") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
+                            ) { Text("取消") }
+                        }
+                    )
+                } else if (encrypted == null) {
+                    // 正在检测加密状态或正在解压非加密 zip
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("查看压缩 Markdown") },
+                        text = {
+                            Column {
+                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
             zipCompressTarget?.let { target ->
                 val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
                 val parentDirUri = Uri.parse(displayUri)
@@ -1892,6 +2052,19 @@ private fun OperationProgressDialog(progress: OperationProgress) {
 /** 密码保护解密后的内容，暂存于内存中供渲染。 */
 private data class PassDecryptedContent(val innerFileName: String, val decryptedBytes: ByteArray)
 
+/** 判断文件名是否为压缩 Markdown/RST 文件（.md.zip 或 .rst.zip）。 */
+private fun isCompressedMarkdown(name: String): Boolean =
+    name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
+
+/** .md.zip / .rst.zip 查看器状态。 */
+private data class MdZipViewState(
+    val targetFile: java.io.File,
+    val contentDir: java.io.File,
+    val zipFileName: String,
+    val zipUri: Uri,
+    val isEncrypted: Boolean
+)
+
 private sealed class GpgOpState {
     abstract val isDecrypt: Boolean
     abstract val dirUri: String
@@ -1980,6 +2153,7 @@ internal fun FileBrowserScreen(
     onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
+    onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
@@ -2288,6 +2462,8 @@ internal fun FileBrowserScreen(
                                         onNavigate(item.uri.toString())
                                     } else {
                                         when {
+                                            isCompressedMarkdown(item.name) ->
+                                                onRequestMdZipView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
                                             item.name.endsWith(".pass", ignoreCase = true) ->
@@ -2363,6 +2539,15 @@ internal fun FileBrowserScreen(
                             ) { Text("渲染 (Markdown/RST)", color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".zip", ignoreCase = true)) {
+                            if (isCompressedMarkdown(menuTarget.name)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRequestMdZipView(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("查看压缩 Markdown", color = MaterialTheme.colorScheme.onSurface) }
+                            }
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -2877,6 +3062,7 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
+        isCompressedMarkdown(model.name) -> Icons.Default.Article
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
     }
@@ -2885,6 +3071,7 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
         model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
+        isCompressedMarkdown(model.name) -> Color.Blue
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }

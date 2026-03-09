@@ -260,3 +260,104 @@ fun isZipEncrypted(context: Context, zipUri: Uri): Boolean {
     } catch (_: Exception) { false }
     finally { cache.delete() }
 }
+
+// ---- .md.zip 压缩 Markdown 查看 ----
+
+/** 解压 .md.zip 到缓存目录后的结果。 */
+data class MdZipExtractResult(
+    val cacheDir: File,
+    val contentDir: File,
+    val targetFile: File,
+    val isEncrypted: Boolean
+)
+
+/** 获取 .md.zip 的缓存目录，基于 URI 哈希。 */
+fun getMdZipCacheDir(context: Context, zipUri: Uri): File {
+    val key = zipUri.toString().hashCode().toUInt().toString(16)
+    return File(context.cacheDir, "md_zip_cache/$key")
+}
+
+/** 读取缓存时间戳（毫秒），无缓存返回 0。 */
+fun getMdZipCacheTimestamp(cacheDir: File): Long {
+    val tsFile = File(cacheDir, ".cache_ts")
+    return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
+}
+
+/** 在已有缓存目录中查找可渲染的 md/rst 文件，未找到返回 null。 */
+fun findMdZipCacheTarget(cacheDir: File): File? {
+    val contentDir = File(cacheDir, "content")
+    if (!contentDir.exists() || !contentDir.isDirectory) return null
+    return findRenderableFile(contentDir)
+}
+
+private val MD_ZIP_CANDIDATES = listOf("index.md", "index.rst", "README.md", "README.rst")
+
+/** 在目录树中查找第一个可渲染的 md/rst 文件（按 index.md > index.rst > README.md > README.rst 优先级）。 */
+private fun findRenderableFile(dir: File): File? {
+    for (name in MD_ZIP_CANDIDATES) {
+        findFileByName(dir, name)?.let { return it }
+    }
+    return null
+}
+
+/** 递归查找指定名称文件（先查直接子项，再查子目录）。 */
+private fun findFileByName(dir: File, name: String): File? {
+    dir.listFiles()?.forEach { child ->
+        if (!child.isDirectory && child.name.equals(name, ignoreCase = true)) return child
+    }
+    dir.listFiles()?.forEach { child ->
+        if (child.isDirectory) findFileByName(child, name)?.let { return it }
+    }
+    return null
+}
+
+/**
+ * 解压 .md.zip 到缓存目录，查找可渲染的 md/rst 文件。
+ * @return 解压结果，失败返回 null
+ */
+fun extractMdZipToCache(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?
+): MdZipExtractResult? {
+    val cacheDir = getMdZipCacheDir(context, zipUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+        }
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        zip.extractAll(contentDir.path)
+        tmpZip.delete()
+        val target = findRenderableFile(contentDir) ?: run {
+            Log.w(TAG, "extractMdZipToCache: no renderable file found in $zipUri")
+            cacheDir.deleteRecursively()
+            return null
+        }
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+        return MdZipExtractResult(cacheDir, contentDir, target, encrypted)
+    } catch (e: Exception) {
+        Log.e(TAG, "extractMdZipToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    } finally {
+        if (tmpZip.exists()) tmpZip.delete()
+    }
+}
+
+/** 缓存是否标记为加密来源。 */
+fun isMdZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
+
+/** 清理 .md.zip 缓存。 */
+fun cleanMdZipCache(context: Context, zipUri: Uri) {
+    getMdZipCacheDir(context, zipUri).deleteRecursively()
+}

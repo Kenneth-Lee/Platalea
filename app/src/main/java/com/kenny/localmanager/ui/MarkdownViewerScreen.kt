@@ -51,6 +51,8 @@ import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
@@ -240,6 +242,7 @@ private fun InputStream.readBytesUpTo(maxLen: Int): ByteArray {
 }
 
 private const val MD_DEBUG = "MdViewer"
+private const val MDZIP_DEBUG = "MdZipViewer"
 
 private class LinkCallbackHolder { var onLink: (String) -> Unit = {} }
 
@@ -261,16 +264,17 @@ private fun looksLikeHostname(segment: String): Boolean {
     return segment.indexOf('.', idx + 1) > 0 // 至少两个点，避免把 test1.md 当主机名
 }
 
-/** 当前文件所在目录 URI。若为 tree URI 则返回同树的父目录 tree URI，否则用 getDirectoryToOpen。 */
+/** 当前文件所在目录 URI。使用 buildDocumentUriUsingTree 保持在已授权的树中。 */
 private fun getParentDirectoryUri(context: android.content.Context, currentUri: String): Uri? {
     val uri = Uri.parse(currentUri)
     if (currentUri.contains("/tree/")) {
         return try {
             val docId = DocumentsContract.getDocumentId(uri) ?: return null
             val lastSlash = docId.lastIndexOf('/')
-            val parentId = if (lastSlash > 0) docId.substring(0, lastSlash) else docId
-            val authority = uri.authority ?: return null
-            DocumentsContract.buildTreeDocumentUri(authority, parentId)
+            val parentId = if (lastSlash > 0) docId.substring(0, lastSlash) else {
+                DocumentsContract.getTreeDocumentId(uri)
+            }
+            DocumentsContract.buildDocumentUriUsingTree(uri, parentId)
         } catch (_: Exception) {
             Log.d(MD_DEBUG, "[父目录] tree 解析异常 currentUri=$currentUri")
             null
@@ -862,5 +866,388 @@ fun PassContentViewerScreen(
                 }
             )
         }
+    }
+}
+
+/** .md.zip 压缩 Markdown 查看器：从本地缓存目录中读取 md/rst 并渲染，支持本地图片等资源。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MdZipViewerScreen(
+    initialTargetFile: File,
+    contentDir: File,
+    zipFileName: String,
+    onBack: () -> Unit,
+    logDebug: ((String) -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var scalePercent by remember { mutableStateOf(100) }
+    var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
+    val linkHolder = remember { LinkCallbackHolder() }
+
+    var backStack by remember { mutableStateOf(listOf<File>()) }
+    var currentFile by remember { mutableStateOf(initialTargetFile) }
+    var htmlContent by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var pendingInternalFile by remember { mutableStateOf<File?>(null) }
+
+    val katexInline = remember(context) {
+        try {
+            val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
+                .replace("</style>", "<\\/style>")
+            val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            val autoRender = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
+                .replace("</script>", "<\\/script>")
+            Triple(css, katexJs, autoRender)
+        } catch (_: Exception) {
+            Triple("", "", "")
+        }
+    }
+    val (katexCss, katexJs, autoRenderJs) = katexInline
+
+    Log.d(MDZIP_DEBUG, "打开 zipFileName=$zipFileName contentDir=${contentDir.absolutePath} initialTargetFile=${initialTargetFile.absolutePath}")
+    logDebug?.invoke("[MDZIP] 打开 zipFileName=$zipFileName")
+    logDebug?.invoke("[MDZIP] contentDir=${contentDir.absolutePath}")
+    logDebug?.invoke("[MDZIP] initialTargetFile=${initialTargetFile.absolutePath}")
+
+    LaunchedEffect(currentFile) {
+        Log.d(MDZIP_DEBUG, "加载文件 path=${currentFile.absolutePath} exists=${currentFile.exists()} parentDir=${currentFile.parentFile?.absolutePath}")
+        logDebug?.invoke("[MDZIP] 加载文件 path=${currentFile.absolutePath}")
+        logDebug?.invoke("[MDZIP]   exists=${currentFile.exists()}")
+        logDebug?.invoke("[MDZIP]   parentDir=${currentFile.parentFile?.absolutePath}")
+        loading = true
+        loadError = null
+        htmlContent = null
+        withContext(Dispatchers.IO) {
+            try {
+                if (!currentFile.exists()) {
+                    loadError = "文件不存在: ${currentFile.absolutePath}"
+                    Log.e(MDZIP_DEBUG, "文件不存在: ${currentFile.absolutePath}")
+                    logDebug?.invoke("[MDZIP] 文件不存在!")
+                    return@withContext
+                }
+                val bytes = currentFile.readBytes().let {
+                    if (it.size > MAX_MARKDOWN_BYTES) it.copyOf(MAX_MARKDOWN_BYTES) else it
+                }
+                val decoded = bytes.decodeToString()
+                val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
+                Log.d(MDZIP_DEBUG, "文件内容长度=${trimmed.length}")
+                logDebug?.invoke("[MDZIP] 文件内容长度=${trimmed.length}")
+                logDebug?.invoke("[MDZIP] 文件内容前200字符:")
+                logDebug?.invoke(trimmed.take(200))
+                val isRst = currentFile.name.endsWith(".rst", ignoreCase = true)
+                htmlContent = if (isRst) {
+                    rstToHtml(trimmed)
+                } else {
+                    val parser = Parser.builder().build()
+                    val document = parser.parse(trimmed)
+                    val renderer = HtmlRenderer.builder().build()
+                    renderer.render(document)
+                }
+                Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
+                logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
+            } catch (e: Exception) {
+                loadError = "加载失败: ${e.message}"
+                Log.e(MDZIP_DEBUG, "加载异常: ${e.javaClass.name}: ${e.message}", e)
+                logDebug?.invoke("[MDZIP] 加载异常: ${e.javaClass.name}: ${e.message}")
+            }
+        }
+        loading = false
+    }
+
+    LaunchedEffect(pendingInternalFile) {
+        val target = pendingInternalFile ?: return@LaunchedEffect
+        pendingInternalFile = null
+        Log.d(MDZIP_DEBUG, "内链跳转目标 path=${target.absolutePath} exists=${target.exists()} isFile=${target.isFile}")
+        logDebug?.invoke("[MDZIP] 内链跳转目标 path=${target.absolutePath}")
+        logDebug?.invoke("[MDZIP]   exists=${target.exists()}")
+        logDebug?.invoke("[MDZIP]   isFile=${target.isFile}")
+        if (target.exists()) {
+            val name = target.name
+            val isRenderable = name.endsWith(".md", ignoreCase = true) || name.endsWith(".rst", ignoreCase = true)
+            Log.d(MDZIP_DEBUG, "  name=$name isRenderable=$isRenderable")
+            logDebug?.invoke("[MDZIP]   name=$name isRenderable=$isRenderable")
+            if (isRenderable) {
+                backStack = backStack + currentFile
+                currentFile = target
+                Log.d(MDZIP_DEBUG, "  跳转成功 -> ${target.absolutePath}")
+                logDebug?.invoke("[MDZIP]   跳转成功 -> ${target.absolutePath}")
+            } else {
+                Log.d(MDZIP_DEBUG, "  不是 md/rst，忽略")
+                logDebug?.invoke("[MDZIP]   不是 md/rst，忽略")
+            }
+        } else {
+            Log.e(MDZIP_DEBUG, "  文件不存在，跳转失败!")
+            logDebug?.invoke("[MDZIP]   文件不存在，跳转失败!")
+        }
+    }
+
+    linkHolder.onLink = { url ->
+        val parsed = Uri.parse(url)
+        val scheme = parsed.scheme?.lowercase() ?: ""
+        val mainHandler = Handler(Looper.getMainLooper())
+        Log.d(MDZIP_DEBUG, "链接点击 url=$url scheme=$scheme")
+        logDebug?.invoke("[MDZIP] 链接点击 url=$url")
+        logDebug?.invoke("[MDZIP]   scheme=$scheme")
+        val finalUrl = when {
+            scheme == "http" || scheme == "https" || scheme == "mailto" -> url
+            looksLikeExternalUrl(url) -> {
+                if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+            }
+            else -> null
+        }
+        if (finalUrl != null) {
+            Log.d(MDZIP_DEBUG, "  识别为外链 finalUrl=$finalUrl")
+            logDebug?.invoke("[MDZIP]   识别为外链 finalUrl=$finalUrl")
+            mainHandler.post { pendingExternalUrl = finalUrl }
+        } else {
+            val decoded = Uri.decode(if (scheme == "file") parsed.path ?: url else url)
+            Log.d(MDZIP_DEBUG, "  parsed.path=${parsed.path} decoded=$decoded")
+            logDebug?.invoke("[MDZIP]   parsed.path=${parsed.path}")
+            logDebug?.invoke("[MDZIP]   decoded=$decoded")
+            logDebug?.invoke("[MDZIP]   currentFile.parentFile=${currentFile.parentFile?.absolutePath}")
+            val resolved = if (decoded.startsWith("/")) {
+                Log.d(MDZIP_DEBUG, "  绝对路径，直接使用")
+                logDebug?.invoke("[MDZIP]   绝对路径，直接使用")
+                File(decoded).canonicalFile
+            } else {
+                Log.d(MDZIP_DEBUG, "  相对路径，拼接父目录 ${currentFile.parentFile?.absolutePath}")
+                logDebug?.invoke("[MDZIP]   相对路径，拼接父目录")
+                currentFile.parentFile?.let { File(it, decoded).canonicalFile }
+            }
+            val contentDirCanonical = contentDir.canonicalPath
+            Log.d(MDZIP_DEBUG, "  resolved=${resolved?.absolutePath} contentDirCanonical=$contentDirCanonical")
+            logDebug?.invoke("[MDZIP]   resolved=${resolved?.absolutePath}")
+            logDebug?.invoke("[MDZIP]   contentDirCanonical=$contentDirCanonical")
+            val startsWithCheck = resolved?.absolutePath?.startsWith(contentDirCanonical)
+            Log.d(MDZIP_DEBUG, "  startsWith=$startsWithCheck")
+            logDebug?.invoke("[MDZIP]   startsWith=$startsWithCheck")
+            if (resolved != null && startsWithCheck == true) {
+                Log.d(MDZIP_DEBUG, "  通过安全检查，设置 pendingInternalFile")
+                logDebug?.invoke("[MDZIP]   通过安全检查，设置 pendingInternalFile")
+                mainHandler.post { pendingInternalFile = resolved }
+            } else {
+                Log.w(MDZIP_DEBUG, "  未通过安全检查或 resolved 为 null，忽略")
+                logDebug?.invoke("[MDZIP]   未通过安全检查或 resolved 为 null，忽略")
+            }
+        }
+    }
+
+    val doBack: () -> Unit = {
+        if (backStack.isNotEmpty()) {
+            currentFile = backStack.last()
+            backStack = backStack.dropLast(1)
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler { doBack() }
+
+    if (pendingExternalUrl != null) {
+        AlertDialog(
+            onDismissRequest = { pendingExternalUrl = null },
+            title = { Text("打开链接") },
+            text = { Text("将用浏览器打开该链接。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingExternalUrl?.let { u ->
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(u))
+                            context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        } catch (_: Exception) {}
+                    }
+                    pendingExternalUrl = null
+                }) { Text("打开") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("不打开") }
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { doBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (htmlContent != null) {
+                        IconButton(
+                            onClick = {
+                                scalePercent = maxOf(50, scalePercent - 25)
+                                webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                        }
+                        IconButton(
+                            onClick = {
+                                scalePercent = minOf(200, scalePercent + 25)
+                                webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            }
+                        ) {
+                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(loadError!!, color = MaterialTheme.colorScheme.error)
+                }
+                htmlContent != null -> {
+                    val baseUrl = "file://${currentFile.parentFile?.absolutePath}/"
+                    val bg = MaterialTheme.colorScheme.surface
+                    val fg = MaterialTheme.colorScheme.onSurface
+                    val bgHex = "#%02x%02x%02x".format(
+                        (bg.red * 255).toInt(), (bg.green * 255).toInt(), (bg.blue * 255).toInt()
+                    )
+                    val fgHex = "#%02x%02x%02x".format(
+                        (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
+                    )
+                    val fullHtml = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                        <style>$katexCss</style>
+                        <style>
+                            body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
+                            h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
+                            h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
+                            h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
+                            pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
+                            pre { display: block; padding: 12px; overflow-x: auto; }
+                            pre code { padding: 0; background: none; }
+                            .katex { font-size: 1.1em; }
+                            blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
+                            figure { margin: 1em 0; }
+                            figure img { max-width: 100%; height: auto; display: block; }
+                            figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; }
+                            a { color: #2196F3; }
+                            ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
+                            table { border-collapse: collapse; width: 100%; }
+                            th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
+                            th { background: rgba(128,128,128,0.15); }
+                        </style>
+                    </head>
+                    <body>${htmlContent}
+                    <script>$katexJs</script>
+                    <script>$autoRenderJs</script>
+                    <script>
+                    document.addEventListener("DOMContentLoaded", function() {
+                        if (typeof katex !== "undefined") {
+                            document.querySelectorAll(".katex-inline").forEach(function(el) {
+                                var latex = el.getAttribute("data-latex");
+                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {}
+                            });
+                            document.querySelectorAll(".katex-display").forEach(function(el) {
+                                var latex = el.getAttribute("data-latex");
+                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {}
+                            });
+                        }
+                        if (typeof renderMathInElement === "function") {
+                            renderMathInElement(document.body, {
+                                delimiters: [
+                                    { left: "$$", right: "$$", display: true },
+                                    { left: "$", right: "$", display: false },
+                                    { left: "\\\\(", right: "\\\\)", display: false },
+                                    { left: "\\\\[", right: "\\\\]", display: true }
+                                ],
+                                throwOnError: false
+                            });
+                        }
+                    });
+                    </script>
+                    </body>
+                    </html>
+                    """.trimIndent()
+                    val currentFileForClient = currentFile
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                setBackgroundColor(Color.TRANSPARENT)
+                                @SuppressLint("SetJavaScriptEnabled")
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = false
+                                settings.allowFileAccess = true
+                                webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFileForClient) { w ->
+                                    w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                }
+                                webViewRef.value = this
+                                loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { webView ->
+                            webViewRef.value = webView
+                            webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** WebViewClient：拦截链接点击；从本地解压目录加载图片等资源。 */
+private class MdZipWebViewClient(
+    private val linkHolder: LinkCallbackHolder,
+    private val contentDir: File,
+    private val currentFile: File,
+    private val onPageFinished: ((WebView) -> Unit)? = null
+) : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString() ?: return false
+        linkHolder.onLink(url)
+        return true
+    }
+
+    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+        val url = request?.url ?: return null
+        if (request.isForMainFrame) return null
+        if (url.scheme == "file") {
+            val path = url.path ?: return null
+            val file = File(path)
+            if (file.exists() && file.isFile && file.absolutePath.startsWith(contentDir.absolutePath)) {
+                return try {
+                    val mime = when {
+                        file.name.endsWith(".png", true) -> "image/png"
+                        file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
+                        file.name.endsWith(".gif", true) -> "image/gif"
+                        file.name.endsWith(".svg", true) -> "image/svg+xml"
+                        file.name.endsWith(".webp", true) -> "image/webp"
+                        file.name.endsWith(".css", true) -> "text/css"
+                        file.name.endsWith(".js", true) -> "application/javascript"
+                        else -> "application/octet-stream"
+                    }
+                    WebResourceResponse(mime, "UTF-8", FileInputStream(file))
+                } catch (_: Exception) { null }
+            }
+        }
+        return null
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        view?.let { onPageFinished?.invoke(it) }
     }
 }
