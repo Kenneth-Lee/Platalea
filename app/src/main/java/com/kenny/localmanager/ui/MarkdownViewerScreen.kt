@@ -1,6 +1,9 @@
 package com.kenny.localmanager.ui
 
 import android.annotation.SuppressLint
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -48,6 +51,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
@@ -263,6 +267,13 @@ private fun looksLikeExternalUrl(url: String): Boolean {
     val scheme = Uri.parse(s).scheme
     if (!scheme.isNullOrEmpty()) return false
     return s.startsWith("www.") || (s.contains(".") && !s.contains("/"))
+}
+
+/** 从任意 URL 中提取可能的主机名段（如 file:///www.bing.com -> www.bing.com），用于判断是否当外链处理。 */
+private fun hostnameSegmentFromUrl(url: String): String? {
+    val parsed = Uri.parse(url)
+    val seg = parsed.path?.trimStart('/')?.split('/')?.lastOrNull() ?: return null
+    return if (looksLikeHostname(seg)) seg else null
 }
 
 /** 判断是否像主机名（用于 content URI 的 lastPathSegment，如 www.baidu.com）。 */
@@ -523,6 +534,12 @@ fun MarkdownViewerScreen(
                     "https://$segment"
                 } else null
             }
+            scheme == "file" -> {
+                hostnameSegmentFromUrl(url)?.let { seg ->
+                    Log.d(MD_DEBUG, "[链接] file URI 识别为外链 segment=$seg")
+                    "https://$seg"
+                }
+            }
             looksLikeExternalUrl(url) -> {
                 Log.d(MD_DEBUG, "[链接] 识别为外链(无 scheme) url=$url")
                 if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
@@ -551,23 +568,36 @@ fun MarkdownViewerScreen(
     }
 
     if (pendingExternalUrl != null) {
+        val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("打开链接") },
-            text = { Text("将用浏览器打开该链接。") },
+            title = { Text("链接") },
+            text = {
+                Column {
+                    Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    pendingExternalUrl?.let { url ->
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                            context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
-                        } catch (_: Exception) {}
-                    }
+                    try {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
+                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("打开") }
+                }) { Text("复制链接") }
+                TextButton(onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
+                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                    } catch (_: Exception) {}
+                    pendingExternalUrl = null
+                }) { Text("用浏览器打开") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("不打开") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
             }
         )
     }
@@ -1062,6 +1092,7 @@ fun MdZipViewerScreen(
         logDebug?.invoke("[MDZIP]   scheme=$scheme")
         val finalUrl = when {
             scheme == "http" || scheme == "https" || scheme == "mailto" -> url
+            scheme == "file" -> hostnameSegmentFromUrl(url)?.let { seg -> "https://$seg" }
             looksLikeExternalUrl(url) -> {
                 if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
             }
@@ -1116,23 +1147,36 @@ fun MdZipViewerScreen(
     BackHandler { doBack() }
 
     if (pendingExternalUrl != null) {
+        val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("打开链接") },
-            text = { Text("将用浏览器打开该链接。") },
+            title = { Text("链接") },
+            text = {
+                Column {
+                    Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    pendingExternalUrl?.let { u ->
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(u))
-                            context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
-                        } catch (_: Exception) {}
-                    }
+                    try {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
+                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("打开") }
+                }) { Text("复制链接") }
+                TextButton(onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
+                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                    } catch (_: Exception) {}
+                    pendingExternalUrl = null
+                }) { Text("用浏览器打开") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("不打开") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
             }
         )
     }
@@ -1456,23 +1500,36 @@ fun HtmlZipViewerScreen(
     }
 
     if (pendingExternalUrl != null) {
+        val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("打开链接") },
-            text = { Text("将用浏览器打开该链接。") },
+            title = { Text("链接") },
+            text = {
+                Column {
+                    Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
-                    pendingExternalUrl?.let { u ->
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(u))
-                            context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
-                        } catch (_: Exception) {}
-                    }
+                    try {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
+                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("打开") }
+                }) { Text("复制链接") }
+                TextButton(onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
+                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                    } catch (_: Exception) {}
+                    pendingExternalUrl = null
+                }) { Text("用浏览器打开") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("不打开") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
             }
         )
     }
