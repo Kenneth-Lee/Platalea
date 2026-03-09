@@ -1,6 +1,8 @@
 package com.kenny.localmanager.ui
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -69,6 +71,65 @@ fun GitConfigDialog(
     var syncStatus by remember { mutableStateOf<SyncStatus>(SyncStatus.Idle) }
     val syncLogs = remember { mutableStateListOf<String>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val json = org.json.JSONObject().apply {
+                    put("repoUrl", repoUrl)
+                    put("userName", userName)
+                    put("userEmail", userEmail)
+                    put("httpsPassword", httpsPassword)
+                }
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use {
+                            it.write(json.toString(2).toByteArray())
+                        }
+                        true
+                    } catch (_: Exception) { false }
+                }
+                Toast.makeText(context, if (ok) "导出成功" else "导出失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            val text = input.bufferedReader().readText()
+                            org.json.JSONObject(text)
+                        }
+                    } catch (_: Exception) { null }
+                }
+                if (result != null) {
+                    repoUrl = result.optString("repoUrl", "")
+                    userName = result.optString("userName", "")
+                    userEmail = result.optString("userEmail", "")
+                    httpsPassword = result.optString("httpsPassword", "")
+                    configDirty = true
+                    if (configApplied) {
+                        configApplied = false
+                        prefs.setGitConfigApplied(false)
+                    }
+                    prefs.setGitRepoUrl(repoUrl)
+                    prefs.setGitUserName(userName)
+                    prefs.setGitUserEmail(userEmail)
+                    prefs.setGitHttpsPassword(httpsPassword)
+                    Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(context, "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
 
     // 加载保存的配置
     LaunchedEffect(prefs) {
@@ -278,6 +339,26 @@ fun GitConfigDialog(
                 }
 
                 Spacer(Modifier.height(24.dp))
+
+                // 导入/导出按钮
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { exportLauncher.launch("git_config.json") },
+                        enabled = syncStatus !is SyncStatus.Syncing
+                    ) {
+                        Text("导出配置")
+                    }
+                    OutlinedButton(
+                        onClick = { importLauncher.launch(arrayOf("application/json", "application/octet-stream")) },
+                        enabled = syncStatus !is SyncStatus.Syncing
+                    ) {
+                        Text("导入配置")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
 
                 // 操作按钮
                 Row(

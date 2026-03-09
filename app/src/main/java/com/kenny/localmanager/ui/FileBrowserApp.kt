@@ -60,6 +60,9 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -720,29 +723,6 @@ fun FileBrowserApp(
                         }
                     },
                     canGoBack = fileBrowserBackStack.isNotEmpty(),
-                    onChangeRoot = {
-                        val r = rootUri
-                        if (r == null) {
-                            treeLauncher.launch(null)
-                            return@FileBrowserScreen
-                        }
-                        scope.launch {
-                            val count = withContext(Dispatchers.IO) {
-                                cachedTrashUri?.let { trash ->
-                                    val doc = if (trash.toString().contains("/tree/")) {
-                                        DocumentFile.fromTreeUri(context, trash)
-                                    } else {
-                                        DocumentFile.fromSingleUri(context, trash)
-                                    }
-                                    doc?.listFilesSafe()?.size ?: 0
-                                } ?: 0
-                            }
-                            withContext(Dispatchers.Main.immediate) {
-                                if (count > 0) showChangeRootConfirm = true
-                                else treeLauncher.launch(null)
-                            }
-                        }
-                    },
                     onEmptyTrash = rootUri?.let { r ->
                         {
                             scope.launch {
@@ -1076,6 +1056,29 @@ fun FileBrowserApp(
                     onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
                     onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
+                    onChangeRoot = {
+                        val r = rootUri
+                        if (r == null) {
+                            treeLauncher.launch(null)
+                            return@ConfigDialog
+                        }
+                        scope.launch {
+                            val count = withContext(Dispatchers.IO) {
+                                cachedTrashUri?.let { trash ->
+                                    val doc = if (trash.toString().contains("/tree/")) {
+                                        DocumentFile.fromTreeUri(context, trash)
+                                    } else {
+                                        DocumentFile.fromSingleUri(context, trash)
+                                    }
+                                    doc?.listFilesSafe()?.size ?: 0
+                                } ?: 0
+                            }
+                            withContext(Dispatchers.Main.immediate) {
+                                if (count > 0) showChangeRootConfirm = true
+                                else treeLauncher.launch(null)
+                            }
+                        }
+                    }
                 )
             }
             if (showGitConfigDialog) {
@@ -2135,7 +2138,6 @@ internal fun FileBrowserScreen(
     onNavigate: (String) -> Unit,
     onBack: () -> Unit,
     canGoBack: Boolean,
-    onChangeRoot: () -> Unit,
     onEmptyTrash: (() -> Unit)? = null,
     onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
     isViewingTrash: Boolean = false,
@@ -2310,14 +2312,8 @@ internal fun FileBrowserScreen(
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("更换根目录") },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onChangeRoot()
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("把当前过滤结果全部加入待处理列表") },
+                                leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
@@ -2328,6 +2324,7 @@ internal fun FileBrowserScreen(
                             onEmptyTrash?.let { empty ->
                                 DropdownMenuItem(
                                     text = { Text("清空回收站") },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                                     onClick = {
                                         showOverflowMenu = false
                                         empty()
@@ -2336,6 +2333,7 @@ internal fun FileBrowserScreen(
                             }
                             DropdownMenuItem(
                                 text = { Text("播放器") },
+                                leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenPlaybackScreen()
@@ -2343,6 +2341,7 @@ internal fun FileBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("FTP 数据交换") },
+                                leadingIcon = { Icon(Icons.Default.Wifi, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenFtp()
@@ -2350,6 +2349,7 @@ internal fun FileBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("Git 文件共享") },
+                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenFileShare()
@@ -2357,6 +2357,7 @@ internal fun FileBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("配置") },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenConfig()
@@ -2364,6 +2365,7 @@ internal fun FileBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text("关于") },
+                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenAbout()
@@ -3069,6 +3071,7 @@ fun FileItem(
         model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
         isCompressedMarkdown(model.name) -> Icons.Default.Article
+        model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
     }
@@ -3077,7 +3080,7 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
         model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
-        isCompressedMarkdown(model.name) -> Color.Blue
+        model.name.endsWith(".zip", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
@@ -3986,7 +3989,8 @@ fun ConfigDialog(
     ftpTimeoutMinutes: Int,
     onFtpTimeoutMinutesChange: (Int) -> Unit,
     onOpenGitConfig: () -> Unit,
-    onManageKeys: () -> Unit
+    onManageKeys: () -> Unit,
+    onChangeRoot: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
@@ -4089,6 +4093,11 @@ fun ConfigDialog(
                 Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text("Git 配置") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { onDismiss(); onChangeRoot() },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("更换根目录") }
                 Spacer(Modifier.height(24.dp))
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }

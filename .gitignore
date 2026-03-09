@@ -32,3 +32,5 @@ outputs/
 
 # Logs
 *.log
+
+*.swp
