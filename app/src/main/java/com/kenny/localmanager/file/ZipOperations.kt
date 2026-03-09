@@ -267,7 +267,7 @@ fun isZipEncrypted(context: Context, zipUri: Uri): Boolean {
 data class MdZipExtractResult(
     val cacheDir: File,
     val contentDir: File,
-    val targetFile: File,
+    val targetFile: File?,  // null 表示未找到可渲染的 md/rst 文件
     val isEncrypted: Boolean
 )
 
@@ -283,21 +283,79 @@ fun getMdZipCacheTimestamp(cacheDir: File): Long {
     return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
 }
 
-/** 在已有缓存目录中查找可渲染的 md/rst 文件，未找到返回 null。 */
-fun findMdZipCacheTarget(cacheDir: File): File? {
+/** 在已有缓存目录中查找（或生成）可渲染的 md/rst 文件。
+ * @param isRstZip true 表示来源为 .rst.zip，优先查找 rst；false 表示 .md.zip，优先查找 md。 */
+fun findMdZipCacheTarget(cacheDir: File, isRstZip: Boolean): File? {
     val contentDir = File(cacheDir, "content")
     if (!contentDir.exists() || !contentDir.isDirectory) return null
-    return findRenderableFile(contentDir)
+    return findOrCreateRenderableFile(contentDir, isRstZip)
 }
 
-private val MD_ZIP_CANDIDATES = listOf("index.md", "index.rst", "README.md", "README.rst")
+/** 根据 zip 类型确定搜索候选文件名。 */
+private fun candidatesForZipType(isRstZip: Boolean): List<String> =
+    if (isRstZip) listOf("index.rst", "README.rst") else listOf("index.md", "README.md")
 
-/** 在目录树中查找第一个可渲染的 md/rst 文件（按 index.md > index.rst > README.md > README.rst 优先级）。 */
-private fun findRenderableFile(dir: File): File? {
-    for (name in MD_ZIP_CANDIDATES) {
-        findFileByName(dir, name)?.let { return it }
+/**
+ * 在目录树中查找 index/README 文件。若未找到，自动在有效目录中生成一个包含
+ * 同类文件链接列表的 index 文件。
+ */
+private fun findOrCreateRenderableFile(dir: File, isRstZip: Boolean): File? {
+    val effectiveDir = unwrapSingleChildDir(dir)
+    // 1. 查找已有的 index / README
+    for (name in candidatesForZipType(isRstZip)) {
+        findFileByName(effectiveDir, name)?.let { return it }
     }
-    return null
+    // 2. 收集同类文件
+    val ext = if (isRstZip) "rst" else "md"
+    val files = collectFilesWithExtension(effectiveDir, ext)
+    if (files.isEmpty()) return null
+    // 3. 生成 index
+    val indexFile = File(effectiveDir, "index.$ext")
+    indexFile.writeText(generateIndexContent(files, effectiveDir, isRstZip))
+    return indexFile
+}
+
+/** 递归收集指定扩展名的文件，返回相对于 baseDir 的路径列表（排序后）。 */
+private fun collectFilesWithExtension(baseDir: File, ext: String): List<Pair<String, File>> {
+    val result = mutableListOf<Pair<String, File>>()
+    fun walk(dir: File, prefix: String) {
+        dir.listFiles()?.sortedBy { it.name.lowercase() }?.forEach { child ->
+            val rel = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+            if (child.isDirectory) {
+                walk(child, rel)
+            } else if (child.name.endsWith(".$ext", ignoreCase = true)) {
+                result.add(rel to child)
+            }
+        }
+    }
+    walk(baseDir, "")
+    return result
+}
+
+/** 生成 index 文件内容，包含所有同类文件的链接。 */
+private fun generateIndexContent(
+    files: List<Pair<String, File>>,
+    baseDir: File,
+    isRstZip: Boolean
+): String {
+    val sb = StringBuilder()
+    if (isRstZip) {
+        sb.appendLine("目录")
+        sb.appendLine("====")
+        sb.appendLine()
+        for ((rel, _) in files) {
+            val label = rel.substringBeforeLast('.').replace("/", " / ")
+            sb.appendLine("- `$label <$rel>`_")
+        }
+    } else {
+        sb.appendLine("# 目录")
+        sb.appendLine()
+        for ((rel, _) in files) {
+            val label = rel.substringBeforeLast('.').replace("/", " / ")
+            sb.appendLine("- [$label]($rel)")
+        }
+    }
+    return sb.toString()
 }
 
 /** 递归查找指定名称文件（先查直接子项，再查子目录）。 */
@@ -312,14 +370,17 @@ private fun findFileByName(dir: File, name: String): File? {
 }
 
 /**
- * 解压 .md.zip 到缓存目录，查找可渲染的 md/rst 文件。
- * @return 解压结果，失败返回 null
+ * 解压 .md.zip / .rst.zip 到缓存目录，查找（或生成）可渲染的文件。
+ * @param zipFileName 原始 zip 文件名，用于判断是 .md.zip 还是 .rst.zip
+ * @return 解压结果（targetFile 可能为 null 表示压缩包为空），解压失败返回 null
  */
 fun extractMdZipToCache(
     context: Context,
     zipUri: Uri,
-    password: CharArray?
+    password: CharArray?,
+    zipFileName: String
 ): MdZipExtractResult? {
+    val isRstZip = zipFileName.endsWith(".rst.zip", ignoreCase = true)
     val cacheDir = getMdZipCacheDir(context, zipUri)
     cacheDir.deleteRecursively()
     cacheDir.mkdirs()
@@ -337,10 +398,9 @@ fun extractMdZipToCache(
         val contentDir = File(cacheDir, "content").apply { mkdirs() }
         zip.extractAll(contentDir.path)
         tmpZip.delete()
-        val target = findRenderableFile(contentDir) ?: run {
-            Log.w(TAG, "extractMdZipToCache: no renderable file found in $zipUri")
-            cacheDir.deleteRecursively()
-            return null
+        val target = findOrCreateRenderableFile(contentDir, isRstZip)
+        if (target == null) {
+            Log.w(TAG, "extractMdZipToCache: no files found in $zipUri")
         }
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
@@ -360,4 +420,33 @@ fun isMdZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted"
 /** 清理 .md.zip 缓存。 */
 fun cleanMdZipCache(context: Context, zipUri: Uri) {
     getMdZipCacheDir(context, zipUri).deleteRecursively()
+}
+
+/** 递归列出目录中的所有文件（相对路径），用于显示目录内容。
+ *  如果顶层只有一个子目录，则跳入该子目录显示其内容。 */
+fun listMdZipContentFiles(contentDir: File): List<String> {
+    val effectiveDir = unwrapSingleChildDir(contentDir)
+    val result = mutableListOf<String>()
+    fun walk(dir: File, prefix: String) {
+        dir.listFiles()?.sortedBy { it.name.lowercase() }?.forEach { child ->
+            val relativePath = if (prefix.isEmpty()) child.name else "$prefix/${child.name}"
+            if (child.isDirectory) {
+                result.add("$relativePath/")
+                walk(child, relativePath)
+            } else {
+                result.add(relativePath)
+            }
+        }
+    }
+    walk(effectiveDir, "")
+    return result
+}
+
+/** 如果目录中只有一个子目录（无其他文件），则递归展开返回该子目录。 */
+private fun unwrapSingleChildDir(dir: File): File {
+    val children = dir.listFiles() ?: return dir
+    if (children.size == 1 && children[0].isDirectory) {
+        return unwrapSingleChildDir(children[0])
+    }
+    return dir
 }

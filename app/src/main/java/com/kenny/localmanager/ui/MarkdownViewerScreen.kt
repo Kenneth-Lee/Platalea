@@ -14,8 +14,14 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ZoomIn
@@ -40,16 +46,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
+import com.kenny.localmanager.file.listMdZipContentFiles
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.gpg.GpgHelper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
+import org.commonmark.ext.gfm.tables.TablesExtension
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -459,9 +468,10 @@ fun MarkdownViewerScreen(
                 htmlContent = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
-                    val parser = Parser.builder().build()
+                    val extensions = listOf(TablesExtension.create())
+                    val parser = Parser.builder().extensions(extensions).build()
                     val document = parser.parse(trimmed)
-                    val renderer = HtmlRenderer.builder().build()
+                    val renderer = HtmlRenderer.builder().extensions(extensions).build()
                     renderer.render(document)
                 }
                 Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
@@ -737,9 +747,10 @@ fun PassContentViewerScreen(
         val isRst = innerFileName.endsWith(".rst", ignoreCase = true)
         if (isRst) rstToHtml(trimmed)
         else {
-            val parser = org.commonmark.parser.Parser.builder().build()
+        val extensions = listOf(TablesExtension.create())
+            val parser = org.commonmark.parser.Parser.builder().extensions(extensions).build()
             val document = parser.parse(trimmed)
-            val renderer = org.commonmark.renderer.html.HtmlRenderer.builder().build()
+            val renderer = org.commonmark.renderer.html.HtmlRenderer.builder().extensions(extensions).build()
             renderer.render(document)
         }
     }
@@ -873,12 +884,23 @@ fun PassContentViewerScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MdZipViewerScreen(
-    initialTargetFile: File,
+    initialTargetFile: File?,  // null 表示未找到可渲染文件
     contentDir: File,
     zipFileName: String,
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
+    // 无可渲染文件时显示目录内容
+    if (initialTargetFile == null) {
+        MdZipNoTargetScreen(
+            contentDir = contentDir,
+            zipFileName = zipFileName,
+            onBack = onBack,
+            logDebug = logDebug
+        )
+        return
+    }
+
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
@@ -941,9 +963,10 @@ fun MdZipViewerScreen(
                 htmlContent = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
-                    val parser = Parser.builder().build()
+                    val extensions = listOf(TablesExtension.create())
+                    val parser = Parser.builder().extensions(extensions).build()
                     val document = parser.parse(trimmed)
-                    val renderer = HtmlRenderer.builder().build()
+                    val renderer = HtmlRenderer.builder().extensions(extensions).build()
                     renderer.render(document)
                 }
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
@@ -1249,5 +1272,92 @@ private class MdZipWebViewClient(
     override fun onPageFinished(view: WebView?, url: String?) {
         super.onPageFinished(view, url)
         view?.let { onPageFinished?.invoke(it) }
+    }
+}
+
+/** 无可渲染文件时显示目录内容的界面。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MdZipNoTargetScreen(
+    contentDir: File,
+    zipFileName: String,
+    onBack: () -> Unit,
+    logDebug: ((String) -> Unit)? = null
+) {
+    val isRstZip = zipFileName.endsWith(".rst.zip", ignoreCase = true)
+    val fileList = remember(contentDir) {
+        listMdZipContentFiles(contentDir)
+    }
+
+    logDebug?.invoke("[MDZIP] 无可渲染文件，显示目录内容")
+    logDebug?.invoke("[MDZIP] contentDir=${contentDir.absolutePath}")
+    logDebug?.invoke("[MDZIP] 文件数量=${fileList.size}")
+    logDebug?.invoke("[MDZIP] contentDir.exists=${contentDir.exists()}, listFiles=${contentDir.listFiles()?.map { it.name }}")
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { onBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp)
+        ) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "未找到可打开的文件",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+            Spacer(Modifier.height(8.dp))
+            val ext = if (isRstZip) ".rst" else ".md"
+            Text(
+                text = "压缩包中未找到 index${ext}、README${ext} 文件，也没有其他 ${ext} 文件可生成索引。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "压缩包内容：",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(Modifier.height(8.dp))
+            if (fileList.isEmpty()) {
+                Text(
+                    text = "（空目录）",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    items(fileList) { filePath ->
+                        Text(
+                            text = filePath,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (filePath.endsWith("/")) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 }

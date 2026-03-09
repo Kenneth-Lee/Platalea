@@ -504,36 +504,42 @@ fun FileBrowserApp(
                 val cacheDir = getMdZipCacheDir(context, target.uri)
                 val cacheTs = getMdZipCacheTimestamp(cacheDir)
                 if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val cachedTarget = findMdZipCacheTarget(cacheDir)
-                    if (cachedTarget != null) {
+                    val contentDir = java.io.File(cacheDir, "content")
+                    val hasContent = contentDir.exists() &&
+                        (contentDir.listFiles()?.isNotEmpty() == true)
+                    if (hasContent) {
+                        val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
+                        val cachedTarget = findMdZipCacheTarget(cacheDir, isRstZip)
                         mdZipTarget = null
                         mdZipViewState = MdZipViewState(
                             targetFile = cachedTarget,
-                            contentDir = java.io.File(cacheDir, "content"),
+                            contentDir = contentDir,
                             zipFileName = target.name,
                             zipUri = target.uri,
                             isEncrypted = false
                         )
                         return@LaunchedEffect
                     }
+                    // 缓存内容为空，废弃并重新解压
+                    cacheDir.deleteRecursively()
                 }
                 mdZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
                 // 非加密的直接解压
                 if (mdZipEncrypted == false) {
                     mdZipInProgress = true
-                    val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null) }
+                    val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null, target.name) }
                     mdZipInProgress = false
                     mdZipTarget = null
                     if (result != null) {
                         mdZipViewState = MdZipViewState(
-                            targetFile = result.targetFile,
+                            targetFile = result.targetFile,  // 可能为 null
                             contentDir = result.contentDir,
                             zipFileName = target.name,
                             zipUri = target.uri,
                             isEncrypted = false
                         )
                     } else {
-                        Toast.makeText(context, "未找到可渲染的 md/rst 文件", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
                     }
                 }
             }
@@ -1509,21 +1515,21 @@ fun FileBrowserApp(
                                     val pwd = mdZipPassword.toCharArray()
                                     scope.launch {
                                         val result = withContext(Dispatchers.IO) {
-                                            extractMdZipToCache(context, target.uri, pwd)
+                                            extractMdZipToCache(context, target.uri, pwd, target.name)
                                         }
                                         mdZipInProgress = false
                                         if (result != null) {
                                             mdZipTarget = null
                                             mdZipPassword = ""
                                             mdZipViewState = MdZipViewState(
-                                                targetFile = result.targetFile,
+                                                targetFile = result.targetFile,  // 可能为 null
                                                 contentDir = result.contentDir,
                                                 zipFileName = target.name,
                                                 zipUri = target.uri,
                                                 isEncrypted = true
                                             )
                                         } else {
-                                            Toast.makeText(context, "解压失败（请检查密码或无可渲染文件）", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 }
@@ -2058,7 +2064,7 @@ private fun isCompressedMarkdown(name: String): Boolean =
 
 /** .md.zip / .rst.zip 查看器状态。 */
 private data class MdZipViewState(
-    val targetFile: java.io.File,
+    val targetFile: java.io.File?,  // null 表示未找到可渲染文件，此时显示目录内容
     val contentDir: java.io.File,
     val zipFileName: String,
     val zipUri: Uri,

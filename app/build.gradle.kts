@@ -88,6 +88,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.1")
     implementation("org.commonmark:commonmark:0.24.0")
+    implementation("org.commonmark:commonmark-ext-gfm-tables:0.24.0")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.12.0.202106070339-r")
     implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache:5.12.0.202106070339-r") {
