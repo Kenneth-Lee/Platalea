@@ -73,6 +73,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,11 +108,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.geometry.Size
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.getEpubChapterFile
 
@@ -2423,13 +2432,16 @@ private class GestureWebView(
 /** PDF 查看器页面数据 */
 data class PdfPageData(
     val pageIndex: Int,
-    val bitmap: Bitmap
+    val bitmap: Bitmap,
+    val pageWidth: Int,
+    val pageHeight: Int
 )
 
 /**
  * PDF 文件查看器
  * 使用 Android 内置的 PdfRenderer 渲染 PDF 页面
  * 按需加载页面，支持大文件
+ * 支持左右点击翻页，自适应屏幕宽度
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -2440,33 +2452,47 @@ fun PdfViewerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val configuration = LocalConfiguration.current
+    val screenWidthPx = with(LocalDensity.current) { configuration.screenWidthDp.dp.toPx() }
 
     var pageCount by remember { mutableStateOf(0) }
     var currentPage by remember { mutableStateOf(0) }
     var currentPageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var pageLoading by remember { mutableStateOf(false) }
-    var zoom by remember { mutableStateOf(1f) }
+    var fitToWidthZoom by remember { mutableStateOf<Float?>(null) } // 自适应宽度的缩放比例
+    var zoom by remember { mutableStateOf(1f) } // 用户调整的缩放（相对于自适应）
     var isLoading by remember { mutableStateOf(true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+    var pageInfo by remember { mutableStateOf<Pair<Int, Int>?>(null) } // 原始页面宽高
     // 缓存最近渲染的页面
     val pageCache = remember { mutableMapOf<Int, Bitmap>() }
 
-    // 初始加载：只获取页数
+    // 初始加载：获取页数和第一页尺寸
     LaunchedEffect(uri) {
         isLoading = true
         errorMsg = null
         try {
-            val count = withContext(Dispatchers.IO) {
+            val result = withContext(Dispatchers.IO) {
                 val pfd = context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
-                    ?: return@withContext 0
+                    ?: return@withContext null
                 val renderer = PdfRenderer(pfd)
                 val c = renderer.pageCount
+                // 获取第一页尺寸用于计算自适应缩放
+                val firstPage = if (c > 0) renderer.openPage(0) else null
+                val w = firstPage?.width ?: 0
+                val h = firstPage?.height ?: 0
+                firstPage?.close()
                 renderer.close()
                 pfd.close()
-                c
+                Triple(c, w, h)
             }
-            if (count > 0) {
-                pageCount = count
+            if (result != null && result.first > 0) {
+                pageCount = result.first
+                pageInfo = Pair(result.second, result.third)
+                // 计算自适应宽度的缩放比例
+                if (result.second > 0 && screenWidthPx > 0) {
+                    fitToWidthZoom = screenWidthPx / result.second.toFloat()
+                }
             } else {
                 errorMsg = "PDF 文件为空"
             }
@@ -2482,7 +2508,7 @@ fun PdfViewerScreen(
         if (pageIndex !in 0 until pageCount) return
 
         // 检查缓存
-        val cacheKey = (pageIndex * 100 + (zoomLevel * 10).toInt())
+        val cacheKey = (pageIndex * 1000 + (zoomLevel * 100).toInt())
         pageCache[cacheKey]?.let {
             currentPageBitmap = it
             return
@@ -2508,9 +2534,9 @@ fun PdfViewerScreen(
                     bmp
                 }
                 if (bitmap != null) {
-                    // 清理旧缓存，只保留最近的5页
-                    if (pageCache.size > 5) {
-                        pageCache.keys.sorted().take(pageCache.size - 5).forEach { pageCache.remove(it) }
+                    // 清理旧缓存，只保留最近的3页
+                    if (pageCache.size > 3) {
+                        pageCache.keys.sorted().take(pageCache.size - 3).forEach { pageCache.remove(it) }
                     }
                     pageCache[cacheKey] = bitmap
                     currentPageBitmap = bitmap
@@ -2523,9 +2549,25 @@ fun PdfViewerScreen(
     }
 
     // 当页码或缩放变化时渲染页面
-    LaunchedEffect(currentPage, zoom, pageCount) {
-        if (pageCount > 0 && !isLoading) {
-            renderPage(currentPage, zoom)
+    LaunchedEffect(currentPage, zoom, pageCount, fitToWidthZoom) {
+        if (pageCount > 0 && !isLoading && fitToWidthZoom != null) {
+            val actualZoom = fitToWidthZoom!! * zoom
+            renderPage(currentPage, actualZoom)
+        }
+    }
+
+    // 处理点击翻页
+    fun handleTap(x: Float, screenWidth: Float) {
+        val edgeZone = screenWidth * 0.3f
+        when {
+            x < edgeZone -> {
+                // 左侧点击 -> 上一页
+                if (currentPage > 0) currentPage--
+            }
+            x > screenWidth - edgeZone -> {
+                // 右侧点击 -> 下一页
+                if (currentPage < pageCount - 1) currentPage++
+            }
         }
     }
 
@@ -2543,15 +2585,13 @@ fun PdfViewerScreen(
                 actions = {
                     // 缩放按钮
                     IconButton(onClick = {
-                        val newZoom = (zoom - 0.25f).coerceAtLeast(0.5f)
-                        zoom = newZoom
+                        zoom = (zoom - 0.25f).coerceAtLeast(0.5f)
                     }) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
                     }
                     Text("${(zoom * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
                     IconButton(onClick = {
-                        val newZoom = (zoom + 0.25f).coerceAtMost(3f)
-                        zoom = newZoom
+                        zoom = (zoom + 0.25f).coerceAtMost(3f)
                     }) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "放大")
                     }
@@ -2568,7 +2608,7 @@ fun PdfViewerScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 ) {
                     IconButton(
-                        onClick = { currentPage = (currentPage - 1).coerceAtLeast(0) },
+                        onClick = { if (currentPage > 0) currentPage-- },
                         enabled = currentPage > 0
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一页")
@@ -2579,7 +2619,7 @@ fun PdfViewerScreen(
                         style = MaterialTheme.typography.bodyMedium
                     )
                     IconButton(
-                        onClick = { currentPage = (currentPage + 1).coerceAtMost(pageCount - 1) },
+                        onClick = { if (currentPage < pageCount - 1) currentPage++ },
                         enabled = currentPage < pageCount - 1
                     ) {
                         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "下一页")
@@ -2596,7 +2636,11 @@ fun PdfViewerScreen(
         ) {
             when {
                 isLoading -> {
-                    Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                        Spacer(Modifier.height(8.dp))
+                        Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
                 errorMsg != null -> {
                     Text(errorMsg!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
@@ -2605,26 +2649,57 @@ fun PdfViewerScreen(
                     Text("正在渲染页面...", style = MaterialTheme.typography.bodyLarge)
                 }
                 currentPageBitmap != null -> {
-                    Column(
-                        Modifier
+                    // 使用 Box 包裹并添加点击检测
+                    val boxWidth = with(LocalDensity.current) { currentPageBitmap!!.width.toDp() }
+                    var boxSizePx by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
+
+                    Box(
+                        modifier = Modifier
                             .fillMaxSize()
-                            .verticalScroll(rememberScrollState()),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .onGloballyPositioned { coordinates ->
+                                boxSizePx = androidx.compose.ui.geometry.Size(
+                                    coordinates.size.width.toFloat(),
+                                    coordinates.size.height.toFloat()
+                                )
+                            }
+                            .pointerInput(Unit) {
+                                detectTapGestures { offset ->
+                                    handleTap(offset.x, boxSizePx.width)
+                                }
+                            }
                     ) {
-                        Image(
-                            bitmap = currentPageBitmap!!.asImageBitmap(),
-                            contentDescription = "第 ${currentPage + 1} 页",
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    if (pageLoading) {
-                        // 显示加载指示器
-                        androidx.compose.foundation.layout.Box(
-                            Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.BottomCenter
+                        Column(
+                            Modifier
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
+                            Image(
+                                bitmap = currentPageBitmap!!.asImageBitmap(),
+                                contentDescription = "第 ${currentPage + 1} 页",
+                                modifier = Modifier
+                                    .wrapContentSize()
+                                    .pointerInput(Unit) {
+                                        // 长按检测 - 显示提示（PDF作为位图不支持文字选择）
+                                        detectTapGestures(
+                                            onLongPress = {
+                                                Toast.makeText(
+                                                    context,
+                                                    "提示：PDF 页面渲染为图像，暂不支持文字选择。\n如需选择文字，请使用专业 PDF 阅读器。",
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        )
+                                    }
+                            )
+                        }
+                        if (pageLoading) {
                             androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.padding(16.dp)
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(16.dp)
                             )
                         }
                     }
