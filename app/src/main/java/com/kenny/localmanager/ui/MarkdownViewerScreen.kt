@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.AlertDialog
@@ -68,6 +70,15 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.BottomAppBar
+import com.kenny.localmanager.file.EpubExtractResult
+import com.kenny.localmanager.file.getEpubChapterFile
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
@@ -1706,3 +1717,356 @@ private fun HtmlZipNoIndexScreen(
         }
     }
 }
+
+// ---- EPUB 电子书查看器 ----
+
+private const val EPUB_DEBUG = "EpubViewer"
+
+/** EPUB 电子书查看器：支持章节导航、目录、缩放。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun EpubViewerScreen(
+    extractResult: EpubExtractResult,
+    zipFileName: String,
+    onBack: () -> Unit,
+    logDebug: ((String) -> Unit)? = null
+) {
+    val context = LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var scalePercent by remember { mutableStateOf(100) }
+    var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
+    var showToc by remember { mutableStateOf(false) }
+    var currentChapterIndex by remember { mutableStateOf(0) }
+
+    val chapters = extractResult.chapters
+    val contentDir = extractResult.contentDir
+    val opfDir = extractResult.opfDir
+
+    logDebug?.invoke("[EPUB] 打开 $zipFileName")
+    logDebug?.invoke("[EPUB] 章节数=${chapters.size}")
+    logDebug?.invoke("[EPUB] contentDir=${contentDir.absolutePath}")
+
+    val currentChapter = chapters.getOrNull(currentChapterIndex)
+    val chapterFile = if (currentChapter != null) {
+        getEpubChapterFile(extractResult, currentChapter)
+    } else null
+
+    // 跳转到指定章节
+    fun goToChapter(index: Int) {
+        if (index in chapters.indices) {
+            currentChapterIndex = index
+            showToc = false
+        }
+    }
+
+    BackHandler {
+        if (showToc) {
+            showToc = false
+        } else {
+            onBack()
+        }
+    }
+
+    // 外链对话框
+    if (pendingExternalUrl != null) {
+        val urlToShow = pendingExternalUrl!!
+        AlertDialog(
+            onDismissRequest = { pendingExternalUrl = null },
+            title = { Text("链接") },
+            text = {
+                Column {
+                    Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
+                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {}
+                    pendingExternalUrl = null
+                }) { Text("复制链接") }
+                TextButton(onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
+                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                    } catch (_: Exception) {}
+                    pendingExternalUrl = null
+                }) { Text("用浏览器打开") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+            }
+        )
+    }
+
+    // 目录对话框
+    if (showToc) {
+        AlertDialog(
+            onDismissRequest = { showToc = false },
+            title = { Text("目录 - ${extractResult.bookInfo.title}") },
+            text = {
+                LazyColumn {
+                    items(chapters.size) { index ->
+                        val chapter = chapters[index]
+                        TextButton(
+                            onClick = { goToChapter(index) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = chapter.title ?: chapter.href.substringBeforeLast("."),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (index == currentChapterIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showToc = false }) { Text("关闭") }
+            }
+        )
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                        if (currentChapter != null) {
+                            Text(
+                                currentChapter.title ?: currentChapter.href.substringBeforeLast("."),
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        if (showToc) {
+                            showToc = false
+                        } else {
+                            onBack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    // 目录按钮
+                    IconButton(onClick = { showToc = true }) {
+                        Icon(Icons.Default.Menu, contentDescription = "目录")
+                    }
+                    // 缩小
+                    IconButton(onClick = {
+                        scalePercent = maxOf(50, scalePercent - 25)
+                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                    }) {
+                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                    }
+                    // 放大
+                    IconButton(onClick = {
+                        scalePercent = minOf(200, scalePercent + 25)
+                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                    }) {
+                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        },
+        bottomBar = {
+            if (chapters.size > 1) {
+                androidx.compose.material3.BottomAppBar(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        // 上一章
+                        TextButton(
+                            onClick = {
+                                if (currentChapterIndex > 0) {
+                                    currentChapterIndex--
+                                }
+                            },
+                            enabled = currentChapterIndex > 0
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一章")
+                            Spacer(Modifier.width(4.dp))
+                            Text("上一章")
+                        }
+
+                        // 页码显示
+                        Text(
+                            "${currentChapterIndex + 1} / ${chapters.size}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        // 下一章
+                        TextButton(
+                            onClick = {
+                                if (currentChapterIndex < chapters.size - 1) {
+                                    currentChapterIndex++
+                                }
+                            },
+                            enabled = currentChapterIndex < chapters.size - 1
+                        ) {
+                            Text("下一章")
+                            Spacer(Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "下一章")
+                        }
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = if (chapters.size > 1) 56.dp else 0.dp)
+        ) {
+            when {
+                chapterFile == null || !chapterFile.exists() -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("无法加载章节内容", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                else -> {
+                    // 章节内图片/链接相对路径是相对于当前章节文件所在目录，必须用章节目录作为 baseUrl
+                    val chapterBaseDir = chapterFile.parentFile ?: opfDir
+                    val baseUrl = "file://${chapterBaseDir.absolutePath}/"
+                    val bg = MaterialTheme.colorScheme.surface
+                    val fg = MaterialTheme.colorScheme.onSurface
+                    val bgHex = "#%02x%02x%02x".format(
+                        (bg.red * 255).toInt(), (bg.green * 255).toInt(), (bg.blue * 255).toInt()
+                    )
+                    val fgHex = "#%02x%02x%02x".format(
+                        (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
+                    )
+
+                    val chapterFileForUpdate = chapterFile
+                    AndroidView(
+                        factory = { ctx ->
+                            WebView(ctx).apply {
+                                setBackgroundColor(Color.TRANSPARENT)
+                                @SuppressLint("SetJavaScriptEnabled")
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = false
+                                settings.allowFileAccess = true
+                                webViewClient = EpubWebViewClient(opfDir) { url ->
+                                    pendingExternalUrl = url
+                                }
+                                webViewRef.value = this
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        update = { webView ->
+                            webViewRef.value = webView
+                            try {
+                                val htmlContent = chapterFileForUpdate.readText()
+                                // 注入基础样式
+                                val styledHtml = """
+                                    <!DOCTYPE html>
+                                    <html>
+                                    <head>
+                                        <meta charset="UTF-8">
+                                        <meta name="viewport" content="width=device-width, initial-scale=1">
+                                        <style>
+                                            body {
+                                                background: $bgHex;
+                                                color: $fgHex;
+                                                font-size: 16px;
+                                                padding: 16px;
+                                                line-height: 1.6;
+                                                font-family: sans-serif;
+                                            }
+                                            img { max-width: 100%; height: auto; }
+                                            a { color: #2196F3; }
+                                        </style>
+                                    </head>
+                                    <body>$htmlContent</body>
+                                    </html>
+                                """.trimIndent()
+                                webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
+                                webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            } catch (e: Exception) {
+                                Log.e(EPUB_DEBUG, "加载章节失败", e)
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** WebViewClient：拦截外链，加载本地资源。 */
+private class EpubWebViewClient(
+    private val opfDir: File,
+    private val onExternalUrl: (String) -> Unit
+) : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString() ?: return false
+        if (!request.isForMainFrame) return false
+        val scheme = request.url?.scheme?.lowercase() ?: ""
+        when {
+            scheme == "http" || scheme == "https" || scheme == "mailto" -> {
+                onExternalUrl(url)
+                return true
+            }
+            scheme == "file" -> {
+                val path = request.url?.path ?: return false
+                val file = File(path)
+                // 只允许访问opfDir内的文件
+                if (file.exists() && file.absolutePath.startsWith(opfDir.absolutePath)) {
+                    return false
+                }
+            }
+        }
+        return false
+    }
+
+    override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+        val url = request?.url ?: return null
+        if (request.isForMainFrame) return null
+        if (url.scheme == "file") {
+            val path = url.path ?: return null
+            val file = File(path)
+            if (file.exists() && file.isFile && file.absolutePath.startsWith(opfDir.absolutePath)) {
+                return try {
+                    val mime = when {
+                        file.name.endsWith(".png", true) -> "image/png"
+                        file.name.endsWith(".jpg", true) || file.name.endsWith(".jpeg", true) -> "image/jpeg"
+                        file.name.endsWith(".gif", true) -> "image/gif"
+                        file.name.endsWith(".svg", true) -> "image/svg+xml"
+                        file.name.endsWith(".webp", true) -> "image/webp"
+                        file.name.endsWith(".css", true) -> "text/css"
+                        file.name.endsWith(".js", true) -> "application/javascript"
+                        file.name.endsWith(".woff", true) -> "font/woff"
+                        file.name.endsWith(".woff2", true) -> "font/woff2"
+                        file.name.endsWith(".ttf", true) -> "font/ttf"
+                        else -> "application/octet-stream"
+                    }
+                    WebResourceResponse(mime, "UTF-8", FileInputStream(file))
+                } catch (_: Exception) { null }
+            }
+        }
+        return null
+    }
+}
+
+private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[index] else null

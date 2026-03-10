@@ -535,3 +535,231 @@ fun cleanHtmlZipCache(context: Context, zipUri: Uri) {
 
 /** 递归列出 .html.zip 内容目录中的所有文件（相对路径）。 */
 fun listHtmlZipContentFiles(contentDir: File): List<String> = listMdZipContentFiles(contentDir)
+
+// ---- EPUB 电子书查看 ----
+
+/** EPUB 章节信息 */
+data class EpubChapter(
+    val id: String,
+    val href: String,
+    val title: String? = null  // 从NCX/NAV获取的标题
+)
+
+/** EPUB 书籍信息 */
+data class EpubBookInfo(
+    val title: String,
+    val author: String?,
+    val language: String?
+)
+
+/** EPUB 解压结果 */
+data class EpubExtractResult(
+    val cacheDir: File,
+    val contentDir: File,
+    val opfDir: File,          // OPF文件所在目录（用于解析相对路径）
+    val bookInfo: EpubBookInfo,
+    val chapters: List<EpubChapter>,
+    val isEncrypted: Boolean
+)
+
+/** 获取 EPUB 的缓存目录，基于 URI 哈希。 */
+fun getEpubCacheDir(context: Context, epubUri: Uri): File {
+    val key = epubUri.toString().hashCode().toUInt().toString(16)
+    return File(context.cacheDir, "epub_cache/$key")
+}
+
+/** 读取 EPUB 缓存时间戳（毫秒），无缓存返回 0。 */
+fun getEpubCacheTimestamp(cacheDir: File): Long {
+    val tsFile = File(cacheDir, ".cache_ts")
+    return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
+}
+
+/** 缓存是否标记为加密来源（EPUB）。 */
+fun isEpubCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
+
+/** 清理 EPUB 缓存。 */
+fun cleanEpubCache(context: Context, epubUri: Uri) {
+    getEpubCacheDir(context, epubUri).deleteRecursively()
+}
+
+/** 解析 META-INF/container.xml 获取 rootfile（OPF文件）路径。 */
+private fun parseEpubContainer(contentDir: File): String? {
+    val containerFile = File(contentDir, "META-INF/container.xml")
+    if (!containerFile.exists()) return null
+    val content = containerFile.readText()
+    // 简单XML解析：查找 rootfile 的 full-path 属性
+    val pathMatch = Regex("""full-path\s*=\s*"([^"]+)"""").find(content)
+    return pathMatch?.groupValues?.getOrNull(1)
+}
+
+/** 解析 OPF 文件获取书籍信息和章节列表。 */
+private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<EpubChapter>>? {
+    if (!opfFile.exists()) return null
+    val content = opfFile.readText()
+
+    // 解析 metadata
+    var title = "未知书名"
+    var author: String? = null
+    var language: String? = null
+
+    val titleMatch = Regex("""<dc:title[^>]*>([^<]*)</dc:title>""", RegexOption.IGNORE_CASE).find(content)
+    if (titleMatch != null) title = titleMatch.groupValues[1].trim()
+
+    val authorMatch = Regex("""<dc:creator[^>]*>([^<]*)</dc:creator>""", RegexOption.IGNORE_CASE).find(content)
+    if (authorMatch != null) author = authorMatch.groupValues[1].trim()
+
+    val langMatch = Regex("""<dc:language[^>]*>([^<]*)</dc:language>""", RegexOption.IGNORE_CASE).find(content)
+    if (langMatch != null) language = langMatch.groupValues[1].trim()
+
+    val bookInfo = EpubBookInfo(title, author, language)
+
+    // 解析 manifest（ID -> href 映射）
+    val manifest = mutableMapOf<String, String>()
+    val manifestRegex = Regex("""<item[^>]*id\s*=\s*"([^"]+)"[^>]*href\s*=\s*"([^"]+)"[^>]*/?>""", RegexOption.IGNORE_CASE)
+    manifestRegex.findAll(content).forEach { match ->
+        val id = match.groupValues[1]
+        val href = match.groupValues[2]
+        manifest[id] = href
+    }
+
+    // 解析 spine（阅读顺序）
+    val chapters = mutableListOf<EpubChapter>()
+    val spineRegex = Regex("""<itemref[^>]*idref\s*=\s*"([^"]+)"[^>]*/?>""", RegexOption.IGNORE_CASE)
+    spineRegex.findAll(content).forEach { match ->
+        val idref = match.groupValues[1]
+        val href = manifest[idref]
+        if (href != null) {
+            chapters.add(EpubChapter(idref, href, null))
+        }
+    }
+
+    return bookInfo to chapters
+}
+
+/** 尝试从 NCX 或 NAV 文件获取章节标题。 */
+private fun parseEpubNavigation(contentDir: File, opfDir: File, chapters: List<EpubChapter>): List<EpubChapter> {
+    // 尝试查找 NCX 文件
+    val ncxFile = opfDir.listFiles()?.find { it.name.endsWith(".ncx", ignoreCase = true) }
+    if (ncxFile != null && ncxFile.exists()) {
+        try {
+            val ncxContent = ncxFile.readText()
+            val navPointRegex = Regex("""<navPoint[^>]*>.*?<navLabel>.*?<text>([^<]*)</text>.*?</navLabel>.*?<content[^>]*src\s*=\s*"([^"]+)""""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+            val navMap = mutableMapOf<String, String>()
+            navPointRegex.findAll(ncxContent).iterator().forEach { match ->
+                val title = match.groupValues[1].trim()
+                val src = match.groupValues[2].substringBefore("#").substringBefore("?")
+                navMap[src] = title
+            }
+            // 更新章节标题
+            return chapters.map { chapter ->
+                val hrefName = chapter.href.substringAfterLast("/")
+                val title = navMap[hrefName] ?: navMap[chapter.href] ?: chapter.href.substringBeforeLast(".")
+                chapter.copy(title = title)
+            }
+        } catch (_: Exception) { }
+    }
+
+    // 如果没有 NCX，使用文件名作为标题
+    return chapters.map { chapter ->
+        val fileName = chapter.href.substringAfterLast("/")
+        val title = fileName.substringBeforeLast(".").replace("_", " ").replace("-", " ")
+        chapter.copy(title = title)
+    }
+}
+
+/**
+ * 解压 EPUB 到缓存目录，解析 OPF 获取章节列表。
+ * @param epubFileName EPUB 文件名（用于日志，可选）
+ * @return 解压结果，解压失败返回 null
+ */
+fun extractEpubToCache(
+    context: Context,
+    epubUri: Uri,
+    password: CharArray?,
+    epubFileName: String? = null
+): EpubExtractResult? {
+    val cacheDir = getEpubCacheDir(context, epubUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(epubUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+        }
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        zip.extractAll(contentDir.path)
+        tmpZip.delete()
+
+        // 解析 container.xml 获取 OPF 路径
+        val opfRelativePath = parseEpubContainer(contentDir)
+        if (opfRelativePath == null) {
+            Log.w(TAG, "extractEpubToCache: META-INF/container.xml not found or invalid")
+            return null
+        }
+
+        val opfFile = File(contentDir, opfRelativePath)
+        val opfDir = opfFile.parentFile ?: contentDir
+
+        // 解析 OPF
+        val parseResult = parseEpubOpf(opfFile, opfDir)
+        if (parseResult == null) {
+            Log.w(TAG, "extractEpubToCache: Failed to parse OPF file")
+            return null
+        }
+        val (bookInfo, rawChapters) = parseResult
+
+        // 尝试获取章节标题
+        val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+
+        if (chapters.isEmpty()) {
+            Log.w(TAG, "extractEpubToCache: No chapters found in EPUB")
+            return null
+        }
+
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+
+        return EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted)
+    } catch (e: Exception) {
+        Log.e(TAG, "extractEpubToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    } finally {
+        if (tmpZip.exists()) tmpZip.delete()
+    }
+}
+
+/** 从已有缓存加载 EPUB 信息（不解压）。 */
+fun loadEpubFromCache(cacheDir: File): EpubExtractResult? {
+    if (!cacheDir.exists()) return null
+    val contentDir = File(cacheDir, "content")
+    if (!contentDir.exists()) return null
+
+    val encrypted = isEpubCacheEncrypted(cacheDir)
+
+    // 解析 container.xml 获取 OPF 路径
+    val opfRelativePath = parseEpubContainer(contentDir) ?: return null
+    val opfFile = File(contentDir, opfRelativePath)
+    val opfDir = opfFile.parentFile ?: contentDir
+
+    val parseResult = parseEpubOpf(opfFile, opfDir) ?: return null
+    val (bookInfo, rawChapters) = parseResult
+    val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+
+    return EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted)
+}
+
+/** 获取 EPUB 章节的完整文件路径。 */
+fun getEpubChapterFile(result: EpubExtractResult, chapter: EpubChapter): File? {
+    val file = File(result.opfDir, chapter.href)
+    return if (file.exists()) file else null
+}
+
+/** 判断文件名是否为 EPUB 文件。 */
+fun isEpubFile(name: String): Boolean = name.endsWith(".epub", ignoreCase = true)

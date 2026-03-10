@@ -60,6 +60,7 @@ import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Article
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
@@ -149,6 +150,15 @@ import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
 import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
 import com.kenny.localmanager.file.extractHtmlZipToCache
+import com.kenny.localmanager.file.EpubExtractResult
+import com.kenny.localmanager.file.extractEpubToCache
+import com.kenny.localmanager.file.loadEpubFromCache
+import com.kenny.localmanager.file.getEpubChapterFile
+import com.kenny.localmanager.file.getEpubCacheDir
+import com.kenny.localmanager.file.getEpubCacheTimestamp
+import com.kenny.localmanager.file.isEpubCacheEncrypted
+import com.kenny.localmanager.file.cleanEpubCache
+import com.kenny.localmanager.ui.EpubViewerScreen
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.ACTION_NEXT
@@ -249,6 +259,7 @@ fun FileBrowserApp(
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
+    var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -421,6 +432,22 @@ fun FileBrowserApp(
                 logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
             )
         }
+        epubViewState != null -> {
+            val state = epubViewState!!
+            BackHandler {
+                if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
+                epubViewState = null
+            }
+            EpubViewerScreen(
+                extractResult = state.extractResult,
+                zipFileName = state.zipFileName,
+                onBack = {
+                    if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
+                    epubViewState = null
+                },
+                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+            )
+        }
         passContentView != null -> {
             val content = passContentView!!
             BackHandler { passContentView = null }
@@ -546,6 +573,10 @@ fun FileBrowserApp(
             var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var htmlZipPassword by remember { mutableStateOf("") }
             var htmlZipInProgress by remember { mutableStateOf(false) }
+            var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var epubPassword by remember { mutableStateOf("") }
+            var epubInProgress by remember { mutableStateOf(false) }
             var showPendingCompressToZip by remember { mutableStateOf(false) }
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
@@ -649,6 +680,47 @@ fun FileBrowserApp(
                     }
                 }
             }
+            LaunchedEffect(epubTarget) {
+                epubEncrypted = null
+                epubPassword = ""
+                epubInProgress = false
+                val target = epubTarget ?: return@LaunchedEffect
+                val cacheDir = getEpubCacheDir(context, target.uri)
+                val cacheTs = getEpubCacheTimestamp(cacheDir)
+                // 检查缓存是否有效
+                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                    val result = loadEpubFromCache(cacheDir)
+                    if (result != null) {
+                        epubTarget = null
+                        epubViewState = EpubViewState(
+                            extractResult = result,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                        return@LaunchedEffect
+                    }
+                    // 缓存无效，删除重新解压
+                    cacheDir.deleteRecursively()
+                }
+                epubEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                if (epubEncrypted == false) {
+                    epubInProgress = true
+                    val result = withContext(Dispatchers.IO) { extractEpubToCache(context, target.uri, null, target.name) }
+                    epubInProgress = false
+                    epubTarget = null
+                    if (result != null) {
+                        epubViewState = EpubViewState(
+                            extractResult = result,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                    } else {
+                        Toast.makeText(context, "EPUB解析失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
@@ -688,6 +760,7 @@ fun FileBrowserApp(
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
+                    epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
                     zipCompressTarget != null -> zipCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
@@ -940,6 +1013,7 @@ fun FileBrowserApp(
                     onUnzipRequest = { zipUnzipTarget = it },
                     onRequestMdZipView = { mdZipTarget = it },
                     onRequestHtmlZipView = { htmlZipTarget = it },
+                    onRequestEpubView = { epubTarget = it },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
                     onRequestPassView = { model ->
@@ -1800,6 +1874,80 @@ fun FileBrowserApp(
                     )
                 }
             }
+            // ---- .epub 密码输入对话框 ----
+            epubTarget?.let { target ->
+                val encrypted = epubEncrypted
+                if (encrypted == true) {
+                    AlertDialog(
+                        onDismissRequest = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } },
+                        title = { Text("查看 EPUB 电子书") },
+                        text = {
+                            Column {
+                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = epubPassword,
+                                    onValueChange = { if (!epubInProgress) epubPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("ZIP 密码") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !epubInProgress
+                                )
+                                if (epubInProgress) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (epubInProgress || epubPassword.isBlank()) return@Button
+                                    epubInProgress = true
+                                    val pwd = epubPassword.toCharArray()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            extractEpubToCache(context, target.uri, pwd, target.name)
+                                        }
+                                        epubInProgress = false
+                                        if (result != null) {
+                                            epubTarget = null
+                                            epubPassword = ""
+                                            epubViewState = EpubViewState(
+                                                extractResult = result,
+                                                zipFileName = target.name,
+                                                epubUri = target.uri,
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) { Text("确定") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
+                            ) { Text("取消") }
+                        }
+                    )
+                } else if (encrypted == null) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("查看 EPUB 电子书") },
+                        text = {
+                            Column {
+                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
             zipCompressTarget?.let { target ->
                 val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
                 val parentDirUri = Uri.parse(displayUri)
@@ -2318,12 +2466,24 @@ private data class MdZipViewState(
 private fun isCompressedHtml(name: String): Boolean =
     name.endsWith(".html.zip", ignoreCase = true)
 
+/** 判断文件名是否为 EPUB 文件。 */
+private fun isEpubFile(name: String): Boolean =
+    name.endsWith(".epub", ignoreCase = true)
+
 /** .html.zip 查看器状态。 */
 private data class HtmlZipViewState(
     val indexFile: java.io.File?,
     val contentDir: java.io.File,
     val zipFileName: String,
     val zipUri: Uri,
+    val isEncrypted: Boolean
+)
+
+/** EPUB 查看器状态。 */
+private data class EpubViewState(
+    val extractResult: EpubExtractResult,
+    val zipFileName: String,
+    val epubUri: Uri,
     val isEncrypted: Boolean
 )
 
@@ -2428,6 +2588,7 @@ internal fun FileBrowserScreen(
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
+    onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
@@ -2741,6 +2902,8 @@ internal fun FileBrowserScreen(
                                                 onRequestMdZipView(item)
                                             isCompressedHtml(item.name) ->
                                                 onRequestHtmlZipView(item)
+                                            isEpubFile(item.name) ->
+                                                onRequestEpubView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
                                             item.name.endsWith(".pass", ignoreCase = true) ->
@@ -3357,6 +3520,7 @@ fun FileItem(
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
         isCompressedMarkdown(model.name) -> Icons.Default.Article
         isCompressedHtml(model.name) -> Icons.Default.Article
+        isEpubFile(model.name) -> Icons.Default.MenuBook
         model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
@@ -3366,6 +3530,7 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
         model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
+        isEpubFile(model.name) -> Color(0xFF8B4513)  // 棕色，适合书籍
         model.name.endsWith(".zip", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
