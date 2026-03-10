@@ -441,6 +441,7 @@ fun FileBrowserApp(
             EpubViewerScreen(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
+                epubUri = state.epubUri,
                 onBack = {
                     if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
                     epubViewState = null

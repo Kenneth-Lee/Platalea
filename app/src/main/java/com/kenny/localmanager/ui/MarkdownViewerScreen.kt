@@ -11,6 +11,10 @@ import android.provider.DocumentsContract
 import android.util.Log
 import android.os.Handler
 import android.os.Looper
+import android.os.Vibrator
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.view.GestureDetector
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -28,9 +32,23 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.Card
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Badge
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,10 +66,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
@@ -61,6 +82,10 @@ import com.kenny.localmanager.file.listHtmlZipContentFiles
 import com.kenny.localmanager.file.listMdZipContentFiles
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.gpg.GpgHelper
+import com.kenny.localmanager.epub.EpubBookmark
+import com.kenny.localmanager.epub.EpubBookmarkManager
+import com.kenny.localmanager.epub.EpubReadingProgress
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
@@ -75,6 +100,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
 import com.kenny.localmanager.file.EpubExtractResult
@@ -1722,21 +1749,32 @@ private fun HtmlZipNoIndexScreen(
 
 private const val EPUB_DEBUG = "EpubViewer"
 
-/** EPUB 电子书查看器：支持章节导航、目录、缩放。 */
+/** EPUB 电子书查看器：支持章节导航、目录、缩放、收藏夹。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EpubViewerScreen(
     extractResult: EpubExtractResult,
     zipFileName: String,
+    epubUri: Uri,
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var showToc by remember { mutableStateOf(false) }
+    var showBookmarks by remember { mutableStateOf(false) }
+    var showAddBookmark by remember { mutableStateOf(false) }
+    var editingBookmark by remember { mutableStateOf<EpubBookmark?>(null) }
     var currentChapterIndex by remember { mutableStateOf(0) }
+    var currentScrollRatio by remember { mutableStateOf(0f) }
+
+    // 收藏夹管理器
+    val bookmarkManager = remember { EpubBookmarkManager(context) }
+    val bookmarks by bookmarkManager.bookmarks.collectAsState()
+    val epubBookmarks = bookmarks.filter { it.epubUri == epubUri.toString() }
 
     val chapters = extractResult.chapters
     val contentDir = extractResult.contentDir
@@ -1745,6 +1783,31 @@ fun EpubViewerScreen(
     logDebug?.invoke("[EPUB] 打开 $zipFileName")
     logDebug?.invoke("[EPUB] 章节数=${chapters.size}")
     logDebug?.invoke("[EPUB] contentDir=${contentDir.absolutePath}")
+
+    // 恢复阅读进度
+    LaunchedEffect(Unit) {
+        val progress = bookmarkManager.loadProgress(epubUri.toString())
+        if (progress != null) {
+            currentChapterIndex = progress.chapterIndex
+            currentScrollRatio = progress.scrollRatio
+            logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
+        }
+    }
+
+    // 保存阅读进度（章节变化时）
+    LaunchedEffect(currentChapterIndex) {
+        val progress = EpubReadingProgress(
+            epubUri = epubUri.toString(),
+            epubFileName = zipFileName,
+            chapterIndex = currentChapterIndex,
+            chapterTitle = chapters.getOrNull(currentChapterIndex)?.title ?: "",
+            scrollPosition = 0,
+            scrollRatio = currentScrollRatio,
+            lastReadTime = System.currentTimeMillis()
+        )
+        bookmarkManager.saveProgress(progress)
+        logDebug?.invoke("[EPUB] 保存进度: 章节$currentChapterIndex")
+    }
 
     val currentChapter = chapters.getOrNull(currentChapterIndex)
     val chapterFile = if (currentChapter != null) {
@@ -1755,15 +1818,45 @@ fun EpubViewerScreen(
     fun goToChapter(index: Int) {
         if (index in chapters.indices) {
             currentChapterIndex = index
+            currentScrollRatio = 0f
             showToc = false
         }
     }
 
-    BackHandler {
-        if (showToc) {
-            showToc = false
+    // 跳转到收藏位置
+    fun goToBookmark(bookmark: EpubBookmark) {
+        currentChapterIndex = bookmark.chapterIndex
+        currentScrollRatio = bookmark.scrollRatio
+        showBookmarks = false
+    }
+
+    // 添加收藏
+    fun addBookmark(note: String = "") {
+        val bookmark = EpubBookmark(
+            id = bookmarkManager.generateId(),
+            epubUri = epubUri.toString(),
+            epubFileName = zipFileName,
+            chapterIndex = currentChapterIndex,
+            chapterTitle = currentChapter?.title ?: "",
+            scrollPosition = 0,
+            scrollRatio = currentScrollRatio,
+            note = note,
+            createTime = System.currentTimeMillis()
+        )
+        if (bookmarkManager.addBookmark(bookmark)) {
+            Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
         } else {
-            onBack()
+            Toast.makeText(context, "该位置已收藏", Toast.LENGTH_SHORT).show()
+        }
+        showAddBookmark = false
+    }
+
+    BackHandler {
+        when {
+            showToc -> showToc = false
+            showBookmarks -> showBookmarks = false
+            showAddBookmark -> showAddBookmark = false
+            else -> onBack()
         }
     }
 
@@ -1833,6 +1926,181 @@ fun EpubViewerScreen(
         )
     }
 
+    // 收藏夹对话框
+    if (showBookmarks) {
+        AlertDialog(
+            onDismissRequest = { showBookmarks = false },
+            title = { Text("收藏夹 - $zipFileName") },
+            text = {
+                if (epubBookmarks.isEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Spacer(Modifier.height(32.dp))
+                        Icon(
+                            Icons.Outlined.BookmarkBorder,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(16.dp))
+                        Text(
+                            "暂无收藏",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "点击顶部收藏按钮可添加当前位置",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(epubBookmarks.size) { index ->
+                            val bookmark = epubBookmarks[index]
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                onClick = { goToBookmark(bookmark) }
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "第${bookmark.chapterIndex + 1}章",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = bookmark.formattedTime,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = bookmark.chapterTitle.ifBlank { "未命名章节" },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (bookmark.note.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = bookmark.note,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(onClick = {
+                                            editingBookmark = bookmark
+                                        }) {
+                                            Icon(Icons.Default.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("编辑")
+                                        }
+                                        TextButton(onClick = {
+                                            bookmarkManager.removeBookmark(bookmark.id)
+                                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                                        }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("删除")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showBookmarks = false }) { Text("关闭") }
+            }
+        )
+    }
+
+    // 添加收藏对话框
+    if (showAddBookmark) {
+        var noteText by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddBookmark = false },
+            title = { Text("添加收藏") },
+            text = {
+                Column {
+                    Text(
+                        "当前位置：第${currentChapterIndex + 1}章 - ${currentChapter?.title ?: ""}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        label = { Text("备注（可选）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { addBookmark(noteText) }) { Text("添加") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBookmark = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 编辑收藏对话框
+    editingBookmark?.let { bookmark ->
+        var noteText by remember { mutableStateOf(bookmark.note) }
+        AlertDialog(
+            onDismissRequest = { editingBookmark = null },
+            title = { Text("编辑收藏") },
+            text = {
+                Column {
+                    Text(
+                        "位置：第${bookmark.chapterIndex + 1}章 - ${bookmark.chapterTitle}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        label = { Text("备注") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    bookmarkManager.updateBookmarkNote(bookmark.id, noteText)
+                    Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
+                    editingBookmark = null
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingBookmark = null }) { Text("取消") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1864,6 +2132,22 @@ fun EpubViewerScreen(
                     // 目录按钮
                     IconButton(onClick = { showToc = true }) {
                         Icon(Icons.Default.Menu, contentDescription = "目录")
+                    }
+                    // 收藏按钮
+                    IconButton(onClick = { showAddBookmark = true }) {
+                        Icon(Icons.Default.BookmarkAdd, contentDescription = "添加收藏")
+                    }
+                    // 收藏夹按钮
+                    IconButton(onClick = { showBookmarks = true }) {
+                        BadgedBox(
+                            badge = {
+                                if (epubBookmarks.isNotEmpty()) {
+                                    Badge { Text("${epubBookmarks.size}", style = MaterialTheme.typography.labelSmall) }
+                                }
+                            }
+                        ) {
+                            Icon(Icons.Default.Bookmarks, contentDescription = "收藏夹")
+                        }
                     }
                     // 缩小
                     IconButton(onClick = {
@@ -1959,9 +2243,13 @@ fun EpubViewerScreen(
                     )
 
                     val chapterFileForUpdate = chapterFile
+                    val chaptersSize = chapters.size
+                    val onChapterChanged: (Int) -> Unit = { newIndex ->
+                        currentChapterIndex = newIndex
+                    }
                     AndroidView(
                         factory = { ctx ->
-                            WebView(ctx).apply {
+                            GestureWebView(ctx, chaptersSize, onChapterChanged).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
@@ -1976,6 +2264,8 @@ fun EpubViewerScreen(
                         modifier = Modifier.fillMaxSize(),
                         update = { webView ->
                             webViewRef.value = webView
+                            // 更新当前章节索引给GestureWebView
+                            webView.currentChapterIndex = currentChapterIndex
                             try {
                                 val htmlContent = chapterFileForUpdate.readText()
                                 // 注入基础样式
@@ -2070,3 +2360,55 @@ private class EpubWebViewClient(
 }
 
 private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[index] else null
+
+/** 支持双击切换章节的WebView：左侧双击上一章，右侧双击下一章 */
+private class GestureWebView(
+    context: Context,
+    private val totalChapters: Int,
+    private val onChapterChange: (Int) -> Unit
+) : WebView(context) {
+    var currentChapterIndex: Int = 0
+    private var lastClickTime: Long = 0
+    private var lastClickX: Float = 0f
+    private val doubleClickTimeout: Long = 300 // 双击时间阈值（毫秒）
+    private val edgeZoneRatio = 0.3f // 左右边缘区域占比（30%）
+
+    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            val width = width.toFloat()
+            val leftZone = width * edgeZoneRatio
+            val rightZone = width * (1 - edgeZoneRatio)
+
+            val newChapter = when {
+                e.x < leftZone -> {
+                    // 左侧双击 -> 上一章
+                    maxOf(currentChapterIndex - 1, 0)
+                }
+                e.x > rightZone -> {
+                    // 右侧双击 -> 下一章
+                    minOf(currentChapterIndex + 1, totalChapters - 1)
+                }
+                else -> {
+                    // 中间区域，不切换
+                    return false
+                }
+            }
+
+            if (newChapter != currentChapterIndex) {
+                Handler(Looper.getMainLooper()).post {
+                    onChapterChange(newChapter)
+                }
+                return true
+            }
+            return false
+        }
+    })
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        // 先让GestureDetector处理双击检测
+        if (gestureDetector.onTouchEvent(event)) {
+            return true
+        }
+        return super.onTouchEvent(event)
+    }
+}
