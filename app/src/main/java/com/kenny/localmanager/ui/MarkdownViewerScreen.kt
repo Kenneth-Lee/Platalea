@@ -5,8 +5,11 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.util.Log
 import android.os.Handler
@@ -73,6 +76,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
@@ -102,6 +106,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
 import com.kenny.localmanager.file.EpubExtractResult
@@ -2410,5 +2417,222 @@ private class GestureWebView(
             return true
         }
         return super.onTouchEvent(event)
+    }
+}
+
+/** PDF 查看器页面数据 */
+data class PdfPageData(
+    val pageIndex: Int,
+    val bitmap: Bitmap
+)
+
+/**
+ * PDF 文件查看器
+ * 使用 Android 内置的 PdfRenderer 渲染 PDF 页面
+ * 按需加载页面，支持大文件
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PdfViewerScreen(
+    uri: String,
+    fileName: String,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var pageCount by remember { mutableStateOf(0) }
+    var currentPage by remember { mutableStateOf(0) }
+    var currentPageBitmap by remember { mutableStateOf<Bitmap?>(null) }
+    var pageLoading by remember { mutableStateOf(false) }
+    var zoom by remember { mutableStateOf(1f) }
+    var isLoading by remember { mutableStateOf(true) }
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    // 缓存最近渲染的页面
+    val pageCache = remember { mutableMapOf<Int, Bitmap>() }
+
+    // 初始加载：只获取页数
+    LaunchedEffect(uri) {
+        isLoading = true
+        errorMsg = null
+        try {
+            val count = withContext(Dispatchers.IO) {
+                val pfd = context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+                    ?: return@withContext 0
+                val renderer = PdfRenderer(pfd)
+                val c = renderer.pageCount
+                renderer.close()
+                pfd.close()
+                c
+            }
+            if (count > 0) {
+                pageCount = count
+            } else {
+                errorMsg = "PDF 文件为空"
+            }
+        } catch (e: Exception) {
+            Log.e("PdfViewer", "加载 PDF 失败", e)
+            errorMsg = "加载失败: ${e.message}"
+        }
+        isLoading = false
+    }
+
+    // 渲染当前页面
+    fun renderPage(pageIndex: Int, zoomLevel: Float) {
+        if (pageIndex !in 0 until pageCount) return
+
+        // 检查缓存
+        val cacheKey = (pageIndex * 100 + (zoomLevel * 10).toInt())
+        pageCache[cacheKey]?.let {
+            currentPageBitmap = it
+            return
+        }
+
+        scope.launch {
+            pageLoading = true
+            try {
+                val bitmap = withContext(Dispatchers.IO) {
+                    val pfd = context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")
+                        ?: return@withContext null
+                    val renderer = PdfRenderer(pfd)
+                    val page = renderer.openPage(pageIndex)
+
+                    val width = (page.width * zoomLevel).toInt().coerceAtLeast(100)
+                    val height = (page.height * zoomLevel).toInt().coerceAtLeast(100)
+                    val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    bmp.eraseColor(android.graphics.Color.WHITE)
+                    page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    page.close()
+                    renderer.close()
+                    pfd.close()
+                    bmp
+                }
+                if (bitmap != null) {
+                    // 清理旧缓存，只保留最近的5页
+                    if (pageCache.size > 5) {
+                        pageCache.keys.sorted().take(pageCache.size - 5).forEach { pageCache.remove(it) }
+                    }
+                    pageCache[cacheKey] = bitmap
+                    currentPageBitmap = bitmap
+                }
+            } catch (e: Exception) {
+                Log.e("PdfViewer", "渲染页面失败", e)
+            }
+            pageLoading = false
+        }
+    }
+
+    // 当页码或缩放变化时渲染页面
+    LaunchedEffect(currentPage, zoom, pageCount) {
+        if (pageCount > 0 && !isLoading) {
+            renderPage(currentPage, zoom)
+        }
+    }
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    // 缩放按钮
+                    IconButton(onClick = {
+                        val newZoom = (zoom - 0.25f).coerceAtLeast(0.5f)
+                        zoom = newZoom
+                    }) {
+                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                    }
+                    Text("${(zoom * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                    IconButton(onClick = {
+                        val newZoom = (zoom + 0.25f).coerceAtMost(3f)
+                        zoom = newZoom
+                    }) {
+                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        },
+        bottomBar = {
+            if (pageCount > 0) {
+                BottomAppBar(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ) {
+                    IconButton(
+                        onClick = { currentPage = (currentPage - 1).coerceAtLeast(0) },
+                        enabled = currentPage > 0
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一页")
+                    }
+                    Text(
+                        "${currentPage + 1} / $pageCount",
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    IconButton(
+                        onClick = { currentPage = (currentPage + 1).coerceAtMost(pageCount - 1) },
+                        enabled = currentPage < pageCount - 1
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "下一页")
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(padding),
+            contentAlignment = Alignment.Center
+        ) {
+            when {
+                isLoading -> {
+                    Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                }
+                errorMsg != null -> {
+                    Text(errorMsg!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
+                }
+                pageLoading && currentPageBitmap == null -> {
+                    Text("正在渲染页面...", style = MaterialTheme.typography.bodyLarge)
+                }
+                currentPageBitmap != null -> {
+                    Column(
+                        Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState()),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            bitmap = currentPageBitmap!!.asImageBitmap(),
+                            contentDescription = "第 ${currentPage + 1} 页",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    if (pageLoading) {
+                        // 显示加载指示器
+                        androidx.compose.foundation.layout.Box(
+                            Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.BottomCenter
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.padding(16.dp)
+                            )
+                        }
+                    }
+                }
+                pageCount == 0 -> {
+                    Text("PDF 为空", style = MaterialTheme.typography.bodyLarge)
+                }
+            }
+        }
     }
 }

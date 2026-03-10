@@ -5,8 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Binder
@@ -35,6 +39,8 @@ const val ACTION_STOP = "com.kenny.localmanager.player.STOP"
 const val ACTION_PREV = "com.kenny.localmanager.player.PREV"
 const val ACTION_NEXT = "com.kenny.localmanager.player.NEXT"
 const val ACTION_SEEK = "com.kenny.localmanager.player.SEEK"
+const val ACTION_PAUSE = "com.kenny.localmanager.player.PAUSE"
+const val ACTION_RESUME = "com.kenny.localmanager.player.RESUME"
 
 const val EXTRA_URIS = "uris"
 const val EXTRA_NAMES = "names"
@@ -65,6 +71,15 @@ class PlaybackService : Service() {
 
     private val binder = LocalBinder()
 
+    // 音频输出设备断开（如蓝牙耳机断开）的广播接收器
+    private val noisyReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
+                pausePlayback()
+            }
+        }
+    }
+
     inner class LocalBinder : Binder() {
         fun getService(): PlaybackService = this@PlaybackService
     }
@@ -73,6 +88,13 @@ class PlaybackService : Service() {
         super.onCreate()
         prefs = Preferences(applicationContext)
         createChannel()
+        // 注册音频输出设备断开广播
+        val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(noisyReceiver, filter)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder = binder
@@ -101,6 +123,8 @@ class PlaybackService : Service() {
             ACTION_STOP -> stopPlayback()
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
+            ACTION_PAUSE -> pausePlayback()
+            ACTION_RESUME -> resumePlayback()
             ACTION_SEEK -> {
                 val posMs = intent.getIntExtra(EXTRA_POSITION_MS, 0)
                 mediaPlayer?.let { mp ->
@@ -289,6 +313,25 @@ class PlaybackService : Service() {
         playTrackAtIndex(prev)
     }
 
+    private fun pausePlayback() {
+        val mp = mediaPlayer ?: return
+        if (mp.isPlaying) {
+            mp.pause()
+            updateState(isPlaying = false)
+            updateNotification()
+        }
+    }
+
+    private fun resumePlayback() {
+        val mp = mediaPlayer ?: return
+        if (!mp.isPlaying) {
+            mp.start()
+            updateState(isPlaying = true)
+            startProgressUpdates()
+            updateNotification()
+        }
+    }
+
     private fun savePosition() {
         scope.launch(Dispatchers.IO) {
             val idx = currentIndex.get()
@@ -343,6 +386,13 @@ class PlaybackService : Service() {
             this, 0, Intent(this, PlaybackService::class.java).setAction(ACTION_NEXT),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        val pauseAction = if (state?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
+        val pauseIcon = if (state?.isPlaying == true) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        val pauseText = if (state?.isPlaying == true) getString(R.string.playback_pause) else getString(R.string.playback_resume)
+        val playPause = PendingIntent.getService(
+            this, 0, Intent(this, PlaybackService::class.java).setAction(pauseAction),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val title = state?.trackName ?: getString(R.string.playback_notification_title)
         val text = if (state != null) "${state.trackIndex + 1} / ${state.totalTracks}" else ""
@@ -354,6 +404,7 @@ class PlaybackService : Service() {
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(android.R.drawable.ic_media_previous, getString(R.string.playback_prev), prev)
+            .addAction(pauseIcon, pauseText, playPause)
             .addAction(android.R.drawable.ic_media_next, getString(R.string.playback_next), next)
             .addAction(android.R.drawable.ic_delete, getString(R.string.playback_stop), stop)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
@@ -362,6 +413,9 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         handler.removeCallbacks(progressUpdateRunnable ?: return)
+        try {
+            unregisterReceiver(noisyReceiver)
+        } catch (_: Exception) {}
         mediaPlayer?.release()
         mediaPlayer = null
         PlaybackService._playbackState.value = null

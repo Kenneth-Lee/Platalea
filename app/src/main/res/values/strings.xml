@@ -6,4 +6,6 @@
     <string name="playback_stop">停止</string>
     <string name="playback_prev">上一首</string>
     <string name="playback_next">下一首</string>
+    <string name="playback_pause">暂停</string>
+    <string name="playback_resume">继续</string>
 </resources>

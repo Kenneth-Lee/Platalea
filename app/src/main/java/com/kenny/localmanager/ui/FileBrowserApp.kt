@@ -52,6 +52,8 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.QueueMusic
@@ -61,6 +63,7 @@ import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
@@ -159,11 +162,14 @@ import com.kenny.localmanager.file.getEpubCacheTimestamp
 import com.kenny.localmanager.file.isEpubCacheEncrypted
 import com.kenny.localmanager.file.cleanEpubCache
 import com.kenny.localmanager.ui.EpubViewerScreen
+import com.kenny.localmanager.ui.PdfViewerScreen
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.ACTION_NEXT
+import com.kenny.localmanager.player.ACTION_PAUSE
 import com.kenny.localmanager.player.ACTION_PLAY
 import com.kenny.localmanager.player.ACTION_PREV
+import com.kenny.localmanager.player.ACTION_RESUME
 import com.kenny.localmanager.player.ACTION_STOP
 import com.kenny.localmanager.player.EXTRA_DIR_URI
 import com.kenny.localmanager.player.EXTRA_NAMES
@@ -260,6 +266,7 @@ fun FileBrowserApp(
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
+    var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -447,6 +454,15 @@ fun FileBrowserApp(
                     epubViewState = null
                 },
                 logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+            )
+        }
+        pdfViewState != null -> {
+            val (pdfUri, pdfName) = pdfViewState!!
+            BackHandler { pdfViewState = null }
+            PdfViewerScreen(
+                uri = pdfUri,
+                fileName = pdfName,
+                onBack = { pdfViewState = null }
             )
         }
         passContentView != null -> {
@@ -762,6 +778,7 @@ fun FileBrowserApp(
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
                     epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
+                    pdfViewState != null -> pdfViewState = null
                     zipCompressTarget != null -> zipCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
@@ -825,6 +842,7 @@ fun FileBrowserApp(
                         copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
                         if (fail == 0 && ok > 0) {
                             pendingList.clear()
+                            showPendingList = false
                             Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
                         } else if (ok > 0) {
                             Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
@@ -856,6 +874,7 @@ fun FileBrowserApp(
                         copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
                         if (fail == 0 && ok > 0) {
                             pendingList.clear()
+                            showPendingList = false
                             Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
                         } else if (ok > 0) {
                             Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
@@ -1015,6 +1034,7 @@ fun FileBrowserApp(
                     onRequestMdZipView = { mdZipTarget = it },
                     onRequestHtmlZipView = { htmlZipTarget = it },
                     onRequestEpubView = { epubTarget = it },
+                    onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
                     onRequestPassView = { model ->
@@ -1128,6 +1148,11 @@ fun FileBrowserApp(
                     },
                     onPlayNext = {
                         val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                    },
+                    onPlayPause = {
+                        val action = if (playbackState?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
+                        val intent = Intent(context, PlaybackService::class.java).setAction(action)
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                     },
                     onSeek = { positionMs ->
@@ -1474,6 +1499,7 @@ fun FileBrowserApp(
                             batchObfuscatePassword = ""
                             Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
                             pendingList.clear()
+                            showPendingList = false
                             refreshTrigger++
                         }
                     },
@@ -2164,6 +2190,7 @@ fun FileBrowserApp(
                                             }
                                             Toast.makeText(context, "已公钥加密 ${batchOp.list.size} 个文件", Toast.LENGTH_SHORT).show()
                                             pendingList.clear()
+                                            showPendingList = false
                                             gpgState = null
                                             refreshTrigger++
                                         } finally {
@@ -2358,7 +2385,10 @@ fun FileBrowserApp(
                                             is GpgOpState.BatchEncrypt -> "已加密 ${op.list.size} 个文件"
                                             else -> if (op.isDecrypt) "解密完成" else "加密完成"
                                         }, Toast.LENGTH_SHORT).show()
-                                        if (op is GpgOpState.BatchDecrypt || op is GpgOpState.BatchEncrypt) pendingList.clear()
+                                        if (op is GpgOpState.BatchDecrypt || op is GpgOpState.BatchEncrypt) {
+                                            pendingList.clear()
+                                            showPendingList = false
+                                        }
                                     } else Toast.makeText(ctx, if (op.isDecrypt) "解密失败（开启「显示调试窗口」可查看详情）" else "加密失败", Toast.LENGTH_LONG).show()
                                     gpgState = null
                                     gpgMethod = null
@@ -2470,6 +2500,10 @@ private fun isCompressedHtml(name: String): Boolean =
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
     name.endsWith(".epub", ignoreCase = true)
+
+/** 判断文件名是否为 PDF 文件。 */
+private fun isPdfFile(name: String): Boolean =
+    name.endsWith(".pdf", ignoreCase = true)
 
 /** .html.zip 查看器状态。 */
 private data class HtmlZipViewState(
@@ -2590,6 +2624,7 @@ internal fun FileBrowserScreen(
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
+    onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
@@ -2905,6 +2940,8 @@ internal fun FileBrowserScreen(
                                                 onRequestHtmlZipView(item)
                                             isEpubFile(item.name) ->
                                                 onRequestEpubView(item)
+                                            isPdfFile(item.name) ->
+                                                onRequestPdfView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
                                             item.name.endsWith(".pass", ignoreCase = true) ->
@@ -3522,6 +3559,7 @@ fun FileItem(
         isCompressedMarkdown(model.name) -> Icons.Default.Article
         isCompressedHtml(model.name) -> Icons.Default.Article
         isEpubFile(model.name) -> Icons.Default.MenuBook
+        isPdfFile(model.name) -> Icons.Default.PictureAsPdf
         model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
@@ -3532,6 +3570,7 @@ fun FileItem(
         model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
         isEpubFile(model.name) -> Color(0xFF8B4513)  // 棕色，适合书籍
+        isPdfFile(model.name) -> Color(0xFFD32F2F)  // 红色，PDF 标志色
         model.name.endsWith(".zip", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -3864,6 +3903,7 @@ fun PlaybackScreen(
     onStopPlayback: () -> Unit,
     onPlayPrev: () -> Unit,
     onPlayNext: () -> Unit,
+    onPlayPause: () -> Unit,
     onSeek: (positionMs: Int) -> Unit = {},
     onDismiss: () -> Unit
 ) {
@@ -4066,6 +4106,12 @@ fun PlaybackScreen(
                         ) {
                             IconButton(onClick = onPlayPrev) {
                                 Icon(Icons.Default.SkipPrevious, contentDescription = "上一首")
+                            }
+                            IconButton(onClick = onPlayPause) {
+                                Icon(
+                                    if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                                    contentDescription = if (state.isPlaying) "暂停" else "播放"
+                                )
                             }
                             IconButton(onClick = onPlayNext) {
                                 Icon(Icons.Default.SkipNext, contentDescription = "下一首")
