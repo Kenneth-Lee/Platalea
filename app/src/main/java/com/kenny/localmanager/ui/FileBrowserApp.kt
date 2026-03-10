@@ -242,6 +242,11 @@ fun FileBrowserApp(
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
+    var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
+    var passEditPassword by remember { mutableStateOf("") }
+    var passEditInProgress by remember { mutableStateOf(false) }
+    var passEditState by remember { mutableStateOf<PassEditState?>(null) }
+    var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
@@ -425,6 +430,35 @@ fun FileBrowserApp(
                 onBack = { passContentView = null }
             )
         }
+        passEditState != null -> {
+            val state = passEditState!!
+            BackHandler { passEditState = null }
+            PassEditScreen(
+                fileName = state.innerName,
+                initialDecryptedBytes = state.decryptedBytes,
+                onSave = { newBytes ->
+                    val ctx = context
+                    val fileModel = state.fileModel
+                    val dirUri = state.dirUri
+                    val treeUri = state.treeUri
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            val secRings = loadSecretKeyRings(ctx) ?: return@withContext false
+                            val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID ?: return@withContext false
+                            val pubRings = loadPublicKeyRings(ctx) ?: return@withContext false
+                            val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId) ?: return@withContext false
+                            val encrypted = GpgHelper.encryptWithPublicKey(newBytes, pubKeyRing, fileModel.name) ?: return@withContext false
+                            try { ctx.contentResolver.deleteDocument(fileModel.uri) } catch (_: Exception) { }
+                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, fileModel.name, "application/octet-stream", encrypted)
+                        }
+                        passEditState = null
+                        refreshTrigger++
+                        Toast.makeText(ctx, if (ok) "已保存并重新加密" else "保存失败", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                onBack = { passEditState = null }
+            )
+        }
         viewingFile != null -> {
             val (uri, name, isEncrypted) = viewingFile!!
             BackHandler { viewingFile = null }
@@ -447,7 +481,6 @@ fun FileBrowserApp(
             var showConfigDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
-            var refreshTrigger by remember { mutableStateOf(0) }
             LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
             var lastBackPressTime by remember { mutableStateOf(0L) }
             var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
@@ -637,6 +670,8 @@ fun FileBrowserApp(
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     passProtectTarget != null -> { passProtectTarget = null }
                     passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
+                    passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
+                    passEditState != null -> passEditState = null
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     gpgState != null -> {
                         if (showGpgKeyPicker) showGpgKeyPicker = false
@@ -910,6 +945,9 @@ fun FileBrowserApp(
                     onRequestPassView = { model ->
                         passViewTarget = model
                         passViewPassword = ""
+                    },
+                    onRequestPassEdit = { model, dirUri ->
+                        passEditRequest = Pair(model, dirUri)
                     },
                     playbackState = playbackState,
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
@@ -1488,6 +1526,61 @@ fun FileBrowserApp(
                             if (!passViewInProgress) {
                                 passViewTarget = null
                                 passViewPassword = ""
+                            }
+                        }
+                    )
+                }
+            }
+            // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
+            passEditRequest?.let { (model, dirUri) ->
+                val secRings = loadSecretKeyRings(context)
+                if (secRings == null) {
+                    AlertDialog(
+                        onDismissRequest = { passEditRequest = null },
+                        title = { Text("直接编辑") },
+                        text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                        confirmButton = {
+                            Button(onClick = { passEditRequest = null }) { Text("确定") }
+                        }
+                    )
+                } else {
+                    GpgPasswordDialog(
+                        isDecrypt = true,
+                        fileName = model.name,
+                        password = passEditPassword,
+                        passwordLabel = "密钥密码",
+                        inProgress = passEditInProgress,
+                        onPasswordChange = { if (!passEditInProgress) passEditPassword = it },
+                        onConfirm = { pwd ->
+                            if (passEditInProgress) return@GpgPasswordDialog
+                            passEditInProgress = true
+                            val ctx = context
+                            scope.launch {
+                                val decrypted = withContext(Dispatchers.IO) {
+                                    val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                                    ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                        GpgHelper.decryptWithSecretKey(
+                                            input, rings, pwd.toCharArray()
+                                        ) { e ->
+                                            logDebug("[PASS] 编辑解密失败: ${model.name}")
+                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
+                                        }
+                                    }
+                                }
+                                passEditInProgress = false
+                                if (decrypted != null) {
+                                    passEditRequest = null
+                                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                                    val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                    passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
+                                } else {
+                                    Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        onDismiss = {
+                            if (!passEditInProgress) {
+                                passEditRequest = null
                             }
                         }
                     )
@@ -2234,6 +2327,18 @@ private data class HtmlZipViewState(
     val isEncrypted: Boolean
 )
 
+/** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */
+private data class PassEditState(
+    val fileModel: DocumentFileModel,
+    val dirUri: String,
+    val treeUri: Uri?,
+    val innerName: String,
+    val decryptedBytes: ByteArray
+) {
+    override fun equals(other: Any?) = (other is PassEditState) && fileModel == other.fileModel && dirUri == other.dirUri && innerName == other.innerName && decryptedBytes.contentEquals(other.decryptedBytes)
+    override fun hashCode() = 31 * (31 * fileModel.hashCode() + dirUri.hashCode()) + innerName.hashCode()
+}
+
 private sealed class GpgOpState {
     abstract val isDecrypt: Boolean
     abstract val dirUri: String
@@ -2326,6 +2431,7 @@ internal fun FileBrowserScreen(
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
+    onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -2771,6 +2877,13 @@ internal fun FileBrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text("查看密码", color = MaterialTheme.colorScheme.onSurface) }
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestPassEdit(menuTarget, currentUri)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("直接编辑", color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
@@ -3995,6 +4108,67 @@ fun GpgPasswordDialog(
                 }
             }
         }
+    }
+}
+
+/** 直接编辑 .pass 文件：解密后显示可编辑文本，存盘时若已修改则重新加密写回。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PassEditScreen(
+    fileName: String,
+    initialDecryptedBytes: ByteArray,
+    onSave: (ByteArray) -> Unit,
+    onBack: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    var textContent by remember(initialDecryptedBytes) {
+        mutableStateOf(initialDecryptedBytes.decodeToString())
+    }
+    var saveInProgress by remember { mutableStateOf(false) }
+
+    BackHandler { if (!saveInProgress) onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(fileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { if (!saveInProgress) onBack() }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    if (saveInProgress) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    TextButton(
+                        onClick = {
+                            if (saveInProgress) return@TextButton
+                            val newBytes = textContent.encodeToByteArray()
+                            if (newBytes.contentEquals(initialDecryptedBytes)) {
+                                onBack()
+                            } else {
+                                saveInProgress = true
+                                onSave(newBytes)
+                            }
+                        },
+                        enabled = !saveInProgress
+                    ) { Text("保存") }
+                }
+            )
+        }
+    ) { padding ->
+        OutlinedTextField(
+            value = textContent,
+            onValueChange = { textContent = it },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(scrollState),
+            minLines = 20,
+            maxLines = Int.MAX_VALUE
+        )
     }
 }
 
