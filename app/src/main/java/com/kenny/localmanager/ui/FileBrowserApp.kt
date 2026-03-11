@@ -4928,7 +4928,7 @@ fun CacheManagementDialog(
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .padding(vertical = 6.dp),
+                                    .padding(vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(Modifier.weight(1f)) {
@@ -4949,6 +4949,21 @@ fun CacheManagementDialog(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
+                if (!loading && entries.isNotEmpty()) {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                withContext(Dispatchers.IO) {
+                                    entries.forEach { clearCacheEntry(context, it) }
+                                }
+                                refresh()
+                                Toast.makeText(context, "已清理全部缓存", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("清理全部") }
+                    Spacer(Modifier.height(8.dp))
+                }
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }
         }
