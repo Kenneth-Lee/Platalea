@@ -163,7 +163,13 @@ import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.getEpubCacheTimestamp
 import com.kenny.localmanager.file.isEpubCacheEncrypted
 import com.kenny.localmanager.file.cleanEpubCache
+import com.kenny.localmanager.file.extractPicZipToCache
+import com.kenny.localmanager.file.getPicZipCacheDir
+import com.kenny.localmanager.file.getPicZipCacheTimestamp
+import com.kenny.localmanager.file.isPicZipCacheEncrypted
+import com.kenny.localmanager.file.cleanPicZipCache
 import com.kenny.localmanager.ui.EpubViewerScreen
+import com.kenny.localmanager.ui.PicZipViewerScreen
 import com.kenny.localmanager.ui.PdfViewerScreen
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
@@ -266,6 +272,7 @@ fun FileBrowserApp(
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
+    var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
@@ -458,6 +465,24 @@ fun FileBrowserApp(
                 logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
             )
         }
+        picZipViewState != null -> {
+            val state = picZipViewState!!
+            BackHandler {
+                if (!state.isEncrypted) cleanPicZipCache(context, state.zipUri)
+                picZipViewState = null
+            }
+            PicZipViewerScreen(
+                contentDir = state.contentDir,
+                imagePaths = state.imagePaths,
+                zipFileName = state.zipFileName,
+                isEncrypted = state.isEncrypted,
+                password = state.password,
+                onBack = {
+                    if (!state.isEncrypted) cleanPicZipCache(context, state.zipUri)
+                    picZipViewState = null
+                }
+            )
+        }
         pdfViewState != null -> {
             val (pdfUri, pdfName) = pdfViewState!!
             BackHandler { pdfViewState = null }
@@ -596,6 +621,10 @@ fun FileBrowserApp(
             var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var epubPassword by remember { mutableStateOf("") }
             var epubInProgress by remember { mutableStateOf(false) }
+            var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var picZipPassword by remember { mutableStateOf("") }
+            var picZipInProgress by remember { mutableStateOf(false) }
             var showPendingCompressToZip by remember { mutableStateOf(false) }
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
@@ -740,6 +769,51 @@ fun FileBrowserApp(
                     }
                 }
             }
+            LaunchedEffect(picZipTarget) {
+                picZipEncrypted = null
+                picZipPassword = ""
+                picZipInProgress = false
+                val target = picZipTarget ?: return@LaunchedEffect
+                val cacheDir = getPicZipCacheDir(context, target.uri)
+                val cacheTs = getPicZipCacheTimestamp(cacheDir)
+                if (cacheTs > 0 && !isPicZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                    val contentDir = java.io.File(cacheDir, "content")
+                    val listFile = java.io.File(cacheDir, ".image_list")
+                    if (contentDir.exists() && listFile.exists()) {
+                        val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                        picZipTarget = null
+                        picZipViewState = PicZipViewState(
+                            contentDir = contentDir,
+                            imagePaths = paths,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false,
+                            password = null
+                        )
+                        return@LaunchedEffect
+                    }
+                    cacheDir.deleteRecursively()
+                }
+                picZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                if (picZipEncrypted == false) {
+                    picZipInProgress = true
+                    val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
+                    picZipInProgress = false
+                    picZipTarget = null
+                    if (result != null) {
+                        picZipViewState = PicZipViewState(
+                            contentDir = result.contentDir,
+                            imagePaths = result.imagePaths,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false,
+                            password = null
+                        )
+                    } else {
+                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
             LaunchedEffect(prefs) {
                 prefs.ftpPort.collect { ftpPort = it }
             }
@@ -780,6 +854,7 @@ fun FileBrowserApp(
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
                     epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
+                    picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
                     pdfViewState != null -> pdfViewState = null
                     zipCompressTarget != null -> zipCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
@@ -1036,6 +1111,7 @@ fun FileBrowserApp(
                     onRequestMdZipView = { mdZipTarget = it },
                     onRequestHtmlZipView = { htmlZipTarget = it },
                     onRequestEpubView = { epubTarget = it },
+                    onRequestPicZipView = { picZipTarget = it },
                     onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                     onCompressToZipRequest = { zipCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
@@ -1977,6 +2053,82 @@ fun FileBrowserApp(
                     )
                 }
             }
+            // ---- .pic.zip 密码输入对话框 ----
+            picZipTarget?.let { target ->
+                val encrypted = picZipEncrypted
+                if (encrypted == true) {
+                    AlertDialog(
+                        onDismissRequest = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } },
+                        title = { Text("查看图片压缩包") },
+                        text = {
+                            Column {
+                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = picZipPassword,
+                                    onValueChange = { if (!picZipInProgress) picZipPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("ZIP 密码") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !picZipInProgress
+                                )
+                                if (picZipInProgress) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (picZipInProgress || picZipPassword.isBlank()) return@Button
+                                    picZipInProgress = true
+                                    val pwd = picZipPassword.toCharArray()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            extractPicZipToCache(context, target.uri, pwd, target.name)
+                                        }
+                                        picZipInProgress = false
+                                        if (result != null) {
+                                            picZipTarget = null
+                                            picZipPassword = ""
+                                            picZipViewState = PicZipViewState(
+                                                contentDir = result.contentDir,
+                                                imagePaths = result.imagePaths,
+                                                zipFileName = target.name,
+                                                zipUri = target.uri,
+                                                isEncrypted = true,
+                                                password = pwd
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) { Text("确定") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
+                            ) { Text("取消") }
+                        }
+                    )
+                } else if (encrypted == null) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("查看图片压缩包") },
+                        text = {
+                            Column {
+                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
             zipCompressTarget?.let { target ->
                 val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
                 val parentDirUri = Uri.parse(displayUri)
@@ -2499,6 +2651,10 @@ private data class MdZipViewState(
 private fun isCompressedHtml(name: String): Boolean =
     name.endsWith(".html.zip", ignoreCase = true)
 
+/** 判断文件名是否为 .pic.zip 图片压缩包。 */
+private fun isPicZip(name: String): Boolean =
+    name.endsWith(".pic.zip", ignoreCase = true)
+
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
     name.endsWith(".epub", ignoreCase = true)
@@ -2522,6 +2678,16 @@ private data class EpubViewState(
     val zipFileName: String,
     val epubUri: Uri,
     val isEncrypted: Boolean
+)
+
+/** .pic.zip 查看器状态。 */
+private data class PicZipViewState(
+    val contentDir: java.io.File,
+    val imagePaths: List<String>,
+    val zipFileName: String,
+    val zipUri: Uri,
+    val isEncrypted: Boolean,
+    val password: CharArray? = null
 )
 
 /** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */
@@ -2626,6 +2792,7 @@ internal fun FileBrowserScreen(
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
+    onRequestPicZipView: (DocumentFileModel) -> Unit = {},
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
@@ -2942,6 +3109,8 @@ internal fun FileBrowserScreen(
                                                 onRequestHtmlZipView(item)
                                             isEpubFile(item.name) ->
                                                 onRequestEpubView(item)
+                                            isPicZip(item.name) ->
+                                                onRequestPicZipView(item)
                                             isPdfFile(item.name) ->
                                                 onRequestPdfView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
@@ -3036,6 +3205,15 @@ internal fun FileBrowserScreen(
                                         contextMenuTarget = null
                                     }
                                 ) { Text("查看压缩 HTML", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                            if (isPicZip(menuTarget.name)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRequestPicZipView(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) }
                             }
                             TextButton(
                                 onClick = {
@@ -3647,6 +3825,7 @@ fun FileItem(
         isCompressedHtml(model.name) -> Icons.Default.Article
         isEpubFile(model.name) -> Icons.Default.MenuBook
         isPdfFile(model.name) -> Icons.Default.PictureAsPdf
+        isPicZip(model.name) -> Icons.Default.Archive
         model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
@@ -3658,6 +3837,7 @@ fun FileItem(
         model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
         isEpubFile(model.name) -> Color(0xFF8B4513)  // 棕色，适合书籍
         isPdfFile(model.name) -> Color(0xFFD32F2F)  // 红色，PDF 标志色
+        isPicZip(model.name) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".zip", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant

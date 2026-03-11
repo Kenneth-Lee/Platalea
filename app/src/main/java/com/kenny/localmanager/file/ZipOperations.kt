@@ -601,6 +601,115 @@ fun cleanHtmlZipCache(context: Context, zipUri: Uri) {
 /** 递归列出 .html.zip 内容目录中的所有文件（相对路径）。 */
 fun listHtmlZipContentFiles(contentDir: File): List<String> = listMdZipContentFiles(contentDir)
 
+// ---- .pic.zip 图片压缩包查看 ----
+
+private val PIC_IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
+
+/** .pic.zip 解压结果：缓存目录、内容目录、zip 内图片路径列表（已排序）、是否加密。 */
+data class PicZipExtractResult(
+    val cacheDir: File,
+    val contentDir: File,
+    val imagePaths: List<String>,
+    val isEncrypted: Boolean
+)
+
+fun getPicZipCacheDir(context: Context, zipUri: Uri): File {
+    val key = zipUri.toString().hashCode().toUInt().toString(16)
+    return File(context.cacheDir, "pic_zip_cache/$key")
+}
+
+fun getPicZipCacheTimestamp(cacheDir: File): Long {
+    val tsFile = File(cacheDir, ".cache_ts")
+    return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
+}
+
+fun isPicZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
+
+/**
+ * 解压 .pic.zip：仅建立目录结构并解压前 10 张图到 content。
+ * @return 解压结果（imagePaths 可为空），解压失败返回 null
+ */
+fun extractPicZipToCache(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String,
+    initialCount: Int = 10
+): PicZipExtractResult? {
+    val cacheDir = getPicZipCacheDir(context, zipUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+        }
+        val imagePaths = zip.fileHeaders.asSequence()
+            .filter { !it.isDirectory }
+            .map { it.fileName }
+            .filter { path ->
+                val ext = path.substringAfterLast('.', "").lowercase()
+                ext in PIC_IMAGE_EXTENSIONS
+            }
+            .sorted()
+            .toList()
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        val toExtract = imagePaths.take(initialCount)
+        for (path in toExtract) {
+            val header = zip.getFileHeader(path) ?: continue
+            zip.extractFile(header, contentDir.path)
+        }
+        File(cacheDir, ".image_list").writeText(imagePaths.joinToString("\n"))
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+        return PicZipExtractResult(cacheDir, contentDir, imagePaths, encrypted)
+    } catch (e: Exception) {
+        Log.e(TAG, "extractPicZipToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    }
+}
+
+/**
+ * 将 .pic.zip 中指定下标范围的图片解压到 content 目录（用于按需加载前后 10 张）。
+ * @param password 加密 zip 需传密码，非加密传 null
+ */
+fun extractPicZipImageRange(
+    context: Context,
+    cacheDir: File,
+    contentDir: File,
+    imagePaths: List<String>,
+    fromIndex: Int,
+    toIndex: Int,
+    password: CharArray?
+): Boolean {
+    if (fromIndex >= toIndex || fromIndex < 0 || toIndex > imagePaths.size) return true
+    val zipFile = File(cacheDir, "__archive.zip")
+    if (!zipFile.exists()) return false
+    return try {
+        val zip = ZipFile(zipFile)
+        if (zip.isEncrypted && password != null && password.isNotEmpty()) zip.setPassword(password)
+        for (i in fromIndex until toIndex) {
+            val path = imagePaths[i]
+            val header = zip.getFileHeader(path) ?: continue
+            zip.extractFile(header, contentDir.path)
+        }
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+fun cleanPicZipCache(context: Context, zipUri: Uri) {
+    getPicZipCacheDir(context, zipUri).deleteRecursively()
+}
+
 // ---- EPUB 电子书查看 ----
 
 /** EPUB 章节信息 */
