@@ -126,13 +126,207 @@ import com.kenny.localmanager.file.getEpubChapterFile
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
 
-/** 简易 reStructuredText → HTML，覆盖常用语法（标题、粗/斜体、代码、链接、列表、代码块）。 */
-private fun rstToHtml(rst: String): String {
-    fun escape(s: String): String = s
+private fun escapeHtml(s: String): String = s
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
+
+private fun normalizeCodeLanguage(raw: String?): String? {
+        val lang = raw?.trim()?.lowercase()?.ifBlank { null } ?: return null
+        return when (lang) {
+                "c" -> "c"
+                "c++", "cpp", "cxx", "cc", "hpp", "hxx" -> "cpp"
+                "python", "py" -> "python"
+                "java" -> "java"
+                "kotlin", "kt", "kts" -> "kotlin"
+                "bash", "sh", "shell", "zsh" -> "bash"
+                else -> lang.replace(Regex("[^a-z0-9_+\\-]"), "")
+        }
+}
+
+private fun buildCodeBlockHtml(codeLines: List<String>, language: String? = null): String {
+        val langClass = normalizeCodeLanguage(language)?.takeIf { it.isNotBlank() }?.let { " class=\"language-$it\"" } ?: ""
+        return "<pre><code$langClass>${codeLines.joinToString("\\n")}</code></pre>"
+}
+
+private fun syntaxHighlightStyle(): String = """
+        pre { background: rgba(128,128,128,0.15); }
+        pre code.syntax-highlighted { background: none; }
+        .hl-keyword { color: #b03a2e; font-weight: 600; }
+        .hl-type { color: #7d3c98; }
+        .hl-string { color: #117a65; }
+        .hl-comment { color: #6c757d; font-style: italic; }
+        .hl-number { color: #b9770e; }
+        .hl-function { color: #1f618d; }
+""".trimIndent()
+
+private fun syntaxHighlightScript(): String = """
+        (function() {
+            function esc(s) {
+                return s
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;");
+            }
+
+            function aliasLang(lang) {
+                if (!lang) return null;
+                var l = String(lang).toLowerCase();
+                if (l === "c") return "c";
+                if (["cpp", "c++", "cxx", "cc", "hpp", "hxx"].indexOf(l) >= 0) return "cpp";
+                if (["python", "py"].indexOf(l) >= 0) return "python";
+                if (l === "java") return "java";
+                if (["kotlin", "kt", "kts"].indexOf(l) >= 0) return "kotlin";
+                if (["bash", "sh", "shell", "zsh"].indexOf(l) >= 0) return "bash";
+                return null;
+            }
+
+            function detectLang(el) {
+                var classes = el.className ? el.className.split(/\s+/) : [];
+                for (var i = 0; i < classes.length; i++) {
+                    if (classes[i].indexOf("language-") === 0) {
+                        return aliasLang(classes[i].substring("language-".length));
+                    }
+                }
+                var dataLang = el.getAttribute("data-lang");
+                return aliasLang(dataLang);
+            }
+
+            function cfgFor(lang) {
+                var cLikeKeywords = {
+                    "if":1,"else":1,"for":1,"while":1,"do":1,"switch":1,"case":1,"default":1,
+                    "break":1,"continue":1,"return":1,"goto":1,"sizeof":1,"typedef":1,"const":1,
+                    "static":1,"extern":1,"inline":1,"volatile":1,"enum":1,"struct":1,"class":1,
+                    "public":1,"private":1,"protected":1,"new":1,"delete":1,"try":1,"catch":1,
+                    "throw":1,"throws":1,"finally":1,"import":1,"package":1,"namespace":1,"using":1,
+                    "template":1,"this":1,"super":1,"override":1,"virtual":1,"final":1,"sealed":1
+                };
+                var cLikeTypes = {
+                    "void":1,"int":1,"long":1,"short":1,"char":1,"float":1,"double":1,"bool":1,
+                    "auto":1,"unsigned":1,"signed":1,"size_t":1,"string":1,"String":1,"Object":1,
+                    "var":1,"val":1,"fun":1,"Unit":1,"Any":1,"Nothing":1,"List":1,"Map":1,"Set":1
+                };
+                var pythonKeywords = {
+                    "def":1,"class":1,"if":1,"elif":1,"else":1,"for":1,"while":1,"break":1,
+                    "continue":1,"return":1,"import":1,"from":1,"as":1,"try":1,"except":1,
+                    "finally":1,"raise":1,"with":1,"lambda":1,"yield":1,"pass":1,"global":1,
+                    "nonlocal":1,"assert":1,"del":1,"in":1,"is":1,"not":1,"and":1,"or":1
+                };
+                var bashKeywords = {
+                    "if":1,"then":1,"else":1,"fi":1,"for":1,"in":1,"do":1,"done":1,"while":1,
+                    "case":1,"esac":1,"function":1,"local":1,"export":1,"unset":1,"return":1,
+                    "break":1,"continue":1,"source":1
+                };
+
+                if (lang === "python") {
+                    return { lineComment: "#", blockStart: null, blockEnd: null, keywords: pythonKeywords, types: {} };
+                }
+                if (lang === "bash") {
+                    return { lineComment: "#", blockStart: null, blockEnd: null, keywords: bashKeywords, types: {} };
+                }
+                return { lineComment: "//", blockStart: "/*", blockEnd: "*/", keywords: cLikeKeywords, types: cLikeTypes };
+            }
+
+            function highlightCode(code, lang) {
+                var cfg = cfgFor(lang);
+                var out = "";
+                var i = 0;
+
+                function span(cls, txt) {
+                    return '<span class="' + cls + '">' + esc(txt) + '</span>';
+                }
+
+                while (i < code.length) {
+                    var ch = code[i];
+
+                    if (cfg.blockStart && code.substring(i, i + cfg.blockStart.length) === cfg.blockStart) {
+                        var endIdx = code.indexOf(cfg.blockEnd, i + cfg.blockStart.length);
+                        if (endIdx < 0) endIdx = code.length - cfg.blockEnd.length;
+                        var block = code.substring(i, endIdx + cfg.blockEnd.length);
+                        out += span("hl-comment", block);
+                        i = endIdx + cfg.blockEnd.length;
+                        continue;
+                    }
+
+                    if (cfg.lineComment && code.substring(i, i + cfg.lineComment.length) === cfg.lineComment) {
+                        var lineEnd = code.indexOf("\n", i);
+                        if (lineEnd < 0) lineEnd = code.length;
+                        var line = code.substring(i, lineEnd);
+                        out += span("hl-comment", line);
+                        i = lineEnd;
+                        continue;
+                    }
+
+                    if (ch === '"' || ch === "'" || ch === "`") {
+                        var q = ch;
+                        var j = i + 1;
+                        while (j < code.length) {
+                            if (code[j] === "\\\\") {
+                                j += 2;
+                                continue;
+                            }
+                            if (code[j] === q) {
+                                j++;
+                                break;
+                            }
+                            j++;
+                        }
+                        out += span("hl-string", code.substring(i, j));
+                        i = j;
+                        continue;
+                    }
+
+                    if ((ch >= "0" && ch <= "9") || (ch === "." && i + 1 < code.length && code[i + 1] >= "0" && code[i + 1] <= "9")) {
+                        var n = i + 1;
+                        while (n < code.length && /[0-9a-fA-FxX._]/.test(code[n])) n++;
+                        out += span("hl-number", code.substring(i, n));
+                        i = n;
+                        continue;
+                    }
+
+                    if (/[A-Za-z_]/.test(ch)) {
+                        var k = i + 1;
+                        while (k < code.length && /[A-Za-z0-9_]/.test(code[k])) k++;
+                        var word = code.substring(i, k);
+                        if (cfg.keywords[word]) {
+                            out += span("hl-keyword", word);
+                        } else if (cfg.types[word]) {
+                            out += span("hl-type", word);
+                        } else {
+                            var nextPos = k;
+                            while (nextPos < code.length && /\s/.test(code[nextPos])) nextPos++;
+                            if (nextPos < code.length && code[nextPos] === "(") out += span("hl-function", word);
+                            else out += esc(word);
+                        }
+                        i = k;
+                        continue;
+                    }
+
+                    out += esc(ch);
+                    i++;
+                }
+
+                return out;
+            }
+
+            window.applySyntaxHighlight = function(root) {
+                var scope = root || document;
+                var blocks = scope.querySelectorAll("pre > code");
+                blocks.forEach(function(codeEl) {
+                    var lang = detectLang(codeEl);
+                    if (!lang) return;
+                    if (lang === "mermaid") return;
+                    var raw = codeEl.textContent || "";
+                    codeEl.innerHTML = highlightCode(raw, lang);
+                    codeEl.classList.add("syntax-highlighted");
+                });
+            };
+        })();
+""".trimIndent()
+
+/** 简易 reStructuredText → HTML，覆盖常用语法（标题、粗/斜体、代码、链接、列表、代码块）。 */
+private fun rstToHtml(rst: String): String {
     val lines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     val out = StringBuilder()
     var i = 0
@@ -145,7 +339,7 @@ private fun rstToHtml(rst: String): String {
         if (under != null && next.isNotBlank() && line.isNotBlank() && next.length >= line.length) {
             val level = when (under) { '=', '#' -> 1; '-', '^' -> 2; '~', '"', '\'' -> 3; else -> 2 }
             val tag = "h${level.coerceIn(1, 3)}"
-            out.append("<").append(tag).append(">").append(escape(line.trim())).append("</").append(tag).append(">")
+            out.append("<").append(tag).append(">").append(escapeHtml(line.trim())).append("</").append(tag).append(">")
             i += 2
             continue
         }
@@ -169,12 +363,12 @@ private fun rstToHtml(rst: String): String {
                 if (i < lines.size && lines[i].isBlank()) i++
                 val caption = mutableListOf<String>()
                 while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                    if (lines[i].isNotBlank()) caption.add(rstInlineToHtml(escape(lines[i].trimStart())))
+                    if (lines[i].isNotBlank()) caption.add(rstInlineToHtml(escapeHtml(lines[i].trimStart())))
                     i++
                 }
                 val style = listOfNotNull(width, height).filter { it.isNotBlank() }.joinToString("; ")
                 out.append("<figure>")
-                out.append("<img src=\"").append(escape(path)).append("\" alt=\"").append(alt).append("\"")
+                out.append("<img src=\"").append(escapeHtml(path)).append("\" alt=\"").append(alt).append("\"")
                 if (style.isNotBlank()) out.append(" style=\"").append(style).append("\"")
                 out.append(">")
                 if (caption.isNotEmpty()) out.append("<figcaption>").append(caption.joinToString(" ")).append("</figcaption>")
@@ -187,10 +381,10 @@ private fun rstToHtml(rst: String): String {
         if (line.trim().startsWith(".. math::")) {
             val restOfLine = line.trim().removePrefix(".. math::").trim()
             val mathLines = mutableListOf<String>()
-            if (restOfLine.isNotBlank()) mathLines.add(escape(restOfLine))
+            if (restOfLine.isNotBlank()) mathLines.add(escapeHtml(restOfLine))
             i++
             while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) mathLines.add(escape(lines[i].trimStart()))
+                if (lines[i].isNotBlank()) mathLines.add(escapeHtml(lines[i].trimStart()))
                 i++
             }
             if (mathLines.isNotEmpty()) {
@@ -202,6 +396,23 @@ private fun rstToHtml(rst: String): String {
             }
             continue
         }
+        if (line.trim().startsWith(".. code-block::") || line.trim().startsWith(".. sourcecode::")) {
+            val directive = line.trim()
+            val langRaw = directive.substringAfter("::", "").trim()
+            val language = normalizeCodeLanguage(langRaw)
+            i++
+            while (i < lines.size && lines[i].trimStart().startsWith(":")) i++
+            if (i < lines.size && lines[i].isBlank()) i++
+            val codeLines = mutableListOf<String>()
+            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
+                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
+                i++
+            }
+            if (codeLines.isNotEmpty()) {
+                out.append(buildCodeBlockHtml(codeLines, language))
+            }
+            continue
+        }
         if (line.trim().startsWith(".. ") && (line.trim().length <= 3 || line.trim()[3].isWhitespace() || line.trim()[3] == ':')) {
             i++
             continue
@@ -209,7 +420,7 @@ private fun rstToHtml(rst: String): String {
         if (line.trim().matches(Regex("^[-*•]\\s.+"))) {
             out.append("<ul>")
             while (i < lines.size && lines[i].trim().matches(Regex("^[-*•]\\s.+"))) {
-                out.append("<li>").append(rstInlineToHtml(escape(lines[i].trim().drop(1).trim()))).append("</li>")
+                out.append("<li>").append(rstInlineToHtml(escapeHtml(lines[i].trim().drop(1).trim()))).append("</li>")
                 i++
             }
             out.append("</ul>")
@@ -218,7 +429,7 @@ private fun rstToHtml(rst: String): String {
         if (line.trim().matches(Regex("^\\d+\\.\\s.+"))) {
             out.append("<ol>")
             while (i < lines.size && lines[i].trim().matches(Regex("^\\d+\\.\\s.+"))) {
-                out.append("<li>").append(rstInlineToHtml(escape(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))).append("</li>")
+                out.append("<li>").append(rstInlineToHtml(escapeHtml(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))).append("</li>")
                 i++
             }
             out.append("</ol>")
@@ -228,11 +439,11 @@ private fun rstToHtml(rst: String): String {
             i++
             val codeLines = mutableListOf<String>()
             while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) codeLines.add(escape(lines[i].trimStart()))
+                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
                 i++
             }
             if (codeLines.isNotEmpty()) {
-                out.append("<pre><code>").append(codeLines.joinToString("\n")).append("</code></pre>")
+                out.append(buildCodeBlockHtml(codeLines))
             }
             continue
         }
@@ -244,10 +455,10 @@ private fun rstToHtml(rst: String): String {
         if (line.startsWith(" ") || line.startsWith("\t")) {
             val codeLines = mutableListOf<String>()
             while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) codeLines.add(escape(lines[i].trimStart()))
+                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
                 i++
             }
-            if (codeLines.isNotEmpty()) out.append("<pre><code>").append(codeLines.joinToString("\n")).append("</code></pre>")
+            if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines))
             continue
         }
         // RST：仅空行分段；连续非空行合并为一段，用空格连接
@@ -257,7 +468,7 @@ private fun rstToHtml(rst: String): String {
             paraLines.add(lines[i])
         }
         val paraText = paraLines.joinToString(" ")
-        out.append("<p>").append(rstInlineToHtml(escape(paraText))).append("</p>")
+        out.append("<p>").append(rstInlineToHtml(escapeHtml(paraText))).append("</p>")
         i++
     }
     return out.toString()
@@ -266,6 +477,7 @@ private fun rstToHtml(rst: String): String {
 private fun rstLineStartsBlock(line: String, next: String?, peekUnderlineChar: (String) -> Char?): Boolean {
     val t = line.trim()
     if (t.startsWith(".. figure::") || t.startsWith(".. math::")) return true
+    if (t.startsWith(".. code-block::") || t.startsWith(".. sourcecode::")) return true
     if (t.startsWith(".. ") && (t.length <= 3 || t.getOrNull(3)?.isWhitespace() == true || t.getOrNull(3) == ':')) return true
     if (t == ".." || (t.startsWith("::") && t.length == 2)) return true
     if (t.matches(Regex("^[-*•]\\s.+"))) return true
@@ -511,6 +723,8 @@ fun MarkdownViewerScreen(
                 .replace("</script>", "<\\/script>")
         } catch (_: Exception) { "" }
     }
+    val syntaxHighlightCss = remember { syntaxHighlightStyle() }
+    val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     LaunchedEffect(currentUri, currentEncrypted) {
         loading = true
@@ -747,14 +961,19 @@ fun MarkdownViewerScreen(
                             table { border-collapse: collapse; width: 100%; }
                             th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
                             th { background: rgba(128,128,128,0.15); }
+                            $syntaxHighlightCss
                         </style>
                     </head>
                     <body>${htmlContent}
                     <script>$katexJs</script>
                     <script>$autoRenderJs</script>
                     <script>$mermaidJs</script>
+                    <script>$syntaxHighlightJs</script>
                     <script>
                     document.addEventListener("DOMContentLoaded", function() {
+                        if (typeof applySyntaxHighlight === "function") {
+                            applySyntaxHighlight(document);
+                        }
                         if (typeof katex !== "undefined") {
                             document.querySelectorAll(".katex-inline").forEach(function(el) {
                                 var latex = el.getAttribute("data-latex");
@@ -851,6 +1070,8 @@ fun PassContentViewerScreen(
                 .replace("</script>", "<\\/script>")
         } catch (_: Exception) { "" }
     }
+    val syntaxHighlightCss = remember { syntaxHighlightStyle() }
+    val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     val htmlContent = remember(decryptedBytes, innerFileName) {
         val decoded = decryptedBytes.decodeToString()
@@ -938,14 +1159,19 @@ fun PassContentViewerScreen(
                     table { border-collapse: collapse; width: 100%; }
                     th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
                     th { background: rgba(128,128,128,0.15); }
+                    $syntaxHighlightCss
                 </style>
             </head>
             <body>$htmlContent
             <script>$katexJs</script>
             <script>$autoRenderJs</script>
             <script>$mermaidJs</script>
+            <script>$syntaxHighlightJs</script>
             <script>
             document.addEventListener("DOMContentLoaded", function() {
+                if (typeof applySyntaxHighlight === "function") {
+                    applySyntaxHighlight(document);
+                }
                 if (typeof katex !== "undefined") {
                     document.querySelectorAll(".katex-inline").forEach(function(el) {
                         var latex = el.getAttribute("data-latex");
@@ -1058,6 +1284,8 @@ fun MdZipViewerScreen(
                 .replace("</script>", "<\\/script>")
         } catch (_: Exception) { "" }
     }
+    val syntaxHighlightCss = remember { syntaxHighlightStyle() }
+    val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     Log.d(MDZIP_DEBUG, "打开 zipFileName=$zipFileName contentDir=${contentDir.absolutePath} initialTargetFile=${initialTargetFile.absolutePath}")
     logDebug?.invoke("[MDZIP] 打开 zipFileName=$zipFileName")
@@ -1314,14 +1542,19 @@ fun MdZipViewerScreen(
                             table { border-collapse: collapse; width: 100%; }
                             th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
                             th { background: rgba(128,128,128,0.15); }
+                            $syntaxHighlightCss
                         </style>
                     </head>
                     <body>${htmlContent}
                     <script>$katexJs</script>
                     <script>$autoRenderJs</script>
                     <script>$mermaidJs</script>
+                    <script>$syntaxHighlightJs</script>
                     <script>
                     document.addEventListener("DOMContentLoaded", function() {
+                        if (typeof applySyntaxHighlight === "function") {
+                            applySyntaxHighlight(document);
+                        }
                         if (typeof katex !== "undefined") {
                             document.querySelectorAll(".katex-inline").forEach(function(el) {
                                 var latex = el.getAttribute("data-latex");
