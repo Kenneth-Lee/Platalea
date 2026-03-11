@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -171,6 +172,10 @@ import com.kenny.localmanager.file.tryPicZipPassword
 import com.kenny.localmanager.file.getPicZipCacheTimestamp
 import com.kenny.localmanager.file.isPicZipCacheEncrypted
 import com.kenny.localmanager.file.cleanPicZipCache
+import com.kenny.localmanager.file.CacheEntry
+import com.kenny.localmanager.file.getCacheEntries
+import com.kenny.localmanager.file.clearCacheEntry
+import com.kenny.localmanager.file.formatSize
 import com.kenny.localmanager.ui.EpubViewerScreen
 import com.kenny.localmanager.ui.PicZipViewerScreen
 import com.kenny.localmanager.ui.PdfViewerScreen
@@ -551,6 +556,7 @@ fun FileBrowserApp(
             var showPlaybackScreen by remember { mutableStateOf(false) }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
+            var showCacheManagementDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
             LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
@@ -850,6 +856,7 @@ fun FileBrowserApp(
                     }
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
+                    showCacheManagementDialog -> showCacheManagementDialog = false
                     showGitConfigDialog -> showGitConfigDialog = false
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
@@ -1329,6 +1336,9 @@ fun FileBrowserApp(
             if (showAboutDialog) {
                 AboutDialog(onDismiss = { showAboutDialog = false })
             }
+            if (showCacheManagementDialog) {
+                CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
+            }
             if (showConfigDialog) {
                 ConfigDialog(
                     onDismiss = { showConfigDialog = false },
@@ -1349,6 +1359,7 @@ fun FileBrowserApp(
                     onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
                     onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
+                    onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
                     onChangeRoot = {
                         val r = rootUri
                         if (r == null) {
@@ -4876,6 +4887,75 @@ private const val MIN_PREVIEW_BYTES = 1024
 private const val MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
 @Composable
+fun CacheManagementDialog(
+    context: Context,
+    onDismiss: () -> Unit
+) {
+    var entries by remember { mutableStateOf<List<CacheEntry>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        entries = withContext(Dispatchers.IO) { getCacheEntries(context) }
+        loading = false
+    }
+    fun refresh() {
+        loading = true
+        scope.launch {
+            entries = withContext(Dispatchers.IO) { getCacheEntries(context) }
+            loading = false
+        }
+    }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                Modifier
+                    .padding(24.dp)
+                    .widthIn(max = 400.dp)
+            ) {
+                Text("缓存管理", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Spacer(Modifier.height(16.dp))
+                if (loading) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(Modifier.padding(24.dp))
+                    }
+                } else {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        entries.forEach { entry ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(entry.displayName, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(formatSize(entry.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                TextButton(
+                                    onClick = {
+                                        scope.launch {
+                                            withContext(Dispatchers.IO) { clearCacheEntry(context, entry) }
+                                            refresh()
+                                            Toast.makeText(context, "已清空 ${entry.displayName}", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                ) { Text("清空") }
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+        }
+    }
+}
+
+@Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
@@ -4892,6 +4972,7 @@ fun ConfigDialog(
     onFtpTimeoutMinutesChange: (Int) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
+    onOpenCacheManagement: () -> Unit,
     onChangeRoot: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
@@ -4995,6 +5076,8 @@ fun ConfigDialog(
                 Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text("Git 配置") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { onDismiss(); onChangeRoot() },
