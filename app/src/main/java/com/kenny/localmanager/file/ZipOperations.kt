@@ -697,9 +697,55 @@ fun extractPicZipImageRange(
         if (zip.isEncrypted && password != null && password.isNotEmpty()) zip.setPassword(password)
         for (i in fromIndex until toIndex) {
             val path = imagePaths[i]
+            val destFile = File(contentDir, path)
+            if (destFile.exists()) continue
             val header = zip.getFileHeader(path) ?: continue
             zip.extractFile(header, contentDir.path)
         }
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/**
+ * 验证加密 .pic.zip 的密码是否正确（用于复用已有缓存时校验）。
+ * @return 密码正确且能读取到第一个图片条目时返回 true
+ */
+fun tryPicZipPassword(context: Context, zipUri: Uri, password: CharArray?): Boolean {
+    if (password == null || password.isEmpty()) return false
+    val cacheDir = getPicZipCacheDir(context, zipUri)
+    val tmpZip = File(cacheDir, "__archive.zip")
+    if (!tmpZip.exists()) {
+        val fallback = java.io.File(context.cacheDir, "pic_zip_verify_${System.currentTimeMillis()}.zip")
+        try {
+            context.contentResolver.openInputStream(zipUri)?.use { fallback.outputStream().use { o -> it.copyTo(o) } }
+                ?: return false
+            return tryZipPassword(fallback, password)
+        } finally {
+            fallback.delete()
+        }
+    }
+    return tryZipPassword(tmpZip, password)
+}
+
+private fun tryZipPassword(zipFile: java.io.File, password: CharArray): Boolean {
+    return try {
+        val zip = ZipFile(zipFile)
+        if (!zip.isEncrypted) return true
+        zip.setPassword(password)
+        val imagePaths = zip.fileHeaders.asSequence()
+            .filter { !it.isDirectory }
+            .map { it.fileName }
+            .filter { path ->
+                val ext = path.substringAfterLast('.', "").lowercase()
+                ext in PIC_IMAGE_EXTENSIONS
+            }
+            .sorted()
+            .toList()
+        val first = imagePaths.firstOrNull() ?: return false
+        val header = zip.getFileHeader(first) ?: return false
+        zip.getInputStream(header).use { it.read() }
         true
     } catch (_: Exception) {
         false

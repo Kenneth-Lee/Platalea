@@ -10,21 +10,29 @@ import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -74,7 +82,7 @@ fun PicZipViewerScreen(
     isEncrypted: Boolean,
     password: CharArray?,
     initialIndex: Int = 0,
-    onBack: () -> Unit
+    onBack: (deleteCache: Boolean?) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -88,10 +96,14 @@ fun PicZipViewerScreen(
     var offset by remember { mutableStateOf(Offset.Zero) }
     var isMaximized by remember { mutableStateOf(false) }
     var showDirectory by remember { mutableStateOf(false) }
+    var showJumpToDialog by remember { mutableStateOf(false) }
+    var jumpToInput by remember { mutableStateOf("") }
+    var showExitCacheDialog by remember { mutableStateOf(false) }
 
-    fun loadBitmapForIndex(index: Int) {
+    fun loadBitmapForIndex(index: Int, onLoaded: (() -> Unit)? = null) {
         if (index < 0 || index >= imagePaths.size) {
             currentBitmap = null
+            onLoaded?.invoke()
             return
         }
         val path = imagePaths[index]
@@ -112,6 +124,7 @@ fun PicZipViewerScreen(
             }
             withContext(Dispatchers.Main.immediate) {
                 if (currentIndex == index) currentBitmap = bitmap
+                onLoaded?.invoke()
             }
         }
     }
@@ -123,9 +136,22 @@ fun PicZipViewerScreen(
         }
         currentBitmap = null
         loading = true
-        val batchStart = (currentIndex / BATCH_SIZE) * BATCH_SIZE
+        val idx = currentIndex
+        val batchStart = (idx / BATCH_SIZE) * BATCH_SIZE
         val batchEnd = minOf(imagePaths.size, batchStart + BATCH_SIZE)
         withContext(Dispatchers.IO) {
+            extractPicZipImageRange(
+                context,
+                cacheDir,
+                contentDir,
+                imagePaths,
+                idx,
+                idx + 1,
+                if (isEncrypted) password else null
+            )
+        }
+        loadBitmapForIndex(idx) { loading = false }
+        scope.launch(Dispatchers.IO) {
             extractPicZipImageRange(
                 context,
                 cacheDir,
@@ -136,8 +162,6 @@ fun PicZipViewerScreen(
                 if (isEncrypted) password else null
             )
         }
-        loading = false
-        loadBitmapForIndex(currentIndex)
     }
 
     LaunchedEffect(currentIndex) {
@@ -210,6 +234,9 @@ fun PicZipViewerScreen(
         offset = Offset.Zero
         isMaximized = false
     }
+    BackHandler(enabled = !isZoomed) {
+        if (isEncrypted) showExitCacheDialog = true else onBack(null)
+    }
 
     Scaffold(
         topBar = if (isZoomed) { {} } else {
@@ -223,7 +250,9 @@ fun PicZipViewerScreen(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = {
+                        if (isEncrypted) showExitCacheDialog = true else onBack(null)
+                    }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -237,7 +266,10 @@ fun PicZipViewerScreen(
                             "${currentIndex + 1} / ${imagePaths.size}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(end = 8.dp).padding(vertical = 12.dp)
+                            modifier = Modifier
+                                .padding(end = 8.dp)
+                                .padding(vertical = 12.dp)
+                                .clickable { jumpToInput = "${currentIndex + 1}"; showJumpToDialog = true }
                         )
                         IconButton(onClick = { showDirectory = true }) {
                             Icon(Icons.Filled.List, contentDescription = "目录")
@@ -378,12 +410,19 @@ fun PicZipViewerScreen(
 
     if (showDirectory) {
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val listState = rememberLazyListState()
+        LaunchedEffect(showDirectory, currentIndex) {
+            if (showDirectory && imagePaths.isNotEmpty()) {
+                listState.animateScrollToItem(currentIndex.coerceIn(0, imagePaths.size - 1))
+            }
+        }
         ModalBottomSheet(
             onDismissRequest = { showDirectory = false },
             sheetState = sheetState,
             shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
         ) {
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp)
@@ -409,5 +448,60 @@ fun PicZipViewerScreen(
                 }
             }
         }
+    }
+
+    // 跳转到第几张
+    if (showJumpToDialog && imagePaths.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { showJumpToDialog = false },
+            title = { Text("跳转到第几张") },
+            text = {
+                Column {
+                    Text("共 ${imagePaths.size} 张，输入 1～${imagePaths.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = jumpToInput,
+                        onValueChange = { jumpToInput = it.filter { c -> c.isDigit() } },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("页码") },
+                        singleLine = true
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val n = jumpToInput.toIntOrNull()?.coerceIn(1, imagePaths.size) ?: (currentIndex + 1)
+                        currentIndex = n - 1
+                        scale = 1f
+                        offset = Offset.Zero
+                        showJumpToDialog = false
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = { TextButton(onClick = { showJumpToDialog = false }) { Text("取消") } }
+        )
+    }
+
+    // 加密包退出时是否删除缓存
+    if (showExitCacheDialog) {
+        AlertDialog(
+            onDismissRequest = { showExitCacheDialog = false },
+            title = { Text("退出加密图片包") },
+            text = { Text("是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可使用已有缓存。", color = MaterialTheme.colorScheme.onSurface) },
+            confirmButton = {
+                Button(onClick = {
+                    showExitCacheDialog = false
+                    try { cacheDir.deleteRecursively() } catch (_: Exception) {}
+                    onBack(true)
+                }) { Text("删除缓存并退出") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showExitCacheDialog = false
+                    onBack(false)
+                }) { Text("保留缓存并退出") }
+            }
+        )
     }
 }

@@ -163,8 +163,10 @@ import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.getEpubCacheTimestamp
 import com.kenny.localmanager.file.isEpubCacheEncrypted
 import com.kenny.localmanager.file.cleanEpubCache
+import com.kenny.localmanager.file.PicZipExtractResult
 import com.kenny.localmanager.file.extractPicZipToCache
 import com.kenny.localmanager.file.getPicZipCacheDir
+import com.kenny.localmanager.file.tryPicZipPassword
 import com.kenny.localmanager.file.getPicZipCacheTimestamp
 import com.kenny.localmanager.file.isPicZipCacheEncrypted
 import com.kenny.localmanager.file.cleanPicZipCache
@@ -467,10 +469,7 @@ fun FileBrowserApp(
         }
         picZipViewState != null -> {
             val state = picZipViewState!!
-            BackHandler {
-                if (state.isEncrypted) cleanPicZipCache(context, state.zipUri)
-                picZipViewState = null
-            }
+            BackHandler { picZipViewState = null }
             PicZipViewerScreen(
                 contentDir = state.contentDir,
                 imagePaths = state.imagePaths,
@@ -478,8 +477,8 @@ fun FileBrowserApp(
                 isEncrypted = state.isEncrypted,
                 password = state.password,
                 initialIndex = state.initialIndex,
-                onBack = {
-                    if (state.isEncrypted) cleanPicZipCache(context, state.zipUri)
+                onBack = { doDelete ->
+                    if (doDelete == true) cleanPicZipCache(context, state.zipUri)
                     picZipViewState = null
                 }
             )
@@ -2091,21 +2090,35 @@ fun FileBrowserApp(
                                     picZipInProgress = true
                                     val pwd = picZipPassword.toCharArray()
                                     scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            extractPicZipToCache(context, target.uri, pwd, target.name)
+                                        var result: PicZipExtractResult? = null
+                                        var cachedInitialIndex = 0
+                                        withContext(Dispatchers.IO) {
+                                            val cacheDir = getPicZipCacheDir(context, target.uri)
+                                            val contentDir = java.io.File(cacheDir, "content")
+                                            val listFile = java.io.File(cacheDir, ".image_list")
+                                            if (contentDir.exists() && listFile.exists() && tryPicZipPassword(context, target.uri, pwd)) {
+                                                val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                                                val lastIndexFile = java.io.File(cacheDir, ".last_index")
+                                                cachedInitialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, (paths.size - 1).coerceAtLeast(0)) ?: 0
+                                                result = PicZipExtractResult(cacheDir, contentDir, paths, true)
+                                            }
+                                            if (result == null) {
+                                                result = extractPicZipToCache(context, target.uri, pwd, target.name)
+                                            }
                                         }
                                         picZipInProgress = false
-                                        if (result != null) {
+                                        val res = result
+                                        if (res != null) {
                                             picZipTarget = null
                                             picZipPassword = ""
                                             picZipViewState = PicZipViewState(
-                                                contentDir = result.contentDir,
-                                                imagePaths = result.imagePaths,
+                                                contentDir = res.contentDir,
+                                                imagePaths = res.imagePaths,
                                                 zipFileName = target.name,
                                                 zipUri = target.uri,
                                                 isEncrypted = true,
                                                 password = pwd,
-                                                initialIndex = 0
+                                                initialIndex = cachedInitialIndex
                                             )
                                         } else {
                                             Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
