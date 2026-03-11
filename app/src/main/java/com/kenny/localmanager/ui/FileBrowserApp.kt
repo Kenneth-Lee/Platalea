@@ -477,6 +477,7 @@ fun FileBrowserApp(
                 zipFileName = state.zipFileName,
                 isEncrypted = state.isEncrypted,
                 password = state.password,
+                initialIndex = state.initialIndex,
                 onBack = {
                     if (state.isEncrypted) cleanPicZipCache(context, state.zipUri)
                     picZipViewState = null
@@ -781,6 +782,8 @@ fun FileBrowserApp(
                     val listFile = java.io.File(cacheDir, ".image_list")
                     if (contentDir.exists() && listFile.exists()) {
                         val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                        val lastIndexFile = java.io.File(cacheDir, ".last_index")
+                        val initialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, paths.size - 1) ?: 0
                         picZipTarget = null
                         picZipViewState = PicZipViewState(
                             contentDir = contentDir,
@@ -788,7 +791,8 @@ fun FileBrowserApp(
                             zipFileName = target.name,
                             zipUri = target.uri,
                             isEncrypted = false,
-                            password = null
+                            password = null,
+                            initialIndex = initialIndex
                         )
                         return@LaunchedEffect
                     }
@@ -807,7 +811,8 @@ fun FileBrowserApp(
                             zipFileName = target.name,
                             zipUri = target.uri,
                             isEncrypted = false,
-                            password = null
+                            password = null,
+                            initialIndex = 0
                         )
                     } else {
                         Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
@@ -2099,7 +2104,8 @@ fun FileBrowserApp(
                                                 zipFileName = target.name,
                                                 zipUri = target.uri,
                                                 isEncrypted = true,
-                                                password = pwd
+                                                password = pwd,
+                                                initialIndex = 0
                                             )
                                         } else {
                                             Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
@@ -2687,7 +2693,8 @@ private data class PicZipViewState(
     val zipFileName: String,
     val zipUri: Uri,
     val isEncrypted: Boolean,
-    val password: CharArray? = null
+    val password: CharArray? = null,
+    val initialIndex: Int = 0
 )
 
 /** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */
