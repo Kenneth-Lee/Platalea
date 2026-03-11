@@ -222,7 +222,7 @@ fun PicZipViewerScreen(
 
     val transformableState = rememberTransformableState { zoomChange, offsetChange, _ ->
         scale = (scale * zoomChange).coerceIn(MIN_SCALE, MAX_SCALE)
-        offset += offsetChange
+        offset += Offset(offsetChange.x * scale, offsetChange.y * scale)
         if (scale <= 1.1f) isMaximized = false
     }
 

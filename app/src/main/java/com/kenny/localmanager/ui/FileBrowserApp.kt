@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
@@ -4198,6 +4199,9 @@ fun PlaybackScreen(
     val scope = rememberCoroutineScope()
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
+    var showPlaylistNoteDialog by remember { mutableStateOf(false) }
+    var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
+    var playlistNoteEditText by remember { mutableStateOf("") }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -4253,11 +4257,32 @@ fun PlaybackScreen(
                     Text("列表已空", style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
-                LazyColumn(
-                    Modifier.fillMaxSize().padding(padding),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
+                Column(Modifier.fillMaxSize().padding(padding)) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                playlistNoteEditTarget = pl
+                                playlistNoteEditText = pl.note
+                                showPlaylistNoteDialog = true
+                            }
+                            .padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            if (pl.note.isNotBlank()) {
+                                Text(pl.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            } else {
+                                Text("点击添加备注", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Icon(Icons.Filled.Edit, contentDescription = "编辑备注", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    LazyColumn(
+                        Modifier.fillMaxSize(),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                     items(pl.uris.size) { i ->
                         val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
                         val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
@@ -4338,6 +4363,7 @@ fun PlaybackScreen(
                             }
                         }
                     }
+                }
                 }
             }
         } else {
@@ -4451,7 +4477,17 @@ fun PlaybackScreen(
                             }
                             Column(Modifier.weight(1f)) {
                                 Text(pl.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (pl.note.isNotBlank()) {
+                                    Text(pl.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
                                 Text("${pl.trackCount} 首", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            IconButton(onClick = {
+                                playlistNoteEditTarget = pl
+                                playlistNoteEditText = pl.note
+                                showPlaylistNoteDialog = true
+                            }) {
+                                Icon(Icons.Filled.Edit, contentDescription = "编辑备注", Modifier.size(22.dp))
                             }
                             IconButton(onClick = { selectedPlaylistId = pl.id }) {
                                 Icon(Icons.Default.List, contentDescription = "查看列表音乐", Modifier.size(24.dp))
@@ -4499,6 +4535,31 @@ fun PlaybackScreen(
                 }
             }
         }
+        }
+        playlistNoteEditTarget?.let { target ->
+            AlertDialog(
+                onDismissRequest = { playlistNoteEditTarget = null },
+                title = { Text("播放列表备注") },
+                text = {
+                    OutlinedTextField(
+                        value = playlistNoteEditText,
+                        onValueChange = { playlistNoteEditText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("备注") },
+                        minLines = 2,
+                        maxLines = 4
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        scope.launch {
+                            prefs.updatePlaylist(target.copy(note = playlistNoteEditText.trim()))
+                            playlistNoteEditTarget = null
+                        }
+                    }) { Text("保存") }
+                },
+                dismissButton = { TextButton(onClick = { playlistNoteEditTarget = null }) { Text("取消") } }
+            )
         }
     }
 }

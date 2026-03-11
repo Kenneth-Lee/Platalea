@@ -5,11 +5,12 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * 播放列表：名称 + 曲目（uri + 显示名），用于持久化与恢复播放进度。
+ * 播放列表：名称 + 备注（可选）+ 曲目（uri + 显示名），用于持久化与恢复播放进度。
  */
 data class Playlist(
     val id: String,
     val name: String,
+    val note: String = "",
     val uris: List<String>,
     val names: List<String>
 ) {
@@ -18,6 +19,7 @@ data class Playlist(
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("name", name)
+        put("note", note)
         put("uris", JSONArray(uris))
         put("names", JSONArray(names))
     }
@@ -26,6 +28,7 @@ data class Playlist(
         fun fromJson(obj: JSONObject): Playlist = Playlist(
             id = obj.optString("id", UUID.randomUUID().toString()),
             name = obj.optString("name", ""),
+            note = obj.optString("note", ""),
             uris = jsonArrayToList(obj.optJSONArray("uris")),
             names = jsonArrayToList(obj.optJSONArray("names"))
         )
