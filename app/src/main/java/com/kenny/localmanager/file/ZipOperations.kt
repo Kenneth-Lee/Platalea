@@ -261,6 +261,71 @@ fun isZipEncrypted(context: Context, zipUri: Uri): Boolean {
     finally { cache.delete() }
 }
 
+/** 获取 zip 第一层目录/文件列表时的结果。 */
+sealed class ZipFirstLevelResult {
+    /** 成功，entries 为第一层名称列表（已排序）。 */
+    data class Ok(val entries: List<String>) : ZipFirstLevelResult()
+    /** 顶层仅有一个目录（针对该目录压缩），rootDirName 为目录名，children 为该目录下第一层子项（已排序）。 */
+    data class OkSingleDir(val rootDirName: String, val children: List<String>) : ZipFirstLevelResult()
+    /** 加密 zip，需提供密码后再请求。 */
+    object Encrypted : ZipFirstLevelResult()
+    /** 读取失败或非 zip。 */
+    object Error : ZipFirstLevelResult()
+}
+
+/**
+ * 读取 zip 第一层内容列表（仅目录/文件名，不解压）。
+ * 若顶层只有一个目录，则视为“针对该目录压缩”，返回该目录名及其第一层子项。
+ * @param password 加密 zip 的密码，无密码传 null；为 Encrypted 时可带密码重试。
+ */
+fun getZipFirstLevelEntries(context: Context, zipUri: Uri, password: CharArray?): ZipFirstLevelResult {
+    val cache = File(context.cacheDir, "zip_list_${System.currentTimeMillis()}.zip")
+    return try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            cache.outputStream().use { output -> input.copyTo(output) }
+        } ?: return ZipFirstLevelResult.Error
+        val zip = ZipFile(cache)
+        if (zip.isEncrypted) {
+            if (password == null || password.isEmpty()) return ZipFirstLevelResult.Encrypted
+            zip.setPassword(password)
+        }
+        val firstLevel = mutableSetOf<String>()
+        val firstLevelDirs = mutableSetOf<String>()
+        for (header in zip.fileHeaders) {
+            val path = header.fileName
+            val top = path.substringBefore("/").ifEmpty { path }
+            if (top.isNotEmpty()) {
+                firstLevel.add(top)
+                if (path.startsWith("$top/")) firstLevelDirs.add(top)
+            }
+        }
+        val sortedFirst = firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it }
+        if (firstLevel.size == 1) {
+            val rootName = firstLevel.single()
+            val prefix = "$rootName/"
+            val hasChildrenUnderRoot = zip.fileHeaders.any { it.fileName.startsWith(prefix) }
+            if (hasChildrenUnderRoot) {
+                val childToDir = mutableMapOf<String, Boolean>()
+                for (header in zip.fileHeaders) {
+                    if (!header.fileName.startsWith(prefix)) continue
+                    val rest = header.fileName.removePrefix(prefix)
+                    val childName = rest.substringBefore("/")
+                    if (childName.isEmpty()) continue
+                    val isDir = rest == "$childName/" || rest.startsWith("$childName/")
+                    childToDir[childName] = childToDir[childName] == true || isDir
+                }
+                val children = childToDir.entries.sortedBy { it.key }.map { (name, isDir) -> if (isDir) "$name/" else name }
+                return ZipFirstLevelResult.OkSingleDir(rootName, children)
+            }
+        }
+        ZipFirstLevelResult.Ok(sortedFirst)
+    } catch (_: Exception) {
+        ZipFirstLevelResult.Error
+    } finally {
+        cache.delete()
+    }
+}
+
 // ---- .md.zip 压缩 Markdown 查看 ----
 
 /** 解压 .md.zip 到缓存目录后的结果。 */

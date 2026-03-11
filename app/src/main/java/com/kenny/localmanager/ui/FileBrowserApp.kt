@@ -141,6 +141,8 @@ import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.isZipEncrypted
+import com.kenny.localmanager.file.getZipFirstLevelEntries
+import com.kenny.localmanager.file.ZipFirstLevelResult
 import com.kenny.localmanager.file.extractMdZipToCache
 import com.kenny.localmanager.file.getMdZipCacheDir
 import com.kenny.localmanager.file.getMdZipCacheTimestamp
@@ -3396,6 +3398,17 @@ internal fun FileBrowserScreen(
         var detailRenameValue by remember(detailTarget.uri) { mutableStateOf(detailTarget.name) }
         var detailMeta by remember(detailTarget.uri) { mutableStateOf<Map<String, String>>(emptyMap()) }
         val detailRenameFocus = remember { FocusRequester() }
+        val isZipFile = detailTarget.name.endsWith(".zip", ignoreCase = true)
+        var zipDetailResult by remember(detailTarget.uri) { mutableStateOf<ZipFirstLevelResult?>(null) }
+        var zipDetailPassword by remember(detailTarget.uri) { mutableStateOf("") }
+        var zipDetailShowPasswordInput by remember(detailTarget.uri) { mutableStateOf(false) }
+        val detailScope = rememberCoroutineScope()
+
+        LaunchedEffect(detailTarget.uri) {
+            if (isZipFile) {
+                zipDetailResult = withContext(Dispatchers.IO) { getZipFirstLevelEntries(context, detailTarget.uri, null) }
+            }
+        }
 
         LaunchedEffect(detailTarget.uri) {
             withContext(Dispatchers.IO) {
@@ -3529,6 +3542,80 @@ internal fun FileBrowserScreen(
                     MetaRow("类型", if (detailTarget.isDirectory) "文件夹" else mimeType.ifEmpty { "文件" })
                     if (!detailTarget.isDirectory) MetaRow("大小", sizeStr)
                     MetaRow("修改时间", displayModified)
+
+                    if (isZipFile) {
+                        Spacer(Modifier.height(16.dp))
+                        Text("ZIP 内容（第一层）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(8.dp))
+                        when (val r = zipDetailResult) {
+                            is ZipFirstLevelResult.Ok -> {
+                                if (r.entries.isEmpty()) {
+                                    Text("（空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                } else {
+                                    Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                                        r.entries.forEach { entry ->
+                                            Text(entry, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+                            is ZipFirstLevelResult.OkSingleDir -> {
+                                Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                                    Text("${r.rootDirName}/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                    if (r.children.isEmpty()) {
+                                        Text("  （空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    } else {
+                                        r.children.forEach { child ->
+                                            Text("  $child", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        }
+                                    }
+                                }
+                            }
+                            ZipFirstLevelResult.Encrypted -> {
+                                if (!zipDetailShowPasswordInput) {
+                                    OutlinedButton(onClick = { zipDetailShowPasswordInput = true }) {
+                                        Text("输入密码查看内容")
+                                    }
+                                } else {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        OutlinedTextField(
+                                            value = zipDetailPassword,
+                                            onValueChange = { zipDetailPassword = it },
+                                            label = { Text("密码") },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth(),
+                                            visualTransformation = PasswordVisualTransformation()
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Row(horizontalArrangement = Arrangement.End) {
+                                            TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text("取消") }
+                                            Spacer(Modifier.width(8.dp))
+                                            Button(
+                                                onClick = {
+                                                    detailScope.launch {
+                                                        val res = withContext(Dispatchers.IO) {
+                                                            getZipFirstLevelEntries(context, detailTarget.uri, zipDetailPassword.toCharArray())
+                                                        }
+                                                        zipDetailResult = res
+                                                        if (res is ZipFirstLevelResult.Error) {
+                                                            Toast.makeText(context, "密码错误或无法读取", Toast.LENGTH_SHORT).show()
+                                                        }
+                                                    }
+                                                },
+                                                enabled = zipDetailPassword.isNotEmpty()
+                                            ) { Text("确定") }
+                                        }
+                                    }
+                                }
+                            }
+                            ZipFirstLevelResult.Error -> {
+                                Text("无法读取 ZIP 内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                            null -> {
+                                CircularProgressIndicator(Modifier.size(24.dp))
+                            }
+                        }
+                    }
 
                     Spacer(Modifier.height(16.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
