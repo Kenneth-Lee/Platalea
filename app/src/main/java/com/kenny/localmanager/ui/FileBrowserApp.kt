@@ -4476,18 +4476,13 @@ fun PlaybackScreen(
                                 )
                             }
                             Column(Modifier.weight(1f)) {
-                                Text(pl.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                if (pl.note.isNotBlank()) {
-                                    Text(pl.note, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                }
+                                Text(
+                                    if (pl.note.isNotBlank()) pl.note else pl.name,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    maxLines = if (pl.note.isNotBlank()) 2 else 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                                 Text("${pl.trackCount} 首", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            IconButton(onClick = {
-                                playlistNoteEditTarget = pl
-                                playlistNoteEditText = pl.note
-                                showPlaylistNoteDialog = true
-                            }) {
-                                Icon(Icons.Filled.Edit, contentDescription = "编辑备注", Modifier.size(22.dp))
                             }
                             IconButton(onClick = { selectedPlaylistId = pl.id }) {
                                 Icon(Icons.Default.List, contentDescription = "查看列表音乐", Modifier.size(24.dp))
