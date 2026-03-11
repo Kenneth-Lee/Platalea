@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
@@ -99,6 +100,7 @@ fun PicZipViewerScreen(
     var showJumpToDialog by remember { mutableStateOf(false) }
     var jumpToInput by remember { mutableStateOf("") }
     var showExitCacheDialog by remember { mutableStateOf(false) }
+    var rotationDegrees by remember { mutableFloatStateOf(0f) }
 
     fun loadBitmapForIndex(index: Int, onLoaded: (() -> Unit)? = null) {
         if (index < 0 || index >= imagePaths.size) {
@@ -129,6 +131,9 @@ fun PicZipViewerScreen(
         }
     }
 
+    LaunchedEffect(currentIndex) {
+        rotationDegrees = 0f
+    }
     LaunchedEffect(currentIndex, imagePaths) {
         if (imagePaths.isEmpty()) {
             loading = false
@@ -274,6 +279,9 @@ fun PicZipViewerScreen(
                         IconButton(onClick = { showDirectory = true }) {
                             Icon(Icons.Filled.List, contentDescription = "目录")
                         }
+                        IconButton(onClick = { rotationDegrees = (rotationDegrees + 90f) % 360f }) {
+                            Icon(Icons.Filled.RotateRight, contentDescription = "旋转")
+                        }
                     }
                 }
             )
@@ -303,7 +311,8 @@ fun PicZipViewerScreen(
                                     scaleX = scale,
                                     scaleY = scale,
                                     translationX = offset.x,
-                                    translationY = offset.y
+                                    translationY = offset.y,
+                                    rotationZ = rotationDegrees
                                 )
                                 .transformable(state = transformableState)
                                 .pointerInput(Unit) {
