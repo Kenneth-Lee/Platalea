@@ -97,6 +97,10 @@ import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
 import org.commonmark.ext.gfm.tables.TablesExtension
+import org.commonmark.ext.gfm.strikethrough.StrikethroughExtension
+import org.commonmark.ext.task.list.items.TaskListItemsExtension
+import org.commonmark.ext.footnotes.FootnotesExtension
+import org.commonmark.ext.heading.anchor.HeadingAnchorExtension
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -125,6 +129,21 @@ import com.kenny.localmanager.file.getEpubChapterFile
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
+
+/** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
+private fun markdownToHtml(md: String): String {
+    val preprocessed = md.replace("~~~", "~~")
+    val extensions = listOf(
+        TablesExtension.create(),
+        StrikethroughExtension.create(),
+        TaskListItemsExtension.create(),
+        FootnotesExtension.create(),
+        HeadingAnchorExtension.create()
+    )
+    val parser = Parser.builder().extensions(extensions).build()
+    val renderer = HtmlRenderer.builder().extensions(extensions).build()
+    return renderer.render(parser.parse(preprocessed))
+}
 
 private fun escapeHtml(s: String): String = s
         .replace("&", "&amp;")
@@ -647,6 +666,45 @@ private fun resolveResource(
 
 private class ResourceResolverHolder(var currentUri: String)
 
+/** 供页面 JS 调用：点击脚注时用气泡（Toast）显示脚注内容，不跳转。 */
+private class FootnoteToastHandler(private val context: android.content.Context) {
+    @android.webkit.JavascriptInterface
+    fun showFootnote(text: String?) {
+        val t = text?.trim() ?: return
+        if (t.isEmpty()) return
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            Toast.makeText(context, t, Toast.LENGTH_LONG).show()
+        }
+    }
+}
+
+/** 同页锚点：用 JS 滚动到指定 id，解决 loadDataWithBaseURL 下 WebView 不自动滚动的现象。 */
+private fun scrollToAnchor(view: WebView?, fragment: String) {
+    if (fragment.isBlank() || view == null) return
+    val quotedId = try { org.json.JSONObject.quote(fragment) } catch (_: Exception) { "\"$fragment\"" }
+    val js = "(function(){ var el = document.getElementById($quotedId); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}); })();"
+    view.post { view.evaluateJavascript(js, null) }
+}
+
+/** 脚注链接：若被 WebView 拦截则在此用 JS 取内容并 Toast；否则由页面内脚本调用 FootnoteToastHandler。 */
+private fun handleFootnoteClick(view: WebView?, url: String, context: android.content.Context): Boolean {
+    val frag = url.substringAfter('#', "").takeIf { it.isNotBlank() } ?: return false
+    if (!frag.startsWith("fn") && !frag.startsWith("fnref")) return false
+    val defId = frag.replace(Regex("^fnref"), "fn")
+    val js = "(function(){ var el = document.getElementById(\"${defId.replace("\"", "\\\"")}\"); return el ? (el.innerText || el.textContent || '').trim() : ''; })();"
+    view?.evaluateJavascript(js) { result ->
+        var text = result ?: ""
+        if (text.length >= 2 && text.startsWith("\"") && text.endsWith("\""))
+            text = text.drop(1).dropLast(1).replace("\\n", "\n").replace("\\\"", "\"")
+        if (text.isNotBlank()) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    return true
+}
+
 /** WebViewClient：链接点击回调；资源请求用同目录文件响应（图片等）。 */
 private class LinkInterceptClient(
     private val linkHolder: LinkCallbackHolder,
@@ -656,6 +714,15 @@ private class LinkInterceptClient(
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
+        if (handleFootnoteClick(view, url, context)) return true
+        val frag = url.substringAfter('#', "")
+        val baseUrl = currentUriHolder.currentUri.substringBeforeLast("/").let { if (it.isEmpty()) "file:///" else "$it/" }
+        val isSamePageAnchor = frag.isNotBlank() && !frag.startsWith("fn") && !frag.startsWith("fnref") &&
+            (url.trimStart().startsWith("#") || (url.startsWith(baseUrl) && url.length > baseUrl.length && url[baseUrl.length] == '#'))
+        if (isSamePageAnchor) {
+            scrollToAnchor(view, frag)
+            return true
+        }
         linkHolder.onLink(url)
         return true
     }
@@ -674,6 +741,91 @@ private class LinkInterceptClient(
         view?.let { onPageFinished?.invoke(it) }
     }
 }
+
+/** 构建单文件 MD 查看器用的完整 HTML，用于多 WebView 时按 uri 分别构建。 */
+private fun buildMdViewerFullHtml(
+    htmlContent: String,
+    baseUrl: String,
+    katexCss: String,
+    katexJs: String,
+    autoRenderJs: String,
+    mermaidJs: String,
+    syntaxHighlightCss: String,
+    syntaxHighlightJs: String,
+    bgHex: String,
+    fgHex: String
+): String = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<base href="$baseUrl">
+<style>$katexCss</style>
+<style>
+body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
+h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
+h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
+h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
+pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
+pre { display: block; padding: 12px; overflow-x: auto; }
+pre code { padding: 0; background: none; }
+.katex { font-size: 1.1em; }
+blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
+figure { margin: 1em 0; }
+figure img { max-width: 100%; height: auto; display: block; }
+figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; }
+a { color: #2196F3; }
+ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
+th { background: rgba(128,128,128,0.15); }
+del, s { text-decoration: line-through; }
+.task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
+.task-list-item input { margin: 0; flex-shrink: 0; vertical-align: middle; }
+.task-list-item > p { margin: 0; flex: 1; }
+sup a { text-decoration: none; color: #2196F3; }
+.footnote-tooltip { position: fixed; max-width: 320px; padding: 10px 12px; background: rgba(30,30,30,0.95); color: #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 99999; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+$syntaxHighlightCss
+</style>
+</head>
+<body>$htmlContent
+<script>$katexJs</script>
+<script>$autoRenderJs</script>
+<script>$mermaidJs</script>
+<script>$syntaxHighlightJs</script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+if (typeof applySyntaxHighlight === "function") { applySyntaxHighlight(document); }
+function showFootnoteTooltip(linkEl, text) {
+  var old = document.getElementById("fn-tooltip"); if (old) old.remove();
+  var rect = linkEl.getBoundingClientRect();
+  var tip = document.createElement("div"); tip.id = "fn-tooltip"; tip.className = "footnote-tooltip"; tip.textContent = text;
+  tip.style.maxWidth = Math.min(320, window.innerWidth - 24) + "px";
+  tip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 336)) + "px";
+  tip.style.top = (rect.top - 8) + "px"; tip.style.transform = "translateY(-100%)";
+  document.body.appendChild(tip);
+  setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
+}
+document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
+a.addEventListener("click", function(e) { e.preventDefault(); e.stopPropagation(); var id = (a.getAttribute("href") || "").slice(1).replace(/^fnref/, "fn"); var def = document.getElementById(id); if (def) { var text = (def.innerText || def.textContent || "").trim(); if (text) showFootnoteTooltip(a, text); } });
+});
+if (typeof katex !== "undefined") {
+document.querySelectorAll(".katex-inline").forEach(function(el) { var latex = el.getAttribute("data-latex"); if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {} });
+document.querySelectorAll(".katex-display").forEach(function(el) { var latex = el.getAttribute("data-latex"); if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {} });
+}
+if (typeof renderMathInElement === "function") {
+renderMathInElement(document.body, { delimiters: [{ left: "$$", right: "$$", display: true }, { left: "$", right: "$", display: false }, { left: "\\\\(", right: "\\\\)", display: false }, { left: "\\\\[", right: "\\\\]", display: true }], throwOnError: false });
+}
+if (typeof mermaid !== "undefined") {
+mermaid.initialize({ startOnLoad: false, theme: 'default' });
+document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) { var pre = codeEl.parentElement; var div = document.createElement("div"); div.className = "mermaid"; div.textContent = codeEl.textContent; pre.parentNode.replaceChild(div, pre); }); mermaid.run();
+}
+});
+</script>
+</body>
+</html>
+""".trimIndent()
 
 /** 独立 Markdown 渲染查看器：支持内链（同应用内打开、可退回）、外链（仅提示用浏览器打开）。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -696,11 +848,13 @@ fun MarkdownViewerScreen(
     var loading by remember { mutableStateOf(true) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var pendingInternalUri by remember { mutableStateOf<String?>(null) }
+    val htmlCache = remember { mutableMapOf<String, String>() }
     val linkHolder = remember { LinkCallbackHolder() }
     val currentUriHolder = remember { ResourceResolverHolder(currentUri) }
     currentUriHolder.currentUri = currentUri
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) } // 50..200，页面 body.style.zoom
+    val webViewMap = remember { mutableMapOf<String, WebView>() }
 
     val katexInline = remember(context) {
         try {
@@ -727,6 +881,13 @@ fun MarkdownViewerScreen(
     val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     LaunchedEffect(currentUri, currentEncrypted) {
+        val cacheKey = "$currentUri:$currentEncrypted"
+        htmlCache[cacheKey]?.let { cached ->
+            htmlContent = cached
+            loading = false
+            Log.d(MD_DEBUG, "[加载] 使用缓存 currentUri=$currentUri")
+            return@LaunchedEffect
+        }
         loading = true
         loadError = null
         htmlContent = null
@@ -755,12 +916,9 @@ fun MarkdownViewerScreen(
                 htmlContent = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
-                    val extensions = listOf(TablesExtension.create())
-                    val parser = Parser.builder().extensions(extensions).build()
-                    val document = parser.parse(trimmed)
-                    val renderer = HtmlRenderer.builder().extensions(extensions).build()
-                    renderer.render(document)
+                    markdownToHtml(trimmed)
                 }
+                htmlCache[cacheKey] = htmlContent!!
                 Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
             }
         }
@@ -925,8 +1083,6 @@ fun MarkdownViewerScreen(
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
                 htmlContent != null -> {
-                    val dirPrefix = currentUri.substringBeforeLast("/")
-                    val baseUrl = if (dirPrefix.isNotEmpty()) "$dirPrefix/" else "file:///"
                     val bg = MaterialTheme.colorScheme.surface
                     val fg = MaterialTheme.colorScheme.onSurface
                     val bgHex = "#%02x%02x%02x".format(
@@ -935,102 +1091,49 @@ fun MarkdownViewerScreen(
                     val fgHex = "#%02x%02x%02x".format(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
-                    val fullHtml = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1">
-                        <base href="$baseUrl">
-                        <style>$katexCss</style>
-                        <style>
-                            body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
-                            h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
-                            h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
-                            h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
-                            pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
-                            pre { display: block; padding: 12px; overflow-x: auto; }
-                            pre code { padding: 0; background: none; }
-                            .katex { font-size: 1.1em; }
-                            blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
-                            figure { margin: 1em 0; }
-                            figure img { max-width: 100%; height: auto; display: block; }
-                            figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; }
-                            a { color: #2196F3; }
-                            ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-                            table { border-collapse: collapse; width: 100%; }
-                            th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
-                            th { background: rgba(128,128,128,0.15); }
-                            $syntaxHighlightCss
-                        </style>
-                    </head>
-                    <body>${htmlContent}
-                    <script>$katexJs</script>
-                    <script>$autoRenderJs</script>
-                    <script>$mermaidJs</script>
-                    <script>$syntaxHighlightJs</script>
-                    <script>
-                    document.addEventListener("DOMContentLoaded", function() {
-                        if (typeof applySyntaxHighlight === "function") {
-                            applySyntaxHighlight(document);
-                        }
-                        if (typeof katex !== "undefined") {
-                            document.querySelectorAll(".katex-inline").forEach(function(el) {
-                                var latex = el.getAttribute("data-latex");
-                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {}
-                            });
-                            document.querySelectorAll(".katex-display").forEach(function(el) {
-                                var latex = el.getAttribute("data-latex");
-                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {}
-                            });
-                        }
-                        if (typeof renderMathInElement === "function") {
-                            renderMathInElement(document.body, {
-                                delimiters: [
-                                    { left: "$$", right: "$$", display: true },
-                                    { left: "$", right: "$", display: false },
-                                    { left: "\\\\(", right: "\\\\)", display: false },
-                                    { left: "\\\\[", right: "\\\\]", display: true }
-                                ],
-                                throwOnError: false
-                            });
-                        }
-                        if (typeof mermaid !== "undefined") {
-                            mermaid.initialize({ startOnLoad: false, theme: 'default' });
-                            document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) {
-                                var pre = codeEl.parentElement;
-                                var div = document.createElement("div");
-                                div.className = "mermaid";
-                                div.textContent = codeEl.textContent;
-                                pre.parentNode.replaceChild(div, pre);
-                            });
-                            mermaid.run();
-                        }
-                    });
-                    </script>
-                    </body>
-                    </html>
-                    """.trimIndent()
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                setBackgroundColor(Color.TRANSPARENT)
-                                webViewClient = LinkInterceptClient(
-                                    linkHolder, context, currentUriHolder
-                                ) { w -> w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null) }
-                                settings.domStorageEnabled = false
-                                settings.javaScriptEnabled = true
-                                webViewRef.value = this
-                                loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                    val pages = (backStack + Triple(currentUri, currentName, currentEncrypted))
+                        .filter { (u, _, e) -> (htmlCache["$u:$e"] != null || u == currentUri) && (u != currentUri || htmlContent != null) }
+                    for (page in pages) {
+                        val (uri, _, encrypted) = page
+                        val cacheKey = "$uri:$encrypted"
+                        val content = htmlCache[cacheKey] ?: if (uri == currentUri) htmlContent!! else continue
+                        val isCurrent = uri == currentUri
+                        androidx.compose.runtime.key(uri) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .then(if (isCurrent) Modifier else Modifier.size(0.dp))
+                            ) {
+                                AndroidView(
+                                    factory = { ctx ->
+                                        webViewMap.getOrPut(uri) {
+                                            val dirPrefix = uri.substringBeforeLast("/")
+                                            val baseUrl = if (dirPrefix.isNotEmpty()) "$dirPrefix/" else "file:///"
+                                            val fullHtml = buildMdViewerFullHtml(content, baseUrl, katexCss, katexJs, autoRenderJs, mermaidJs, syntaxHighlightCss, syntaxHighlightJs, bgHex, fgHex)
+                                            WebView(ctx).apply {
+                                                setBackgroundColor(Color.TRANSPARENT)
+                                                addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
+                                                webViewClient = LinkInterceptClient(
+                                                    linkHolder, context, currentUriHolder
+                                                ) { w -> w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null) }
+                                                settings.domStorageEnabled = false
+                                                settings.javaScriptEnabled = true
+                                                loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                                            }
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxSize(),
+                                    update = { webView ->
+                                        if (isCurrent) {
+                                            currentUriHolder.currentUri = currentUri
+                                            webViewRef.value = webView
+                                            webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                        }
+                                    }
+                                )
                             }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                        update = { webView ->
-                            currentUriHolder.currentUri = currentUri
-                            webViewRef.value = webView
-                            webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                         }
-                    )
+                    }
                 }
             }
         }
@@ -1078,13 +1181,7 @@ fun PassContentViewerScreen(
         val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
         val isRst = innerFileName.endsWith(".rst", ignoreCase = true)
         if (isRst) rstToHtml(trimmed)
-        else {
-        val extensions = listOf(TablesExtension.create())
-            val parser = org.commonmark.parser.Parser.builder().extensions(extensions).build()
-            val document = parser.parse(trimmed)
-            val renderer = org.commonmark.renderer.html.HtmlRenderer.builder().extensions(extensions).build()
-            renderer.render(document)
-        }
+        else markdownToHtml(trimmed)
     }
 
     val doBack = {
@@ -1159,6 +1256,12 @@ fun PassContentViewerScreen(
                     table { border-collapse: collapse; width: 100%; }
                     th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
                     th { background: rgba(128,128,128,0.15); }
+                    del, s { text-decoration: line-through; }
+                    .task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
+                    .task-list-item input { margin: 0; flex-shrink: 0; vertical-align: middle; }
+                    .task-list-item > p { margin: 0; flex: 1; }
+                    sup a { text-decoration: none; color: #2196F3; }
+                    .footnote-tooltip { position: fixed; max-width: 320px; padding: 10px 12px; background: rgba(30,30,30,0.95); color: #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 99999; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
                     $syntaxHighlightCss
                 </style>
             </head>
@@ -1169,9 +1272,26 @@ fun PassContentViewerScreen(
             <script>$syntaxHighlightJs</script>
             <script>
             document.addEventListener("DOMContentLoaded", function() {
-                if (typeof applySyntaxHighlight === "function") {
-                    applySyntaxHighlight(document);
+                if (typeof applySyntaxHighlight === "function") { applySyntaxHighlight(document); }
+                function showFootnoteTooltip(linkEl, text) {
+                    var old = document.getElementById("fn-tooltip"); if (old) old.remove();
+                    var rect = linkEl.getBoundingClientRect();
+                    var tip = document.createElement("div"); tip.id = "fn-tooltip"; tip.className = "footnote-tooltip"; tip.textContent = text;
+                    tip.style.maxWidth = Math.min(320, window.innerWidth - 24) + "px";
+                    tip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 336)) + "px";
+                    tip.style.top = (rect.top - 8) + "px"; tip.style.transform = "translateY(-100%)";
+                    document.body.appendChild(tip);
+                    setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
                 }
+                document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
+                    a.addEventListener("click", function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        var id = (a.getAttribute("href") || "").slice(1).replace(/^fnref/, "fn");
+                        var def = document.getElementById(id);
+                        if (def) { var text = (def.innerText || def.textContent || "").trim(); if (text) showFootnoteTooltip(a, text); }
+                    });
+                });
                 if (typeof katex !== "undefined") {
                     document.querySelectorAll(".katex-inline").forEach(function(el) {
                         var latex = el.getAttribute("data-latex");
@@ -1213,6 +1333,7 @@ fun PassContentViewerScreen(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         setBackgroundColor(Color.TRANSPARENT)
+                        addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
                         settings.domStorageEnabled = false
                         settings.javaScriptEnabled = true
                         settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
@@ -1262,6 +1383,7 @@ fun MdZipViewerScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var pendingInternalFile by remember { mutableStateOf<File?>(null) }
+    val htmlCache = remember { mutableMapOf<String, String>() }
 
     val katexInline = remember(context) {
         try {
@@ -1293,6 +1415,14 @@ fun MdZipViewerScreen(
     logDebug?.invoke("[MDZIP] initialTargetFile=${initialTargetFile.absolutePath}")
 
     LaunchedEffect(currentFile) {
+        val cacheKey = currentFile.absolutePath
+        htmlCache[cacheKey]?.let { cached ->
+            htmlContent = cached
+            loading = false
+            Log.d(MDZIP_DEBUG, "[MDZIP] 使用缓存 path=$cacheKey")
+            logDebug?.invoke("[MDZIP] 使用缓存 path=$cacheKey")
+            return@LaunchedEffect
+        }
         Log.d(MDZIP_DEBUG, "加载文件 path=${currentFile.absolutePath} exists=${currentFile.exists()} parentDir=${currentFile.parentFile?.absolutePath}")
         logDebug?.invoke("[MDZIP] 加载文件 path=${currentFile.absolutePath}")
         logDebug?.invoke("[MDZIP]   exists=${currentFile.exists()}")
@@ -1321,12 +1451,9 @@ fun MdZipViewerScreen(
                 htmlContent = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
-                    val extensions = listOf(TablesExtension.create())
-                    val parser = Parser.builder().extensions(extensions).build()
-                    val document = parser.parse(trimmed)
-                    val renderer = HtmlRenderer.builder().extensions(extensions).build()
-                    renderer.render(document)
+                    markdownToHtml(trimmed)
                 }
+                htmlContent?.let { htmlCache[cacheKey] = it }
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
                 logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
             } catch (e: Exception) {
@@ -1385,9 +1512,9 @@ fun MdZipViewerScreen(
             logDebug?.invoke("[MDZIP]   识别为外链 finalUrl=$finalUrl")
             mainHandler.post { pendingExternalUrl = finalUrl }
         } else {
-            val decoded = Uri.decode(if (scheme == "file") parsed.path ?: url else url)
+            val pathForFile = url.substringBefore('#').trimEnd('/')
+            val decoded = Uri.decode(if (scheme == "file") Uri.parse(pathForFile).path ?: pathForFile else pathForFile)
             Log.d(MDZIP_DEBUG, "  parsed.path=${parsed.path} decoded=$decoded")
-            logDebug?.invoke("[MDZIP]   parsed.path=${parsed.path}")
             logDebug?.invoke("[MDZIP]   decoded=$decoded")
             logDebug?.invoke("[MDZIP]   currentFile.parentFile=${currentFile.parentFile?.absolutePath}")
             val resolved = if (decoded.startsWith("/")) {
@@ -1542,6 +1669,12 @@ fun MdZipViewerScreen(
                             table { border-collapse: collapse; width: 100%; }
                             th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
                             th { background: rgba(128,128,128,0.15); }
+                            del, s { text-decoration: line-through; }
+                            .task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
+                            .task-list-item input { margin: 0; flex-shrink: 0; vertical-align: middle; }
+                            .task-list-item > p { margin: 0; flex: 1; }
+                            sup a { text-decoration: none; color: #2196F3; }
+                            .footnote-tooltip { position: fixed; max-width: 320px; padding: 10px 12px; background: rgba(30,30,30,0.95); color: #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 99999; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
                             $syntaxHighlightCss
                         </style>
                     </head>
@@ -1552,9 +1685,26 @@ fun MdZipViewerScreen(
                     <script>$syntaxHighlightJs</script>
                     <script>
                     document.addEventListener("DOMContentLoaded", function() {
-                        if (typeof applySyntaxHighlight === "function") {
-                            applySyntaxHighlight(document);
+                        if (typeof applySyntaxHighlight === "function") { applySyntaxHighlight(document); }
+                        function showFootnoteTooltip(linkEl, text) {
+                            var old = document.getElementById("fn-tooltip"); if (old) old.remove();
+                            var rect = linkEl.getBoundingClientRect();
+                            var tip = document.createElement("div"); tip.id = "fn-tooltip"; tip.className = "footnote-tooltip"; tip.textContent = text;
+                            tip.style.maxWidth = Math.min(320, window.innerWidth - 24) + "px";
+                            tip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 336)) + "px";
+                            tip.style.top = (rect.top - 8) + "px"; tip.style.transform = "translateY(-100%)";
+                            document.body.appendChild(tip);
+                            setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
                         }
+                        document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
+                            a.addEventListener("click", function(e) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                var id = (a.getAttribute("href") || "").slice(1).replace(/^fnref/, "fn");
+                                var def = document.getElementById(id);
+                                if (def) { var text = (def.innerText || def.textContent || "").trim(); if (text) showFootnoteTooltip(a, text); }
+                            });
+                        });
                         if (typeof katex !== "undefined") {
                             document.querySelectorAll(".katex-inline").forEach(function(el) {
                                 var latex = el.getAttribute("data-latex");
@@ -1597,11 +1747,12 @@ fun MdZipViewerScreen(
                         factory = { ctx ->
                             WebView(ctx).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
+                                addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = false
                                 settings.allowFileAccess = true
-                                webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFileForClient) { w ->
+                                webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFileForClient, context) { w ->
                                     w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                 }
                                 webViewRef.value = this
@@ -1625,10 +1776,20 @@ private class MdZipWebViewClient(
     private val linkHolder: LinkCallbackHolder,
     private val contentDir: File,
     private val currentFile: File,
+    private val context: android.content.Context,
     private val onPageFinished: ((WebView) -> Unit)? = null
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
+        if (handleFootnoteClick(view, url, context)) return true
+        val frag = url.substringAfter('#', "")
+        val baseUrl = "file://${currentFile.parentFile?.absolutePath ?: ""}/"
+        val isSamePageAnchor = frag.isNotBlank() && !frag.startsWith("fn") && !frag.startsWith("fnref") &&
+            (url.trimStart().startsWith("#") || (url.startsWith(baseUrl) && url.length > baseUrl.length && url[baseUrl.length] == '#'))
+        if (isSamePageAnchor) {
+            scrollToAnchor(view, frag)
+            return true
+        }
         linkHolder.onLink(url)
         return true
     }
