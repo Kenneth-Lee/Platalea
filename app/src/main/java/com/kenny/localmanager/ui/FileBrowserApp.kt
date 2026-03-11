@@ -119,6 +119,8 @@ import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import android.provider.DocumentsContract
 import com.kenny.localmanager.data.Playlist
+import com.kenny.localmanager.data.exportConfig
+import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
@@ -1333,6 +1335,34 @@ fun FileBrowserApp(
                     dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
                 )
             }
+            val configExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+                if (uri != null) scope.launch {
+                    val json = exportConfig(context, prefs)
+                    val ok = withContext(Dispatchers.IO) {
+                        try {
+                            context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray(Charsets.UTF_8)) }
+                            true
+                        } catch (_: Exception) { false }
+                    }
+                    Toast.makeText(context, if (ok) "配置已导出" else "导出失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+            val configImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+                if (uri != null) scope.launch {
+                    val jsonString = withContext(Dispatchers.IO) {
+                        try {
+                            context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } ?: ""
+                        } catch (_: Exception) { "" }
+                    }
+                    if (jsonString.isBlank()) {
+                        Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
+                        return@launch
+                    }
+                    val ok = importConfig(context, prefs, jsonString)
+                    refreshTrigger++
+                    Toast.makeText(context, if (ok) "配置已导入" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                }
+            }
             if (showAboutDialog) {
                 AboutDialog(onDismiss = { showAboutDialog = false })
             }
@@ -1360,6 +1390,8 @@ fun FileBrowserApp(
                     onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
                     onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
+                    onExportConfig = { configExportLauncher.launch("local_manager_config.json") },
+                    onImportConfig = { configImportLauncher.launch(arrayOf("application/json", "*/*")) },
                     onChangeRoot = {
                         val r = rootUri
                         if (r == null) {
@@ -4988,6 +5020,8 @@ fun ConfigDialog(
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
+    onExportConfig: () -> Unit,
+    onImportConfig: () -> Unit,
     onChangeRoot: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
@@ -5093,6 +5127,10 @@ fun ConfigDialog(
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
+                Spacer(Modifier.height(12.dp))
+                Button(onClick = onImportConfig, modifier = Modifier.fillMaxWidth()) { Text("导入配置") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { onDismiss(); onChangeRoot() },
