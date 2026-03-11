@@ -468,7 +468,7 @@ fun FileBrowserApp(
         picZipViewState != null -> {
             val state = picZipViewState!!
             BackHandler {
-                if (!state.isEncrypted) cleanPicZipCache(context, state.zipUri)
+                if (state.isEncrypted) cleanPicZipCache(context, state.zipUri)
                 picZipViewState = null
             }
             PicZipViewerScreen(
@@ -478,7 +478,7 @@ fun FileBrowserApp(
                 isEncrypted = state.isEncrypted,
                 password = state.password,
                 onBack = {
-                    if (!state.isEncrypted) cleanPicZipCache(context, state.zipUri)
+                    if (state.isEncrypted) cleanPicZipCache(context, state.zipUri)
                     picZipViewState = null
                 }
             )

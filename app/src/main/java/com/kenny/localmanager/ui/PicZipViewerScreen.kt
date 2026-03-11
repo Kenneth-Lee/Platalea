@@ -67,7 +67,7 @@ fun PicZipViewerScreen(
         val path = imagePaths[index]
         val file = File(contentDir, path)
         scope.launch {
-            currentBitmap = withContext(Dispatchers.IO) {
+            val bitmap = withContext(Dispatchers.IO) {
                 if (!file.exists()) null
                 else {
                     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -80,6 +80,9 @@ fun PicZipViewerScreen(
                     }
                 }
             }
+            withContext(Dispatchers.Main.immediate) {
+                if (currentIndex == index) currentBitmap = bitmap
+            }
         }
     }
 
@@ -88,6 +91,7 @@ fun PicZipViewerScreen(
             loading = false
             return@LaunchedEffect
         }
+        currentBitmap = null
         loading = true
         val batchStart = (currentIndex / BATCH_SIZE) * BATCH_SIZE
         val batchEnd = minOf(imagePaths.size, batchStart + BATCH_SIZE)
