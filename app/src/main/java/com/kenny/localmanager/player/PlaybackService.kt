@@ -160,6 +160,17 @@ class PlaybackService : Service() {
             stopSelf()
             return
         }
+        // 切换列表前先保存当前列表进度，否则再切回来时无法恢复
+        val oldPlaylistId = this.playlistId
+        if (oldPlaylistId != null && playlistUris.isNotEmpty()) {
+            val idx = currentIndex.get()
+            if (idx in playlistUris.indices) {
+                val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
+                scope.launch(Dispatchers.IO) {
+                    prefs.setPlayerLastStateForPlaylist(oldPlaylistId, idx, pos)
+                }
+            }
+        }
         playlistUris = uris
         playlistNames = names
         dirUri = dir
@@ -216,6 +227,8 @@ class PlaybackService : Service() {
                 setOnPreparedListener {
                     if (seekToMs > 0) it.seekTo(seekToMs.coerceAtMost(it.duration))
                     it.start()
+                    updateState(isPlaying = true)
+                    updateNotification()
                     startProgressUpdates()
                 }
                 setOnCompletionListener {
@@ -257,6 +270,7 @@ class PlaybackService : Service() {
                         durationMs = mp.duration,
                         isPlaying = true
                     )
+                    updateNotification()
                 }
                 handler.postDelayed(this, 500)
             }

@@ -166,7 +166,7 @@ private fun normalizeCodeLanguage(raw: String?): String? {
 
 private fun buildCodeBlockHtml(codeLines: List<String>, language: String? = null): String {
         val langClass = normalizeCodeLanguage(language)?.takeIf { it.isNotBlank() }?.let { " class=\"language-$it\"" } ?: ""
-        return "<pre><code$langClass>${codeLines.joinToString("\\n")}</code></pre>"
+        return "<pre><code$langClass>${codeLines.joinToString("\n")}</code></pre>"
 }
 
 private fun syntaxHighlightStyle(): String = """
@@ -545,31 +545,6 @@ private const val MDZIP_DEBUG = "MdZipViewer"
 
 private class LinkCallbackHolder { var onLink: (String) -> Unit = {} }
 
-/** 判断是否像外链（无 scheme 的域名，如 www.baidu.com）。 */
-private fun looksLikeExternalUrl(url: String): Boolean {
-    val s = url.trim()
-    if (s.isEmpty()) return false
-    val scheme = Uri.parse(s).scheme
-    if (!scheme.isNullOrEmpty()) return false
-    return s.startsWith("www.") || (s.contains(".") && !s.contains("/"))
-}
-
-/** 从任意 URL 中提取可能的主机名段（如 file:///www.bing.com -> www.bing.com），用于判断是否当外链处理。 */
-private fun hostnameSegmentFromUrl(url: String): String? {
-    val parsed = Uri.parse(url)
-    val seg = parsed.path?.trimStart('/')?.split('/')?.lastOrNull() ?: return null
-    return if (looksLikeHostname(seg)) seg else null
-}
-
-/** 判断是否像主机名（用于 content URI 的 lastPathSegment，如 www.baidu.com）。 */
-private fun looksLikeHostname(segment: String): Boolean {
-    if (segment.isBlank() || segment.contains("/")) return false
-    if (segment.startsWith("www.")) return true
-    val idx = segment.indexOf('.')
-    if (idx <= 0) return false
-    return segment.indexOf('.', idx + 1) > 0 // 至少两个点，避免把 test1.md 当主机名
-}
-
 /** 当前文件所在目录 URI。使用 buildDocumentUriUsingTree 保持在已授权的树中。 */
 private fun getParentDirectoryUri(context: android.content.Context, currentUri: String): Uri? {
     val uri = Uri.parse(currentUri)
@@ -619,16 +594,6 @@ private fun resolveResourcePath(
     return findChildByName(context, parentUri, segments.last())
 }
 
-/** 从资源请求 URL 中提取相对于当前文档所在目录的路径（WebView 可能请求 base + relativePath 的完整 URL）。 */
-private fun extractRelativePathFromRequest(currentUri: String, resourceUrl: String): String? {
-    val basePrefix = currentUri.substringBeforeLast("/").let { if (it.isEmpty()) return null else "$it/" }
-    if (resourceUrl.startsWith(basePrefix)) {
-        val rel = resourceUrl.substring(basePrefix.length)
-        if (rel.isNotBlank()) return Uri.decode(rel)
-    }
-    return null
-}
-
 /** 根据当前文件 URI 解析资源 URL，返回同目录或相对路径下文件的 WebResourceResponse，否则返回 null。 */
 private fun resolveResource(
     context: android.content.Context,
@@ -639,7 +604,7 @@ private fun resolveResource(
         Log.d(MD_DEBUG, "[图片] 无法取父目录 currentUri=$currentUri resourceUrl=$resourceUrl")
         return null
     }
-    val relativePath = extractRelativePathFromRequest(currentUri, resourceUrl)
+    val relativePath = MdLinkUtils.extractRelativePathFromRequest(currentUri, resourceUrl)
     val path = if (relativePath != null) relativePath else (Uri.parse(resourceUrl).path ?: resourceUrl)
     val segment = path.substringAfterLast('/').let { Uri.decode(it) }.ifBlank { return null }
     val childUri = if (path.contains("/")) {
@@ -955,18 +920,18 @@ fun MarkdownViewerScreen(
             scheme == "http" || scheme == "https" || scheme == "mailto" -> url
             scheme == "content" -> {
                 val segment = parsed.lastPathSegment ?: ""
-                if (looksLikeHostname(segment)) {
+                if (MdLinkUtils.looksLikeHostname(segment)) {
                     Log.d(MD_DEBUG, "[链接] content URI 识别为外链 segment=$segment")
                     "https://$segment"
                 } else null
             }
             scheme == "file" -> {
-                hostnameSegmentFromUrl(url)?.let { seg ->
+                MdLinkUtils.hostnameSegmentFromUrl(url)?.let { seg ->
                     Log.d(MD_DEBUG, "[链接] file URI 识别为外链 segment=$seg")
                     "https://$seg"
                 }
             }
-            looksLikeExternalUrl(url) -> {
+            MdLinkUtils.looksLikeExternalUrl(url) -> {
                 Log.d(MD_DEBUG, "[链接] 识别为外链(无 scheme) url=$url")
                 if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
             }
@@ -1501,8 +1466,8 @@ fun MdZipViewerScreen(
         logDebug?.invoke("[MDZIP]   scheme=$scheme")
         val finalUrl = when {
             scheme == "http" || scheme == "https" || scheme == "mailto" -> url
-            scheme == "file" -> hostnameSegmentFromUrl(url)?.let { seg -> "https://$seg" }
-            looksLikeExternalUrl(url) -> {
+            scheme == "file" -> MdLinkUtils.hostnameSegmentFromUrl(url)?.let { seg -> "https://$seg" }
+            MdLinkUtils.looksLikeExternalUrl(url) -> {
                 if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
             }
             else -> null

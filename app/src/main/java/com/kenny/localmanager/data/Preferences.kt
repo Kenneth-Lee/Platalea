@@ -32,6 +32,7 @@ private val PLAYER_LAST_INDEX = intPreferencesKey("player_last_index")
 private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_ms")
 private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist_id")
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
+private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -96,6 +97,11 @@ class Preferences(private val context: Context) {
 
     val playerLastPositionMs: Flow<Long> = context.dataStore.data.map { prefs ->
         prefs[PLAYER_LAST_POSITION_MS] ?: 0L
+    }
+
+    /** 最后一次播放的列表 ID（用于停止后「恢复播放」）。 */
+    val playerLastPlaylistId: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[PLAYER_LAST_PLAYLIST_ID]
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -196,10 +202,6 @@ class Preferences(private val context: Context) {
         }
     }
 
-    val playerLastPlaylistId: Flow<String?> = context.dataStore.data.map { prefs ->
-        prefs[PLAYER_LAST_PLAYLIST_ID]
-    }
-
     val playlists: Flow<List<Playlist>> = context.dataStore.data.map { prefs ->
         Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
     }
@@ -241,9 +243,20 @@ class Preferences(private val context: Context) {
         }
     }
 
-    /** 按播放列表 ID 保存/读取进度（与目录进度分开）。 */
+    /** 按播放列表 ID 保存/读取进度（每个列表单独记，切换回时能恢复）。 */
     suspend fun setPlayerLastStateForPlaylist(playlistId: String, index: Int, positionMs: Long) {
         context.dataStore.edit { prefs ->
+            val json = prefs[PLAYER_PLAYLIST_RESUME_JSON] ?: "{}"
+            val map = try {
+                org.json.JSONObject(json)
+            } catch (_: Exception) {
+                org.json.JSONObject()
+            }
+            map.put(playlistId, org.json.JSONObject().apply {
+                put("i", index.coerceAtLeast(0))
+                put("p", positionMs.coerceAtLeast(0L))
+            })
+            prefs[PLAYER_PLAYLIST_RESUME_JSON] = map.toString()
             prefs[PLAYER_LAST_PLAYLIST_ID] = playlistId
             prefs[PLAYER_LAST_INDEX] = index.coerceAtLeast(0)
             prefs[PLAYER_LAST_POSITION_MS] = positionMs.coerceAtLeast(0L)
@@ -251,10 +264,15 @@ class Preferences(private val context: Context) {
     }
 
     suspend fun getPlayerResumeStateForPlaylist(playlistId: String): Pair<Int, Long>? {
-        val prefs = context.dataStore.data.first()
-        if (prefs[PLAYER_LAST_PLAYLIST_ID] != playlistId) return null
-        val idx = prefs[PLAYER_LAST_INDEX] ?: 0
-        val pos = prefs[PLAYER_LAST_POSITION_MS] ?: 0L
-        return idx to pos
+        val json = context.dataStore.data.first()[PLAYER_PLAYLIST_RESUME_JSON] ?: return null
+        return try {
+            val map = org.json.JSONObject(json)
+            val obj = map.optJSONObject(playlistId) ?: return null
+            val idx = obj.optInt("i", 0).coerceAtLeast(0)
+            val pos = obj.optLong("p", 0L).coerceAtLeast(0L)
+            idx to pos
+        } catch (_: Exception) {
+            null
+        }
     }
 }

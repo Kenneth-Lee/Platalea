@@ -4241,12 +4241,16 @@ fun PlaybackScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+    var lastPlaylistId by remember { mutableStateOf<String?>(null) }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
     var showPlaylistNoteDialog by remember { mutableStateOf(false) }
     var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
     var playlistNoteEditText by remember { mutableStateOf("") }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.playerLastPlaylistId.collect { lastPlaylistId = it }
     }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
@@ -4411,7 +4415,8 @@ fun PlaybackScreen(
             }
         } else {
         Column(Modifier.fillMaxSize().padding(padding)) {
-            playbackState?.let { state ->
+            if (playbackState != null) {
+                val state = playbackState
                 var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
                 var seekDragging by remember { mutableStateOf(false) }
                 LaunchedEffect(state.positionMs, state.durationMs) {
@@ -4475,6 +4480,45 @@ fun PlaybackScreen(
                             Spacer(Modifier.weight(1f))
                             TextButton(onClick = onStopPlayback) {
                                 Text("停止播放", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
+            } else {
+                val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
+                Card(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                ) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "未在播放",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (restorePlaylist != null) {
+                                Button(onClick = { startPlaylist(restorePlaylist) }) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(20.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("恢复播放")
+                                }
+                            }
+                            IconButton(onClick = {}) {
+                                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                            }
+                            IconButton(onClick = { restorePlaylist?.let { startPlaylist(it) } }) {
+                                Icon(Icons.Default.PlayArrow, contentDescription = "播放", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (restorePlaylist != null) 1f else 0.5f))
+                            }
+                            IconButton(onClick = {}) {
+                                Icon(Icons.Default.SkipNext, contentDescription = "下一首", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                             }
                         }
                     }
