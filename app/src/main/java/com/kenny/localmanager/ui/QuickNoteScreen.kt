@@ -420,24 +420,6 @@ private fun renameQuickNoteCategory(entries: List<QuickNoteEntry>, from: String,
 private fun nextQuickNoteEntryId(entries: List<QuickNoteEntry>): Long =
     (entries.maxOfOrNull { it.id } ?: 0L) + 1L
 
-private fun summarizeMultiLineEntries(entries: List<QuickNoteEntry>): String {
-    return entries
-        .filter { it.text.contains('\n') }
-        .joinToString("\n\n") { entry ->
-            val categoryLabel = normalizeQuickNoteCategory(entry.category)?.let { "[$it] " } ?: ""
-            val lines = entry.text.replace("\r\n", "\n").split("\n")
-            buildString {
-                append(categoryLabel)
-                append(lines.firstOrNull().orEmpty())
-                lines.drop(1).forEach { line ->
-                    append("\n  ")
-                    append(line)
-                }
-            }
-        }
-        .trim()
-}
-
 private val QUICK_NOTE_ENTRY_REGEX = Regex("^\\* \\[([xX ]?)\\]\\s?(.*)$")
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -459,12 +441,8 @@ fun QuickNoteScreen(
     var showIgnoredContentDialog by remember(loadedData.fileInfo.uri, loadedData.rawText) {
         mutableStateOf(loadedData.ignoredSectionContent.isNotBlank())
     }
-    var showMultiLineContentDialog by remember(loadedData.fileInfo.uri, loadedData.rawText) {
-        mutableStateOf(summarizeMultiLineEntries(loadedData.entries).isNotBlank())
-    }
     val categoryExpandedStates = remember(loadedData.fileInfo.uri) { mutableStateMapOf<String, Boolean>() }
     val existingCategories = remember(entries) { quickNoteCategoryNames(entries) }
-    val multiLineEntrySummary = remember(entries) { summarizeMultiLineEntries(entries) }
 
     androidx.activity.compose.BackHandler(enabled = !inProgress) {
         onBack(entries)
@@ -737,49 +715,6 @@ fun QuickNoteScreen(
         )
     }
 
-    if (showMultiLineContentDialog && multiLineEntrySummary.isNotBlank()) {
-        AlertDialog(
-            onDismissRequest = { showMultiLineContentDialog = false },
-            title = { Text("发现多行记录内容") },
-            text = {
-                Column {
-                    Text(
-                        "下面这些缩进行会被协议当成记录正文的一部分，所以保存后会继续保留。如果它们其实是错误数据，需要进入对应记录手动删除。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = multiLineEntrySummary,
-                        onValueChange = {},
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(200.dp),
-                        readOnly = true,
-                        enabled = false,
-                        label = { Text("会被当成记录正文保留的内容") }
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        clipboardManager?.setPrimaryClip(
-                            ClipData.newPlainText("快速笔记多行记录内容", multiLineEntrySummary)
-                        )
-                        Toast.makeText(composeContext, "已复制多行记录内容", Toast.LENGTH_SHORT).show()
-                        showMultiLineContentDialog = false
-                    }
-                ) {
-                    Text("复制并继续")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMultiLineContentDialog = false }) {
-                    Text("继续")
-                }
-            }
-        )
-    }
 }
 
 @Composable
