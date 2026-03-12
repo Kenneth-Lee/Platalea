@@ -71,6 +71,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -132,9 +133,22 @@ private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
 private const val STANDALONE_MD_CACHE_LIMIT = 6
 
+/** 供 MD 查看器使用的脚本/样式资源，在 IO 线程加载一次后复用，避免主线程阻塞。 */
+data class MdViewerAssets(
+    val katexCss: String,
+    val katexJs: String,
+    val autoRenderJs: String,
+    val mermaidJs: String,
+    val syntaxHighlightCss: String,
+    val syntaxHighlightJs: String
+)
+
 class MarkdownViewerSessionCache(
     private val maxEntries: Int = STANDALONE_MD_CACHE_LIMIT
 ) {
+    /** 共享的 MD 查看器资源（katex/mermaid 等），首次进入任意 MD 查看器时在后台加载。 */
+    val assetsState = mutableStateOf<MdViewerAssets?>(null)
+
     private val signatureMap: MutableMap<String, String> = mutableMapOf()
     val htmlCache: MutableMap<String, String> = mutableMapOf()
     val webViewMap: MutableMap<String, WebView> = mutableMapOf()
@@ -269,6 +283,28 @@ private fun normalizeCodeLanguage(raw: String?): String? {
 private fun buildCodeBlockHtml(codeLines: List<String>, language: String? = null): String {
         val langClass = normalizeCodeLanguage(language)?.takeIf { it.isNotBlank() }?.let { " class=\"language-$it\"" } ?: ""
         return "<pre><code$langClass>${codeLines.joinToString("\n")}</code></pre>"
+}
+
+/** 在后台线程加载 katex/mermaid 等资源，避免主线程阻塞；供 MarkdownViewerScreen / MdZipViewerScreen 复用。 */
+private fun loadMdViewerAssets(context: Context): MdViewerAssets {
+    val katexCss = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
+        .replace("</style>", "<\\/style>")
+    val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
+        .replace("</script>", "<\\/script>")
+    val autoRenderJs = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
+        .replace("</script>", "<\\/script>")
+    val mermaidJs = try {
+        context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
+            .replace("</script>", "<\\/script>")
+    } catch (_: Exception) { "" }
+    return MdViewerAssets(
+        katexCss = katexCss,
+        katexJs = katexJs,
+        autoRenderJs = autoRenderJs,
+        mermaidJs = mermaidJs,
+        syntaxHighlightCss = syntaxHighlightStyle(),
+        syntaxHighlightJs = syntaxHighlightScript()
+    )
 }
 
 private fun syntaxHighlightStyle(): String = """
@@ -1396,29 +1432,12 @@ fun MarkdownViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
-    val katexInline = remember(context) {
-        try {
-            val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
-                .replace("</style>", "<\\/style>")
-            val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-            val autoRender = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-            Triple(css, katexJs, autoRender)
-        } catch (_: Exception) {
-            Triple("", "", "")
+    val assets by sessionCache.assetsState
+    LaunchedEffect(Unit) {
+        if (sessionCache.assetsState.value == null) {
+            sessionCache.assetsState.value = withContext(Dispatchers.IO) { loadMdViewerAssets(context) }
         }
     }
-    val (katexCss, katexJs, autoRenderJs) = katexInline
-
-    val mermaidJs = remember(context) {
-        try {
-            context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-        } catch (_: Exception) { "" }
-    }
-    val syntaxHighlightCss = remember { syntaxHighlightStyle() }
-    val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     LaunchedEffect(currentUri, currentEncrypted) {
         regexFindUiState = RegexFindUiState()
@@ -1663,7 +1682,17 @@ fun MarkdownViewerScreen(
                 loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
-                htmlContent != null -> {
+                htmlContent != null && assets == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Card {
+                        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                            Text("加载资源…", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(8.dp))
+                            Text("正在准备渲染脚本与样式", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                htmlContent != null && assets != null -> {
+                    val a = assets!!
                     val bg = MaterialTheme.colorScheme.surface
                     val fg = MaterialTheme.colorScheme.onSurface
                     val bgHex = "#%02x%02x%02x".format(
@@ -1693,7 +1722,7 @@ fun MarkdownViewerScreen(
                                             existing
                                         } else {
                                             val baseUrl = MD_VIEWER_BASE_URL
-                                            val fullHtml = buildMdViewerFullHtml(content, baseUrl, katexCss, katexJs, autoRenderJs, mermaidJs, syntaxHighlightCss, syntaxHighlightJs, bgHex, fgHex)
+                                            val fullHtml = buildMdViewerFullHtml(content, baseUrl, a.katexCss, a.katexJs, a.autoRenderJs, a.mermaidJs, a.syntaxHighlightCss, a.syntaxHighlightJs, bgHex, fgHex)
                                             WebView(ctx).apply {
                                                 setBackgroundColor(Color.TRANSPARENT)
                                                 addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
@@ -2073,29 +2102,12 @@ fun MdZipViewerScreen(
         regexFindUiState = RegexFindUiState()
     }
 
-    val katexInline = remember(context) {
-        try {
-            val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
-                .replace("</style>", "<\\/style>")
-            val katexJs = context.assets.open("katex/katex.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-            val autoRender = context.assets.open("katex/auto-render.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-            Triple(css, katexJs, autoRender)
-        } catch (_: Exception) {
-            Triple("", "", "")
+    val assets by sessionCache.assetsState
+    LaunchedEffect(Unit) {
+        if (sessionCache.assetsState.value == null) {
+            sessionCache.assetsState.value = withContext(Dispatchers.IO) { loadMdViewerAssets(context) }
         }
     }
-    val (katexCss, katexJs, autoRenderJs) = katexInline
-
-    val mermaidJs = remember(context) {
-        try {
-            context.assets.open("mermaid/mermaid.min.js").use { it.bufferedReader().readText() }
-                .replace("</script>", "<\\/script>")
-        } catch (_: Exception) { "" }
-    }
-    val syntaxHighlightCss = remember { syntaxHighlightStyle() }
-    val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     Log.d(MDZIP_DEBUG, "打开 zipFileName=$zipFileName contentDir=${contentDir.absolutePath} initialTargetFile=${initialTargetFile.absolutePath}")
     logDebug?.invoke("[MDZIP] 打开 zipFileName=$zipFileName")
@@ -2188,7 +2200,10 @@ fun MdZipViewerScreen(
             Log.d(MDZIP_DEBUG, "  name=$name isRenderable=$isRenderable")
             logDebug?.invoke("[MDZIP]   name=$name isRenderable=$isRenderable")
             if (isRenderable) {
-                resetCurrentPageState()
+                htmlContent = null
+                loading = true
+                loadingMessage = "正在准备文档…"
+                webViewRef.value = null
                 backStack = backStack + currentFile
                 currentFile = target
                 Log.d(MDZIP_DEBUG, "  跳转成功 -> ${target.absolutePath}")
@@ -2369,7 +2384,17 @@ fun MdZipViewerScreen(
                 loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
-                htmlContent != null -> {
+                htmlContent != null && assets == null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Card {
+                        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                            Text("加载资源…", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(8.dp))
+                            Text("正在准备渲染脚本与样式", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                htmlContent != null && assets != null -> {
+                    val a = assets!!
                     val bg = MaterialTheme.colorScheme.surface
                     val fg = MaterialTheme.colorScheme.onSurface
                     val bgHex = "#%02x%02x%02x".format(
@@ -2382,12 +2407,12 @@ fun MdZipViewerScreen(
                     val fullHtml = buildMdViewerFullHtml(
                         htmlContent!!,
                         baseUrl,
-                        katexCss,
-                        katexJs,
-                        autoRenderJs,
-                        mermaidJs,
-                        syntaxHighlightCss,
-                        syntaxHighlightJs,
+                        a.katexCss,
+                        a.katexJs,
+                        a.autoRenderJs,
+                        a.mermaidJs,
+                        a.syntaxHighlightCss,
+                        a.syntaxHighlightJs,
                         bgHex,
                         fgHex
                     )
