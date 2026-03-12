@@ -280,6 +280,11 @@ fun FileBrowserApp(
     var passEditPassword by remember { mutableStateOf("") }
     var passEditInProgress by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
+    var quickNoteData by remember { mutableStateOf<QuickNoteLoadedData?>(null) }
+    var quickNoteStartWithAddDialog by remember { mutableStateOf(false) }
+    var quickNotePassword by remember { mutableStateOf("") }
+    var quickNotePasswordRequired by remember { mutableStateOf(false) }
+    var quickNoteInProgress by remember { mutableStateOf(false) }
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
@@ -325,6 +330,46 @@ fun FileBrowserApp(
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
         initialFileUri.value = null
         pendingSaveFileUri = uriStr
+    }
+
+    fun resetQuickNotePromptState() {
+        quickNotePassword = ""
+        quickNotePasswordRequired = false
+        quickNoteInProgress = false
+    }
+
+    fun closeQuickNote() {
+        quickNoteData = null
+        quickNoteStartWithAddDialog = false
+        resetQuickNotePromptState()
+    }
+
+    fun requestOpenQuickNote(startWithAddDialog: Boolean, password: String? = null) {
+        val root = rootUri?.let { normalizeContentUriString(it) }
+        if (root == null) {
+            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+            return
+        }
+        quickNoteStartWithAddDialog = startWithAddDialog
+        quickNoteInProgress = true
+        scope.launch {
+            when (val result = withContext(Dispatchers.IO) {
+                openQuickNoteData(context, root, password)
+            }) {
+                is QuickNoteOpenResult.Success -> {
+                    quickNoteData = result.data
+                    quickNotePasswordRequired = false
+                    quickNotePassword = ""
+                }
+                QuickNoteOpenResult.RequiresPassword -> {
+                    quickNotePasswordRequired = true
+                }
+                is QuickNoteOpenResult.Error -> {
+                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                }
+            }
+            quickNoteInProgress = false
+        }
     }
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -536,6 +581,27 @@ fun FileBrowserApp(
                     }
                 },
                 onBack = { passEditState = null }
+            )
+        }
+        quickNoteData != null -> {
+            val data = quickNoteData!!
+            BackHandler { closeQuickNote() }
+            QuickNoteScreen(
+                loadedData = data,
+                startWithAddDialog = quickNoteStartWithAddDialog,
+                onBack = { closeQuickNote() },
+                onPersist = { entries ->
+                    val currentData = quickNoteData
+                        ?: return@QuickNoteScreen Result.failure(IllegalStateException("快速笔记状态已丢失"))
+                    val result = withContext(Dispatchers.IO) {
+                        saveQuickNoteData(context, currentData, entries)
+                    }
+                    result.onSuccess { saved ->
+                        quickNoteData = saved
+                        quickNoteStartWithAddDialog = false
+                    }
+                    result
+                }
             )
         }
         viewingFile != null -> {
@@ -1071,6 +1137,8 @@ fun FileBrowserApp(
                     onRefresh = { refreshTrigger++ },
                     onOpenConfig = { showConfigDialog = true },
                     onOpenAbout = { showAboutDialog = true },
+                    onOpenQuickNote = { requestOpenQuickNote(false) },
+                    onCreateQuickNote = { requestOpenQuickNote(true) },
                     onRequestGpgDecrypt = { fileModel, dirUri ->
                         gpgMethod = null
                         showGpgKeyPicker = false
@@ -1812,6 +1880,25 @@ fun FileBrowserApp(
                         }
                     )
                 }
+            }
+            if (quickNotePasswordRequired) {
+                GpgPasswordDialog(
+                    isDecrypt = true,
+                    fileName = QUICK_NOTE_GPG_FILE_NAME,
+                    password = quickNotePassword,
+                    passwordLabel = "密钥密码",
+                    inProgress = quickNoteInProgress,
+                    onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
+                    onConfirm = { pwd ->
+                        if (!quickNoteInProgress) requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
+                    },
+                    onDismiss = {
+                        if (!quickNoteInProgress) {
+                            resetQuickNotePromptState()
+                            quickNoteStartWithAddDialog = false
+                        }
+                    }
+                )
             }
             zipUnzipTarget?.let { target ->
                 val parentDirUri = Uri.parse(displayUri)
@@ -2845,6 +2932,8 @@ internal fun FileBrowserScreen(
     onOpenAbout: () -> Unit = {},
     onOpenFtp: () -> Unit = {},
     onOpenFileShare: () -> Unit = {},
+    onOpenQuickNote: () -> Unit = {},
+    onCreateQuickNote: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
@@ -3050,6 +3139,14 @@ internal fun FileBrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenFileShare()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("快速笔记") },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenQuickNote()
                                 }
                             )
                             DropdownMenuItem(
@@ -3438,6 +3535,12 @@ internal fun FileBrowserScreen(
                             showCreateDirDialog = true
                         }
                     ) { Text("新建文件夹", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(
+                        onClick = {
+                            showFabMenu = false
+                            onCreateQuickNote()
+                        }
+                    ) { Text("快速笔记", color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(onClick = { showFabMenu = false }) { Text("取消", color = MaterialTheme.colorScheme.onSurface) }
                 }
             }
