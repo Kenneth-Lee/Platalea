@@ -135,14 +135,22 @@ private const val STANDALONE_MD_CACHE_LIMIT = 6
 class MarkdownViewerSessionCache(
     private val maxEntries: Int = STANDALONE_MD_CACHE_LIMIT
 ) {
+    private val signatureMap: MutableMap<String, String> = mutableMapOf()
     val htmlCache: MutableMap<String, String> = mutableMapOf()
     val webViewMap: MutableMap<String, WebView> = mutableMapOf()
     val pageReadyMap: MutableMap<String, Boolean> = mutableMapOf()
     private val accessOrder = mutableListOf<String>()
 
-    fun getHtml(key: String): String? = htmlCache[key]?.also { touch(key) }
+    fun getHtml(key: String, signature: String): String? {
+        if (signatureMap[key] != signature) {
+            invalidate(key)
+            return null
+        }
+        return htmlCache[key]?.also { touch(key) }
+    }
 
-    fun putHtml(key: String, html: String) {
+    fun putHtml(key: String, html: String, signature: String) {
+        signatureMap[key] = signature
         htmlCache[key] = html
         touch(key)
     }
@@ -164,6 +172,17 @@ class MarkdownViewerSessionCache(
         accessOrder.clear()
     }
 
+    fun invalidate(key: String) {
+        accessOrder.remove(key)
+        evict(key)
+    }
+
+    fun invalidateByUri(uri: String) {
+        accessOrder.toList()
+            .filter { it.startsWith("$uri:") }
+            .forEach { invalidate(it) }
+    }
+
     private fun touch(key: String) {
         accessOrder.remove(key)
         accessOrder.add(key)
@@ -177,6 +196,7 @@ class MarkdownViewerSessionCache(
     }
 
     private fun evict(key: String) {
+        signatureMap.remove(key)
         htmlCache.remove(key)
         pageReadyMap.remove(key)
         webViewMap.remove(key)?.let { webView ->
@@ -188,6 +208,23 @@ class MarkdownViewerSessionCache(
                 webView.removeAllViews()
                 webView.destroy()
             }
+        }
+    }
+}
+
+private fun computeMarkdownCacheSignature(context: Context, uriString: String): String {
+    val uri = Uri.parse(uriString)
+    return when (uri.scheme?.lowercase()) {
+        "file" -> {
+            val file = File(uri.path ?: "")
+            "${file.lastModified()}:${file.length()}"
+        }
+        else -> {
+            val doc = DocumentFile.fromSingleUri(context, uri)
+                ?: DocumentFile.fromTreeUri(context, uri)
+            val lastModified = doc?.lastModified() ?: -1L
+            val length = doc?.length() ?: -1L
+            "$lastModified:$length"
         }
     }
 }
@@ -1369,7 +1406,10 @@ fun MarkdownViewerScreen(
     LaunchedEffect(currentUri, currentEncrypted) {
         regexFindUiState = RegexFindUiState()
         val cacheKey = "$currentUri:$currentEncrypted"
-        sessionCache.getHtml(cacheKey)?.let { cached ->
+        val cacheSignature = withContext(Dispatchers.IO) {
+            computeMarkdownCacheSignature(context, currentUri)
+        }
+        sessionCache.getHtml(cacheKey, cacheSignature)?.let { cached ->
             htmlContent = cached
             loading = false
             pageLoading = sessionCache.pageReadyMap[cacheKey] != true
@@ -1415,7 +1455,7 @@ fun MarkdownViewerScreen(
             if (isRst) rstToHtml(trimmed) else markdownToHtml(trimmed)
         }
         htmlContent = renderedHtml
-        sessionCache.putHtml(cacheKey, renderedHtml)
+        sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
         pageLoading = sessionCache.pageReadyMap[cacheKey] != true
         loadingMessage = if (pageLoading) "正在初始化页面样式与脚本…" else "已完成，正在显示页面…"
         Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")

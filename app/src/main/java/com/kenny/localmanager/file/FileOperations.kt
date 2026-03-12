@@ -459,7 +459,19 @@ fun writeBytesAtOffset(context: Context, uri: Uri, offset: Long, bytes: ByteArra
  */
 fun ContentResolver.writeBytesFull(uri: Uri, bytes: ByteArray): Boolean =
     try {
-        openOutputStream(uri)?.use { it.write(bytes) } != null
+        openFileDescriptor(uri, "rw")?.use { pfd ->
+            FileOutputStream(pfd.fileDescriptor).use { out ->
+                out.channel.use { ch ->
+                    ch.truncate(0)
+                    ch.position(0)
+                    ch.write(ByteBuffer.wrap(bytes))
+                    ch.force(true)
+                }
+            }
+            true
+        } ?: run {
+            openOutputStream(uri)?.use { it.write(bytes) } != null
+        }
     } catch (_: Exception) { false }
 
 /**

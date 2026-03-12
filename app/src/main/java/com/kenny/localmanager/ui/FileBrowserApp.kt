@@ -348,6 +348,27 @@ fun FileBrowserApp(
         resetQuickNotePromptState()
     }
 
+    fun requestCloseQuickNote(entries: List<QuickNoteEntry>) {
+        val currentData = quickNoteData ?: run {
+            closeQuickNote()
+            return
+        }
+        if (quickNoteInProgress) return
+        quickNoteInProgress = true
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                saveQuickNoteData(context, currentData, entries)
+            }
+            quickNoteInProgress = false
+            result.onSuccess { saved ->
+                markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
+                closeQuickNote()
+            }.onFailure { throwable ->
+                Toast.makeText(context, throwable.message ?: "快速笔记保存失败", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun requestOpenQuickNote(startWithAddDialog: Boolean, password: String? = null) {
         val root = rootUri?.let { normalizeContentUriString(it) }
         if (root == null) {
@@ -590,23 +611,11 @@ fun FileBrowserApp(
         }
         quickNoteData != null -> {
             val data = quickNoteData!!
-            BackHandler { closeQuickNote() }
             QuickNoteScreen(
                 loadedData = data,
                 startWithAddDialog = quickNoteStartWithAddDialog,
-                onBack = { closeQuickNote() },
-                onPersist = { entries ->
-                    val currentData = quickNoteData
-                        ?: return@QuickNoteScreen Result.failure(IllegalStateException("快速笔记状态已丢失"))
-                    val result = withContext(Dispatchers.IO) {
-                        saveQuickNoteData(context, currentData, entries)
-                    }
-                    result.onSuccess { saved ->
-                        quickNoteData = saved
-                        quickNoteStartWithAddDialog = false
-                    }
-                    result
-                }
+                inProgress = quickNoteInProgress,
+                onBack = { entries -> requestCloseQuickNote(entries) }
             )
         }
         viewingFile != null -> {

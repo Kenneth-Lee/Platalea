@@ -1,5 +1,7 @@
 package com.kenny.localmanager.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
@@ -20,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
@@ -31,6 +34,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -42,7 +47,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,7 +62,6 @@ import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
-import kotlinx.coroutines.launch
 
 const val QUICK_NOTE_FILE_NAME: String = ".lm.note.md"
 const val QUICK_NOTE_GPG_FILE_NAME: String = ".lm.note.md.gpg"
@@ -83,7 +86,9 @@ data class QuickNoteEntry(
 data class QuickNoteLoadedData(
     val fileInfo: QuickNoteFileInfo,
     val rawText: String,
-    val entries: List<QuickNoteEntry>
+    val entries: List<QuickNoteEntry>,
+    val ignoredSectionContent: String = "",
+    val sourcePassword: String? = null
 )
 
 sealed class QuickNoteOpenResult {
@@ -102,6 +107,39 @@ private data class QuickNoteEditorState(
     val deleted: Boolean = false
 )
 
+private data class QuickNoteCategoryEditState(
+    val originalCategory: String,
+    val replacementCategory: String = originalCategory
+)
+
+private data class QuickNoteParseResult(
+    val entries: List<QuickNoteEntry>,
+    val ignoredSectionContent: String
+)
+
+private val QUICK_NOTE_SECTION_BOUNDARY_REGEX = Regex("^#{1,2}\\s+.+$")
+
+private suspend fun readQuickNoteRawText(
+    context: Context,
+    fileInfo: QuickNoteFileInfo,
+    password: String? = null
+): Result<String> {
+    val plainBytes = if (fileInfo.isEncrypted) {
+        val secretKeys = loadSecretKeyRings(context)
+            ?: return Result.failure(IllegalStateException("未找到默认私钥，请先生成密钥对"))
+        val passphrase = password?.toCharArray()
+            ?: return Result.failure(IllegalStateException("缺少密钥密码，无法读取加密笔记"))
+        val decrypted = context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { input ->
+            GpgHelper.decryptWithSecretKey(input, secretKeys, passphrase) { }
+        }
+        decrypted ?: return Result.failure(IllegalStateException("解密失败，请检查密钥密码"))
+    } else {
+        context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { it.readBytes() }
+            ?: return Result.failure(IllegalStateException("无法读取快速笔记文件"))
+    }
+    return Result.success(String(plainBytes, Charsets.UTF_8))
+}
+
 suspend fun openQuickNoteData(
     context: Context,
     rootUriString: String,
@@ -110,28 +148,20 @@ suspend fun openQuickNoteData(
     val rootUri = Uri.parse(rootUriString)
     val fileInfo = resolveQuickNoteFile(context, rootUri)
         ?: return QuickNoteOpenResult.Error("无法创建或定位快速笔记文件")
-    val plainBytes = if (fileInfo.isEncrypted) {
-        val secretKeys = loadSecretKeyRings(context)
-            ?: return QuickNoteOpenResult.Error("未找到默认私钥，请先生成密钥对")
-        val passphrase = (password ?: "").toCharArray()
-        val decrypted = context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { input ->
-            GpgHelper.decryptWithSecretKey(input, secretKeys, passphrase) { }
-        }
-        if (decrypted == null) {
-            return if (password == null) QuickNoteOpenResult.RequiresPassword
-            else QuickNoteOpenResult.Error("解密失败，请检查密钥密码")
-        }
-        decrypted
-    } else {
-        context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { it.readBytes() }
-            ?: return QuickNoteOpenResult.Error("无法读取快速笔记文件")
+    if (fileInfo.isEncrypted && password == null) {
+        return QuickNoteOpenResult.RequiresPassword
     }
-    val rawText = String(plainBytes, Charsets.UTF_8)
+    val rawText = readQuickNoteRawText(context, fileInfo, password).getOrElse {
+        return QuickNoteOpenResult.Error(it.message ?: "无法读取快速笔记文件")
+    }
+    val parsed = parseQuickNoteSectionContent(rawText)
     return QuickNoteOpenResult.Success(
         QuickNoteLoadedData(
             fileInfo = fileInfo,
             rawText = rawText,
-            entries = parseQuickNoteEntries(rawText)
+            entries = parsed.entries,
+            ignoredSectionContent = parsed.ignoredSectionContent,
+            sourcePassword = password
         )
     )
 }
@@ -141,7 +171,9 @@ suspend fun saveQuickNoteData(
     currentData: QuickNoteLoadedData,
     entries: List<QuickNoteEntry>
 ): Result<QuickNoteLoadedData> {
-    val mergedText = mergeQuickNoteSection(currentData.rawText, entries)
+    val latestRawText = readQuickNoteRawText(context, currentData.fileInfo, currentData.sourcePassword)
+        .getOrElse { return Result.failure(it) }
+    val mergedText = mergeQuickNoteSection(latestRawText, entries)
     val outBytes = mergedText.toByteArray(Charsets.UTF_8)
     val ok = if (currentData.fileInfo.isEncrypted) {
         val secretKeys = loadSecretKeyRings(context)
@@ -186,9 +218,11 @@ private fun resolveQuickNoteFile(context: Context, rootUri: Uri): QuickNoteFileI
     return QuickNoteFileInfo(createdUri, QUICK_NOTE_FILE_NAME, false)
 }
 
-fun parseQuickNoteEntries(fullText: String): List<QuickNoteEntry> {
-    val sectionLines = getQuickNoteSectionLines(fullText) ?: return emptyList()
+private fun parseQuickNoteSectionContent(fullText: String): QuickNoteParseResult {
+    val sectionLines = getQuickNoteSectionLines(fullText)
+        ?: return QuickNoteParseResult(entries = emptyList(), ignoredSectionContent = "")
     val entries = mutableListOf<QuickNoteEntry>()
+    val ignoredLines = mutableListOf<String>()
     var currentCategory: String? = null
     var currentChecked = false
     var currentLines: MutableList<String>? = null
@@ -212,6 +246,7 @@ fun parseQuickNoteEntries(fullText: String): List<QuickNoteEntry> {
         val trimmed = line.trimEnd()
         when {
             trimmed.trim() == QUICK_NOTE_SECTION_HEADING -> Unit
+            trimmed.isBlank() -> Unit
             trimmed.trimStart().startsWith("### ") -> {
                 flushCurrent()
                 currentCategory = trimmed.trimStart().removePrefix("### ").trim()
@@ -225,12 +260,18 @@ fun parseQuickNoteEntries(fullText: String): List<QuickNoteEntry> {
             currentLines != null && (line.startsWith("  ") || line.startsWith("\t")) -> {
                 currentLines?.add(line.removePrefix("  ").removePrefix("\t"))
             }
-            else -> Unit
+            else -> ignoredLines += line
         }
     }
     flushCurrent()
-    return entries
+    return QuickNoteParseResult(
+        entries = entries,
+        ignoredSectionContent = ignoredLines.joinToString("\n").trimEnd()
+    )
 }
+
+fun parseQuickNoteEntries(fullText: String): List<QuickNoteEntry> =
+    parseQuickNoteSectionContent(fullText).entries
 
 private fun mergeQuickNoteSection(fullText: String, entries: List<QuickNoteEntry>): String {
     val normalized = fullText.replace("\r\n", "\n")
@@ -295,7 +336,7 @@ private fun serializeQuickNoteEntry(entry: QuickNoteEntry): String {
     }
     return buildString {
         append("* [")
-        append(if (entry.checked) "x" else " ")
+        append(if (entry.checked) "x" else "")
         append("] ")
         append(contentLines.first())
         contentLines.drop(1).forEach { line ->
@@ -316,7 +357,7 @@ private fun findQuickNoteSectionRange(fullText: String): QuickNoteSectionRange? 
     val lines = fullText.replace("\r\n", "\n").split("\n")
     var startIndex = -1
     for (index in lines.indices) {
-        if (lines[index].trimEnd() == QUICK_NOTE_SECTION_HEADING) {
+        if (lines[index].trim() == QUICK_NOTE_SECTION_HEADING) {
             startIndex = index
             break
         }
@@ -324,7 +365,8 @@ private fun findQuickNoteSectionRange(fullText: String): QuickNoteSectionRange? 
     if (startIndex < 0) return null
     var endIndex = lines.size
     for (index in (startIndex + 1) until lines.size) {
-        if (lines[index].startsWith("## ")) {
+        val trimmed = lines[index].trimStart()
+        if (QUICK_NOTE_SECTION_BOUNDARY_REGEX.matches(trimmed) && !trimmed.startsWith("### ")) {
             endIndex = index
             break
         }
@@ -364,42 +406,68 @@ private fun buildQuickNoteCategoryOrder(entries: List<QuickNoteEntry>): List<Str
 private fun normalizeQuickNoteCategory(category: String?): String? =
     category?.trim()?.takeIf { it.isNotEmpty() }
 
+private fun quickNoteCategoryNames(entries: List<QuickNoteEntry>): List<String> =
+    buildQuickNoteCategoryOrder(entries).filterNotNull()
+
+private fun renameQuickNoteCategory(entries: List<QuickNoteEntry>, from: String, to: String?): List<QuickNoteEntry> {
+    val normalizedFrom = normalizeQuickNoteCategory(from) ?: return entries
+    val normalizedTo = normalizeQuickNoteCategory(to)
+    return entries.map { entry ->
+        if (normalizeQuickNoteCategory(entry.category) == normalizedFrom) entry.copy(category = normalizedTo) else entry
+    }
+}
+
 private fun nextQuickNoteEntryId(entries: List<QuickNoteEntry>): Long =
     (entries.maxOfOrNull { it.id } ?: 0L) + 1L
 
-private val QUICK_NOTE_ENTRY_REGEX = Regex("^\\* \\[([ xX])] (.*)$")
+private fun summarizeMultiLineEntries(entries: List<QuickNoteEntry>): String {
+    return entries
+        .filter { it.text.contains('\n') }
+        .joinToString("\n\n") { entry ->
+            val categoryLabel = normalizeQuickNoteCategory(entry.category)?.let { "[$it] " } ?: ""
+            val lines = entry.text.replace("\r\n", "\n").split("\n")
+            buildString {
+                append(categoryLabel)
+                append(lines.firstOrNull().orEmpty())
+                lines.drop(1).forEach { line ->
+                    append("\n  ")
+                    append(line)
+                }
+            }
+        }
+        .trim()
+}
+
+private val QUICK_NOTE_ENTRY_REGEX = Regex("^\\* \\[([xX ]?)\\]\\s?(.*)$")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuickNoteScreen(
     loadedData: QuickNoteLoadedData,
     startWithAddDialog: Boolean,
-    onBack: () -> Unit,
-    onPersist: suspend (List<QuickNoteEntry>) -> Result<QuickNoteLoadedData>
+    inProgress: Boolean,
+    onBack: (List<QuickNoteEntry>) -> Unit
 ) {
     val composeContext = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val clipboardManager = composeContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
     var entries by remember(loadedData.fileInfo.uri, loadedData.rawText) { mutableStateOf(loadedData.entries) }
     var editorState by remember(loadedData.fileInfo.uri, startWithAddDialog) {
         mutableStateOf(if (startWithAddDialog) QuickNoteEditorState() else null)
     }
-    var saving by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
     var deleteConfirmEntry by remember { mutableStateOf<QuickNoteEntry?>(null) }
+    var categoryEditState by remember { mutableStateOf<QuickNoteCategoryEditState?>(null) }
+    var showIgnoredContentDialog by remember(loadedData.fileInfo.uri, loadedData.rawText) {
+        mutableStateOf(loadedData.ignoredSectionContent.isNotBlank())
+    }
+    var showMultiLineContentDialog by remember(loadedData.fileInfo.uri, loadedData.rawText) {
+        mutableStateOf(summarizeMultiLineEntries(loadedData.entries).isNotBlank())
+    }
     val categoryExpandedStates = remember(loadedData.fileInfo.uri) { mutableStateMapOf<String, Boolean>() }
+    val existingCategories = remember(entries) { quickNoteCategoryNames(entries) }
+    val multiLineEntrySummary = remember(entries) { summarizeMultiLineEntries(entries) }
 
-    fun commitEntries(newEntries: List<QuickNoteEntry>) {
-        if (saving) return
-        scope.launch {
-            saving = true
-            val result = onPersist(newEntries)
-            saving = false
-            result.onSuccess { saved ->
-                entries = saved.entries
-            }.onFailure { throwable ->
-                errorMessage = throwable.message ?: "快速笔记保存失败"
-            }
-        }
+    androidx.activity.compose.BackHandler(enabled = !inProgress) {
+        onBack(entries)
     }
 
     val groupedEntries = remember(entries) {
@@ -429,12 +497,12 @@ fun QuickNoteScreen(
                         }
                     },
                     navigationIcon = {
-                        IconButton(onClick = onBack, enabled = !saving) {
+                        IconButton(onClick = { onBack(entries) }, enabled = !inProgress) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                         }
                     },
                     actions = {
-                        IconButton(onClick = { editorState = QuickNoteEditorState() }, enabled = !saving) {
+                        IconButton(onClick = { editorState = QuickNoteEditorState() }, enabled = !inProgress) {
                             Icon(Icons.Default.Add, contentDescription = "新增记录")
                         }
                     },
@@ -443,7 +511,7 @@ fun QuickNoteScreen(
                         titleContentColor = MaterialTheme.colorScheme.onSurface
                     )
                 )
-                if (saving) {
+                if (inProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
             }
@@ -477,8 +545,12 @@ fun QuickNoteScreen(
                                 title = category,
                                 count = categoryEntries.size,
                                 expanded = expanded,
+                                enabled = !inProgress,
                                 onToggle = {
                                     categoryExpandedStates[categoryKey] = !expanded
+                                },
+                                onEditCategory = {
+                                    categoryEditState = QuickNoteCategoryEditState(category)
                                 }
                             )
                         }
@@ -494,16 +566,16 @@ fun QuickNoteScreen(
                         items(categoryEntries, key = { it.id }) { entry ->
                             QuickNoteEntryRow(
                                 entry = entry,
-                                enabled = !saving,
+                                enabled = !inProgress,
                                 onToggleChecked = { checked ->
-                                    commitEntries(entries.map {
+                                    entries = entries.map {
                                         if (it.id == entry.id) it.copy(checked = checked) else it
-                                    })
+                                    }
                                 },
                                 onToggleDeleted = {
-                                    commitEntries(entries.map {
+                                    entries = entries.map {
                                         if (it.id == entry.id) it.copy(deleted = !it.deleted) else it
-                                    })
+                                    }
                                 },
                                 onEdit = {
                                     editorState = QuickNoteEditorState(
@@ -531,8 +603,9 @@ fun QuickNoteScreen(
     editorState?.let { state ->
         QuickNoteEditorDialog(
             state = state,
-            inProgress = saving,
-            onDismiss = { if (!saving) editorState = null },
+            existingCategories = existingCategories,
+            inProgress = inProgress,
+            onDismiss = { if (!inProgress) editorState = null },
             onConfirm = { updated ->
                 val normalizedCategory = normalizeQuickNoteCategory(updated.category)
                 val normalizedText = updated.text.trimEnd()
@@ -544,7 +617,7 @@ fun QuickNoteScreen(
                     ).show()
                     return@QuickNoteEditorDialog
                 }
-                val nextEntries = if (updated.editingId == null) {
+                entries = if (updated.editingId == null) {
                     val newEntry = QuickNoteEntry(
                         id = nextQuickNoteEntryId(entries),
                         category = normalizedCategory,
@@ -569,21 +642,22 @@ fun QuickNoteScreen(
                         }
                     }
                 }
-                commitEntries(nextEntries)
                 editorState = null
             }
         )
     }
 
-    errorMessage?.let { message ->
-        AlertDialog(
-            onDismissRequest = { errorMessage = null },
-            title = { Text("快速笔记") },
-            text = { Text(message) },
-            confirmButton = {
-                Button(onClick = { errorMessage = null }) {
-                    Text("确定")
-                }
+    categoryEditState?.let { state ->
+        QuickNoteCategoryDialog(
+            state = state,
+            existingCategories = existingCategories.filter { it != state.originalCategory },
+            inProgress = inProgress,
+            onDismiss = { if (!inProgress) categoryEditState = null },
+            onConfirm = { replacementCategory ->
+                entries = renameQuickNoteCategory(entries, state.originalCategory, replacementCategory)
+                categoryExpandedStates.remove(quickNoteCategoryKey(state.originalCategory))
+                categoryExpandedStates[quickNoteCategoryKey(normalizeQuickNoteCategory(replacementCategory))] = true
+                categoryEditState = null
             }
         )
     }
@@ -604,16 +678,104 @@ fun QuickNoteScreen(
                     onClick = {
                         val targetId = entry.id
                         deleteConfirmEntry = null
-                        commitEntries(entries.filterNot { it.id == targetId })
+                        entries = entries.filterNot { it.id == targetId }
                     },
-                    enabled = !saving
+                    enabled = !inProgress
                 ) {
                     Text("删除")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { deleteConfirmEntry = null }, enabled = !saving) {
+                TextButton(onClick = { deleteConfirmEntry = null }, enabled = !inProgress) {
                     Text("取消")
+                }
+            }
+        )
+    }
+
+    if (showIgnoredContentDialog && loadedData.ignoredSectionContent.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { showIgnoredContentDialog = false },
+            title = { Text("发现未接管的数据") },
+            text = {
+                Column {
+                    Text(
+                        "“思想火花”章节里有一些不符合当前记录协议的文本。它们不会被读入为记录，退出功能时会被整段覆盖。请先复制保存。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = loadedData.ignoredSectionContent,
+                        onValueChange = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(180.dp),
+                        readOnly = true,
+                        enabled = false,
+                        label = { Text("将被覆盖的原始内容") }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        clipboardManager?.setPrimaryClip(
+                            ClipData.newPlainText("快速笔记未接管内容", loadedData.ignoredSectionContent)
+                        )
+                        Toast.makeText(composeContext, "已复制未接管内容", Toast.LENGTH_SHORT).show()
+                        showIgnoredContentDialog = false
+                    }
+                ) {
+                    Text("复制并继续")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showIgnoredContentDialog = false }) {
+                    Text("继续")
+                }
+            }
+        )
+    }
+
+    if (showMultiLineContentDialog && multiLineEntrySummary.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = { showMultiLineContentDialog = false },
+            title = { Text("发现多行记录内容") },
+            text = {
+                Column {
+                    Text(
+                        "下面这些缩进行会被协议当成记录正文的一部分，所以保存后会继续保留。如果它们其实是错误数据，需要进入对应记录手动删除。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = multiLineEntrySummary,
+                        onValueChange = {},
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp),
+                        readOnly = true,
+                        enabled = false,
+                        label = { Text("会被当成记录正文保留的内容") }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        clipboardManager?.setPrimaryClip(
+                            ClipData.newPlainText("快速笔记多行记录内容", multiLineEntrySummary)
+                        )
+                        Toast.makeText(composeContext, "已复制多行记录内容", Toast.LENGTH_SHORT).show()
+                        showMultiLineContentDialog = false
+                    }
+                ) {
+                    Text("复制并继续")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMultiLineContentDialog = false }) {
+                    Text("继续")
                 }
             }
         )
@@ -625,12 +787,14 @@ private fun QuickNoteCategoryHeader(
     title: String,
     count: Int,
     expanded: Boolean,
-    onToggle: () -> Unit
+    enabled: Boolean,
+    onToggle: () -> Unit,
+    onEditCategory: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
+            .clickable(enabled = enabled, onClick = onToggle)
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -654,6 +818,9 @@ private fun QuickNoteCategoryHeader(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        IconButton(onClick = onEditCategory, enabled = enabled, modifier = Modifier.size(28.dp)) {
+            Icon(Icons.Default.Edit, contentDescription = "修改类别", modifier = Modifier.size(16.dp))
+        }
     }
 }
 
@@ -735,6 +902,7 @@ private fun quickNoteCategoryKey(category: String?): String = category ?: "__def
 @Composable
 private fun QuickNoteEditorDialog(
     state: QuickNoteEditorState,
+    existingCategories: List<String>,
     inProgress: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (QuickNoteEditorState) -> Unit
@@ -749,13 +917,12 @@ private fun QuickNoteEditorDialog(
         title = { Text(if (state.editingId == null) "新增记录" else "编辑记录") },
         text = {
             Column {
-                OutlinedTextField(
+                QuickNoteCategoryField(
                     value = category,
-                    onValueChange = { category = it },
-                    label = { Text("类别（留空为未分类）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !inProgress
+                    existingCategories = existingCategories,
+                    enabled = !inProgress,
+                    label = "类别（留空为未分类）",
+                    onValueChange = { category = it }
                 )
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
@@ -808,4 +975,96 @@ private fun QuickNoteEditorDialog(
             }
         }
     )
+}
+
+@Composable
+private fun QuickNoteCategoryDialog(
+    state: QuickNoteCategoryEditState,
+    existingCategories: List<String>,
+    inProgress: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var category by remember(state.originalCategory) { mutableStateOf(state.replacementCategory) }
+
+    AlertDialog(
+        onDismissRequest = { if (!inProgress) onDismiss() },
+        title = { Text("修改类别") },
+        text = {
+            Column {
+                Text(
+                    "将“${state.originalCategory}”下的所有记录一次性移动到新类别。留空表示改为未分类。",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(12.dp))
+                QuickNoteCategoryField(
+                    value = category,
+                    existingCategories = existingCategories,
+                    enabled = !inProgress,
+                    label = "新类别",
+                    onValueChange = { category = it }
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(category) }, enabled = !inProgress) {
+                Text("应用")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !inProgress) {
+                Text("取消")
+            }
+        }
+    )
+}
+
+@Composable
+private fun QuickNoteCategoryField(
+    value: String,
+    existingCategories: List<String>,
+    enabled: Boolean,
+    label: String,
+    onValueChange: (String) -> Unit
+) {
+    var showMenu by remember { mutableStateOf(false) }
+
+    Box(Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = enabled,
+            trailingIcon = {
+                if (existingCategories.isNotEmpty()) {
+                    IconButton(onClick = { showMenu = !showMenu }, enabled = enabled) {
+                        Icon(Icons.Default.ExpandMore, contentDescription = "选择已有类别")
+                    }
+                }
+            }
+        )
+        DropdownMenu(
+            expanded = showMenu && existingCategories.isNotEmpty(),
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("未分类") },
+                onClick = {
+                    onValueChange("")
+                    showMenu = false
+                }
+            )
+            existingCategories.forEach { category ->
+                DropdownMenuItem(
+                    text = { Text(category) },
+                    onClick = {
+                        onValueChange(category)
+                        showMenu = false
+                    }
+                )
+            }
+        }
+    }
 }
