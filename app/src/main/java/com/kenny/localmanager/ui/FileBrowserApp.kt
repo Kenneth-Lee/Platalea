@@ -275,6 +275,7 @@ fun FileBrowserApp(
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
     var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
     var passEditPassword by remember { mutableStateOf("") }
@@ -325,6 +326,9 @@ fun FileBrowserApp(
                 currentUri = target
             }
         }
+    }
+    LaunchedEffect(rootUri) {
+        markdownViewerSessionCache.clear()
     }
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
@@ -463,6 +467,7 @@ fun FileBrowserApp(
                 initialFileUri = uri,
                 initialFileName = name,
                 isEncrypted = isEncrypted,
+                sessionCache = markdownViewerSessionCache,
                 onBack = { markdownViewFile = null },
                 onOpenFile = { openUri, openName, openEncrypted ->
                     markdownViewFile = Triple(openUri, openName, openEncrypted)

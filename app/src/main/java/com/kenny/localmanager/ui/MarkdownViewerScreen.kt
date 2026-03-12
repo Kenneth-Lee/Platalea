@@ -130,6 +130,67 @@ import com.kenny.localmanager.file.getEpubChapterFile
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
+private const val STANDALONE_MD_CACHE_LIMIT = 6
+
+class MarkdownViewerSessionCache(
+    private val maxEntries: Int = STANDALONE_MD_CACHE_LIMIT
+) {
+    val htmlCache: MutableMap<String, String> = mutableMapOf()
+    val webViewMap: MutableMap<String, WebView> = mutableMapOf()
+    val pageReadyMap: MutableMap<String, Boolean> = mutableMapOf()
+    private val accessOrder = mutableListOf<String>()
+
+    fun getHtml(key: String): String? = htmlCache[key]?.also { touch(key) }
+
+    fun putHtml(key: String, html: String) {
+        htmlCache[key] = html
+        touch(key)
+    }
+
+    fun getWebView(key: String): WebView? = webViewMap[key]?.also { touch(key) }
+
+    fun putWebView(key: String, webView: WebView) {
+        webViewMap[key] = webView
+        touch(key)
+    }
+
+    fun setPageReady(key: String, ready: Boolean) {
+        pageReadyMap[key] = ready
+        touch(key)
+    }
+
+    fun clear() {
+        accessOrder.toList().forEach { evict(it) }
+        accessOrder.clear()
+    }
+
+    private fun touch(key: String) {
+        accessOrder.remove(key)
+        accessOrder.add(key)
+        trimIfNeeded()
+    }
+
+    private fun trimIfNeeded() {
+        while (accessOrder.size > maxEntries) {
+            evict(accessOrder.removeAt(0))
+        }
+    }
+
+    private fun evict(key: String) {
+        htmlCache.remove(key)
+        pageReadyMap.remove(key)
+        webViewMap.remove(key)?.let { webView ->
+            runCatching { (webView.parent as? android.view.ViewGroup)?.removeView(webView) }
+            runCatching {
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.clearHistory()
+                webView.removeAllViews()
+                webView.destroy()
+            }
+        }
+    }
+}
 
 /** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
 private fun markdownToHtml(md: String): String {
@@ -1257,6 +1318,7 @@ fun MarkdownViewerScreen(
     initialFileUri: String,
     initialFileName: String,
     isEncrypted: Boolean,
+    sessionCache: MarkdownViewerSessionCache,
     onBack: () -> Unit,
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
@@ -1269,13 +1331,13 @@ fun MarkdownViewerScreen(
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var pageLoading by remember { mutableStateOf(false) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var pendingInternalUri by remember { mutableStateOf<String?>(null) }
-    val htmlCache = remember { mutableMapOf<String, String>() }
     val linkHolder = remember { LinkCallbackHolder() }
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) } // 50..200，页面 body.style.zoom
-    val webViewMap = remember { mutableMapOf<String, WebView>() }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
@@ -1307,46 +1369,56 @@ fun MarkdownViewerScreen(
     LaunchedEffect(currentUri, currentEncrypted) {
         regexFindUiState = RegexFindUiState()
         val cacheKey = "$currentUri:$currentEncrypted"
-        htmlCache[cacheKey]?.let { cached ->
+        sessionCache.getHtml(cacheKey)?.let { cached ->
             htmlContent = cached
             loading = false
+            pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+            loadingMessage = if (pageLoading) "正在恢复页面脚本与样式…" else "正在复用已缓存页面…"
             Log.d(MD_DEBUG, "[加载] 使用缓存 currentUri=$currentUri")
             return@LaunchedEffect
         }
         loading = true
+        pageLoading = false
         loadError = null
         htmlContent = null
+        loadingMessage = if (currentEncrypted) "正在读取并解密文件…" else "正在读取文件内容…"
         Log.d(MD_DEBUG, "[加载] 开始 currentUri=$currentUri")
         val uri = Uri.parse(currentUri)
-        withContext(Dispatchers.IO) {
+        val decoded = withContext(Dispatchers.IO) {
             val stream = context.contentResolver.openInputStreamSafe(uri)
             if (stream == null) {
                 Log.d(MD_DEBUG, "[加载] 失败 openInputStreamSafe 返回 null uri=$currentUri")
                 loadError = "无法打开文件"
-                return@withContext
+                return@withContext null
             }
             stream.use { raw ->
                 val bytes = if (currentEncrypted) {
                     GpgHelper.decryptStream(raw) ?: run {
                         loadError = "解密失败或需要密码"
                         Log.d(MD_DEBUG, "[加载] 解密失败")
-                        return@withContext
+                        return@withContext null
                     }
                 } else {
                     raw.readBytesUpTo(maxOf(MAX_MARKDOWN_BYTES, MAX_RST_BYTES))
                 }
-                val decoded = bytes.decodeToString()
-                val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
-                val isRst = currentName.endsWith(".rst", ignoreCase = true)
-                htmlContent = if (isRst) {
-                    rstToHtml(trimmed)
-                } else {
-                    markdownToHtml(trimmed)
-                }
-                htmlCache[cacheKey] = htmlContent!!
-                Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
+                bytes.decodeToString().dropLastWhile { it == '\uFFFD' }
             }
         }
+        val trimmed = decoded ?: run {
+            loading = false
+            pageLoading = false
+            return@LaunchedEffect
+        }
+        val isRst = currentName.endsWith(".rst", ignoreCase = true)
+        loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
+        val renderedHtml = withContext(Dispatchers.IO) {
+            if (isRst) rstToHtml(trimmed) else markdownToHtml(trimmed)
+        }
+        htmlContent = renderedHtml
+        sessionCache.putHtml(cacheKey, renderedHtml)
+        pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+        loadingMessage = if (pageLoading) "正在初始化页面样式与脚本…" else "已完成，正在显示页面…"
+        Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
         loading = false
     }
 
@@ -1530,9 +1602,6 @@ fun MarkdownViewerScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
                 loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
@@ -1546,11 +1615,11 @@ fun MarkdownViewerScreen(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
                     val pages = (backStack + Triple(currentUri, currentName, currentEncrypted))
-                        .filter { (u, _, e) -> (htmlCache["$u:$e"] != null || u == currentUri) && (u != currentUri || htmlContent != null) }
+                        .filter { (u, _, e) -> (sessionCache.htmlCache["$u:$e"] != null || u == currentUri) && (u != currentUri || htmlContent != null) }
                     for (page in pages) {
                         val (uri, _, encrypted) = page
                         val cacheKey = "$uri:$encrypted"
-                        val content = htmlCache[cacheKey] ?: if (uri == currentUri) htmlContent!! else continue
+                        val content = sessionCache.htmlCache[cacheKey] ?: if (uri == currentUri) htmlContent!! else continue
                         val isCurrent = uri == currentUri
                         androidx.compose.runtime.key(uri) {
                             Box(
@@ -1560,7 +1629,11 @@ fun MarkdownViewerScreen(
                             ) {
                                 AndroidView(
                                     factory = { ctx ->
-                                        webViewMap.getOrPut(uri) {
+                                        val existing = sessionCache.getWebView(cacheKey)
+                                        if (existing != null) {
+                                            (existing.parent as? android.view.ViewGroup)?.removeView(existing)
+                                            existing
+                                        } else {
                                             val baseUrl = MD_VIEWER_BASE_URL
                                             val fullHtml = buildMdViewerFullHtml(content, baseUrl, katexCss, katexJs, autoRenderJs, mermaidJs, syntaxHighlightCss, syntaxHighlightJs, bgHex, fgHex)
                                             WebView(ctx).apply {
@@ -1569,13 +1642,20 @@ fun MarkdownViewerScreen(
                                                 webViewClient = LinkInterceptClient(
                                                     linkHolder, context, ResourceResolverHolder(uri)
                                                 ) { w ->
+                                                    sessionCache.setPageReady(cacheKey, true)
                                                     regexFindUiState = RegexFindUiState()
                                                     installRegexFindBridge(w)
                                                     w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                                    if (isCurrent) {
+                                                        pageLoading = false
+                                                        loadingMessage = "页面已准备完成"
+                                                    }
                                                 }
                                                 settings.domStorageEnabled = false
                                                 settings.javaScriptEnabled = true
+                                                sessionCache.setPageReady(cacheKey, false)
                                                 loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                                                sessionCache.putWebView(cacheKey, this)
                                             }
                                         }
                                     },
@@ -1583,11 +1663,40 @@ fun MarkdownViewerScreen(
                                     update = { webView ->
                                         if (isCurrent) {
                                             webViewRef.value = webView
+                                            pageLoading = sessionCache.pageReadyMap[cacheKey] != true
                                             webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                         }
                                     }
                                 )
                             }
+                        }
+                    }
+                    if (loading || pageLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Card {
+                                Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                                    Text(
+                                        if (loading) "正在准备文档" else "正在准备页面",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        loadingMessage,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Card {
+                        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                            Text("正在准备文档", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(8.dp))
+                            Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
