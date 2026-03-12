@@ -336,7 +336,7 @@ private fun serializeQuickNoteEntry(entry: QuickNoteEntry): String {
     }
     return buildString {
         append("* [")
-        append(if (entry.checked) "x" else "")
+        append(if (entry.checked) "x" else " ")
         append("] ")
         append(contentLines.first())
         contentLines.drop(1).forEach { line ->
