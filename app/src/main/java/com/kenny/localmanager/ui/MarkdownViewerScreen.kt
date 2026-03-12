@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -792,6 +793,442 @@ document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl
 </html>
 """.trimIndent()
 
+private data class RegexFindUiState(
+    val count: Int = 0,
+    val currentIndex: Int = -1,
+    val error: String? = null
+) {
+    val hasMatches: Boolean get() = count > 0
+}
+
+private val REGEX_FIND_BOOTSTRAP_JS = """
+(function() {
+    if (window.__lmRegexFind) {
+        return true;
+    }
+
+    var styleId = 'lm-regex-find-style';
+    var skipTags = { SCRIPT: true, STYLE: true, NOSCRIPT: true, TEXTAREA: true, INPUT: true, SELECT: true, OPTION: true };
+
+    function ensureStyle() {
+        if (document.getElementById(styleId)) {
+            return;
+        }
+        var style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = 'span.lm-regex-find-match{background:rgba(255,214,10,0.55);color:inherit;box-shadow:0 0 0 1px rgba(255,193,7,0.25);}' +
+            'span.lm-regex-find-match.lm-regex-find-current{background:#ff8f00;color:#111;box-shadow:0 0 0 2px rgba(255,143,0,0.35);}';
+        (document.head || document.documentElement).appendChild(style);
+    }
+
+    function resetState() {
+        window.__lmRegexFindMatches = [];
+        window.__lmRegexFindIndex = -1;
+    }
+
+    function result(extra) {
+        var matches = window.__lmRegexFindMatches || [];
+        var payload = {
+            ok: true,
+            count: matches.length,
+            index: window.__lmRegexFindIndex == null ? -1 : window.__lmRegexFindIndex,
+            error: null
+        };
+        if (extra) {
+            for (var key in extra) {
+                if (Object.prototype.hasOwnProperty.call(extra, key)) {
+                    payload[key] = extra[key];
+                }
+            }
+        }
+        return payload;
+    }
+
+    function shouldSkip(node) {
+        if (!node || !node.parentElement) {
+            return true;
+        }
+        if (!node.nodeValue || !node.nodeValue.trim()) {
+            return true;
+        }
+        var parent = node.parentElement;
+        if (parent.closest && parent.closest('span.lm-regex-find-match')) {
+            return true;
+        }
+        return !!skipTags[parent.tagName];
+    }
+
+    function clear() {
+        var markers = document.querySelectorAll('span.lm-regex-find-match');
+        for (var i = 0; i < markers.length; i++) {
+            var marker = markers[i];
+            var parent = marker.parentNode;
+            if (!parent) {
+                continue;
+            }
+            parent.replaceChild(document.createTextNode(marker.textContent || ''), marker);
+            parent.normalize();
+        }
+        resetState();
+        return result();
+    }
+
+    function buildRegex(pattern) {
+        var source = String(pattern || '');
+        var flags = 'gm';
+        var slashForm = source.match(/^\/((?:\\.|[^\/])+)\/([dgimsuy]*)$/);
+        if (slashForm) {
+            source = slashForm[1];
+            flags = slashForm[2] || '';
+        } else {
+            var inlineFlags = source.match(/^\(\?([dgimsuy]+)\)/);
+            if (inlineFlags) {
+                flags = inlineFlags[1] || '';
+                source = source.slice(inlineFlags[0].length);
+            }
+        }
+        if (flags.indexOf('g') < 0) {
+            flags += 'g';
+        }
+        if (flags.indexOf('m') < 0) {
+            flags += 'm';
+        }
+        return new RegExp(source, flags);
+    }
+
+    function activate(index) {
+        var matches = window.__lmRegexFindMatches || [];
+        if (!matches.length) {
+            window.__lmRegexFindIndex = -1;
+            return result();
+        }
+        var normalizedIndex = index % matches.length;
+        if (normalizedIndex < 0) {
+            normalizedIndex += matches.length;
+        }
+        window.__lmRegexFindIndex = normalizedIndex;
+        for (var i = 0; i < matches.length; i++) {
+            var group = matches[i];
+            if (!group || !group.length) {
+                continue;
+            }
+            for (var j = 0; j < group.length; j++) {
+                group[j].classList.toggle('lm-regex-find-current', i === normalizedIndex);
+            }
+        }
+        var currentGroup = matches[normalizedIndex];
+        var current = currentGroup && currentGroup.length ? currentGroup[0] : null;
+        if (current && current.scrollIntoView) {
+            current.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+        }
+        return result();
+    }
+
+    function search(pattern) {
+        clear();
+        ensureStyle();
+        if (!pattern) {
+            return result();
+        }
+        var regex;
+        try {
+            regex = buildRegex(pattern);
+        } catch (error) {
+            return result({ ok: false, error: String((error && error.message) || error || '无效正则') });
+        }
+
+        var root = document.body || document.documentElement;
+        if (!root) {
+            return result({ ok: false, error: '页面尚未就绪' });
+        }
+
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+        var nodes = [];
+        var fullText = '';
+        var totalOffset = 0;
+        var currentNode;
+        while ((currentNode = walker.nextNode())) {
+            if (!shouldSkip(currentNode)) {
+                var textValue = currentNode.nodeValue || '';
+                nodes.push({
+                    node: currentNode,
+                    text: textValue,
+                    start: totalOffset,
+                    end: totalOffset + textValue.length,
+                    segments: []
+                });
+                fullText += textValue;
+                totalOffset += textValue.length;
+            }
+        }
+
+        var matchRanges = [];
+        var match;
+        regex.lastIndex = 0;
+        while ((match = regex.exec(fullText)) !== null) {
+            var matchedText = match[0];
+            if (!matchedText) {
+                regex.lastIndex += 1;
+                continue;
+            }
+            matchRanges.push({
+                id: matchRanges.length,
+                start: match.index,
+                end: match.index + matchedText.length
+            });
+        }
+
+        var nodeCursor = 0;
+        for (var rangeIndex = 0; rangeIndex < matchRanges.length; rangeIndex++) {
+            var range = matchRanges[rangeIndex];
+            while (nodeCursor < nodes.length && nodes[nodeCursor].end <= range.start) {
+                nodeCursor += 1;
+            }
+            var scanIndex = nodeCursor;
+            while (scanIndex < nodes.length && nodes[scanIndex].start < range.end) {
+                var nodeInfo = nodes[scanIndex];
+                var segmentStart = Math.max(0, range.start - nodeInfo.start);
+                var segmentEnd = Math.min(nodeInfo.text.length, range.end - nodeInfo.start);
+                if (segmentStart < segmentEnd) {
+                    nodeInfo.segments.push({
+                        start: segmentStart,
+                        end: segmentEnd,
+                        matchId: range.id
+                    });
+                }
+                scanIndex += 1;
+            }
+        }
+
+        var matches = new Array(matchRanges.length);
+        for (var nodeIndex = 0; nodeIndex < nodes.length; nodeIndex++) {
+            var nodeInfo = nodes[nodeIndex];
+            if (!nodeInfo.segments.length) {
+                continue;
+            }
+            nodeInfo.segments.sort(function(a, b) {
+                if (a.start !== b.start) {
+                    return a.start - b.start;
+                }
+                return a.end - b.end;
+            });
+            var fragment = document.createDocumentFragment();
+            var lastIndex = 0;
+            for (var segmentIndex = 0; segmentIndex < nodeInfo.segments.length; segmentIndex++) {
+                var segment = nodeInfo.segments[segmentIndex];
+                if (segment.start > lastIndex) {
+                    fragment.appendChild(document.createTextNode(nodeInfo.text.slice(lastIndex, segment.start)));
+                }
+                var marker = document.createElement('span');
+                marker.className = 'lm-regex-find-match';
+                marker.setAttribute('data-lm-regex-find-id', String(segment.matchId));
+                marker.textContent = nodeInfo.text.slice(segment.start, segment.end);
+                fragment.appendChild(marker);
+                if (!matches[segment.matchId]) {
+                    matches[segment.matchId] = [];
+                }
+                matches[segment.matchId].push(marker);
+                lastIndex = segment.end;
+            }
+            if (lastIndex < nodeInfo.text.length) {
+                fragment.appendChild(document.createTextNode(nodeInfo.text.slice(lastIndex)));
+            }
+            if (nodeInfo.node.parentNode) {
+                nodeInfo.node.parentNode.replaceChild(fragment, nodeInfo.node);
+            }
+        }
+
+        matches = matches.filter(function(group) { return !!(group && group.length); });
+
+        window.__lmRegexFindMatches = matches;
+        window.__lmRegexFindIndex = matches.length > 0 ? 0 : -1;
+        return activate(window.__lmRegexFindIndex);
+    }
+
+    function move(delta) {
+        var matches = window.__lmRegexFindMatches || [];
+        if (!matches.length) {
+            return result();
+        }
+        var startIndex = window.__lmRegexFindIndex == null ? 0 : window.__lmRegexFindIndex;
+        return activate(startIndex + delta);
+    }
+
+    resetState();
+    ensureStyle();
+    window.__lmRegexFind = {
+        clear: clear,
+        search: search,
+        next: function() { return move(1); },
+        prev: function() { return move(-1); }
+    };
+    return true;
+})();
+""".trimIndent()
+
+private fun decodeJsStringResult(rawResult: String?): String? {
+    if (rawResult.isNullOrBlank() || rawResult == "null") return null
+    return try {
+        when (val decoded = org.json.JSONTokener(rawResult).nextValue()) {
+            is String -> decoded
+            null -> null
+            else -> decoded.toString()
+        }
+    } catch (_: Exception) {
+        rawResult.trim().removeSurrounding("\"")
+    }
+}
+
+private fun parseRegexFindUiState(rawResult: String?): RegexFindUiState {
+    val decoded = decodeJsStringResult(rawResult) ?: return RegexFindUiState(error = "查找结果解析失败")
+    return try {
+        val json = org.json.JSONObject(decoded)
+        val errorValue = json.opt("error")
+        RegexFindUiState(
+            count = json.optInt("count", 0),
+            currentIndex = json.optInt("index", -1),
+            error = when (errorValue) {
+                null, org.json.JSONObject.NULL -> null
+                is String -> errorValue.takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                else -> errorValue.toString().takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+            },
+        )
+    } catch (_: Exception) {
+        RegexFindUiState(error = "查找结果解析失败")
+    }
+}
+
+private fun installRegexFindBridge(view: WebView?, onInstalled: (() -> Unit)? = null) {
+    if (view == null) {
+        onInstalled?.invoke()
+        return
+    }
+    view.post {
+        view.evaluateJavascript(REGEX_FIND_BOOTSTRAP_JS) {
+            onInstalled?.invoke()
+        }
+    }
+}
+
+private fun runRegexFindCommand(
+    view: WebView?,
+    command: String,
+    onResult: (RegexFindUiState) -> Unit
+) {
+    if (view == null) {
+        onResult(RegexFindUiState(error = "页面尚未就绪"))
+        return
+    }
+    installRegexFindBridge(view) {
+        view.post {
+            view.evaluateJavascript(
+                """(function(){
+                    try {
+                        return JSON.stringify($command);
+                    } catch (error) {
+                        return JSON.stringify({ ok: false, count: 0, index: -1, error: String((error && error.message) || error || '查找失败') });
+                    }
+                })();""".trimIndent()
+            ) { rawResult ->
+                onResult(parseRegexFindUiState(rawResult))
+            }
+        }
+    }
+}
+
+private fun searchInWebViewByRegex(
+    view: WebView?,
+    pattern: String,
+    onResult: (RegexFindUiState) -> Unit
+) {
+    val quotedPattern = try {
+        org.json.JSONObject.quote(pattern)
+    } catch (_: Exception) {
+        "\"${pattern.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+    }
+    runRegexFindCommand(view, "window.__lmRegexFind.search($quotedPattern)", onResult)
+}
+
+private fun moveRegexFindMatch(
+    view: WebView?,
+    forward: Boolean,
+    onResult: (RegexFindUiState) -> Unit
+) {
+    runRegexFindCommand(view, if (forward) "window.__lmRegexFind.next()" else "window.__lmRegexFind.prev()", onResult)
+}
+
+private fun clearRegexFind(
+    view: WebView?,
+    onResult: (RegexFindUiState) -> Unit
+) {
+    runRegexFindCommand(view, "window.__lmRegexFind.clear()", onResult)
+}
+
+@Composable
+private fun WebViewRegexFindAction(
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(Icons.Default.Search, contentDescription = "查找")
+    }
+}
+
+@Composable
+private fun WebViewRegexFindDialog(
+    query: String,
+    result: RegexFindUiState,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("正则查找") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("正则表达式") },
+                    placeholder = { Text("例如 /error|warn/i 或 (?i)error") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "使用 JavaScript 正则语法；支持 /pattern/flags 与 (?i)pattern 形式。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                when {
+                    result.error != null -> Text(result.error, color = MaterialTheme.colorScheme.error)
+                    result.hasMatches -> Text("第 ${result.currentIndex + 1} / ${result.count} 处", color = MaterialTheme.colorScheme.primary)
+                    query.isNotBlank() -> Text("未找到匹配", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> Text("输入正则后点击“查找”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onSearch) { Text("查找") }
+                    TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
+                    TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
+                    TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
+
 /** 独立 Markdown 渲染查看器：支持内链（同应用内打开、可退回）、外链（仅提示用浏览器打开）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -820,6 +1257,9 @@ fun MarkdownViewerScreen(
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) } // 50..200，页面 body.style.zoom
     val webViewMap = remember { mutableMapOf<String, WebView>() }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
     val katexInline = remember(context) {
         try {
@@ -846,6 +1286,7 @@ fun MarkdownViewerScreen(
     val syntaxHighlightJs = remember { syntaxHighlightScript() }
 
     LaunchedEffect(currentUri, currentEncrypted) {
+        regexFindUiState = RegexFindUiState()
         val cacheKey = "$currentUri:$currentEncrypted"
         htmlCache[cacheKey]?.let { cached ->
             htmlContent = cached
@@ -993,6 +1434,32 @@ fun MarkdownViewerScreen(
         )
     }
 
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = {
+                clearRegexFind(webViewRef.value) {
+                    regexFindUiState = it
+                }
+            },
+            onDismiss = { showFindDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1014,6 +1481,9 @@ fun MarkdownViewerScreen(
                 },
                 actions = {
                     if (htmlContent != null) {
+                        WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                            showFindDialog = true
+                        }
                         IconButton(
                             onClick = {
                                 scalePercent = maxOf(50, scalePercent - 25)
@@ -1080,7 +1550,11 @@ fun MarkdownViewerScreen(
                                                 addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
                                                 webViewClient = LinkInterceptClient(
                                                     linkHolder, context, currentUriHolder
-                                                ) { w -> w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null) }
+                                                ) { w ->
+                                                    regexFindUiState = RegexFindUiState()
+                                                    installRegexFindBridge(w)
+                                                    w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                                }
                                                 settings.domStorageEnabled = false
                                                 settings.javaScriptEnabled = true
                                                 loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
@@ -1116,6 +1590,9 @@ fun PassContentViewerScreen(
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
     val katexInline = remember(context) {
         try {
@@ -1156,6 +1633,28 @@ fun PassContentViewerScreen(
 
     BackHandler { doBack() }
 
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onDismiss = { showFindDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1166,6 +1665,9 @@ fun PassContentViewerScreen(
                     }
                 },
                 actions = {
+                    WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                        showFindDialog = true
+                    }
                     IconButton(
                         onClick = {
                             scalePercent = maxOf(50, scalePercent - 25)
@@ -1299,6 +1801,16 @@ fun PassContentViewerScreen(
                     WebView(ctx).apply {
                         setBackgroundColor(Color.TRANSPARENT)
                         addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
+                        webViewClient = object : WebViewClient() {
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                view?.let {
+                                    regexFindUiState = RegexFindUiState()
+                                    installRegexFindBridge(it)
+                                    it.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                }
+                            }
+                        }
                         settings.domStorageEnabled = false
                         settings.javaScriptEnabled = true
                         settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
@@ -1349,6 +1861,9 @@ fun MdZipViewerScreen(
     var loading by remember { mutableStateOf(true) }
     var pendingInternalFile by remember { mutableStateOf<File?>(null) }
     val htmlCache = remember { mutableMapOf<String, String>() }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
     val katexInline = remember(context) {
         try {
@@ -1380,6 +1895,7 @@ fun MdZipViewerScreen(
     logDebug?.invoke("[MDZIP] initialTargetFile=${initialTargetFile.absolutePath}")
 
     LaunchedEffect(currentFile) {
+        regexFindUiState = RegexFindUiState()
         val cacheKey = currentFile.absolutePath
         htmlCache[cacheKey]?.let { cached ->
             htmlContent = cached
@@ -1555,6 +2071,28 @@ fun MdZipViewerScreen(
         )
     }
 
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onDismiss = { showFindDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1566,6 +2104,9 @@ fun MdZipViewerScreen(
                 },
                 actions = {
                     if (htmlContent != null) {
+                        WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                            showFindDialog = true
+                        }
                         IconButton(
                             onClick = {
                                 scalePercent = maxOf(50, scalePercent - 25)
@@ -1718,16 +2259,24 @@ fun MdZipViewerScreen(
                                 settings.domStorageEnabled = false
                                 settings.allowFileAccess = true
                                 webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFileForClient, context) { w ->
+                                    regexFindUiState = RegexFindUiState()
+                                    installRegexFindBridge(w)
                                     w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                 }
                                 webViewRef.value = this
+                                tag = "$baseUrl|${fullHtml.hashCode()}"
                                 loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                             }
                         },
                         modifier = Modifier.fillMaxSize(),
                         update = { webView ->
                             webViewRef.value = webView
-                            webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                            val loadKey = "$baseUrl|${fullHtml.hashCode()}"
+                            if (webView.tag != loadKey) {
+                                webView.tag = loadKey
+                                webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                            }
+                            webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                         }
                     )
                 }
@@ -1904,6 +2453,9 @@ fun HtmlZipViewerScreen(
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
     logDebug?.invoke("[HTMLZIP] 打开 zipFileName=$zipFileName indexFile=${initialIndexFile.absolutePath}")
 
@@ -1947,6 +2499,28 @@ fun HtmlZipViewerScreen(
         )
     }
 
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onDismiss = { showFindDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -1957,6 +2531,11 @@ fun HtmlZipViewerScreen(
                         if (w != null && w.canGoBack()) w.goBack() else onBack()
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                        showFindDialog = true
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -1976,8 +2555,11 @@ fun HtmlZipViewerScreen(
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = true
                         settings.allowContentAccess = true
-                        webViewClient = HtmlZipWebViewClient(contentDir) { url ->
+                        webViewClient = HtmlZipWebViewClient(contentDir, { url ->
                             pendingExternalUrl = url
+                        }) { view ->
+                            regexFindUiState = RegexFindUiState()
+                            installRegexFindBridge(view)
                         }
                         webViewRef.value = this
                         loadUrl("file://${initialIndexFile.absolutePath}")
@@ -1995,7 +2577,8 @@ fun HtmlZipViewerScreen(
 /** WebViewClient：允许 file 协议下 contentDir 内跳转，外链弹窗；子资源从 cache 提供。 */
 private class HtmlZipWebViewClient(
     private val contentDir: File,
-    private val onExternalUrl: (String) -> Unit
+    private val onExternalUrl: (String) -> Unit,
+    private val onPageFinished: ((WebView) -> Unit)? = null
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
@@ -2043,6 +2626,11 @@ private class HtmlZipWebViewClient(
             }
         }
         return null
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        view?.let { onPageFinished?.invoke(it) }
     }
 }
 
@@ -2145,6 +2733,9 @@ fun EpubViewerScreen(
     var editingBookmark by remember { mutableStateOf<EpubBookmark?>(null) }
     var currentChapterIndex by remember { mutableStateOf(0) }
     var currentScrollRatio by remember { mutableStateOf(0f) }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
     // 收藏夹管理器
     val bookmarkManager = remember { EpubBookmarkManager(context) }
@@ -2188,6 +2779,10 @@ fun EpubViewerScreen(
     val chapterFile = if (currentChapter != null) {
         getEpubChapterFile(extractResult, currentChapter)
     } else null
+
+    LaunchedEffect(currentChapterIndex) {
+        regexFindUiState = RegexFindUiState()
+    }
 
     // 跳转到指定章节
     fun goToChapter(index: Int) {
@@ -2268,6 +2863,28 @@ fun EpubViewerScreen(
             dismissButton = {
                 TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
             }
+        )
+    }
+
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onDismiss = { showFindDialog = false }
         )
     }
 
@@ -2504,6 +3121,9 @@ fun EpubViewerScreen(
                     }
                 },
                 actions = {
+                    WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                        showFindDialog = true
+                    }
                     // 目录按钮
                     IconButton(onClick = { showToc = true }) {
                         Icon(Icons.Default.Menu, contentDescription = "目录")
@@ -2630,8 +3250,11 @@ fun EpubViewerScreen(
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = false
                                 settings.allowFileAccess = true
-                                webViewClient = EpubWebViewClient(opfDir) { url ->
+                                webViewClient = EpubWebViewClient(opfDir, { url ->
                                     pendingExternalUrl = url
+                                }) { view ->
+                                    regexFindUiState = RegexFindUiState()
+                                    installRegexFindBridge(view)
                                 }
                                 webViewRef.value = this
                             }
@@ -2666,7 +3289,11 @@ fun EpubViewerScreen(
                                     <body>$htmlContent</body>
                                     </html>
                                 """.trimIndent()
-                                webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
+                                val loadKey = "$baseUrl|${chapterFileForUpdate.absolutePath}|${styledHtml.hashCode()}"
+                                if (webView.tag != loadKey) {
+                                    webView.tag = loadKey
+                                    webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
+                                }
                                 webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             } catch (e: Exception) {
                                 Log.e(EPUB_DEBUG, "加载章节失败", e)
@@ -2682,7 +3309,8 @@ fun EpubViewerScreen(
 /** WebViewClient：拦截外链，加载本地资源。 */
 private class EpubWebViewClient(
     private val opfDir: File,
-    private val onExternalUrl: (String) -> Unit
+    private val onExternalUrl: (String) -> Unit,
+    private val onPageFinished: ((WebView) -> Unit)? = null
 ) : WebViewClient() {
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
@@ -2731,6 +3359,11 @@ private class EpubWebViewClient(
             }
         }
         return null
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        view?.let { onPageFinished?.invoke(it) }
     }
 }
 
