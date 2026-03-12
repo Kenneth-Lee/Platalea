@@ -505,6 +505,7 @@ fun FileBrowserApp(
                 initialTargetFile = state.targetFile,
                 contentDir = state.contentDir,
                 zipFileName = state.zipFileName,
+                sessionCache = markdownViewerSessionCache,
                 onBack = {
                     if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
                     mdZipViewState = null

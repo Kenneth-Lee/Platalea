@@ -229,6 +229,9 @@ private fun computeMarkdownCacheSignature(context: Context, uriString: String): 
     }
 }
 
+private fun computeMarkdownCacheSignature(file: File): String =
+    "${file.lastModified()}:${file.length()}"
+
 /** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
 private fun markdownToHtml(md: String): String {
     val preprocessed = md.replace("~~~", "~~")
@@ -764,6 +767,17 @@ private class FootnoteToastHandler(private val context: android.content.Context)
     }
 }
 
+private class PageReadyJsBridge(
+    private val onReady: () -> Unit
+) {
+    @android.webkit.JavascriptInterface
+    fun onReady() {
+        Handler(Looper.getMainLooper()).post {
+            onReady()
+        }
+    }
+}
+
 /** 同页锚点：用 JS 滚动到指定 id，解决 loadDataWithBaseURL 下 WebView 不自动滚动的现象。 */
 private fun scrollToAnchor(view: WebView?, fragment: String) {
     if (fragment.isBlank() || view == null) return
@@ -905,6 +919,9 @@ renderMathInElement(document.body, { delimiters: [{ left: "$$", right: "$$", dis
 if (typeof mermaid !== "undefined") {
 mermaid.initialize({ startOnLoad: false, theme: 'default' });
 document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) { var pre = codeEl.parentElement; var div = document.createElement("div"); div.className = "mermaid"; div.textContent = codeEl.textContent; pre.parentNode.replaceChild(div, pre); }); mermaid.run();
+}
+if (window.androidPageReady && typeof window.androidPageReady.onReady === "function") {
+window.androidPageReady.onReady();
 }
 });
 </script>
@@ -1679,6 +1696,16 @@ fun MarkdownViewerScreen(
                                             WebView(ctx).apply {
                                                 setBackgroundColor(Color.TRANSPARENT)
                                                 addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
+                                                addJavascriptInterface(PageReadyJsBridge {
+                                                    sessionCache.setPageReady(cacheKey, true)
+                                                    regexFindUiState = RegexFindUiState()
+                                                    installRegexFindBridge(this)
+                                                    evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                                    if (isCurrent) {
+                                                        pageLoading = false
+                                                        loadingMessage = "页面已准备完成"
+                                                    }
+                                                }, "androidPageReady")
                                                 webViewClient = LinkInterceptClient(
                                                     linkHolder, context, ResourceResolverHolder(uri)
                                                 ) { w ->
@@ -2000,6 +2027,7 @@ fun MdZipViewerScreen(
     initialTargetFile: File?,  // null 表示未找到可渲染文件
     contentDir: File,
     zipFileName: String,
+    sessionCache: MarkdownViewerSessionCache,
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
@@ -2025,8 +2053,9 @@ fun MdZipViewerScreen(
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var pageLoading by remember { mutableStateOf(false) }
     var pendingInternalFile by remember { mutableStateOf<File?>(null) }
-    val htmlCache = remember { mutableMapOf<String, String>() }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
@@ -2062,10 +2091,13 @@ fun MdZipViewerScreen(
 
     LaunchedEffect(currentFile) {
         regexFindUiState = RegexFindUiState()
-        val cacheKey = currentFile.absolutePath
-        htmlCache[cacheKey]?.let { cached ->
+        val cacheKey = "mdzip:${currentFile.absolutePath}"
+        val cacheSignature = computeMarkdownCacheSignature(currentFile)
+        sessionCache.getHtml(cacheKey, cacheSignature)?.let { cached ->
             htmlContent = cached
             loading = false
+            pageLoading = true
+            loadingMessage = "正在初始化页面样式与脚本…"
             Log.d(MDZIP_DEBUG, "[MDZIP] 使用缓存 path=$cacheKey")
             logDebug?.invoke("[MDZIP] 使用缓存 path=$cacheKey")
             return@LaunchedEffect
@@ -2075,8 +2107,10 @@ fun MdZipViewerScreen(
         logDebug?.invoke("[MDZIP]   exists=${currentFile.exists()}")
         logDebug?.invoke("[MDZIP]   parentDir=${currentFile.parentFile?.absolutePath}")
         loading = true
+        pageLoading = false
         loadError = null
         htmlContent = null
+        loadingMessage = "正在读取压缩包中的文档…"
         withContext(Dispatchers.IO) {
             try {
                 if (!currentFile.exists()) {
@@ -2095,12 +2129,16 @@ fun MdZipViewerScreen(
                 logDebug?.invoke("[MDZIP] 文件内容前200字符:")
                 logDebug?.invoke(trimmed.take(200))
                 val isRst = currentFile.name.endsWith(".rst", ignoreCase = true)
-                htmlContent = if (isRst) {
+                loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
+                val renderedHtml = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
                     markdownToHtml(trimmed)
                 }
-                htmlContent?.let { htmlCache[cacheKey] = it }
+                htmlContent = renderedHtml
+                sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
+                pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+                loadingMessage = if (pageLoading) "正在初始化页面样式与脚本…" else "已完成，正在显示页面…"
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
                 logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
             } catch (e: Exception) {
@@ -2300,14 +2338,10 @@ fun MdZipViewerScreen(
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when {
-                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
                 loadError != null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(loadError!!, color = MaterialTheme.colorScheme.error)
                 }
                 htmlContent != null -> {
-                    val baseUrl = "file://${currentFile.parentFile?.absolutePath}/"
                     val bg = MaterialTheme.colorScheme.surface
                     val fg = MaterialTheme.colorScheme.onSurface
                     val bgHex = "#%02x%02x%02x".format(
@@ -2316,135 +2350,90 @@ fun MdZipViewerScreen(
                     val fgHex = "#%02x%02x%02x".format(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
-                    val fullHtml = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                        <meta charset="UTF-8">
-                        <meta name="viewport" content="width=device-width, initial-scale=1">
-                        <style>$katexCss</style>
-                        <style>
-                            body { background: $bgHex; color: $fgHex; font-size: 16px; padding: 16px; line-height: 1.6; font-family: sans-serif; }
-                            h1 { font-size: 1.5em; margin: 0.8em 0 0.4em; }
-                            h2 { font-size: 1.3em; margin: 0.8em 0 0.4em; }
-                            h3 { font-size: 1.15em; margin: 0.6em 0 0.3em; }
-                            pre, code { background: rgba(128,128,128,0.2); padding: 0.2em 0.4em; border-radius: 4px; font-family: monospace; }
-                            pre { display: block; padding: 12px; overflow-x: auto; }
-                            pre code { padding: 0; background: none; }
-                            .katex { font-size: 1.1em; }
-                            blockquote { border-left: 4px solid rgba(128,128,128,0.5); margin: 0.5em 0; padding-left: 1em; color: rgba(128,128,128,0.95); }
-                            figure { margin: 1em 0; }
-                            figure img { max-width: 100%; height: auto; display: block; }
-                            figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; }
-                            a { color: #2196F3; }
-                            ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-                            table { border-collapse: collapse; width: 100%; }
-                            th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
-                            th { background: rgba(128,128,128,0.15); }
-                            del, s { text-decoration: line-through; }
-                            .task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
-                            .task-list-item input { margin: 0; flex-shrink: 0; vertical-align: middle; }
-                            .task-list-item > p { margin: 0; flex: 1; }
-                            sup a { text-decoration: none; color: #2196F3; }
-                            .footnote-tooltip { position: fixed; max-width: 320px; padding: 10px 12px; background: rgba(30,30,30,0.95); color: #e0e0e0; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 99999; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
-                            $syntaxHighlightCss
-                        </style>
-                    </head>
-                    <body>${htmlContent}
-                    <script>$katexJs</script>
-                    <script>$autoRenderJs</script>
-                    <script>$mermaidJs</script>
-                    <script>$syntaxHighlightJs</script>
-                    <script>
-                    document.addEventListener("DOMContentLoaded", function() {
-                        if (typeof applySyntaxHighlight === "function") { applySyntaxHighlight(document); }
-                        function showFootnoteTooltip(linkEl, text) {
-                            var old = document.getElementById("fn-tooltip"); if (old) old.remove();
-                            var rect = linkEl.getBoundingClientRect();
-                            var tip = document.createElement("div"); tip.id = "fn-tooltip"; tip.className = "footnote-tooltip"; tip.textContent = text;
-                            tip.style.maxWidth = Math.min(320, window.innerWidth - 24) + "px";
-                            tip.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 336)) + "px";
-                            tip.style.top = (rect.top - 8) + "px"; tip.style.transform = "translateY(-100%)";
-                            document.body.appendChild(tip);
-                            setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
-                        }
-                        document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
-                            a.addEventListener("click", function(e) {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                var id = (a.getAttribute("href") || "").slice(1).replace(/^fnref/, "fn");
-                                var def = document.getElementById(id);
-                                if (def) { var text = (def.innerText || def.textContent || "").trim(); if (text) showFootnoteTooltip(a, text); }
-                            });
-                        });
-                        if (typeof katex !== "undefined") {
-                            document.querySelectorAll(".katex-inline").forEach(function(el) {
-                                var latex = el.getAttribute("data-latex");
-                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: false, throwOnError: false }); } catch(e) {}
-                            });
-                            document.querySelectorAll(".katex-display").forEach(function(el) {
-                                var latex = el.getAttribute("data-latex");
-                                if (latex) try { el.innerHTML = katex.renderToString(latex, { displayMode: true, throwOnError: false }); } catch(e) {}
-                            });
-                        }
-                        if (typeof renderMathInElement === "function") {
-                            renderMathInElement(document.body, {
-                                delimiters: [
-                                    { left: "$$", right: "$$", display: true },
-                                    { left: "$", right: "$", display: false },
-                                    { left: "\\\\(", right: "\\\\)", display: false },
-                                    { left: "\\\\[", right: "\\\\]", display: true }
-                                ],
-                                throwOnError: false
-                            });
-                        }
-                        if (typeof mermaid !== "undefined") {
-                            mermaid.initialize({ startOnLoad: false, theme: 'default' });
-                            document.querySelectorAll("pre > code.language-mermaid").forEach(function(codeEl) {
-                                var pre = codeEl.parentElement;
-                                var div = document.createElement("div");
-                                div.className = "mermaid";
-                                div.textContent = codeEl.textContent;
-                                pre.parentNode.replaceChild(div, pre);
-                            });
-                            mermaid.run();
-                        }
-                    });
-                    </script>
-                    </body>
-                    </html>
-                    """.trimIndent()
-                    val currentFileForClient = currentFile
-                    AndroidView(
-                        factory = { ctx ->
-                            WebView(ctx).apply {
-                                setBackgroundColor(Color.TRANSPARENT)
-                                addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
-                                @SuppressLint("SetJavaScriptEnabled")
-                                settings.javaScriptEnabled = true
-                                settings.domStorageEnabled = false
-                                settings.allowFileAccess = true
-                                webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFileForClient, context) { w ->
-                                    regexFindUiState = RegexFindUiState()
-                                    installRegexFindBridge(w)
-                                    w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
-                                }
-                                webViewRef.value = this
-                                tag = "$baseUrl|${fullHtml.hashCode()}"
-                                loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize(),
-                        update = { webView ->
-                            webViewRef.value = webView
-                            val loadKey = "$baseUrl|${fullHtml.hashCode()}"
-                            if (webView.tag != loadKey) {
-                                webView.tag = loadKey
-                                webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
-                            }
-                            webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
-                        }
+                    val baseUrl = "file://${currentFile.parentFile?.absolutePath}/"
+                    val fullHtml = buildMdViewerFullHtml(
+                        htmlContent!!,
+                        baseUrl,
+                        katexCss,
+                        katexJs,
+                        autoRenderJs,
+                        mermaidJs,
+                        syntaxHighlightCss,
+                        syntaxHighlightJs,
+                        bgHex,
+                        fgHex
                     )
+                    androidx.compose.runtime.key(currentFile.absolutePath) {
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    setBackgroundColor(Color.TRANSPARENT)
+                                    addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
+                                    addJavascriptInterface(PageReadyJsBridge {
+                                        regexFindUiState = RegexFindUiState()
+                                        installRegexFindBridge(this)
+                                        evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                        pageLoading = false
+                                        loadingMessage = "页面已准备完成"
+                                    }, "androidPageReady")
+                                    @SuppressLint("SetJavaScriptEnabled")
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = false
+                                    settings.allowFileAccess = true
+                                    webViewClient = MdZipWebViewClient(linkHolder, contentDir, currentFile, context) { w ->
+                                        regexFindUiState = RegexFindUiState()
+                                        installRegexFindBridge(w)
+                                        w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                                        pageLoading = false
+                                        loadingMessage = "页面已准备完成"
+                                    }
+                                    val loadKey = "$baseUrl|${fullHtml.hashCode()}"
+                                    tag = loadKey
+                                    loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            update = { webView ->
+                                webViewRef.value = webView
+                                val loadKey = "$baseUrl|${fullHtml.hashCode()}"
+                                if (webView.tag != loadKey) {
+                                    pageLoading = true
+                                    loadingMessage = "正在初始化页面样式与脚本…"
+                                    webView.tag = loadKey
+                                    webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
+                                }
+                                webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                            }
+                        )
+                    }
+                    if (loading || pageLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Card {
+                                Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                                    Text(
+                                        if (loading) "正在准备文档" else "正在准备页面",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        loadingMessage,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Card {
+                        Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                            Text("正在准备文档", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Spacer(Modifier.height(8.dp))
+                            Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
             }
         }
