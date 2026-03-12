@@ -543,8 +543,21 @@ private fun InputStream.readBytesUpTo(maxLen: Int): ByteArray {
 
 private const val MD_DEBUG = "MdViewer"
 private const val MDZIP_DEBUG = "MdZipViewer"
+private const val MD_VIEWER_BASE_URL = "https://local-md.invalid/"
 
 private class LinkCallbackHolder { var onLink: (String) -> Unit = {} }
+
+private fun isMdViewerLocalUrl(url: String): Boolean {
+    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return false
+    return parsed.scheme.equals("https", ignoreCase = true) && parsed.authority == "local-md.invalid"
+}
+
+private fun extractMdViewerRelativePath(url: String): String? {
+    if (!isMdViewerLocalUrl(url)) return null
+    val encodedPath = Uri.parse(url).encodedPath ?: return null
+    val trimmed = encodedPath.trim('/')
+    return trimmed.takeIf { it.isNotBlank() }?.let(Uri::decode)
+}
 
 /** 当前文件所在目录 URI。使用 buildDocumentUriUsingTree 保持在已授权的树中。 */
 private fun getParentDirectoryUri(context: android.content.Context, currentUri: String): Uri? {
@@ -567,14 +580,22 @@ private fun getParentDirectoryUri(context: android.content.Context, currentUri: 
 
 /** 将链接 URL 解析为当前文件同目录下的实际 content URI；无法解析时返回 null。 */
 private fun resolveRelativeToCurrent(context: android.content.Context, currentUri: String, clickedUrl: String): String? {
-    val segment = Uri.parse(clickedUrl).lastPathSegment ?: clickedUrl.substringAfterLast('/').ifBlank { clickedUrl }
-    if (segment.isBlank()) return null
+    val relativePath = MdLinkUtils.extractRelativePathFromRequest(currentUri, clickedUrl)
+        ?: extractMdViewerRelativePath(clickedUrl)
+        ?: Uri.parse(clickedUrl).encodedPath?.trim('/')?.takeIf { it.isNotBlank() }?.let(Uri::decode)
+        ?: Uri.parse(clickedUrl).lastPathSegment
+        ?: clickedUrl.substringAfterLast('/').ifBlank { clickedUrl }
+    if (relativePath.isBlank()) return null
     val parentUri = getParentDirectoryUri(context, currentUri) ?: run {
         Log.d(MD_DEBUG, "[内链] 无法取父目录 currentUri=$currentUri")
         return null
     }
-    val childUri = findChildByName(context, parentUri, segment) ?: run {
-        Log.d(MD_DEBUG, "[内链] 父目录下未找到 name=$segment parentUri=$parentUri")
+    val childUri = if (relativePath.contains('/')) {
+        resolveResourcePath(context, currentUri, relativePath)
+    } else {
+        findChildByName(context, parentUri, relativePath)
+    } ?: run {
+        Log.d(MD_DEBUG, "[内链] 父目录下未找到 path=$relativePath parentUri=$parentUri")
         return null
     }
     Log.d(MD_DEBUG, "[内链] 解析成功 clickedUrl=$clickedUrl -> $childUri")
@@ -605,7 +626,8 @@ private fun resolveResource(
         Log.d(MD_DEBUG, "[图片] 无法取父目录 currentUri=$currentUri resourceUrl=$resourceUrl")
         return null
     }
-    val relativePath = MdLinkUtils.extractRelativePathFromRequest(currentUri, resourceUrl)
+    val relativePath = extractMdViewerRelativePath(resourceUrl)
+        ?: MdLinkUtils.extractRelativePathFromRequest(currentUri, resourceUrl)
     val path = if (relativePath != null) relativePath else (Uri.parse(resourceUrl).path ?: resourceUrl)
     val segment = path.substringAfterLast('/').let { Uri.decode(it) }.ifBlank { return null }
     val childUri = if (path.contains("/")) {
@@ -682,9 +704,8 @@ private class LinkInterceptClient(
         val url = request?.url?.toString() ?: return false
         if (handleFootnoteClick(view, url, context)) return true
         val frag = url.substringAfter('#', "")
-        val baseUrl = currentUriHolder.currentUri.substringBeforeLast("/").let { if (it.isEmpty()) "file:///" else "$it/" }
         val isSamePageAnchor = frag.isNotBlank() && !frag.startsWith("fn") && !frag.startsWith("fnref") &&
-            (url.trimStart().startsWith("#") || (url.startsWith(baseUrl) && url.length > baseUrl.length && url[baseUrl.length] == '#'))
+            (url.trimStart().startsWith("#") || (isMdViewerLocalUrl(url) && extractMdViewerRelativePath(url).isNullOrBlank()))
         if (isSamePageAnchor) {
             scrollToAnchor(view, frag)
             return true
@@ -1252,8 +1273,6 @@ fun MarkdownViewerScreen(
     var pendingInternalUri by remember { mutableStateOf<String?>(null) }
     val htmlCache = remember { mutableMapOf<String, String>() }
     val linkHolder = remember { LinkCallbackHolder() }
-    val currentUriHolder = remember { ResourceResolverHolder(currentUri) }
-    currentUriHolder.currentUri = currentUri
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) } // 50..200，页面 body.style.zoom
     val webViewMap = remember { mutableMapOf<String, WebView>() }
@@ -1542,14 +1561,13 @@ fun MarkdownViewerScreen(
                                 AndroidView(
                                     factory = { ctx ->
                                         webViewMap.getOrPut(uri) {
-                                            val dirPrefix = uri.substringBeforeLast("/")
-                                            val baseUrl = if (dirPrefix.isNotEmpty()) "$dirPrefix/" else "file:///"
+                                            val baseUrl = MD_VIEWER_BASE_URL
                                             val fullHtml = buildMdViewerFullHtml(content, baseUrl, katexCss, katexJs, autoRenderJs, mermaidJs, syntaxHighlightCss, syntaxHighlightJs, bgHex, fgHex)
                                             WebView(ctx).apply {
                                                 setBackgroundColor(Color.TRANSPARENT)
                                                 addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
                                                 webViewClient = LinkInterceptClient(
-                                                    linkHolder, context, currentUriHolder
+                                                    linkHolder, context, ResourceResolverHolder(uri)
                                                 ) { w ->
                                                     regexFindUiState = RegexFindUiState()
                                                     installRegexFindBridge(w)
@@ -1564,7 +1582,6 @@ fun MarkdownViewerScreen(
                                     modifier = Modifier.fillMaxSize(),
                                     update = { webView ->
                                         if (isCurrent) {
-                                            currentUriHolder.currentUri = currentUri
                                             webViewRef.value = webView
                                             webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                         }
