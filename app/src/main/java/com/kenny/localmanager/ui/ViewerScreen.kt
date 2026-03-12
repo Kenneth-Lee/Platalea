@@ -24,6 +24,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -47,6 +49,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -64,6 +68,110 @@ import android.widget.Toast
 private const val MAX_PREVIEW_BYTES = 4096
 private const val PAGE_SIZE = 4096
 private const val MAX_TEXT_EDIT_BYTES = 512 * 1024
+
+private data class TextRegexFindUiState(
+    val matches: List<IntRange> = emptyList(),
+    val currentIndex: Int = -1,
+    val error: String? = null
+) {
+    val hasMatches: Boolean get() = matches.isNotEmpty()
+    val count: Int get() = matches.size
+}
+
+private fun buildTextFindRegex(pattern: String): Regex {
+    val slashForm = Regex("^/((?:\\\\.|[^/])*)/([a-zA-Z]*)$").matchEntire(pattern)
+    if (slashForm != null) {
+        val source = slashForm.groupValues[1]
+        val flags = slashForm.groupValues[2]
+        val options = buildSet {
+            flags.forEach { flag ->
+                when (flag.lowercaseChar()) {
+                    'i' -> add(RegexOption.IGNORE_CASE)
+                    'm' -> add(RegexOption.MULTILINE)
+                    's' -> add(RegexOption.DOT_MATCHES_ALL)
+                    'u', 'g' -> Unit
+                    else -> throw IllegalArgumentException("不支持的正则标志: $flag")
+                }
+            }
+        }
+        return Regex(source, options)
+    }
+    return Regex(pattern)
+}
+
+private fun findTextRegexMatches(text: String, pattern: String): TextRegexFindUiState {
+    if (pattern.isBlank()) return TextRegexFindUiState()
+    return try {
+        val regex = buildTextFindRegex(pattern)
+        val matches = regex.findAll(text)
+            .mapNotNull { match ->
+                if (match.value.isEmpty()) null else match.range
+            }
+            .toList()
+        TextRegexFindUiState(matches = matches, currentIndex = if (matches.isNotEmpty()) 0 else -1)
+    } catch (e: Exception) {
+        TextRegexFindUiState(error = e.message ?: "无效正则")
+    }
+}
+
+private fun applyTextMatchSelection(value: TextFieldValue, range: IntRange): TextFieldValue {
+    return value.copy(selection = TextRange(range.first, range.last + 1))
+}
+
+@Composable
+private fun TextRegexFindDialog(
+    query: String,
+    result: TextRegexFindUiState,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onPrevious: () -> Unit,
+    onNext: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("正则查找") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("正则表达式") },
+                    placeholder = { Text("例如 /error|warn/i 或 (?i)error") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = "只在文本编辑模式下查找，匹配后会直接选中对应文本。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                when {
+                    result.error != null -> Text(result.error, color = MaterialTheme.colorScheme.error)
+                    result.hasMatches -> Text("第 ${result.currentIndex + 1} / ${result.count} 处", color = MaterialTheme.colorScheme.primary)
+                    query.isNotBlank() -> Text("未找到匹配", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    else -> Text("输入正则后点击“查找”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onSearch) { Text("查找") }
+                    TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
+                    TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
+                    TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("关闭") }
+        }
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,13 +191,16 @@ fun ViewerScreen(
 
     // 编辑模式状态
     var isEditMode by remember { mutableStateOf(false) }
-    var textEditContent by remember { mutableStateOf<String?>(null) }
+    var textEditValue by remember { mutableStateOf<TextFieldValue?>(null) }
     var textEditLoading by remember { mutableStateOf(false) }
     var hexPageIndex by remember { mutableStateOf(0) }
     var hexPageBytes by remember { mutableStateOf<ByteArray?>(null) }
     var hexPageLoading by remember { mutableStateOf(false) }
     var fileSize by remember { mutableStateOf(0L) }
     var saveInProgress by remember { mutableStateOf(false) }
+    var showTextFindDialog by remember { mutableStateOf(false) }
+    var textFindQuery by remember { mutableStateOf("") }
+    var textFindState by remember { mutableStateOf(TextRegexFindUiState()) }
 
     val uri = remember(fileUri) { Uri.parse(fileUri) }
     val canEdit = !isEncrypted
@@ -119,14 +230,15 @@ fun ViewerScreen(
     LaunchedEffect(isEditMode, viewMode) {
         if (!isEditMode || viewMode != 0 || isEncrypted) return@LaunchedEffect
         textEditLoading = true
-        textEditContent = null
+        textEditValue = null
+        textFindState = TextRegexFindUiState()
         withContext(Dispatchers.IO) {
             val cr = context.contentResolver
             cr.openInputStreamSafe(uri)?.use { raw ->
                 val bytes = raw.readBytes(MAX_TEXT_EDIT_BYTES)
                 val decoded = bytes.decodeToString()
                 val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
-                textEditContent = trimmed
+                textEditValue = TextFieldValue(trimmed)
             }
         }
         textEditLoading = false
@@ -165,6 +277,44 @@ fun ViewerScreen(
 
     val totalHexPages = if (fileSize > 0) ((fileSize + PAGE_SIZE - 1) / PAGE_SIZE).toInt() else 1
 
+    fun applyTextFindState(state: TextRegexFindUiState, targetIndex: Int = state.currentIndex) {
+        textFindState = state.copy(currentIndex = targetIndex)
+        val value = textEditValue ?: return
+        if (state.hasMatches && targetIndex in state.matches.indices) {
+            textEditValue = applyTextMatchSelection(value, state.matches[targetIndex])
+        }
+    }
+
+    if (showTextFindDialog) {
+        TextRegexFindDialog(
+            query = textFindQuery,
+            result = textFindState,
+            onQueryChange = {
+                textFindQuery = it
+                if (it.isBlank()) textFindState = TextRegexFindUiState()
+            },
+            onSearch = {
+                val value = textEditValue ?: return@TextRegexFindDialog
+                applyTextFindState(findTextRegexMatches(value.text, textFindQuery))
+            },
+            onPrevious = {
+                if (!textFindState.hasMatches) return@TextRegexFindDialog
+                val nextIndex = if (textFindState.currentIndex <= 0) textFindState.matches.lastIndex else textFindState.currentIndex - 1
+                applyTextFindState(textFindState, nextIndex)
+            },
+            onNext = {
+                if (!textFindState.hasMatches) return@TextRegexFindDialog
+                val nextIndex = if (textFindState.currentIndex >= textFindState.matches.lastIndex) 0 else textFindState.currentIndex + 1
+                applyTextFindState(textFindState, nextIndex)
+            },
+            onClear = {
+                textFindQuery = ""
+                textFindState = TextRegexFindUiState()
+            },
+            onDismiss = { showTextFindDialog = false }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -178,11 +328,21 @@ fun ViewerScreen(
                 },
                 actions = {
                     if (isEditMode) {
+                        if (viewMode == 0) {
+                            IconButton(
+                                onClick = { showTextFindDialog = true },
+                                enabled = !textEditLoading && textEditValue != null
+                            ) {
+                                Icon(Icons.Default.Search, contentDescription = "查找")
+                            }
+                        }
                         TextButton(
                             onClick = {
                                 isEditMode = false
-                                textEditContent = null
+                                textEditValue = null
                                 hexPageBytes = null
+                                textFindQuery = ""
+                                textFindState = TextRegexFindUiState()
                             }
                         ) { Text("放弃") }
                         TextButton(
@@ -191,7 +351,7 @@ fun ViewerScreen(
                                 scope.launch {
                                     val ok = withContext(Dispatchers.IO) {
                                         if (viewMode == 0) {
-                                            val text = textEditContent ?: ""
+                                            val text = textEditValue?.text ?: ""
                                             context.contentResolver.writeBytesFull(uri, text.toByteArray(Charsets.UTF_8))
                                         } else {
                                             val page = hexPageBytes ?: return@withContext false
@@ -202,8 +362,10 @@ fun ViewerScreen(
                                     if (ok) {
                                         Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
                                         isEditMode = false
-                                        textEditContent = null
+                                        textEditValue = null
                                         hexPageBytes = null
+                                        textFindQuery = ""
+                                        textFindState = TextRegexFindUiState()
                                         refreshKey++
                                         bytesState = null
                                     } else {
@@ -252,17 +414,22 @@ fun ViewerScreen(
                             Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
-                        val text = textEditContent ?: ""
+                        val textValue = textEditValue ?: TextFieldValue("")
+                        val text = textValue.text
                         Column(Modifier.fillMaxSize().padding(16.dp)) {
                             OutlinedTextField(
-                                value = text,
+                                value = textValue,
                                 onValueChange = { new ->
                                     // 修复：部分 IME 在回车时会把当前行再发一遍，导致出现两行相同内容
                                     val lastLine = text.lines().lastOrNull().orEmpty()
-                                    textEditContent = if (lastLine.isNotEmpty() && new == text + "\n" + lastLine) {
+                                    val nextText = if (lastLine.isNotEmpty() && new.text == text + "\n" + lastLine) {
                                         text + "\n"
                                     } else {
-                                        new
+                                        new.text
+                                    }
+                                    textEditValue = new.copy(text = nextText)
+                                    if (textFindQuery.isNotBlank()) {
+                                        textFindState = findTextRegexMatches(nextText, textFindQuery)
                                     }
                                 },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
