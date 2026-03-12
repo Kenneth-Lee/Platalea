@@ -1506,6 +1506,7 @@ fun MarkdownViewerScreen(
         val scheme = parsed.scheme?.lowercase() ?: ""
         val mainHandler = Handler(Looper.getMainLooper())
         val finalUrl = when {
+            isMdViewerLocalUrl(url) -> null
             scheme == "http" || scheme == "https" || scheme == "mailto" -> url
             scheme == "content" -> {
                 val segment = parsed.lastPathSegment ?: ""
@@ -2055,10 +2056,22 @@ fun MdZipViewerScreen(
     var loading by remember { mutableStateOf(true) }
     var loadingMessage by remember { mutableStateOf("加载中…") }
     var pageLoading by remember { mutableStateOf(false) }
+    var showPageLoadingHint by remember { mutableStateOf(false) }
     var pendingInternalFile by remember { mutableStateOf<File?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+
+    fun resetCurrentPageState(message: String = "正在准备文档…") {
+        webViewRef.value = null
+        htmlContent = null
+        loadError = null
+        loading = true
+        loadingMessage = message
+        pageLoading = false
+        showPageLoadingHint = false
+        regexFindUiState = RegexFindUiState()
+    }
 
     val katexInline = remember(context) {
         try {
@@ -2088,6 +2101,18 @@ fun MdZipViewerScreen(
     logDebug?.invoke("[MDZIP] 打开 zipFileName=$zipFileName")
     logDebug?.invoke("[MDZIP] contentDir=${contentDir.absolutePath}")
     logDebug?.invoke("[MDZIP] initialTargetFile=${initialTargetFile.absolutePath}")
+
+    LaunchedEffect(pageLoading, currentFile.absolutePath) {
+        if (!pageLoading) {
+            showPageLoadingHint = false
+            return@LaunchedEffect
+        }
+        showPageLoadingHint = false
+        kotlinx.coroutines.delay(180)
+        if (pageLoading) {
+            showPageLoadingHint = true
+        }
+    }
 
     LaunchedEffect(currentFile) {
         regexFindUiState = RegexFindUiState()
@@ -2137,8 +2162,8 @@ fun MdZipViewerScreen(
                 }
                 htmlContent = renderedHtml
                 sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
-                pageLoading = sessionCache.pageReadyMap[cacheKey] != true
-                loadingMessage = if (pageLoading) "正在初始化页面样式与脚本…" else "已完成，正在显示页面…"
+                pageLoading = true
+                loadingMessage = "正在初始化页面样式与脚本…"
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
                 logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
             } catch (e: Exception) {
@@ -2163,6 +2188,7 @@ fun MdZipViewerScreen(
             Log.d(MDZIP_DEBUG, "  name=$name isRenderable=$isRenderable")
             logDebug?.invoke("[MDZIP]   name=$name isRenderable=$isRenderable")
             if (isRenderable) {
+                resetCurrentPageState()
                 backStack = backStack + currentFile
                 currentFile = target
                 Log.d(MDZIP_DEBUG, "  跳转成功 -> ${target.absolutePath}")
@@ -2231,8 +2257,10 @@ fun MdZipViewerScreen(
 
     val doBack: () -> Unit = {
         if (backStack.isNotEmpty()) {
-            currentFile = backStack.last()
+            val target = backStack.last()
+            resetCurrentPageState()
             backStack = backStack.dropLast(1)
+            currentFile = target
         } else {
             onBack()
         }
@@ -2406,7 +2434,7 @@ fun MdZipViewerScreen(
                             }
                         )
                     }
-                    if (loading || pageLoading) {
+                    if (loading || (pageLoading && showPageLoadingHint)) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                             Card {
                                 Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
