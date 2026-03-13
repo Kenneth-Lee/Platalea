@@ -51,10 +51,23 @@ suspend fun exportConfig(context: Context, prefs: Preferences): String {
 }
 
 /**
+ * 检查 JSON 配置字符串是否包含公钥或私钥数据（用于导入前提示用户）。
+ */
+fun configJsonContainsKeys(jsonString: String): Boolean {
+    val obj = try {
+        JSONObject(jsonString)
+    } catch (_: Exception) {
+        return false
+    }
+    return obj.has(KEY_GPG_PUBLIC_KEYS_BASE64) || obj.has(KEY_GPG_SECRET_KEYS_BASE64)
+}
+
+/**
  * 从 JSON 字符串导入配置。仅对存在的键写入，缺失的键不修改。
+ * @param importKeys 是否导入并覆盖公钥/私钥；为 false 时跳过密钥，保留本机现有密钥
  * @return 成功为 true，解析失败为 false
  */
-suspend fun importConfig(context: Context, prefs: Preferences, jsonString: String): Boolean {
+suspend fun importConfig(context: Context, prefs: Preferences, jsonString: String, importKeys: Boolean = true): Boolean {
     val obj = try {
         JSONObject(jsonString)
     } catch (_: Exception) {
@@ -73,18 +86,20 @@ suspend fun importConfig(context: Context, prefs: Preferences, jsonString: Strin
     if (obj.has(KEY_GIT_HTTPS_PASSWORD)) prefs.setGitHttpsPassword(obj.optString(KEY_GIT_HTTPS_PASSWORD).ifBlank { null })
     if (obj.has(KEY_GIT_CONFIG_APPLIED)) prefs.setGitConfigApplied(obj.getBoolean(KEY_GIT_CONFIG_APPLIED))
 
-    val keyDir = getGpgKeyDir(context)
-    if (obj.has(KEY_GPG_PUBLIC_KEYS_BASE64)) {
-        try {
-            val bytes = Base64.decode(obj.getString(KEY_GPG_PUBLIC_KEYS_BASE64), Base64.NO_WRAP)
-            File(keyDir, "pubring.gpg").writeBytes(bytes)
-        } catch (_: Exception) { }
-    }
-    if (obj.has(KEY_GPG_SECRET_KEYS_BASE64)) {
-        try {
-            val bytes = Base64.decode(obj.getString(KEY_GPG_SECRET_KEYS_BASE64), Base64.NO_WRAP)
-            File(keyDir, "secring.gpg").writeBytes(bytes)
-        } catch (_: Exception) { }
+    if (importKeys) {
+        val keyDir = getGpgKeyDir(context)
+        if (obj.has(KEY_GPG_PUBLIC_KEYS_BASE64)) {
+            try {
+                val bytes = Base64.decode(obj.getString(KEY_GPG_PUBLIC_KEYS_BASE64), Base64.NO_WRAP)
+                File(keyDir, "pubring.gpg").writeBytes(bytes)
+            } catch (_: Exception) { }
+        }
+        if (obj.has(KEY_GPG_SECRET_KEYS_BASE64)) {
+            try {
+                val bytes = Base64.decode(obj.getString(KEY_GPG_SECRET_KEYS_BASE64), Base64.NO_WRAP)
+                File(keyDir, "secring.gpg").writeBytes(bytes)
+            } catch (_: Exception) { }
+        }
     }
 
     return true

@@ -126,6 +126,7 @@ import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.exportConfig
+import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
@@ -656,6 +657,8 @@ fun FileBrowserApp(
             var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
+            var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
+            var pendingImportJson by remember { mutableStateOf<String?>(null) }
             var showCacheManagementDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
@@ -1465,13 +1468,60 @@ fun FileBrowserApp(
                         Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
                         return@launch
                     }
-                    val ok = importConfig(context, prefs, jsonString)
-                    refreshTrigger++
-                    Toast.makeText(context, if (ok) "配置已导入" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                    if (configJsonContainsKeys(jsonString)) {
+                        pendingImportJson = jsonString
+                        showImportKeyConfirmDialog = true
+                    } else {
+                        val ok = importConfig(context, prefs, jsonString)
+                        refreshTrigger++
+                        Toast.makeText(context, if (ok) "配置已导入" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
             if (showAboutDialog) {
                 AboutDialog(onDismiss = { showAboutDialog = false })
+            }
+            if (showImportKeyConfirmDialog && pendingImportJson != null) {
+                val jsonToImport = pendingImportJson!!
+                AlertDialog(
+                    onDismissRequest = {
+                        showImportKeyConfirmDialog = false
+                        pendingImportJson = null
+                    },
+                    title = { Text("导入配置") },
+                    text = {
+                        Text(
+                            "导入的配置包含公钥/私钥，会覆盖本机现有密钥。请选择：",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                showImportKeyConfirmDialog = false
+                                pendingImportJson = null
+                                scope.launch {
+                                    val ok = importConfig(context, prefs, jsonToImport, importKeys = true)
+                                    refreshTrigger++
+                                    Toast.makeText(context, if (ok) "配置已导入（含密钥）" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) { Text("全部替换") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = {
+                                showImportKeyConfirmDialog = false
+                                pendingImportJson = null
+                                scope.launch {
+                                    val ok = importConfig(context, prefs, jsonToImport, importKeys = false)
+                                    refreshTrigger++
+                                    Toast.makeText(context, if (ok) "配置已导入（已跳过密钥）" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        ) { Text("跳过密钥（保留本机密钥）") }
+                    }
+                )
             }
             if (showCacheManagementDialog) {
                 CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
