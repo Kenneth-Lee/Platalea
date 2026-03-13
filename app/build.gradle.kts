@@ -12,8 +12,8 @@ android {
         applicationId = "com.kenny.localmanager"
         minSdk = 24
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.4"
+        versionCode = 7
+        versionName = "0.7"
     }
     signingConfigs {
         create("release") {
