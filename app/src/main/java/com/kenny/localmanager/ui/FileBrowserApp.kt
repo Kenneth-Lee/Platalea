@@ -3090,9 +3090,6 @@ internal fun FileBrowserScreen(
                         }
                     },
                     actions = {
-                        IconButton(onClick = { onShowPendingList(true) }) {
-                            Icon(Icons.Default.PlaylistAdd, contentDescription = "待处理列表")
-                        }
                         IconButton(onClick = onRefresh) {
                             Icon(Icons.Default.Refresh, contentDescription = "刷新")
                         }
@@ -3249,12 +3246,30 @@ internal fun FileBrowserScreen(
         },
         floatingActionButton = {
             if (!loading && error == null) {
-                FloatingActionButton(
-                    onClick = { showFabMenu = true },
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    horizontalAlignment = Alignment.End
                 ) {
-                    Icon(Icons.Default.Add, contentDescription = "新建")
+                    FloatingActionButton(
+                        onClick = { onShowPendingList(true) },
+                        containerColor = if (pendingList.isEmpty())
+                            MaterialTheme.colorScheme.surfaceVariant
+                        else
+                            MaterialTheme.colorScheme.tertiary,
+                        contentColor = if (pendingList.isEmpty())
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onTertiary
+                    ) {
+                        Icon(Icons.Default.List, contentDescription = "待处理列表")
+                    }
+                    FloatingActionButton(
+                        onClick = { showFabMenu = true },
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = "新建")
+                    }
                 }
             }
         }
