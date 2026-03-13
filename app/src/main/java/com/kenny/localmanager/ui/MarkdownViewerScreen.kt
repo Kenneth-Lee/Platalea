@@ -3837,16 +3837,20 @@ fun PdfViewerScreen(
             when {
                 isLoading -> {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        androidx.compose.material3.CircularProgressIndicator()
+                        androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.padding(bottom = 16.dp))
+                        Text("正在打开 PDF，请稍候…", style = MaterialTheme.typography.bodyLarge)
                         Spacer(Modifier.height(8.dp))
-                        Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                        Text(fileName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 errorMsg != null -> {
                     Text(errorMsg!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                 }
                 pageLoading && currentPageBitmap == null -> {
-                    Text("正在渲染页面...", style = MaterialTheme.typography.bodyLarge)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        androidx.compose.material3.CircularProgressIndicator(modifier = Modifier.padding(bottom = 8.dp))
+                        Text("正在渲染页面…", style = MaterialTheme.typography.bodyLarge)
+                    }
                 }
                 currentPageBitmap != null -> {
                     // 使用 Box 包裹并添加点击检测

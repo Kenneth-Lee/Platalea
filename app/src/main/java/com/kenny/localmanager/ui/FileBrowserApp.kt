@@ -836,44 +836,51 @@ fun FileBrowserApp(
                 }
             }
             LaunchedEffect(epubTarget) {
+                val target = epubTarget ?: return@LaunchedEffect
                 epubEncrypted = null
                 epubPassword = ""
-                epubInProgress = false
-                val target = epubTarget ?: return@LaunchedEffect
-                val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-                // 检查缓存是否有效
-                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val result = loadEpubFromCache(cacheDir)
-                    if (result != null) {
-                        epubTarget = null
+                epubInProgress = true
+                try {
+                    var cachedResult: EpubExtractResult? = null
+                    var encrypted: Boolean? = null
+                    withContext(Dispatchers.IO) {
+                        val cacheDir = getEpubCacheDir(context, target.uri)
+                        val cacheTs = getEpubCacheTimestamp(cacheDir)
+                        if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                            cachedResult = loadEpubFromCache(cacheDir)
+                            if (cachedResult != null) return@withContext
+                            cacheDir.deleteRecursively()
+                        }
+                        encrypted = isZipEncrypted(context, target.uri)
+                    }
+                    val cached = cachedResult
+                    if (cached != null) {
                         epubViewState = EpubViewState(
-                            extractResult = result,
+                            extractResult = cached,
                             zipFileName = target.name,
                             epubUri = target.uri,
                             isEncrypted = false
                         )
+                        epubTarget = null
                         return@LaunchedEffect
                     }
-                    // 缓存无效，删除重新解压
-                    cacheDir.deleteRecursively()
-                }
-                epubEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
-                if (epubEncrypted == false) {
-                    epubInProgress = true
-                    val result = withContext(Dispatchers.IO) { extractEpubToCache(context, target.uri, null, target.name) }
-                    epubInProgress = false
-                    epubTarget = null
-                    if (result != null) {
-                        epubViewState = EpubViewState(
-                            extractResult = result,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                    } else {
-                        Toast.makeText(context, "EPUB解析失败", Toast.LENGTH_SHORT).show()
+                    epubEncrypted = encrypted
+                    if (encrypted == false) {
+                        val result = withContext(Dispatchers.IO) { extractEpubToCache(context, target.uri, null, target.name) }
+                        epubTarget = null
+                        if (result != null) {
+                            epubViewState = EpubViewState(
+                                extractResult = result,
+                                zipFileName = target.name,
+                                epubUri = target.uri,
+                                isEncrypted = false
+                            )
+                        } else {
+                            Toast.makeText(context, "EPUB解析失败", Toast.LENGTH_SHORT).show()
+                        }
                     }
+                } finally {
+                    epubInProgress = false
                 }
             }
             LaunchedEffect(picZipTarget) {
@@ -2210,10 +2217,11 @@ fun FileBrowserApp(
                         onDismissRequest = {},
                         title = { Text("查看 EPUB 电子书") },
                         text = {
-                            Column {
-                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(modifier = Modifier.padding(bottom = 16.dp))
+                                Text("正在打开 EPUB，请稍候…", color = MaterialTheme.colorScheme.onSurface)
                                 Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                Text("${target.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         },
                         confirmButton = {}
