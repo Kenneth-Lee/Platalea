@@ -32,6 +32,7 @@ private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_m
 private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist_id")
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
+private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -262,6 +263,17 @@ class Preferences(private val context: Context) {
             idx to pos
         } catch (_: Exception) {
             null
+        }
+    }
+
+    /** 启动时解密密钥：开启后启动需输入私钥密码解锁，解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。默认关闭。 */
+    val startupDecryptKey: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[STARTUP_DECRYPT_KEY] ?: false
+    }
+
+    suspend fun setStartupDecryptKey(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[STARTUP_DECRYPT_KEY] = enabled
         }
     }
 }

@@ -1,5 +1,6 @@
 package com.kenny.localmanager.gpg
 
+import android.content.Context
 import org.bouncycastle.bcpg.ArmoredOutputStream
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.bouncycastle.openpgp.PGPPublicKey
@@ -166,6 +167,28 @@ object GpgHelper {
         } finally {
             passphrase.clear()
         }
+    }
+
+    /**
+     * 校验私钥密码：用公钥加密一段数据再用私钥+密码解密，成功则密码正确。
+     * 用于启动解锁门，不落盘。
+     */
+    fun tryUnlockSecretKey(context: Context, password: CharArray): Boolean {
+        val secretRings = loadSecretKeyRings(context) ?: return false
+        val publicRings = loadPublicKeyRings(context) ?: return false
+        val firstRing = secretRings.iterator().asSequence().firstOrNull() ?: return false
+        val keyId = firstRing.publicKey?.keyID ?: return false
+        val publicKeyRing = findPublicKeyRing(publicRings, keyId) ?: return false
+        val plain = "test".toByteArray()
+        val encrypted = encryptWithPublicKey(plain, publicKeyRing, "test") ?: return false
+        val decrypted = decryptBytes(
+            encrypted,
+            password = null,
+            secretKeyRings = secretRings,
+            keyPassphrase = password,
+            onError = null
+        ) ?: return false
+        return decrypted.contentEquals(plain)
     }
 
     /**

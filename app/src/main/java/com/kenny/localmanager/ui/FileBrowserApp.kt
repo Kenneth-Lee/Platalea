@@ -222,8 +222,10 @@ import com.kenny.localmanager.gpg.mergePublicKeyRing
 import com.kenny.localmanager.gpg.parsePublicKeyRingFromStream
 import com.kenny.localmanager.gpg.parseSecretKeyRingFromStream
 import com.kenny.localmanager.gpg.saveSecretKeyRing
+import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
+import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
@@ -235,6 +237,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -288,6 +291,7 @@ fun FileBrowserApp(
     var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
     var passEditPassword by remember { mutableStateOf("") }
     var passEditInProgress by remember { mutableStateOf(false) }
+    var passEditTriedCache by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
     var quickNoteData by remember { mutableStateOf<QuickNoteLoadedData?>(null) }
     var quickNoteStartWithAddDialog by remember { mutableStateOf(false) }
@@ -306,6 +310,19 @@ fun FileBrowserApp(
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
+
+    var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
+    var hasSecretKeyFile by remember { mutableStateOf(false) }
+    var unlockedByStartup by remember { mutableStateOf(false) }
+    LaunchedEffect(prefs) {
+        prefs.startupDecryptKey.collect { startupDecryptKeyEnabled = it }
+    }
+    LaunchedEffect(Unit) {
+        hasSecretKeyFile = withContext(Dispatchers.IO) {
+            File(getGpgKeyDir(context), "secring.gpg").exists()
+        }
+    }
+    val showUnlockGate = startupDecryptKeyEnabled && hasSecretKeyFile && !unlockedByStartup
 
     LaunchedEffect(prefs) {
         prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
@@ -399,7 +416,7 @@ fun FileBrowserApp(
     LaunchedEffect(initialLaunchTarget, rootUri) {
         if (initialLaunchTarget == "quick_note" && !quickNoteLaunchTriggered) {
             quickNoteLaunchTriggered = true
-            if (rootUri != null) requestOpenQuickNote(false)
+            if (rootUri != null) requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
             else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_LONG).show()
         }
     }
@@ -459,6 +476,73 @@ fun FileBrowserApp(
     }
 
     when {
+        showUnlockGate -> {
+            BackHandler { (context as? Activity)?.finish() }
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                var unlockPwd by remember { mutableStateOf("") }
+                var unlockInProgress by remember { mutableStateOf(false) }
+                var unlockError by remember { mutableStateOf<String?>(null) }
+                Column(
+                    modifier = Modifier.widthIn(max = 320.dp).padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                    Text(
+                        "启动解密密钥已开启",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                    Text(
+                        "请输入私钥密码以解锁应用",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = unlockPwd,
+                        onValueChange = { unlockPwd = it; unlockError = null },
+                        label = { Text("私钥密码") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !unlockInProgress
+                    )
+                    unlockError?.let { err ->
+                        Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        onClick = {
+                            if (unlockPwd.isEmpty() || unlockInProgress) return@Button
+                            unlockInProgress = true
+                            unlockError = null
+                            scope.launch {
+                                val ok = withContext(Dispatchers.IO) {
+                                    GpgHelper.tryUnlockSecretKey(context, unlockPwd.toCharArray())
+                                }
+                                unlockInProgress = false
+                                if (ok) {
+                                    SecretKeyPasswordCache.set(unlockPwd.toCharArray())
+                                    unlockedByStartup = true
+                                } else {
+                                    unlockError = "密码错误或解密失败"
+                                }
+                            }
+                        },
+                        enabled = unlockPwd.isNotEmpty() && !unlockInProgress,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (unlockInProgress) {
+                            CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
+                        } else {
+                            Text("解锁")
+                        }
+                    }
+                }
+            }
+        }
         rootUri == null && initialDirUri == null && showOverwriteConfirm == null -> {
             var lastBackPressTime by remember { mutableStateOf(0L) }
             BackHandler {
@@ -656,6 +740,7 @@ fun FileBrowserApp(
             var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
             var gpgMethod by remember { mutableStateOf<GpgMethod?>(null) }
             var gpgPassword by remember { mutableStateOf("") }
+            var gpgTriedCache by remember { mutableStateOf(false) }
             var showGpgKeyPicker by remember { mutableStateOf(false) }
             var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
             var showChangeRootConfirm by remember { mutableStateOf(false) }
@@ -670,6 +755,7 @@ fun FileBrowserApp(
             var passViewTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var passViewPassword by remember { mutableStateOf("") }
             var passViewInProgress by remember { mutableStateOf(false) }
+            var passViewTriedCache by remember { mutableStateOf(false) }
             var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
             var currentDirPath by remember { mutableStateOf("") }
             LaunchedEffect(displayUri, rootUri) {
@@ -981,8 +1067,12 @@ fun FileBrowserApp(
                 }
             }
             var hideDotFiles by remember { mutableStateOf(false) }
+            var startupDecryptKey by remember { mutableStateOf(false) }
             LaunchedEffect(prefs) {
                 prefs.hideDotFiles.collect { hideDotFiles = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.startupDecryptKey.collect { startupDecryptKey = it }
             }
             val copyMoveLog: ((String) -> Unit)? = null
             suspend fun runWithProgress(
@@ -1158,8 +1248,8 @@ fun FileBrowserApp(
                     onRefresh = { refreshTrigger++ },
                     onOpenConfig = { showConfigDialog = true },
                     onOpenAbout = { showAboutDialog = true },
-                    onOpenQuickNote = { requestOpenQuickNote(false) },
-                    onCreateQuickNote = { requestOpenQuickNote(true) },
+                    onOpenQuickNote = { requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) }) },
+                    onCreateQuickNote = { requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) }) },
                     onRequestGpgDecrypt = { fileModel, dirUri ->
                         gpgMethod = null
                         showGpgKeyPicker = false
@@ -1221,9 +1311,11 @@ fun FileBrowserApp(
                     onRequestPassView = { model ->
                         passViewTarget = model
                         passViewPassword = ""
+                        passViewTriedCache = false
                     },
                     onRequestPassEdit = { model, dirUri ->
                         passEditRequest = Pair(model, dirUri)
+                        passEditTriedCache = false
                     },
                     playbackState = playbackState,
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
@@ -1500,6 +1592,11 @@ fun FileBrowserApp(
                     onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
                     hideDotFiles = hideDotFiles,
                     onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
+                    startupDecryptKey = startupDecryptKey,
+                    onStartupDecryptKeyChange = { enabled ->
+                        scope.launch { prefs.setStartupDecryptKey(enabled) }
+                        if (!enabled) SecretKeyPasswordCache.clear()
+                    },
                     viewerPreviewBytes = viewerPreviewBytes,
                     onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
                     ftpPassword = ftpPassword ?: "",
@@ -1836,6 +1933,27 @@ fun FileBrowserApp(
                         }
                     )
                 } else {
+                    LaunchedEffect(model) {
+                        if (passViewTriedCache) return@LaunchedEffect
+                        val cached = SecretKeyPasswordCache.get() ?: run { passViewTriedCache = true; return@LaunchedEffect }
+                        passViewTriedCache = true
+                        passViewInProgress = true
+                        val decrypted = withContext(Dispatchers.IO) {
+                            val rings = loadSecretKeyRings(context) ?: return@withContext null
+                            context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                            }
+                        }
+                        passViewInProgress = false
+                        if (decrypted != null) {
+                            passViewTarget = null
+                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                            passContentView = PassDecryptedContent(innerName, decrypted)
+                        } else {
+                            Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    if (SecretKeyPasswordCache.get() == null || passViewTriedCache) {
                     GpgPasswordDialog(
                         isDecrypt = true,
                         fileName = model.name,
@@ -1875,6 +1993,7 @@ fun FileBrowserApp(
                             }
                         }
                     )
+                    }
                 }
             }
             // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
@@ -1890,6 +2009,28 @@ fun FileBrowserApp(
                         }
                     )
                 } else {
+                    LaunchedEffect(model) {
+                        if (passEditTriedCache) return@LaunchedEffect
+                        val cached = SecretKeyPasswordCache.get() ?: run { passEditTriedCache = true; return@LaunchedEffect }
+                        passEditTriedCache = true
+                        passEditInProgress = true
+                        val decrypted = withContext(Dispatchers.IO) {
+                            val rings = loadSecretKeyRings(context) ?: return@withContext null
+                            context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                            }
+                        }
+                        passEditInProgress = false
+                        if (decrypted != null) {
+                            passEditRequest = null
+                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                            val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                            passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
+                        } else {
+                            Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    if (SecretKeyPasswordCache.get() == null || passEditTriedCache) {
                     GpgPasswordDialog(
                         isDecrypt = true,
                         fileName = model.name,
@@ -1927,6 +2068,7 @@ fun FileBrowserApp(
                             }
                         }
                     )
+                    }
                 }
             }
             if (quickNotePasswordRequired) {
@@ -2474,7 +2616,7 @@ fun FileBrowserApp(
                     hasSecretKeys = decKeys.isNotEmpty(),
                     onSymmetric = { gpgMethod = GpgMethod.Symmetric },
                     onPublicKey = { showGpgKeyPicker = true },
-                    onSecretKey = { gpgMethod = GpgMethod.SecretKeyDec },
+                    onSecretKey = { gpgMethod = GpgMethod.SecretKeyDec; gpgTriedCache = false },
                     onDismiss = { gpgState = null; gpgMethod = null; showGpgKeyPicker = false }
                 )
             }
@@ -2592,6 +2734,76 @@ fun FileBrowserApp(
             var gpgInProgress by remember { mutableStateOf(false) }
             gpgState?.let { op ->
                 if (gpgMethod == GpgMethod.Symmetric || gpgMethod == GpgMethod.SecretKeyDec) {
+                    if (gpgMethod == GpgMethod.SecretKeyDec) {
+                        LaunchedEffect(op, gpgMethod) {
+                            if (gpgTriedCache) return@LaunchedEffect
+                            val cached = SecretKeyPasswordCache.get() ?: run { gpgTriedCache = true; return@LaunchedEffect }
+                            gpgTriedCache = true
+                            gpgInProgress = true
+                            val ctx = context
+                            val dirUri = normalizeContentUriString(op.dirUri)
+                            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                            val ok = when (op) {
+                                is GpgOpState.BatchDecrypt -> {
+                                    runWithProgress("解密", op.list.size) { setProgress ->
+                                        withContext(Dispatchers.IO) {
+                                            op.list.forEachIndexed { index, fileModel ->
+                                                val secretRings = loadSecretKeyRings(ctx)
+                                                if (secretRings != null) {
+                                                    ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                                                        val encBytes = input.readBytes()
+                                                        val decrypted = GpgHelper.decryptWithSecretKey(
+                                                            java.io.ByteArrayInputStream(encBytes),
+                                                            secretRings, cached
+                                                        ) { _ -> }
+                                                        if (decrypted != null) {
+                                                            val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
+                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                                        }
+                                                    }
+                                                }
+                                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                            }
+                                        }
+                                    }
+                                    true
+                                }
+                                else -> if (op.isDecrypt) {
+                                    withContext(Dispatchers.IO) {
+                                        val secretRings = loadSecretKeyRings(ctx)
+                                        if (secretRings == null) false
+                                        else ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
+                                            val encBytes = input.readBytes()
+                                            val decrypted = GpgHelper.decryptWithSecretKey(
+                                                java.io.ByteArrayInputStream(encBytes),
+                                                secretRings, cached
+                                            ) { _ -> }
+                                            if (decrypted != null) {
+                                                val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
+                                                createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
+                                            } else false
+                                            } ?: false
+                                    }
+                                } else false
+                            }
+                            gpgInProgress = false
+                            if (ok) {
+                                gpgState = null
+                                gpgMethod = null
+                                refreshTrigger++
+                                if (op is GpgOpState.BatchDecrypt) {
+                                    pendingList.clear()
+                                    showPendingList = false
+                                    Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                                }
+                            } else {
+                                Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                    if (gpgMethod == GpgMethod.Symmetric || SecretKeyPasswordCache.get() == null || gpgTriedCache) {
                     GpgPasswordDialog(
                         isDecrypt = op.isDecrypt,
                         fileName = op.displayName,
@@ -2736,6 +2948,7 @@ fun FileBrowserApp(
                         },
                         onDismiss = { if (!gpgInProgress) { gpgState = null; gpgMethod = null; gpgPassword = "" } }
                     )
+                    }
                 }
             }
             }
@@ -5272,6 +5485,8 @@ fun ConfigDialog(
     onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
     onHideDotFilesChange: (Boolean) -> Unit,
+    startupDecryptKey: Boolean,
+    onStartupDecryptKeyChange: (Boolean) -> Unit,
     viewerPreviewBytes: Int,
     onViewerPreviewBytesChange: (Int) -> Unit,
     ftpPassword: String,
@@ -5315,6 +5530,17 @@ fun ConfigDialog(
                 ) {
                     Text("不显示 . 开头的文件", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = hideDotFiles, onCheckedChange = onHideDotFilesChange)
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("启动解密密钥", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                        Text("开启后启动需输入私钥密码解锁；解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = startupDecryptKey, onCheckedChange = onStartupDecryptKeyChange)
                 }
                 Spacer(Modifier.height(12.dp))
                 Row(
