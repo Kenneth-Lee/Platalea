@@ -311,6 +311,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.5 提升markdown渲染能力，支持mermaid，表格等语法，支持markdown zip查看功能。
 * V0.6 支持epub，pdf，pci.zip, html.zip等查看功能，支持zip文件查看的缓存处理，
   支持播放器耳机断开的时候暂停，支持配置的导入导出。
+* V0.7 支持应用多入口，优化列表处理逻辑
 
 ### 已知问题
 

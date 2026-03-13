@@ -17,6 +17,10 @@ import com.kenny.localmanager.ui.theme.LocalManagerTheme
 
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        const val LAUNCH_TARGET_EXTRA = "launch_target"
+    }
+
     private var initialFileUriState: MutableState<String?>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,11 +29,7 @@ class MainActivity : ComponentActivity() {
         intent?.data?.let { uri ->
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        val launchTarget = when (intent?.component?.className) {
-            "com.kenny.localmanager.PlayerLauncher" -> "player"
-            "com.kenny.localmanager.QuickNoteLauncher" -> "quick_note"
-            else -> null
-        }
+        val launchTarget = intent?.getStringExtra(LAUNCH_TARGET_EXTRA)
         setContent {
             val state = remember { mutableStateOf<String?>(intent?.data?.toString()) }
             initialFileUriState = state

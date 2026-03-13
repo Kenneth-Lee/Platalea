@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ShortcutManager
 import android.net.Uri
 import android.os.Build
 import androidx.compose.material.icons.filled.ArrowBack
@@ -118,6 +119,11 @@ import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import android.provider.DocumentsContract
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import com.kenny.localmanager.MainActivity
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.importConfig
@@ -364,6 +370,7 @@ fun FileBrowserApp(
             result.onSuccess { saved ->
                 markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
                 closeQuickNote()
+                if (initialLaunchTarget == "quick_note") (context as? Activity)?.finish()
             }.onFailure { throwable ->
                 Toast.makeText(context, throwable.message ?: "快速笔记保存失败", Toast.LENGTH_SHORT).show()
             }
@@ -954,7 +961,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
-                    showPlaybackScreen -> showPlaybackScreen = false
+                    showPlaybackScreen -> if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
@@ -1347,7 +1354,7 @@ fun FileBrowserApp(
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                     },
-                    onDismiss = { showPlaybackScreen = false }
+                    onDismiss = { if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
                 )
             }
             if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
@@ -5175,6 +5182,80 @@ fun CacheManagementDialog(
 }
 
 @Composable
+private fun DesktopShortcutButtons() {
+    val context = LocalContext.current
+    Column(Modifier.fillMaxWidth()) {
+        OutlinedButton(
+            onClick = {
+                try {
+                    if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
+                        Toast.makeText(context, "当前启动器不支持添加快捷方式到桌面", Toast.LENGTH_SHORT).show()
+                        return@OutlinedButton
+                    }
+                    val intent = Intent(context, MainActivity::class.java).apply {
+                        action = Intent.ACTION_MAIN
+                        addCategory(Intent.CATEGORY_LAUNCHER)
+                        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, "player")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    val shortcut = ShortcutInfoCompat.Builder(context, "launcher_player")
+                        .setShortLabel(context.getString(R.string.launcher_player_name))
+                        .setLongLabel(context.getString(R.string.launcher_player_name))
+                        .setIcon(IconCompat.createWithResource(context, R.drawable.ic_launcher_player))
+                        .setIntent(intent)
+                        .build()
+                    if (ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)) {
+                        Toast.makeText(context, "请将「管家播放器」放到桌面", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "当前启动器可能不支持添加快捷方式", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("添加「管家播放器」到桌面") }
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = {
+                try {
+                    if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
+                        Toast.makeText(context, "当前启动器不支持添加快捷方式到桌面", Toast.LENGTH_SHORT).show()
+                        return@OutlinedButton
+                    }
+                    val intent = Intent(context, MainActivity::class.java).apply {
+                        action = Intent.ACTION_MAIN
+                        addCategory(Intent.CATEGORY_LAUNCHER)
+                        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, "quick_note")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    }
+                    val shortcut = ShortcutInfoCompat.Builder(context, "launcher_quick_note")
+                        .setShortLabel(context.getString(R.string.launcher_quick_note_name))
+                        .setLongLabel(context.getString(R.string.launcher_quick_note_name))
+                        .setIcon(IconCompat.createWithResource(context, R.drawable.ic_launcher_quick_note))
+                        .setIntent(intent)
+                        .build()
+                    if (ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)) {
+                        Toast.makeText(context, "请将「管家速记」放到桌面", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "当前启动器可能不支持添加快捷方式", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_LONG).show()
+                }
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("添加「管家速记」到桌面") }
+        Text(
+            "删除桌面上的快捷方式不会卸载应用，可随时在此重新添加。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
+        )
+    }
+}
+
+@Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
     debugEnabled: Boolean,
@@ -5299,6 +5380,10 @@ fun ConfigDialog(
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
+                Spacer(Modifier.height(12.dp))
+                Text("桌面入口", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                Spacer(Modifier.height(6.dp))
+                DesktopShortcutButtons()
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
                 Spacer(Modifier.height(12.dp))
