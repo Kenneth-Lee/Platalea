@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.map
 private val Context.dataStore: DataStore<androidx.datastore.preferences.core.Preferences> by preferencesDataStore(name = "settings")
 
 private val ROOT_URI = stringPreferencesKey("root_uri")
-private val DEBUG_ENABLED = booleanPreferencesKey("debug_enabled")
 private val HIDE_DOT_FILES = booleanPreferencesKey("hide_dot_files")
 private val VIEWER_PREVIEW_BYTES = intPreferencesKey("viewer_preview_bytes")
 private val FTP_PORT = intPreferencesKey("ftp_port")
@@ -37,10 +36,6 @@ private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[ROOT_URI]
-    }
-
-    val debugEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
-        prefs[DEBUG_ENABLED] ?: false
     }
 
     val hideDotFiles: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -108,12 +103,6 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (uri == null) prefs.remove(ROOT_URI)
             else prefs[ROOT_URI] = uri
-        }
-    }
-
-    suspend fun setDebugEnabled(enabled: Boolean) {
-        context.dataStore.edit { prefs ->
-            prefs[DEBUG_ENABLED] = enabled
         }
     }
 

@@ -7,7 +7,6 @@ import kotlinx.coroutines.flow.first
 import org.json.JSONObject
 import java.io.File
 
-private const val KEY_DEBUG_ENABLED = "debug_enabled"
 private const val KEY_FILTER_VISIBLE = "filter_visible"
 private const val KEY_HIDE_DOT_FILES = "hide_dot_files"
 private const val KEY_VIEWER_PREVIEW_BYTES = "viewer_preview_bytes"
@@ -22,12 +21,11 @@ private const val KEY_GPG_PUBLIC_KEYS_BASE64 = "gpg_public_keys_base64"
 private const val KEY_GPG_SECRET_KEYS_BASE64 = "gpg_secret_keys_base64"
 
 /**
- * 导出当前配置为 JSON 字符串。包含：调试窗口、过滤条件、隐藏点文件、查看器预览长度、
+ * 导出当前配置为 JSON 字符串。包含：过滤条件、隐藏点文件、查看器预览长度、
  * FTP 密码与倒计时、Git 配置、公钥与私钥（base64）。
  */
 suspend fun exportConfig(context: Context, prefs: Preferences): String {
     val obj = JSONObject()
-    obj.put(KEY_DEBUG_ENABLED, prefs.debugEnabled.first())
     obj.put(KEY_FILTER_VISIBLE, prefs.filterVisible.first())
     obj.put(KEY_HIDE_DOT_FILES, prefs.hideDotFiles.first())
     obj.put(KEY_VIEWER_PREVIEW_BYTES, prefs.viewerPreviewBytes.first())
@@ -74,7 +72,6 @@ suspend fun importConfig(context: Context, prefs: Preferences, jsonString: Strin
         return false
     }
 
-    if (obj.has(KEY_DEBUG_ENABLED)) prefs.setDebugEnabled(obj.getBoolean(KEY_DEBUG_ENABLED))
     if (obj.has(KEY_FILTER_VISIBLE)) prefs.setFilterVisible(obj.getBoolean(KEY_FILTER_VISIBLE))
     if (obj.has(KEY_HIDE_DOT_FILES)) prefs.setHideDotFiles(obj.getBoolean(KEY_HIDE_DOT_FILES))
     if (obj.has(KEY_VIEWER_PREVIEW_BYTES)) prefs.setViewerPreviewBytes(obj.getInt(KEY_VIEWER_PREVIEW_BYTES).coerceIn(1024, 10 * 1024 * 1024))

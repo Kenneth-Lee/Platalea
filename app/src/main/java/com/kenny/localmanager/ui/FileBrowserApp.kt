@@ -306,17 +306,6 @@ fun FileBrowserApp(
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     val scope = rememberCoroutineScope()
-    // 调试日志（在顶层定义以便 mdZipViewState 分支可用）
-    var debugEnabledTop by remember { mutableStateOf(false) }
-    val debugLogTop = remember { mutableStateListOf<String>() }
-    LaunchedEffect(prefs) {
-        prefs.debugEnabled.collect { debugEnabledTop = it }
-    }
-    fun logDebugTop(msg: String) {
-        if (debugEnabledTop) {
-            scope.launch(Dispatchers.Main.immediate) { debugLogTop.add(msg) }
-        }
-    }
 
     LaunchedEffect(prefs) {
         prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
@@ -528,7 +517,7 @@ fun FileBrowserApp(
                     if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
                     mdZipViewState = null
                 },
-                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+                logDebug = null
             )
         }
         htmlZipViewState != null -> {
@@ -545,7 +534,7 @@ fun FileBrowserApp(
                     if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
                     htmlZipViewState = null
                 },
-                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+                logDebug = null
             )
         }
         epubViewState != null -> {
@@ -562,7 +551,7 @@ fun FileBrowserApp(
                     if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
                     epubViewState = null
                 },
-                logDebug = if (debugEnabledTop) { { msg -> logDebugTop(msg) } } else null
+                logDebug = null
             )
         }
         picZipViewState != null -> {
@@ -991,21 +980,11 @@ fun FileBrowserApp(
                     }
                 }
             }
-            var debugEnabled by remember { mutableStateOf(false) }
             var hideDotFiles by remember { mutableStateOf(false) }
-            val debugLog = debugLogTop // 使用顶层调试日志列表
-            LaunchedEffect(prefs) {
-                prefs.debugEnabled.collect { debugEnabled = it }
-            }
             LaunchedEffect(prefs) {
                 prefs.hideDotFiles.collect { hideDotFiles = it }
             }
-            fun logDebug(msg: String) {
-                scope.launch(Dispatchers.Main.immediate) {
-                    debugLog.add(msg)
-                }
-            }
-            val copyMoveLog: ((String) -> Unit)? = if (debugEnabled) { { logDebug(it) } } else null
+            val copyMoveLog: ((String) -> Unit)? = null
             suspend fun runWithProgress(
                 label: String,
                 total: Int? = null,
@@ -1103,7 +1082,7 @@ fun FileBrowserApp(
                 }
                 progressOp?.let { OperationProgressDialog(it) }
                 FileBrowserScreen(
-                    modifier = if (debugEnabled) Modifier.weight(1f) else Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize(),
                     currentUri = displayUri,
                     refreshTrigger = refreshTrigger,
                     dirCache = dirCache,
@@ -1249,18 +1228,6 @@ fun FileBrowserApp(
                     playbackState = playbackState,
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
-                if (debugEnabled) {
-                    DebugPanel(
-                        debugLog = debugLog,
-                        onClear = { debugLog.clear() },
-                        onCopyAll = {
-                            val ctx = context
-                            val clip = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                            clip?.setPrimaryClip(ClipData.newPlainText("调试日志", debugLog.joinToString("\n")))
-                            Toast.makeText(ctx, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                        }
-                    )
-                }
             }
             if (showPendingList) {
                 PendingListScreen(
@@ -1529,8 +1496,6 @@ fun FileBrowserApp(
             if (showConfigDialog) {
                 ConfigDialog(
                     onDismiss = { showConfigDialog = false },
-                    debugEnabled = debugEnabled,
-                    onDebugEnabledChange = { scope.launch { prefs.setDebugEnabled(it) } },
                     filterVisible = filterVisible,
                     onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
                     hideDotFiles = hideDotFiles,
@@ -1888,10 +1853,7 @@ fun FileBrowserApp(
                                     ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
                                         GpgHelper.decryptWithSecretKey(
                                             input, rings, pwd.toCharArray()
-                                        ) { e ->
-                                            logDebug("[PASS] 解密失败: ${model.name}")
-                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                        }
+                                        ) { _ -> }
                                     }
                                 }
                                 passViewInProgress = false
@@ -1945,10 +1907,7 @@ fun FileBrowserApp(
                                     ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
                                         GpgHelper.decryptWithSecretKey(
                                             input, rings, pwd.toCharArray()
-                                        ) { e ->
-                                            logDebug("[PASS] 编辑解密失败: ${model.name}")
-                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                        }
+                                        ) { _ -> }
                                     }
                                 }
                                 passEditInProgress = false
@@ -2720,14 +2679,8 @@ fun FileBrowserApp(
                                                         val decrypted = GpgHelper.decryptWithSecretKey(
                                                             java.io.ByteArrayInputStream(encBytes),
                                                             secretRings, pwd.toCharArray()
-                                                        ) { e ->
-                                                            logDebug("[GPG] 私钥解密失败: ${(op as GpgOpState.Decrypt).fileModel.name}")
-                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                            logDebug("  输入: ${encBytes.size} bytes, 密钥密码长度: ${pwd.length}")
-                                                        }
+                                                        ) { _ -> }
                                                         if (decrypted != null) {
-                                                            logDebug("[GPG] 私钥解密成功: ${(op as GpgOpState.Decrypt).fileModel.name}, 输出=${decrypted.size} bytes")
                                                             val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
                                                             createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
                                                         } else false
@@ -2739,14 +2692,8 @@ fun FileBrowserApp(
                                                         val decrypted = GpgHelper.decryptSymmetric(
                                                             java.io.ByteArrayInputStream(encBytes),
                                                             pwd.toCharArray()
-                                                        ) { e ->
-                                                            logDebug("[GPG] 对称解密失败: ${(op as GpgOpState.Decrypt).fileModel.name}")
-                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                            logDebug("  输入: ${encBytes.size} bytes, 密码长度: ${pwd.length}")
-                                                        }
+                                                        ) { _ -> }
                                                         if (decrypted != null) {
-                                                            logDebug("[GPG] 对称解密成功: ${(op as GpgOpState.Decrypt).fileModel.name}, 算法=AES256/S2K=SHA-1(与加密一致), 输入=${encBytes.size} bytes, 输出=${decrypted.size} bytes, 密码长度=${pwd.length}")
                                                             val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
                                                             createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
                                                         } else false
@@ -2757,14 +2704,8 @@ fun FileBrowserApp(
                                                         val plain = input.readBytes()
                                                         val encrypted = GpgHelper.encryptSymmetric(
                                                             plain, pwd.toCharArray(), (op as GpgOpState.Encrypt).fileModel.name
-                                                        ) { e ->
-                                                            logDebug("[GPG] 对称加密失败: ${(op as GpgOpState.Encrypt).fileModel.name}")
-                                                            logDebug("  异常: ${e.javaClass.name}: ${e.message}")
-                                                            e.stackTraceToString().lines().take(20).forEach { logDebug("    $it") }
-                                                            logDebug("  明文: ${plain.size} bytes, 密码长度: ${pwd.length}")
-                                                        }
+                                                        ) { _ -> }
                                                         if (encrypted != null) {
-                                                            logDebug("[GPG] 对称加密成功: ${(op as GpgOpState.Encrypt).fileModel.name}, 算法=AES256, S2K=SHA-1, 明文=${plain.size} bytes, 密文=${encrypted.size} bytes, 密码长度=${pwd.length}")
                                                             val outName = (op as GpgOpState.Encrypt).fileModel.name + ".gpg"
                                                             createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
                                                         } else false
@@ -2783,7 +2724,7 @@ fun FileBrowserApp(
                                             pendingList.clear()
                                             showPendingList = false
                                         }
-                                    } else Toast.makeText(ctx, if (op.isDecrypt) "解密失败（开启「显示调试窗口」可查看详情）" else "加密失败", Toast.LENGTH_LONG).show()
+                                    } else Toast.makeText(ctx, if (op.isDecrypt) "解密失败" else "加密失败", Toast.LENGTH_LONG).show()
                                     gpgState = null
                                     gpgMethod = null
                                     gpgPassword = ""
@@ -5327,8 +5268,6 @@ private fun DesktopShortcutButtons() {
 @Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
-    debugEnabled: Boolean,
-    onDebugEnabledChange: (Boolean) -> Unit,
     filterVisible: Boolean,
     onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
@@ -5362,14 +5301,6 @@ fun ConfigDialog(
             ) {
                 Text("配置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("显示调试窗口", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    Switch(checked = debugEnabled, onCheckedChange = onDebugEnabledChange)
-                }
-                Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -5774,51 +5705,3 @@ fun GenerateKeyDialog(
     }
 }
 
-@Composable
-fun DebugPanel(
-    debugLog: List<String>,
-    onClear: () -> Unit,
-    onCopyAll: () -> Unit = {}
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(180.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        tonalElevation = 2.dp
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("调试", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row(horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onCopyAll) { Text("复制全部") }
-                    TextButton(onClick = onClear) { Text("清空") }
-                }
-            }
-            SelectionContainer(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Column {
-                    debugLog.forEach { line ->
-                        Text(
-                            line,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 2.dp)
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
