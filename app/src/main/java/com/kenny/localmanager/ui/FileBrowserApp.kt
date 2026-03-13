@@ -5343,7 +5343,7 @@ fun ConfigDialog(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(140.dp))
+                    Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
                     OutlinedTextField(
                         value = localFtpPassword,
                         onValueChange = { s ->
@@ -5353,7 +5353,9 @@ fun ConfigDialog(
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         visualTransformation = PasswordVisualTransformation(),
-                        placeholder = { Text("留空则无需密码") }
+                        supportingText = {
+                            Text("留空则无需密码", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        }
                     )
                 }
                 Spacer(Modifier.height(12.dp))
@@ -5370,7 +5372,7 @@ fun ConfigDialog(
                         },
                         modifier = Modifier.width(100.dp),
                         singleLine = true,
-                        placeholder = { Text("0=不退出") }
+                        placeholder = { Text("0=不退出", color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Text("0 表示不自动退出", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
