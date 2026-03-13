@@ -246,19 +246,24 @@ private fun computeMarkdownCacheSignature(context: Context, uriString: String): 
 private fun computeMarkdownCacheSignature(file: File): String =
     "${file.lastModified()}:${file.length()}"
 
-/** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
-private fun markdownToHtml(md: String): String {
-    val preprocessed = md.replace("~~~", "~~")
-    val extensions = listOf(
+/** 复用 Parser 与 HtmlRenderer，避免每次解析都创建扩展与构建器（首次调用会初始化，后续解析更快）。 */
+private val markdownExtensions by lazy {
+    listOf(
         TablesExtension.create(),
         StrikethroughExtension.create(),
         TaskListItemsExtension.create(),
         FootnotesExtension.create(),
         HeadingAnchorExtension.create()
     )
-    val parser = Parser.builder().extensions(extensions).build()
-    val renderer = HtmlRenderer.builder().extensions(extensions).build()
-    return renderer.render(parser.parse(preprocessed))
+}
+
+private val markdownParser by lazy { Parser.builder().extensions(markdownExtensions).build() }
+private val markdownRenderer by lazy { HtmlRenderer.builder().extensions(markdownExtensions).build() }
+
+/** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
+private fun markdownToHtml(md: String): String {
+    val preprocessed = md.replace("~~~", "~~")
+    return markdownRenderer.render(markdownParser.parse(preprocessed))
 }
 
 private fun escapeHtml(s: String): String = s
@@ -1487,7 +1492,7 @@ fun MarkdownViewerScreen(
         }
         val isRst = currentName.endsWith(".rst", ignoreCase = true)
         loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
-        val renderedHtml = withContext(Dispatchers.IO) {
+        val renderedHtml = withContext(Dispatchers.Default) {
             if (isRst) rstToHtml(trimmed) else markdownToHtml(trimmed)
         }
         htmlContent = renderedHtml
@@ -2167,10 +2172,8 @@ fun MdZipViewerScreen(
                 logDebug?.invoke(trimmed.take(200))
                 val isRst = currentFile.name.endsWith(".rst", ignoreCase = true)
                 loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
-                val renderedHtml = if (isRst) {
-                    rstToHtml(trimmed)
-                } else {
-                    markdownToHtml(trimmed)
+                val renderedHtml = withContext(Dispatchers.Default) {
+                    if (isRst) rstToHtml(trimmed) else markdownToHtml(trimmed)
                 }
                 htmlContent = renderedHtml
                 sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
