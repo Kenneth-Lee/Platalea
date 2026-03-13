@@ -8,4 +8,6 @@
     <string name="playback_next">下一首</string>
     <string name="playback_pause">暂停</string>
     <string name="playback_resume">继续</string>
+    <string name="launcher_player_name">管家播放器</string>
+    <string name="launcher_quick_note_name">管家速记</string>
 </resources>

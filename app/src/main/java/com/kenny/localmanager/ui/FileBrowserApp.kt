@@ -264,7 +264,8 @@ private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserApp(
-    initialFileUri: androidx.compose.runtime.MutableState<String?>? = null
+    initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
+    initialLaunchTarget: String? = null
 ) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
@@ -394,6 +395,15 @@ fun FileBrowserApp(
                 }
             }
             quickNoteInProgress = false
+        }
+    }
+
+    var quickNoteLaunchTriggered by remember { mutableStateOf(false) }
+    LaunchedEffect(initialLaunchTarget, rootUri) {
+        if (initialLaunchTarget == "quick_note" && !quickNoteLaunchTriggered) {
+            quickNoteLaunchTriggered = true
+            if (rootUri != null) requestOpenQuickNote(false)
+            else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -636,7 +646,7 @@ fun FileBrowserApp(
             val displayUri = currentUri ?: initialDirUri ?: rootUri!!
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
-            var showPlaybackScreen by remember { mutableStateOf(false) }
+            var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
             var showCacheManagementDialog by remember { mutableStateOf(false) }

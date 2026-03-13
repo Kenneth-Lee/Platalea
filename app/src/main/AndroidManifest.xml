@@ -32,6 +32,30 @@
                 <data android:mimeType="*/*" />
             </intent-filter>
         </activity>
+        <activity-alias
+            android:name=".PlayerLauncher"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_player"
+            android:roundIcon="@drawable/ic_launcher_player"
+            android:label="@string/launcher_player_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias
+            android:name=".QuickNoteLauncher"
+            android:targetActivity=".MainActivity"
+            android:exported="true"
+            android:icon="@drawable/ic_launcher_quick_note"
+            android:roundIcon="@drawable/ic_launcher_quick_note"
+            android:label="@string/launcher_quick_note_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
         <service
             android:name=".player.PlaybackService"
             android:foregroundServiceType="mediaPlayback"

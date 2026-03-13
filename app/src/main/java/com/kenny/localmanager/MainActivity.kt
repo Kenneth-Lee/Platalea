@@ -25,6 +25,11 @@ class MainActivity : ComponentActivity() {
         intent?.data?.let { uri ->
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
+        val launchTarget = when (intent?.component?.className) {
+            "com.kenny.localmanager.PlayerLauncher" -> "player"
+            "com.kenny.localmanager.QuickNoteLauncher" -> "quick_note"
+            else -> null
+        }
         setContent {
             val state = remember { mutableStateOf<String?>(intent?.data?.toString()) }
             initialFileUriState = state
@@ -33,7 +38,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FileBrowserApp(initialFileUri = state)
+                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTarget)
                 }
             }
         }
