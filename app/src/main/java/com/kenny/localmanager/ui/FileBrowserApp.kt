@@ -3258,18 +3258,14 @@ internal fun FileBrowserScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalAlignment = Alignment.End
                 ) {
-                    FloatingActionButton(
-                        onClick = { onShowPendingList(true) },
-                        containerColor = if (pendingList.isEmpty())
-                            MaterialTheme.colorScheme.surfaceVariant
-                        else
-                            MaterialTheme.colorScheme.tertiary,
-                        contentColor = if (pendingList.isEmpty())
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onTertiary
-                    ) {
-                        Icon(Icons.Default.List, contentDescription = "待处理列表")
+                    if (pendingList.isNotEmpty()) {
+                        FloatingActionButton(
+                            onClick = { onShowPendingList(true) },
+                            containerColor = MaterialTheme.colorScheme.tertiary,
+                            contentColor = MaterialTheme.colorScheme.onTertiary
+                        ) {
+                            Icon(Icons.Default.List, contentDescription = "待处理列表")
+                        }
                     }
                     FloatingActionButton(
                         onClick = { showFabMenu = true },
