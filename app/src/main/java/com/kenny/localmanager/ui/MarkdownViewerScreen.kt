@@ -260,9 +260,12 @@ private val markdownExtensions by lazy {
 private val markdownParser by lazy { Parser.builder().extensions(markdownExtensions).build() }
 private val markdownRenderer by lazy { HtmlRenderer.builder().extensions(markdownExtensions).build() }
 
-/** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
+/** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点、上标(^xxx^)、下标(~xxx~)。脚注定义需写为 [^1]: 内容。 */
 private fun markdownToHtml(md: String): String {
-    val preprocessed = md.replace("~~~", "~~")
+    var preprocessed = md.replace("~~~", "~~")
+    // 下标 ~xxx~（单波浪号，与删除线 ~~ 区分）；上标 ^xxx^
+    preprocessed = Regex("~([^~\\n]+)~").replace(preprocessed) { "<sub>${escapeHtml(it.groupValues[1])}</sub>" }
+    preprocessed = Regex("\\^([^\\^\\n]+)\\^").replace(preprocessed) { "<sup>${escapeHtml(it.groupValues[1])}</sup>" }
     return markdownRenderer.render(markdownParser.parse(preprocessed))
 }
 
