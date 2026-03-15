@@ -3625,23 +3625,8 @@ internal fun FileBrowserScreen(
                                     }
                                 ) { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) }
                             }
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onUnzipRequest(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text("解压 (ZIP)", color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if (menuTarget.name.endsWith(".gpg", ignoreCase = true)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestGpgDecrypt(menuTarget, currentUri)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text("GnuPG 解密", color = MaterialTheme.colorScheme.onSurface) }
-                        } else if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
+                        if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
