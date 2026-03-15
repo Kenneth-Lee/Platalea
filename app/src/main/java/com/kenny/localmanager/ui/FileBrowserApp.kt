@@ -745,12 +745,14 @@ fun FileBrowserApp(
             var showPendingList by remember { mutableStateOf(false) }
             var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
+            var showPlaybackTargetDialog by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
             var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
             var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
             var pendingImportJson by remember { mutableStateOf<String?>(null) }
             var pendingImportPlaylistCount by remember { mutableStateOf(0) }
             var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
+            var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
             var showCacheManagementDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
@@ -833,8 +835,12 @@ fun FileBrowserApp(
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
             var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
+            var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
             LaunchedEffect(Unit) {
                 PlaybackService.playbackState.collect { playbackState = it }
+            }
+            LaunchedEffect(prefs) {
+                prefs.playlists.collect { playlists = it }
             }
             LaunchedEffect(zipUnzipTarget) {
                 zipUnzipEncrypted = null
@@ -1117,6 +1123,67 @@ fun FileBrowserApp(
                 pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
                 showImportKeyConfirmDialog = false
                 showImportPlaylistConfirmDialog = false
+            }
+
+            fun clearPendingPlaybackTargetState() {
+                pendingPlaybackAudioList = emptyList()
+                showPlaybackTargetDialog = false
+            }
+
+            suspend fun createNewPlaybackPlaylist(audioList: List<DocumentFileModel>) {
+                if (audioList.isEmpty()) return
+                val playlist = Playlist(
+                    id = java.util.UUID.randomUUID().toString(),
+                    name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
+                    uris = audioList.map { it.uri.toString() },
+                    names = audioList.map { it.name }
+                )
+                withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
+                val intent = Intent(context, PlaybackService::class.java).apply {
+                    action = ACTION_PLAY
+                    putExtra(EXTRA_PLAYLIST_ID, playlist.id)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                pendingList.clear()
+                showPlaybackScreen = true
+                showPendingList = false
+                clearPendingPlaybackTargetState()
+                Toast.makeText(context, "已创建播放列表并加入 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
+            }
+
+            suspend fun appendToPlaybackPlaylist(target: Playlist, audioList: List<DocumentFileModel>) {
+                if (audioList.isEmpty()) return
+                val result = withContext(Dispatchers.IO) {
+                    prefs.appendTracksToPlaylist(
+                        target.id,
+                        audioList.map { it.uri.toString() },
+                        audioList.map { it.name }
+                    )
+                }
+                if (!result.found) {
+                    Toast.makeText(context, "加入播放列表失败", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                val intent = Intent(context, PlaybackService::class.java).apply {
+                    action = ACTION_PLAY
+                    putExtra(EXTRA_PLAYLIST_ID, target.id)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                pendingList.clear()
+                showPlaybackScreen = true
+                showPendingList = false
+                clearPendingPlaybackTargetState()
+                val msg = when {
+                    result.appendedCount > 0 && result.skippedCount > 0 ->
+                        "已加入 ${result.appendedCount} 首到「${target.name}」，跳过 ${result.skippedCount} 首重复项，并开始播放"
+                    result.appendedCount > 0 ->
+                        "已加入 ${result.appendedCount} 首到「${target.name}」，并开始播放"
+                    result.skippedCount > 0 ->
+                        "所选音频已存在于「${target.name}」，已直接开始播放"
+                    else ->
+                        "已开始播放「${target.name}」"
+                }
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
             }
 
             suspend fun exportConfigToRoot(): Boolean {
@@ -1576,26 +1643,59 @@ fun FileBrowserApp(
                     },
                     onAddToPlayback = { audioList ->
                         if (audioList.isEmpty()) return@PendingListScreen
-                        val playlist = Playlist(
-                            id = java.util.UUID.randomUUID().toString(),
-                            name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
-                            uris = audioList.map { it.uri.toString() },
-                            names = audioList.map { it.name }
-                        )
-                        scope.launch {
-                            withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
-                            val intent = Intent(context, PlaybackService::class.java).apply {
-                                action = ACTION_PLAY
-                                putExtra(EXTRA_PLAYLIST_ID, playlist.id)
-                            }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                            pendingList.clear()
-                            Toast.makeText(context, "已加入播放 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
-                            showPlaybackScreen = true
-                            showPendingList = false
+                        pendingPlaybackAudioList = audioList
+                        if (playlists.isEmpty()) {
+                            scope.launch { createNewPlaybackPlaylist(audioList) }
+                        } else {
+                            showPlaybackTargetDialog = true
                         }
                     },
                     onDismiss = { showPendingList = false }
+                )
+            }
+            if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
+                AlertDialog(
+                    onDismissRequest = { clearPendingPlaybackTargetState() },
+                    title = { Text("加入播放") },
+                    text = {
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                "请选择要把 ${pendingPlaybackAudioList.size} 首音频加入到哪里。",
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            playlists.forEach { playlist ->
+                                OutlinedButton(
+                                    onClick = {
+                                        scope.launch { appendToPlaybackPlaylist(playlist, pendingPlaybackAudioList) }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
+                                        Text(
+                                            "${playlist.trackCount} 首",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            scope.launch { createNewPlaybackPlaylist(pendingPlaybackAudioList) }
+                        }) { Text("新建列表") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text("取消") }
+                    }
                 )
             }
             if (showPlaybackScreen) {
@@ -4655,7 +4755,7 @@ fun PendingListScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
-                        Text("加入播放：将当前列表中所有 MP3/OGG 文件加入为新播放列表并开始播放，可在「播放器」中切换、删除或排序播放列表。", style = MaterialTheme.typography.bodyMedium)
+                        Text("加入播放：可选择新建播放列表，或把当前列表中的 MP3/OGG 追加到已有播放列表；新建列表会立即开始播放，追加到已有列表时会保留当前播放状态。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4935,10 +5035,6 @@ fun PlaybackScreen(
                             }
                             IconButton(onClick = onPlayNext) {
                                 Icon(Icons.Default.SkipNext, contentDescription = "下一首")
-                            }
-                            Spacer(Modifier.weight(1f))
-                            TextButton(onClick = onStopPlayback) {
-                                Text("停止播放", color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }

@@ -35,6 +35,12 @@ private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json"
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 
+data class PlaylistAppendResult(
+    val found: Boolean,
+    val appendedCount: Int,
+    val skippedCount: Int
+)
+
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[ROOT_URI]
@@ -205,6 +211,42 @@ class Preferences(private val context: Context) {
             val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "") + playlist
             prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
         }
+    }
+
+    suspend fun appendTracksToPlaylist(playlistId: String, uris: List<String>, names: List<String>): PlaylistAppendResult {
+        val trackCount = minOf(uris.size, names.size)
+        if (trackCount <= 0) return PlaylistAppendResult(found = false, appendedCount = 0, skippedCount = 0)
+        var found = false
+        var appendedCount = 0
+        var skippedCount = 0
+        context.dataStore.edit { prefs ->
+            val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "").map { playlist ->
+                if (playlist.id != playlistId) {
+                    playlist
+                } else {
+                    found = true
+                    val existingUris = playlist.uris.toMutableSet()
+                    val newUris = mutableListOf<String>()
+                    val newNames = mutableListOf<String>()
+                    repeat(trackCount) { index ->
+                        val uri = uris[index]
+                        if (existingUris.add(uri)) {
+                            newUris += uri
+                            newNames += names[index]
+                        } else {
+                            skippedCount++
+                        }
+                    }
+                    appendedCount = newUris.size
+                    playlist.copy(
+                        uris = playlist.uris + newUris,
+                        names = playlist.names + newNames
+                    )
+                }
+            }
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
+        }
+        return PlaylistAppendResult(found = found, appendedCount = appendedCount, skippedCount = skippedCount)
     }
 
     suspend fun appendPlaylists(playlists: List<Playlist>) {
