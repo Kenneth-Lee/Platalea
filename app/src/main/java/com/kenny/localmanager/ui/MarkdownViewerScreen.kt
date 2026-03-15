@@ -234,7 +234,7 @@ private fun computeMarkdownCacheSignature(file: File): String =
 
 /** 将 Markdown 转为 HTML：支持表格、删除线(~~ 与 ~~~)、任务列表、脚注、标题锚点。脚注定义需写为 [^1]: 内容。 */
 private fun markdownToHtml(md: String): String {
-    val preprocessed = md.replace("~~~", "~~")
+    val preprocessed = preprocessMarkdown(md)
     val extensions = listOf(
         TablesExtension.create(),
         StrikethroughExtension.create(),
@@ -247,28 +247,122 @@ private fun markdownToHtml(md: String): String {
     return renderer.render(parser.parse(preprocessed))
 }
 
+private fun preprocessMarkdown(md: String): String {
+    val normalizedFootnotes = normalizeMarkdownFootnoteLabels(md.replace("~~~", "~~"))
+    return applyMarkdownSupSubSyntax(normalizedFootnotes)
+}
+
+private fun normalizeMarkdownFootnoteLabels(md: String): String {
+    val numericLabels = LinkedHashSet<String>()
+    Regex("""(?m)^\[\^(\d+)]:""").findAll(md).forEach { numericLabels += it.groupValues[1] }
+    Regex("""\[\^(\d+)]""").findAll(md).forEach { numericLabels += it.groupValues[1] }
+    if (numericLabels.isEmpty()) return md
+
+    var prefix = "__lm_numfn_"
+    while (md.contains("[^$prefix") || md.contains(prefix)) {
+        prefix = "_$prefix"
+    }
+
+    var normalized = md
+    numericLabels.forEach { label ->
+        val mapped = "$prefix$label"
+        normalized = normalized.replace(Regex("""\[\^${Regex.escape(label)}]:(?=\s)"""), "[^$mapped]:")
+        normalized = normalized.replace(Regex("""\[\^${Regex.escape(label)}]"""), "[^$mapped]")
+    }
+    return normalized
+}
+
+private fun applyMarkdownSupSubSyntax(md: String): String {
+    val lines = md.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    val out = StringBuilder()
+    var inFence = false
+
+    lines.forEachIndexed { index, line ->
+        val trimmed = line.trimStart()
+        if (trimmed.startsWith("```") || trimmed.startsWith("~~~")) {
+            inFence = !inFence
+            out.append(line)
+        } else if (inFence || trimmed.startsWith("    ") || line.startsWith("\t")) {
+            out.append(line)
+        } else {
+            out.append(transformMarkdownSupSubInline(line))
+        }
+        if (index < lines.lastIndex) out.append('\n')
+    }
+    return out.toString()
+}
+
+private fun transformMarkdownSupSubInline(line: String): String {
+    val out = StringBuilder()
+    var index = 0
+    var inCode = false
+
+    while (index < line.length) {
+        val ch = line[index]
+        if (ch == '`') {
+            inCode = !inCode
+            out.append(ch)
+            index++
+            continue
+        }
+        if (!inCode && ch == '^') {
+            val closing = line.indexOf('^', index + 1)
+            if (closing > index + 1) {
+                val content = line.substring(index + 1, closing)
+                if (isValidMarkdownSupSubContent(content)) {
+                    out.append("<sup>").append(content).append("</sup>")
+                    index = closing + 1
+                    continue
+                }
+            }
+        }
+        if (!inCode && ch == '~' && line.getOrNull(index - 1) != '~' && line.getOrNull(index + 1) != '~') {
+            val closing = line.indexOf('~', index + 1)
+            if (closing > index + 1 && line.getOrNull(closing - 1) != '~' && line.getOrNull(closing + 1) != '~') {
+                val content = line.substring(index + 1, closing)
+                if (isValidMarkdownSupSubContent(content)) {
+                    out.append("<sub>").append(content).append("</sub>")
+                    index = closing + 1
+                    continue
+                }
+            }
+        }
+        out.append(ch)
+        index++
+    }
+
+    return out.toString()
+}
+
+private fun isValidMarkdownSupSubContent(content: String): Boolean {
+    if (content.isBlank()) return false
+    if (content.first().isWhitespace() || content.last().isWhitespace()) return false
+    if ('<' in content || '>' in content) return false
+    return true
+}
+
 private fun escapeHtml(s: String): String = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
 
 private fun normalizeCodeLanguage(raw: String?): String? {
-        val lang = raw?.trim()?.lowercase()?.ifBlank { null } ?: return null
-        return when (lang) {
-                "c" -> "c"
-                "c++", "cpp", "cxx", "cc", "hpp", "hxx" -> "cpp"
-                "python", "py" -> "python"
-                "java" -> "java"
-                "kotlin", "kt", "kts" -> "kotlin"
-                "bash", "sh", "shell", "zsh" -> "bash"
-                else -> lang.replace(Regex("[^a-z0-9_+\\-]"), "")
-        }
+    val lang = raw?.trim()?.lowercase()?.ifBlank { null } ?: return null
+    return when (lang) {
+        "c" -> "c"
+        "c++", "cpp", "cxx", "cc", "hpp", "hxx" -> "cpp"
+        "python", "py" -> "python"
+        "java" -> "java"
+        "kotlin", "kt", "kts" -> "kotlin"
+        "bash", "sh", "shell", "zsh" -> "bash"
+        else -> lang.replace(Regex("[^a-z0-9_+\\-]"), "")
+    }
 }
 
 private fun buildCodeBlockHtml(codeLines: List<String>, language: String? = null): String {
-        val langClass = normalizeCodeLanguage(language)?.takeIf { it.isNotBlank() }?.let { " class=\"language-$it\"" } ?: ""
-        return "<pre><code$langClass>${codeLines.joinToString("\n")}</code></pre>"
+    val langClass = normalizeCodeLanguage(language)?.takeIf { it.isNotBlank() }?.let { " class=\"language-$it\"" } ?: ""
+    return "<pre><code$langClass>${codeLines.joinToString("\n")}</code></pre>"
 }
 
 private fun syntaxHighlightStyle(): String = """
@@ -373,8 +467,8 @@ private fun syntaxHighlightScript(): String = """
                     if (cfg.lineComment && code.substring(i, i + cfg.lineComment.length) === cfg.lineComment) {
                         var lineEnd = code.indexOf("\n", i);
                         if (lineEnd < 0) lineEnd = code.length;
-                        var line = code.substring(i, lineEnd);
-                        out += span("hl-comment", line);
+                        var lineText = code.substring(i, lineEnd);
+                        out += span("hl-comment", lineText);
                         i = lineEnd;
                         continue;
                     }
@@ -383,7 +477,7 @@ private fun syntaxHighlightScript(): String = """
                         var q = ch;
                         var j = i + 1;
                         while (j < code.length) {
-                            if (code[j] === "\\\\") {
+                            if (code[j] === "\\") {
                                 j += 2;
                                 continue;
                             }
@@ -446,165 +540,483 @@ private fun syntaxHighlightScript(): String = """
         })();
 """.trimIndent()
 
-/** 简易 reStructuredText → HTML，覆盖常用语法（标题、粗/斜体、代码、链接、列表、代码块）。 */
+private data class RstFootnoteDefinition(
+    val label: String,
+    val html: String
+)
+
+private data class RstTableParseResult(
+    val html: String,
+    val nextIndex: Int
+)
+
+private fun countIndent(line: String): Int {
+    var count = 0
+    for (ch in line) {
+        when (ch) {
+            ' ' -> count += 1
+            '\t' -> count += 4
+            else -> return count
+        }
+    }
+    return count
+}
+
+private fun trimIndentColumns(line: String, columns: Int): String {
+    var remaining = columns
+    var index = 0
+    while (index < line.length && remaining > 0) {
+        when (line[index]) {
+            ' ' -> remaining -= 1
+            '\t' -> remaining -= 4
+            else -> break
+        }
+        index++
+    }
+    return line.substring(index)
+}
+
+private fun collectIndentedBlock(lines: List<String>, startIndex: Int): Pair<List<String>, Int> {
+    var index = startIndex
+    val raw = mutableListOf<String>()
+    var minIndent = Int.MAX_VALUE
+    while (index < lines.size) {
+        val line = lines[index]
+        if (line.isBlank()) {
+            raw += ""
+            index++
+            continue
+        }
+        val indent = countIndent(line)
+        if (indent <= 0) break
+        minIndent = minOf(minIndent, indent)
+        raw += line
+        index++
+    }
+    if (raw.isEmpty()) return emptyList<String>() to startIndex
+    if (minIndent == Int.MAX_VALUE) minIndent = 0
+    return raw.map { if (it.isBlank()) "" else trimIndentColumns(it, minIndent) } to index
+}
+
+private fun parseDirectiveOptions(lines: List<String>, startIndex: Int): Pair<Map<String, String>, Int> {
+    var index = startIndex
+    val options = linkedMapOf<String, String>()
+    while (index < lines.size) {
+        val trimmed = lines[index].trimStart()
+        if (!trimmed.startsWith(":")) break
+        val end = trimmed.indexOf(':', startIndex = 1)
+        if (end <= 1) break
+        val key = trimmed.substring(1, end).trim().lowercase()
+        val value = trimmed.substring(end + 1).trim()
+        options[key] = value
+        index++
+    }
+    return options to index
+}
+
+private fun parseRstDirectivePath(trimmedLine: String): String? {
+    val pathMatch = Regex("""\.\.\s+\w+(?:-\w+)?\s*::\s*(?:"([^"]*)"|'([^']*)'|(\S+))""").find(trimmedLine)
+    return pathMatch?.groupValues?.let { groups ->
+        groups[1].ifBlank { groups[2].ifBlank { groups[3] } }.trim().takeIf { it.isNotBlank() }
+    }
+}
+
+private fun buildRstImageStyle(options: Map<String, String>): String {
+    val styles = mutableListOf<String>()
+    options["width"]?.takeIf { it.isNotBlank() }?.let { styles += "width:$it" }
+    options["height"]?.takeIf { it.isNotBlank() }?.let { styles += "height:$it" }
+    options["scale"]?.toIntOrNull()?.takeIf { it > 0 }?.let { styles += "max-width:${it}%" }
+    when (options["align"]?.lowercase()) {
+        "center" -> styles += listOf("display:block", "margin-left:auto", "margin-right:auto")
+        "right" -> styles += listOf("display:block", "margin-left:auto")
+        "left" -> styles += listOf("display:block", "margin-right:auto")
+    }
+    return styles.joinToString("; ")
+}
+
+private fun renderRstInlineText(text: String): String = rstInlineToHtml(escapeHtml(text.trim()))
+
+private fun sanitizeRstFootnoteId(label: String): String =
+    label.removePrefix("#").replace(Regex("[^A-Za-z0-9_-]+"), "-").trim('-').ifBlank { "fn" }
+
+private fun extractRstFootnotes(lines: List<String>): Pair<List<String>, List<RstFootnoteDefinition>> {
+    val bodyLines = mutableListOf<String>()
+    val footnotes = mutableListOf<RstFootnoteDefinition>()
+    var index = 0
+    while (index < lines.size) {
+        val line = lines[index]
+        val match = Regex("""^\.\.\s+\[([^\]]+)]\s*(.*)$""").find(line.trim())
+        if (match != null) {
+            val label = match.groupValues[1].trim()
+            val parts = mutableListOf<String>()
+            val first = match.groupValues[2].trim()
+            if (first.isNotBlank()) parts += first
+            index++
+            val (block, nextIndex) = collectIndentedBlock(lines, index)
+            block.filter { it.isNotBlank() }.forEach { parts += it.trim() }
+            index = nextIndex
+            footnotes += RstFootnoteDefinition(label = label, html = renderRstInlineText(parts.joinToString(" ")))
+            continue
+        }
+        bodyLines += line
+        index++
+    }
+    return bodyLines to footnotes
+}
+
+private fun renderRstFootnotes(footnotes: List<RstFootnoteDefinition>): String {
+    if (footnotes.isEmpty()) return ""
+    return buildString {
+        append("<section class=\"footnotes\"><hr><ol>")
+        footnotes.forEach { footnote ->
+            val id = sanitizeRstFootnoteId(footnote.label)
+            append("<li id=\"fn-").append(id).append("\">")
+            append(footnote.html)
+            append(" <a href=\"#fnref-").append(id).append("\" class=\"footnote-backref\">↩</a></li>")
+        }
+        append("</ol></section>")
+    }
+}
+
+private fun consumeRstCommentBlock(lines: List<String>, startIndex: Int): Int {
+    var index = startIndex + 1
+    while (index < lines.size) {
+        val line = lines[index]
+        if (line.isBlank()) {
+            index++
+            continue
+        }
+        if (countIndent(line) <= 0) break
+        index++
+    }
+    return index
+}
+
+private fun isRstGridBorder(line: String): Boolean {
+    val trimmed = line.trim()
+    return trimmed.startsWith("+") && trimmed.endsWith("+") && trimmed.all { it == '+' || it == '-' || it == '=' }
+}
+
+private fun parseRstGridTable(lines: List<String>, startIndex: Int): RstTableParseResult? {
+    if (!isRstGridBorder(lines[startIndex])) return null
+    var index = startIndex
+    val rows = mutableListOf<List<String>>()
+    val headerRows = mutableSetOf<Int>()
+    while (index < lines.size && isRstGridBorder(lines[index])) {
+        val border = lines[index].trim()
+        val cuts = border.mapIndexedNotNull { pos, ch -> pos.takeIf { ch == '+' } }
+        if (cuts.size < 2) return null
+        index++
+        val contentLines = mutableListOf<String>()
+        while (index < lines.size && !isRstGridBorder(lines[index])) {
+            contentLines += lines[index]
+            index++
+        }
+        if (contentLines.isEmpty()) continue
+        val cells = MutableList(cuts.size - 1) { StringBuilder() }
+        contentLines.forEach { rowLine ->
+            for (cellIndex in 0 until cuts.lastIndex) {
+                val from = (cuts[cellIndex] + 1).coerceAtMost(rowLine.length)
+                val to = cuts[cellIndex + 1].coerceAtMost(rowLine.length)
+                val text = if (from <= to) rowLine.substring(from, to).trim() else ""
+                if (text.isNotEmpty()) {
+                    if (cells[cellIndex].isNotEmpty()) cells[cellIndex].append(' ')
+                    cells[cellIndex].append(text)
+                }
+            }
+        }
+        rows += cells.map { renderRstInlineText(it.toString()) }
+        if (index < lines.size && lines[index].contains('=')) headerRows += rows.lastIndex
+    }
+    if (rows.isEmpty()) return null
+    return RstTableParseResult(renderRstTableHtml(rows, headerRows), index)
+}
+
+private fun isRstSimpleTableBorder(line: String): Boolean =
+    line.trim().matches(Regex("""^=+(?:\t| {2,})=+(?:.*=+)*$""")) || line.trim().matches(Regex("""^=+(?:\s+=+)+$"""))
+
+private fun splitSimpleTableSegments(line: String, ranges: List<IntRange>): List<String> =
+    ranges.map { range ->
+        if (range.first >= line.length) "" else line.substring(range.first, minOf(line.length, range.last + 1)).trim()
+    }
+
+private fun parseRstSimpleTable(lines: List<String>, startIndex: Int): RstTableParseResult? {
+    val top = lines[startIndex].trimEnd()
+    if (!isRstSimpleTableBorder(top)) return null
+    val ranges = Regex("=+").findAll(top).map { it.range }.toList()
+    if (ranges.isEmpty()) return null
+    var index = startIndex + 1
+    val headerLines = mutableListOf<String>()
+    while (index < lines.size && !isRstSimpleTableBorder(lines[index])) {
+        headerLines += lines[index]
+        index++
+    }
+    if (index >= lines.size || !isRstSimpleTableBorder(lines[index])) return null
+    val headerRow = splitSimpleTableSegments(headerLines.joinToString(" "), ranges).map { renderRstInlineText(it) }
+    index++
+    val rows = mutableListOf<List<String>>()
+    while (index < lines.size && !isRstSimpleTableBorder(lines[index])) {
+        if (lines[index].isBlank()) {
+            index++
+            continue
+        }
+        rows += splitSimpleTableSegments(lines[index], ranges).map { renderRstInlineText(it) }
+        index++
+    }
+    if (index >= lines.size || !isRstSimpleTableBorder(lines[index])) return null
+    index++
+    return RstTableParseResult(renderRstTableHtml(listOf(headerRow) + rows, setOf(0)), index)
+}
+
+private fun renderRstTableHtml(rows: List<List<String>>, headerRows: Set<Int> = emptySet(), caption: String? = null): String {
+    if (rows.isEmpty()) return ""
+    val maxColumns = rows.maxOf { it.size }
+    return buildString {
+        append("<table>")
+        caption?.takeIf { it.isNotBlank() }?.let { append("<caption>").append(renderRstInlineText(it)).append("</caption>") }
+        if (headerRows.isNotEmpty()) {
+            append("<thead>")
+            rows.forEachIndexed { rowIndex, row ->
+                if (rowIndex !in headerRows) return@forEachIndexed
+                append("<tr>")
+                repeat(maxColumns) { col -> append("<th>").append(row.getOrElse(col) { "" }).append("</th>") }
+                append("</tr>")
+            }
+            append("</thead>")
+        }
+        append("<tbody>")
+        rows.forEachIndexed { rowIndex, row ->
+            if (rowIndex in headerRows) return@forEachIndexed
+            append("<tr>")
+            repeat(maxColumns) { col -> append("<td>").append(row.getOrElse(col) { "" }).append("</td>") }
+            append("</tr>")
+        }
+        append("</tbody></table>")
+    }
+}
+
+private fun parseRstListTable(lines: List<String>, startIndex: Int): RstTableParseResult? {
+    val title = lines[startIndex].trim().substringAfter("::", "").trim().ifBlank { null }
+    var index = startIndex + 1
+    val (options, afterOptions) = parseDirectiveOptions(lines, index)
+    index = afterOptions
+    if (index < lines.size && lines[index].isBlank()) index++
+    val (block, nextIndex) = collectIndentedBlock(lines, index)
+    if (block.isEmpty()) return null
+    val rows = mutableListOf<MutableList<String>>()
+    var currentRow: MutableList<String>? = null
+    var currentCellIndex = -1
+    block.forEach { rawLine ->
+        val trimmed = rawLine.trimStart()
+        when {
+            trimmed.startsWith("* -") -> {
+                currentRow = mutableListOf(trimmed.removePrefix("* -").trim())
+                rows += currentRow!!
+                currentCellIndex = 0
+            }
+            trimmed.startsWith("-") && currentRow != null -> {
+                currentRow!!.add(trimmed.removePrefix("-").trim())
+                currentCellIndex = currentRow!!.lastIndex
+            }
+            trimmed.isNotBlank() && currentRow != null && currentCellIndex >= 0 -> {
+                val existing = currentRow!![currentCellIndex]
+                currentRow!![currentCellIndex] = if (existing.isBlank()) trimmed else "$existing $trimmed"
+            }
+        }
+    }
+    if (rows.isEmpty()) return null
+    val headerRows = options["header-rows"]?.toIntOrNull()?.coerceAtLeast(0)?.let { count ->
+        (0 until minOf(count, rows.size)).toSet()
+    } ?: emptySet()
+    val renderedRows = rows.map { row -> row.map { renderRstInlineText(it) } }
+    return RstTableParseResult(renderRstTableHtml(renderedRows, headerRows, title), nextIndex)
+}
+
+/** 简易 reStructuredText → HTML，覆盖标题、图片、表格、list-table、代码高亮、脚注等常用语法。 */
 private fun rstToHtml(rst: String): String {
-    val lines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    val normalizedLines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    val (lines, footnotes) = extractRstFootnotes(normalizedLines)
     val out = StringBuilder()
     var i = 0
     fun peekUnderlineChar(line: String): Char? =
-        line.takeIf { it.isNotEmpty() && it.all { c -> c == it[0] && (c == '=' || c == '-' || c == '`' || c == '.' || c == '\'' || c == '"' || c == '~' || c == '^' || c == '_' || c == '*' || c == '#' || c == '+') } }?.get(0)
+        line.takeIf {
+            it.isNotEmpty() && it.all { ch -> ch == it[0] && ch in charArrayOf('=', '-', '`', '.', '\'', '"', '~', '^', '_', '*', '#', '+') }
+        }?.get(0)
     while (i < lines.size) {
         val line = lines[i]
+        val trimmed = line.trim()
         val next = lines.getOrNull(i + 1)
-        val under = next?.let { peekUnderlineChar(it) }
-        if (under != null && next.isNotBlank() && line.isNotBlank() && next.length >= line.length) {
-            val level = when (under) { '=', '#' -> 1; '-', '^' -> 2; '~', '"', '\'' -> 3; else -> 2 }
+        val underline = next?.let { peekUnderlineChar(it) }
+        if (underline != null && next.isNotBlank() && trimmed.isNotBlank() && next.length >= trimmed.length) {
+            val level = when (underline) {
+                '=', '#' -> 1
+                '-', '^' -> 2
+                '~', '"', '\'' -> 3
+                else -> 2
+            }
             val tag = "h${level.coerceIn(1, 3)}"
-            out.append("<").append(tag).append(">").append(escapeHtml(line.trim())).append("</").append(tag).append(">")
+            out.append("<").append(tag).append(">")
+                .append(renderRstInlineText(trimmed))
+                .append("</").append(tag).append(">")
             i += 2
             continue
         }
-        if (line.trim().startsWith(".. figure::")) {
-            val pathMatch = Regex("""\.\.\s+figure\s*::\s*(?:"([^"]*)"|'([^']*)'|(\S+))""").find(line.trim())
-            val path = pathMatch?.groupValues?.let { g -> g[1].ifBlank { g[2].ifBlank { g[3] } } }?.trim()?.takeIf { it.isNotBlank() }
-            if (path != null) {
-                i++
-                var alt = ""
-                var width = ""
-                var height = ""
-                while (i < lines.size && lines[i].trimStart().startsWith(":")) {
-                    val opt = lines[i].trimStart()
-                    when {
-                        opt.startsWith(":alt:") -> alt = opt.removePrefix(":alt:").trim().replace("\"", "&quot;")
-                        opt.startsWith(":width:") -> width = opt.removePrefix(":width:").trim().takeIf { it.isNotBlank() }?.let { "width:$it" } ?: ""
-                        opt.startsWith(":height:") -> height = opt.removePrefix(":height:").trim().takeIf { it.isNotBlank() }?.let { "height:$it" } ?: ""
-                    }
-                    i++
-                }
-                if (i < lines.size && lines[i].isBlank()) i++
-                val caption = mutableListOf<String>()
-                while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                    if (lines[i].isNotBlank()) caption.add(rstInlineToHtml(escapeHtml(lines[i].trimStart())))
-                    i++
-                }
-                val style = listOfNotNull(width, height).filter { it.isNotBlank() }.joinToString("; ")
-                out.append("<figure>")
-                out.append("<img src=\"").append(escapeHtml(path)).append("\" alt=\"").append(alt).append("\"")
-                if (style.isNotBlank()) out.append(" style=\"").append(style).append("\"")
-                out.append(">")
-                if (caption.isNotEmpty()) out.append("<figcaption>").append(caption.joinToString(" ")).append("</figcaption>")
-                out.append("</figure>")
+        val gridTable = parseRstGridTable(lines, i)
+        if (gridTable != null) {
+            out.append(gridTable.html)
+            i = gridTable.nextIndex
+            continue
+        }
+        val simpleTable = parseRstSimpleTable(lines, i)
+        if (simpleTable != null) {
+            out.append(simpleTable.html)
+            i = simpleTable.nextIndex
+            continue
+        }
+        if (trimmed.startsWith(".. list-table::")) {
+            val parsed = parseRstListTable(lines, i)
+            if (parsed != null) {
+                out.append(parsed.html)
+                i = parsed.nextIndex
             } else {
-                i++
+                i = consumeRstCommentBlock(lines, i)
             }
             continue
         }
-        if (line.trim().startsWith(".. math::")) {
-            val restOfLine = line.trim().removePrefix(".. math::").trim()
-            val mathLines = mutableListOf<String>()
-            if (restOfLine.isNotBlank()) mathLines.add(escapeHtml(restOfLine))
-            i++
-            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) mathLines.add(escapeHtml(lines[i].trimStart()))
-                i++
+        if (trimmed.startsWith(".. figure::") || trimmed.startsWith(".. image::")) {
+            val path = parseRstDirectivePath(trimmed)
+            var index = i + 1
+            val (options, afterOptions) = parseDirectiveOptions(lines, index)
+            index = afterOptions
+            if (index < lines.size && lines[index].isBlank()) index++
+            val captionLines = if (trimmed.startsWith(".. figure::")) {
+                val (block, nextIndex) = collectIndentedBlock(lines, index)
+                index = nextIndex
+                block.filter { it.isNotBlank() }
+            } else emptyList()
+            if (path != null) {
+                val style = buildRstImageStyle(options)
+                val alt = escapeHtmlAttr(options["alt"].orEmpty())
+                if (trimmed.startsWith(".. figure::")) out.append("<figure>")
+                out.append("<img src=\"").append(escapeHtml(path)).append("\" alt=\"").append(alt).append("\"")
+                if (style.isNotBlank()) out.append(" style=\"").append(escapeHtmlAttr(style)).append("\"")
+                out.append(">")
+                if (captionLines.isNotEmpty()) {
+                    out.append("<figcaption>")
+                        .append(captionLines.joinToString(" ") { renderRstInlineText(it) })
+                        .append("</figcaption>")
+                }
+                if (trimmed.startsWith(".. figure::")) out.append("</figure>")
             }
+            i = index
+            continue
+        }
+        if (trimmed.startsWith(".. math::")) {
+            val restOfLine = trimmed.removePrefix(".. math::").trim()
+            val mathLines = mutableListOf<String>()
+            if (restOfLine.isNotBlank()) mathLines += escapeHtml(restOfLine)
+            i++
+            val (block, nextIndex) = collectIndentedBlock(lines, i)
+            block.filter { it.isNotBlank() }.forEach { mathLines += escapeHtml(it.trim()) }
+            i = nextIndex
             if (mathLines.isNotEmpty()) {
                 var latex = mathLines.joinToString(" \\\\ ").replace("&amp;", "&")
-                if (mathLines.size > 1 || latex.contains("&=") || latex.contains("&")) {
+                if (mathLines.size > 1 || latex.contains("&=") || latex.contains('&')) {
                     latex = "\\begin{aligned}$latex\\end{aligned}"
                 }
                 out.append("""<div class="katex-display" data-latex="${escapeHtmlAttr(latex)}"></div>""")
             }
             continue
         }
-        if (line.trim().startsWith(".. code-block::") || line.trim().startsWith(".. sourcecode::")) {
-            val directive = line.trim()
-            val langRaw = directive.substringAfter("::", "").trim()
-            val language = normalizeCodeLanguage(langRaw)
+        if (trimmed.startsWith(".. code-block::") || trimmed.startsWith(".. sourcecode::")) {
+            val language = normalizeCodeLanguage(trimmed.substringAfter("::", "").trim())
             i++
-            while (i < lines.size && lines[i].trimStart().startsWith(":")) i++
+            val (_, afterOptions) = parseDirectiveOptions(lines, i)
+            i = afterOptions
             if (i < lines.size && lines[i].isBlank()) i++
-            val codeLines = mutableListOf<String>()
-            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
-                i++
-            }
-            if (codeLines.isNotEmpty()) {
-                out.append(buildCodeBlockHtml(codeLines, language))
-            }
+            val (block, nextIndex) = collectIndentedBlock(lines, i)
+            i = nextIndex
+            val codeLines = block.filter { it.isNotBlank() }.map { escapeHtml(it) }
+            if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines, language))
             continue
         }
-        if (line.trim().startsWith(".. ") && (line.trim().length <= 3 || line.trim()[3].isWhitespace() || line.trim()[3] == ':')) {
-            i++
+        if (trimmed.startsWith(".. ") && !trimmed.startsWith(".. [")) {
+            i = consumeRstCommentBlock(lines, i)
             continue
         }
-        if (line.trim().matches(Regex("^[-*•]\\s.+"))) {
+        if (trimmed.matches(Regex("^[-*•]\\s.+"))) {
             out.append("<ul>")
             while (i < lines.size && lines[i].trim().matches(Regex("^[-*•]\\s.+"))) {
-                out.append("<li>").append(rstInlineToHtml(escapeHtml(lines[i].trim().drop(1).trim()))).append("</li>")
+                out.append("<li>").append(renderRstInlineText(lines[i].trim().drop(1).trim())).append("</li>")
                 i++
             }
             out.append("</ul>")
             continue
         }
-        if (line.trim().matches(Regex("^\\d+\\.\\s.+"))) {
+        if (trimmed.matches(Regex("^\\d+\\.\\s.+"))) {
             out.append("<ol>")
             while (i < lines.size && lines[i].trim().matches(Regex("^\\d+\\.\\s.+"))) {
-                out.append("<li>").append(rstInlineToHtml(escapeHtml(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))).append("</li>")
+                out.append("<li>")
+                    .append(renderRstInlineText(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))
+                    .append("</li>")
                 i++
             }
             out.append("</ol>")
             continue
         }
-        if (line.trim() == ".." || (line.trim().startsWith("::") && line.trim().length == 2)) {
+        if (trimmed == ".." || trimmed == "::") {
             i++
-            val codeLines = mutableListOf<String>()
-            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
-                i++
-            }
-            if (codeLines.isNotEmpty()) {
-                out.append(buildCodeBlockHtml(codeLines))
-            }
+            val (block, nextIndex) = collectIndentedBlock(lines, i)
+            i = nextIndex
+            val codeLines = block.filter { it.isNotBlank() }.map { escapeHtml(it) }
+            if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines))
             continue
         }
         if (line.isBlank()) {
-            out.append("<p></p>")
             i++
             continue
         }
         if (line.startsWith(" ") || line.startsWith("\t")) {
-            val codeLines = mutableListOf<String>()
-            while (i < lines.size && (lines[i].isEmpty() || lines[i].startsWith(" ") || lines[i].startsWith("\t"))) {
-                if (lines[i].isNotBlank()) codeLines.add(escapeHtml(lines[i].trimStart()))
-                i++
-            }
+            val (block, nextIndex) = collectIndentedBlock(lines, i)
+            i = nextIndex
+            val codeLines = block.filter { it.isNotBlank() }.map { escapeHtml(it) }
             if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines))
             continue
         }
-        // RST：仅空行分段；连续非空行合并为一段，用空格连接
         val paraLines = mutableListOf(line)
         while (i + 1 < lines.size && lines[i + 1].isNotBlank() && !rstLineStartsBlock(lines[i + 1], lines.getOrNull(i + 2)) { peekUnderlineChar(it) }) {
             i++
-            paraLines.add(lines[i])
+            paraLines += lines[i]
         }
-        val paraText = paraLines.joinToString(" ")
-        out.append("<p>").append(rstInlineToHtml(escapeHtml(paraText))).append("</p>")
+        val hasLiteralBlockAfter = paraLines.last().trimEnd().endsWith("::") && lines.getOrNull(i + 1)?.let { countIndent(it) > 0 } == true
+        if (hasLiteralBlockAfter) {
+            paraLines[paraLines.lastIndex] = paraLines.last().replace(Regex("::\\s*$"), ":")
+        }
+        out.append("<p>").append(renderRstInlineText(paraLines.joinToString(" "))).append("</p>")
         i++
+        if (hasLiteralBlockAfter) {
+            val (block, nextIndex) = collectIndentedBlock(lines, i)
+            i = nextIndex
+            val codeLines = block.filter { it.isNotBlank() }.map { escapeHtml(it) }
+            if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines))
+        }
     }
+    out.append(renderRstFootnotes(footnotes))
     return out.toString()
 }
 
 private fun rstLineStartsBlock(line: String, next: String?, peekUnderlineChar: (String) -> Char?): Boolean {
-    val t = line.trim()
-    if (t.startsWith(".. figure::") || t.startsWith(".. math::")) return true
-    if (t.startsWith(".. code-block::") || t.startsWith(".. sourcecode::")) return true
-    if (t.startsWith(".. ") && (t.length <= 3 || t.getOrNull(3)?.isWhitespace() == true || t.getOrNull(3) == ':')) return true
-    if (t == ".." || (t.startsWith("::") && t.length == 2)) return true
-    if (t.matches(Regex("^[-*•]\\s.+"))) return true
-    if (t.matches(Regex("^\\d+\\.\\s.+"))) return true
+    val trimmed = line.trim()
+    if (trimmed.startsWith(".. figure::") || trimmed.startsWith(".. image::") || trimmed.startsWith(".. math::")) return true
+    if (trimmed.startsWith(".. list-table::")) return true
+    if (trimmed.startsWith(".. code-block::") || trimmed.startsWith(".. sourcecode::")) return true
+    if (trimmed.startsWith(".. ")) return true
+    if (trimmed == ".." || trimmed == "::") return true
+    if (isRstGridBorder(line) || isRstSimpleTableBorder(line)) return true
+    if (trimmed.matches(Regex("^[-*•]\\s.+"))) return true
+    if (trimmed.matches(Regex("^\\d+\\.\\s.+"))) return true
     if (line.startsWith(" ") || line.startsWith("\t")) return true
-    if (next != null && next.isNotBlank() && peekUnderlineChar(next) != null && next.length >= t.length) return true
+    if (next != null && next.isNotBlank() && peekUnderlineChar(next) != null && next.length >= trimmed.length) return true
     return false
 }
 
@@ -620,6 +1032,12 @@ private fun rstInlineToHtml(escaped: String): String {
     s = Regex(""":math:`([^`]+?)`""").replace(s) {
         val latex = it.groupValues[1].replace("&amp;", "&")
         """<span class="katex-inline" data-latex="${escapeHtmlAttr(latex)}"></span>"""
+    }
+    s = Regex("""\[(#[^\]]+)]_""").replace(s) {
+        val rawLabel = it.groupValues[1]
+        val id = sanitizeRstFootnoteId(rawLabel)
+        val display = escapeHtml(rawLabel.removePrefix("#"))
+        """<sup class="footnote-ref"><a href="#fn-$id" id="fnref-$id">[$display]</a></sup>"""
     }
     s = Regex("""\*\*(.+?)\*\*""").replace(s) { "<strong>${it.groupValues[1]}</strong>" }
     s = Regex("""\*(.+?)\*""").replace(s) { "<em>${it.groupValues[1]}</em>" }
@@ -906,7 +1324,7 @@ function showFootnoteTooltip(linkEl, text) {
   document.body.appendChild(tip);
   setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
 }
-document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
+document.querySelectorAll('a[href^="#fn"], a.footnote-ref, sup a.footnote-ref').forEach(function(a) {
 a.addEventListener("click", function(e) { e.preventDefault(); e.stopPropagation(); var id = (a.getAttribute("href") || "").slice(1).replace(/^fnref/, "fn"); var def = document.getElementById(id); if (def) { var text = (def.innerText || def.textContent || "").trim(); if (text) showFootnoteTooltip(a, text); } });
 });
 if (typeof katex !== "undefined") {
@@ -1944,7 +2362,7 @@ fun PassContentViewerScreen(
                     document.body.appendChild(tip);
                     setTimeout(function(){ document.addEventListener("click", function close(){ tip.remove(); document.removeEventListener("click", close); }); }, 0);
                 }
-                document.querySelectorAll('a[href^="#fn"], sup.footnote-ref a').forEach(function(a) {
+                document.querySelectorAll('a[href^="#fn"], a.footnote-ref, sup a.footnote-ref').forEach(function(a) {
                     a.addEventListener("click", function(e) {
                         e.preventDefault();
                         e.stopPropagation();
