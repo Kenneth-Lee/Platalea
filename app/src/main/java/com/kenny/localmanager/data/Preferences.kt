@@ -34,6 +34,7 @@ private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
+private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -102,6 +103,23 @@ class Preferences(private val context: Context) {
         prefs[PLAYER_LAST_POSITION_MS] ?: 0L
     }
 
+    val externalOpenByExtension: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        val json = prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON] ?: return@map emptyMap()
+        try {
+            val obj = org.json.JSONObject(json)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next().trim().lowercase()
+                    val value = obj.optString(key).trim()
+                    if (key.isNotBlank() && value.isNotBlank()) put(key, value)
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
     /** 最后一次播放的列表 ID（用于停止后「恢复播放」）。 */
     val playerLastPlaylistId: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[PLAYER_LAST_PLAYLIST_ID]
@@ -124,6 +142,29 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[VIEWER_PREVIEW_BYTES] = bytes
         }
+    }
+
+    suspend fun setExternalOpenPackageForExtension(extension: String, packageName: String?) {
+        val normalizedExtension = extension.trim().lowercase().removePrefix(".")
+        if (normalizedExtension.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val obj = try {
+                org.json.JSONObject(prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON] ?: "{}")
+            } catch (_: Exception) {
+                org.json.JSONObject()
+            }
+            if (packageName.isNullOrBlank()) {
+                obj.remove(normalizedExtension)
+            } else {
+                obj.put(normalizedExtension, packageName.trim())
+            }
+            if (obj.length() == 0) prefs.remove(EXTERNAL_OPEN_BY_EXTENSION_JSON)
+            else prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun clearExternalOpenPackageForExtension(extension: String) {
+        setExternalOpenPackageForExtension(extension, null)
     }
 
     suspend fun setFtpPort(port: Int) {

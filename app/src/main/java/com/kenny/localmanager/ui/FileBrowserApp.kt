@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ShortcutManager
 import android.net.Uri
 import android.os.Build
@@ -71,6 +72,8 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
@@ -246,6 +249,11 @@ import java.util.Locale
 
 private const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
 
+private data class ExternalAppTarget(
+    val packageName: String,
+    val label: String
+)
+
 /** 文件列表项副标题：大小与修改时间（与排序方式对应，便于对照）。 */
 private fun fileItemSubtitle(model: DocumentFileModel): String {
     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
@@ -268,6 +276,49 @@ private fun formatPlaybackTime(ms: Int): String {
 private fun normalizeContentUriString(s: String): String {
     if (!s.startsWith("content://")) return s
     return s.replace("android ", "android.")
+}
+
+private fun fileExtensionKey(name: String): String? {
+    val dotIndex = name.lastIndexOf('.')
+    if (dotIndex <= 0 || dotIndex >= name.lastIndex) return null
+    return name.substring(dotIndex + 1).trim().lowercase().ifBlank { null }
+}
+
+private fun buildExternalOpenIntent(context: Context, uri: Uri, packageName: String? = null): Intent {
+    val mimeType = context.contentResolver.getType(uri)
+    return Intent(Intent.ACTION_VIEW).apply {
+        if (mimeType.isNullOrBlank()) data = uri else setDataAndType(uri, mimeType)
+        if (!packageName.isNullOrBlank()) setPackage(packageName)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+}
+
+@Suppress("DEPRECATION")
+private fun queryExternalOpenTargets(context: Context, uriString: String): List<ExternalAppTarget> {
+    val packageManager = context.packageManager
+    return packageManager.queryIntentActivities(
+        buildExternalOpenIntent(context, Uri.parse(uriString)),
+        PackageManager.MATCH_DEFAULT_ONLY
+    ).asSequence()
+        .mapNotNull { resolveInfo ->
+            val packageName = resolveInfo.activityInfo?.packageName?.trim().orEmpty()
+            if (packageName.isBlank() || packageName == context.packageName) return@mapNotNull null
+            val label = runCatching { resolveInfo.loadLabel(packageManager)?.toString() }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: packageName
+            ExternalAppTarget(packageName = packageName, label = label)
+        }
+        .distinctBy { it.packageName }
+        .sortedBy { it.label.lowercase(Locale.getDefault()) }
+        .toList()
+}
+
+private fun launchExternalOpen(context: Context, uriString: String, packageName: String?): Boolean {
+    return runCatching {
+        context.startActivity(buildExternalOpenIntent(context, Uri.parse(uriString), packageName))
+        true
+    }.getOrElse { false }
 }
 
 /** 从根目录算起的相对路径（用于待处理列表显示当前目录） */
@@ -325,6 +376,7 @@ fun FileBrowserApp(
     val fileListLazyState = rememberLazyListState()
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
+    var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
@@ -342,6 +394,9 @@ fun FileBrowserApp(
 
     LaunchedEffect(prefs) {
         prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.externalOpenByExtension.collect { preferredExternalPackages = it }
     }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
@@ -1507,19 +1562,33 @@ fun FileBrowserApp(
                     filterVisible = filterVisible,
                     hideDotFiles = hideDotFiles,
                     isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
+                    preferredExternalPackages = preferredExternalPackages,
                     onOpenFile = { uri, name, isEncrypted ->
                         viewingFile = Triple(uri, name, false)
                     },
-                    onOpenWithOtherApp = { uri, name ->
-                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                            data = Uri.parse(uri)
-                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
+                        val opened = launchExternalOpen(context, uri, packageName)
+                        if (opened) {
+                            if (rememberChoice) {
+                                val extension = fileExtensionKey(name)
+                                if (extension != null && !packageName.isNullOrBlank()) {
+                                    scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                }
+                            }
+                        } else {
+                            val extension = fileExtensionKey(name)
+                            if (!packageName.isNullOrBlank() && extension != null) {
+                                scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                            }
                         }
-                        try {
-                            context.startActivity(Intent.createChooser(intent, null))
-                        } catch (_: android.content.ActivityNotFoundException) {
-                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
-                        }
+                        opened
+                    },
+                    onClearExternalOpenPreference = { name ->
+                        val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
+                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
                     },
                     onOpenMarkdownView = { uri, name, encrypted ->
                         markdownViewFile = Triple(uri, name, encrypted)
@@ -3398,8 +3467,10 @@ internal fun FileBrowserScreen(
     isViewingTrash: Boolean = false,
     filterVisible: Boolean = true,
     hideDotFiles: Boolean = false,
+    preferredExternalPackages: Map<String, String> = emptyMap(),
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
-    onOpenWithOtherApp: (uri: String, name: String) -> Unit = { _, _ -> },
+    onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean) -> Boolean = { _, _, _, _ -> false },
+    onClearExternalOpenPreference: (name: String) -> Unit = {},
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
     onShowPendingList: (Boolean) -> Unit,
@@ -3450,6 +3521,18 @@ internal fun FileBrowserScreen(
     var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
     var sortAscending by remember { mutableStateOf(true) }
     var showSortMenu by remember { mutableStateOf(false) }
+    var externalOpenTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+    var externalOpenOptions by remember { mutableStateOf<List<ExternalAppTarget>>(emptyList()) }
+
+    fun showExternalOpenDialog(target: DocumentFileModel) {
+        val options = queryExternalOpenTargets(context, target.uri.toString())
+        if (options.isEmpty()) {
+            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+            return
+        }
+        externalOpenTarget = target
+        externalOpenOptions = options
+    }
 
     LaunchedEffect(currentUri, refreshTrigger) {
         val normalizedUri = normalizeContentUriString(currentUri)
@@ -3746,6 +3829,7 @@ internal fun FileBrowserScreen(
                             val item = displayItems[index]
                             FileItem(
                                 model = item,
+                                hasPreferredExternalApp = fileExtensionKey(item.name)?.let { preferredExternalPackages.containsKey(it) } == true,
                                 isInPendingList = pendingList.any { it.uri == item.uri },
                                 onClick = {
                                     if (item.isDirectory) {
@@ -3771,8 +3855,13 @@ internal fun FileBrowserScreen(
                                             item.name.endsWith(".md", ignoreCase = true) || item.name.endsWith(".rst", ignoreCase = true) ->
                                                 onOpenMarkdownView(item.uri.toString(), item.name, false)
                                             else -> {
-                                                val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
-                                                onOpenFile(item.uri.toString(), item.name, encrypted)
+                                                val preferredPackage = fileExtensionKey(item.name)?.let { preferredExternalPackages[it] }
+                                                if (preferredPackage != null && onOpenWithOtherApp(item.uri.toString(), item.name, preferredPackage, false)) {
+                                                    Unit
+                                                } else {
+                                                    val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
+                                                    onOpenFile(item.uri.toString(), item.name, encrypted)
+                                                }
                                             }
                                         }
                                     }
@@ -3817,13 +3906,14 @@ internal fun FileBrowserScreen(
                         TextButton(
                             onClick = {
                                 showContextMenu = false
-                                onOpenWithOtherApp(menuTarget.uri.toString(), menuTarget.name)
+                                showExternalOpenDialog(menuTarget)
                                 contextMenuTarget = null
                             }
                         ) { Text("用其他应用打开", color = MaterialTheme.colorScheme.onSurface) }
                         TextButton(
                             onClick = {
                                 showContextMenu = false
+                                onClearExternalOpenPreference(menuTarget.name)
                                 onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
                                 contextMenuTarget = null
                             }
@@ -3988,6 +4078,65 @@ internal fun FileBrowserScreen(
                     ) { Text("删除", color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
                         Text("取消", color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+        }
+    }
+
+    if (externalOpenTarget != null) {
+        val target = externalOpenTarget!!
+        Dialog(onDismissRequest = { externalOpenTarget = null; externalOpenOptions = emptyList() }) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+                tonalElevation = 6.dp
+            ) {
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp)
+                        .heightIn(max = 480.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text("选择打开应用", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        target.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    externalOpenOptions.forEach { option ->
+                        TextButton(
+                            onClick = {
+                                val opened = onOpenWithOtherApp(target.uri.toString(), target.name, option.packageName, true)
+                                if (opened) {
+                                    externalOpenTarget = null
+                                    externalOpenOptions = emptyList()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(option.label, color = MaterialTheme.colorScheme.onSurface)
+                                Text(
+                                    option.packageName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = { externalOpenTarget = null; externalOpenOptions = emptyList() }) {
+                            Text("取消")
+                        }
                     }
                 }
             }
@@ -4459,6 +4608,7 @@ internal fun FileBrowserScreen(
 @Composable
 fun FileItem(
     model: DocumentFileModel,
+    hasPreferredExternalApp: Boolean = false,
     isInPendingList: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -4523,12 +4673,20 @@ fun FileItem(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                icon,
-                contentDescription = null,
-                Modifier.size(32.dp),
-                tint = iconTint
-            )
+            BadgedBox(
+                badge = {
+                    if (hasPreferredExternalApp) {
+                        Badge(containerColor = MaterialTheme.colorScheme.secondary)
+                    }
+                }
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    Modifier.size(32.dp),
+                    tint = iconTint
+                )
+            }
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
