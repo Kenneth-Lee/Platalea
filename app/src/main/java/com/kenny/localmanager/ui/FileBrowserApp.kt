@@ -204,11 +204,11 @@ import com.kenny.localmanager.player.EXTRA_POSITION_MS
 import com.kenny.localmanager.player.EXTRA_START_INDEX
 import com.kenny.localmanager.player.EXTRA_URIS
 import com.kenny.localmanager.gpg.GpgHelper
+import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.generateDefaultKey
 import com.kenny.localmanager.gpg.listEncryptionPublicKeyRings
 import com.kenny.localmanager.gpg.KeyInfo
-import com.kenny.localmanager.gpg.listDecryptionSecretKeys
 import com.kenny.localmanager.gpg.listGpgKeyFiles
 import com.kenny.localmanager.gpg.listPublicKeyInfos
 import com.kenny.localmanager.gpg.listSecretKeyInfos
@@ -738,10 +738,10 @@ fun FileBrowserApp(
             LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
             var lastBackPressTime by remember { mutableStateOf(0L) }
             var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
-            var gpgMethod by remember { mutableStateOf<GpgMethod?>(null) }
             var gpgPassword by remember { mutableStateOf("") }
-            var gpgTriedCache by remember { mutableStateOf(false) }
-            var showGpgKeyPicker by remember { mutableStateOf(false) }
+            var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
+            var gpgDecryptAutoTried by remember { mutableStateOf(false) }
+            var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
             var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
             var showChangeRootConfirm by remember { mutableStateOf(false) }
             var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
@@ -1035,9 +1035,11 @@ fun FileBrowserApp(
                     passEditState != null -> passEditState = null
                     showChangeRootConfirm -> showChangeRootConfirm = false
                     gpgState != null -> {
-                        if (showGpgKeyPicker) showGpgKeyPicker = false
-                        else if (gpgMethod != null) gpgMethod = null
-                        else { gpgState = null; gpgPassword = "" }
+                        gpgState = null
+                        gpgPassword = ""
+                        gpgDecryptMode = null
+                        gpgDecryptAutoTried = false
+                        gpgEncryptSelectedKeyId = null
                     }
                     showKeyManagementDialog -> showKeyManagementDialog = false
                     showConfigDialog -> showConfigDialog = false
@@ -1089,6 +1091,86 @@ fun FileBrowserApp(
                     progressOp = null
                 }
             }
+
+            suspend fun detectGpgDecryptMode(op: GpgOpState): GpgDecryptUiMode = withContext(Dispatchers.IO) {
+                val files = when (op) {
+                    is GpgOpState.Decrypt -> listOf(op.fileModel)
+                    is GpgOpState.BatchDecrypt -> op.list
+                    else -> emptyList()
+                }
+                var hasSymmetric = false
+                var hasPublicKey = false
+                files.forEach { fileModel ->
+                    val kind = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+                        GpgHelper.detectEncryptedKind(input)
+                    } ?: GpgEncryptedKind.UNKNOWN
+                    when (kind) {
+                        GpgEncryptedKind.PUBLIC_KEY -> hasPublicKey = true
+                        GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> hasSymmetric = true
+                    }
+                }
+                when {
+                    hasSymmetric && hasPublicKey -> GpgDecryptUiMode.MIXED
+                    hasPublicKey -> GpgDecryptUiMode.SECRET_KEY
+                    else -> GpgDecryptUiMode.SYMMETRIC
+                }
+            }
+
+            suspend fun decryptGpgFile(
+                fileModel: DocumentFileModel,
+                targetDirUri: String,
+                treeUri: Uri?,
+                symmetricPassword: CharArray?,
+                keyPassphrase: CharArray?
+            ): Boolean = withContext(Dispatchers.IO) {
+                val encBytes = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
+                val kind = GpgHelper.detectEncryptedKind(java.io.ByteArrayInputStream(encBytes))
+                val decrypted = when (kind) {
+                    GpgEncryptedKind.PUBLIC_KEY -> {
+                        val secretRings = loadSecretKeyRings(context) ?: return@withContext false
+                        val effectiveKeyPass = keyPassphrase ?: SecretKeyPasswordCache.get() ?: CharArray(0)
+                        GpgHelper.decryptWithSecretKey(
+                            java.io.ByteArrayInputStream(encBytes),
+                            secretRings,
+                            effectiveKeyPass
+                        ) { }
+                    }
+                    GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> {
+                        val pwd = symmetricPassword ?: return@withContext false
+                        GpgHelper.decryptSymmetric(
+                            java.io.ByteArrayInputStream(encBytes),
+                            pwd
+                        ) { }
+                    }
+                } ?: return@withContext false
+                val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
+                createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", decrypted)
+            }
+
+            suspend fun encryptGpgFile(
+                fileModel: DocumentFileModel,
+                targetDirUri: String,
+                treeUri: Uri?,
+                symmetricPassword: CharArray?,
+                publicKeyId: Long?
+            ): Boolean = withContext(Dispatchers.IO) {
+                val plain = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
+                if (publicKeyId != null) {
+                    val pubRings = loadPublicKeyRings(context) ?: return@withContext false
+                    val pubKeyRing = findPublicKeyRing(pubRings, publicKeyId) ?: return@withContext false
+                    val keyDesc = listEncryptionPublicKeyRings(pubRings).find { it.first == publicKeyId }?.second.orEmpty()
+                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
+                    val baseName = fileModel.name.removeSuffix(".gpg")
+                    val outName = if (safeName.isNotEmpty()) "${baseName}_${safeName}.gpg" else "${baseName}.gpg"
+                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name) ?: return@withContext false
+                    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", encrypted)
+                } else {
+                    val pwd = symmetricPassword ?: return@withContext false
+                    val encrypted = GpgHelper.encryptSymmetric(plain, pwd, fileModel.name) { } ?: return@withContext false
+                    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, fileModel.name + ".gpg", "application/octet-stream", encrypted)
+                }
+            }
+
             val doCopyHere: () -> Unit = {
                 val targetDirUri = normalizeContentUriString(displayUri)
                 copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
@@ -1226,7 +1308,7 @@ fun FileBrowserApp(
                     hideDotFiles = hideDotFiles,
                     isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
                     onOpenFile = { uri, name, isEncrypted ->
-                        viewingFile = Triple(uri, name, isEncrypted)
+                        viewingFile = Triple(uri, name, false)
                     },
                     onOpenWithOtherApp = { uri, name ->
                         val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -1251,13 +1333,17 @@ fun FileBrowserApp(
                     onOpenQuickNote = { requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) }) },
                     onCreateQuickNote = { requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) }) },
                     onRequestGpgDecrypt = { fileModel, dirUri ->
-                        gpgMethod = null
-                        showGpgKeyPicker = false
+                        gpgPassword = ""
+                        gpgDecryptMode = null
+                        gpgDecryptAutoTried = false
+                        gpgEncryptSelectedKeyId = null
                         gpgState = GpgOpState.Decrypt(fileModel, dirUri)
                     },
                     onRequestGpgEncrypt = { fileModel, dirUri ->
-                        gpgMethod = null
-                        showGpgKeyPicker = false
+                        gpgPassword = ""
+                        gpgDecryptMode = null
+                        gpgDecryptAutoTried = false
+                        gpgEncryptSelectedKeyId = null
                         gpgState = GpgOpState.Encrypt(fileModel, dirUri)
                     },
                     onRequestQuickObfuscate = { model ->
@@ -1345,7 +1431,13 @@ fun FileBrowserApp(
                         } else {
                             val list = pendingList.filter { !it.isDirectory }
                             if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
-                            else gpgState = GpgOpState.BatchEncrypt(list, displayUri)
+                            else {
+                                gpgPassword = ""
+                                gpgDecryptMode = null
+                                gpgDecryptAutoTried = false
+                                gpgEncryptSelectedKeyId = null
+                                gpgState = GpgOpState.BatchEncrypt(list, displayUri)
+                            }
                         }
                     },
                     onRequestBatchGpgDecrypt = {
@@ -1354,7 +1446,13 @@ fun FileBrowserApp(
                         } else {
                             val list = pendingList.filter { !it.isDirectory }
                             if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
-                            else gpgState = GpgOpState.BatchDecrypt(list, displayUri)
+                            else {
+                                gpgPassword = ""
+                                gpgDecryptMode = null
+                                gpgDecryptAutoTried = false
+                                gpgEncryptSelectedKeyId = null
+                                gpgState = GpgOpState.BatchDecrypt(list, displayUri)
+                            }
                         }
                     },
                     onRequestCompressToZip = {
@@ -2603,103 +2701,6 @@ fun FileBrowserApp(
                     }
                 )
             }
-            if (gpgState != null && gpgMethod == null && !showGpgKeyPicker) {
-                val op = gpgState!!
-                val pubRings = loadPublicKeyRings(context)
-                val secRings = loadSecretKeyRings(context)
-                val decKeys = listDecryptionSecretKeys(secRings)
-                val hasPubKeys = listEncryptionPublicKeyRings(pubRings).isNotEmpty()
-                GpgMethodDialog(
-                    isDecrypt = op.isDecrypt,
-                    fileName = op.displayName,
-                    hasPublicKeys = hasPubKeys,
-                    hasSecretKeys = decKeys.isNotEmpty(),
-                    onSymmetric = { gpgMethod = GpgMethod.Symmetric },
-                    onPublicKey = { showGpgKeyPicker = true },
-                    onSecretKey = { gpgMethod = GpgMethod.SecretKeyDec; gpgTriedCache = false },
-                    onDismiss = { gpgState = null; gpgMethod = null; showGpgKeyPicker = false }
-                )
-            }
-            if (gpgState != null && showGpgKeyPicker && (gpgState is GpgOpState.Encrypt || gpgState is GpgOpState.BatchEncrypt)) {
-                val op = gpgState!!
-                val pubRings = loadPublicKeyRings(context)
-                val keys = listEncryptionPublicKeyRings(pubRings)
-                GpgPublicKeyPickerDialog(
-                    keys = keys,
-                    fileName = op.displayName,
-                    onConfirm = { keyId, keyDesc ->
-                        showGpgKeyPicker = false
-                        val pubKeyRing = findPublicKeyRing(pubRings, keyId)
-                        if (pubKeyRing != null) {
-                            when (op) {
-                                is GpgOpState.Encrypt -> {
-                                    val encOp = op
-                                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
-                                    val baseName = encOp.fileModel.name.removeSuffix(".gpg")
-                                    val outName = if (safeName.isNotEmpty()) "${baseName}_$safeName.gpg" else "${baseName}.gpg"
-                                    gpgPubEncryptInProgress = true
-                                    scope.launch {
-                                        try {
-                                            val ok = withContext(Dispatchers.IO) {
-                                                context.contentResolver.openInputStreamSafe(encOp.fileModel.uri)?.use { input ->
-                                                    val plain = input.readBytes()
-                                                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, encOp.fileModel.name)
-                                                    if (encrypted != null) {
-                                                        val dirUri = normalizeContentUriString(encOp.dirUri)
-                                                        val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                                        createFileWithBytes(context, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                                    } else false
-                                                } ?: false
-                                            }
-                                            if (ok) Toast.makeText(context, "加密完成", Toast.LENGTH_SHORT).show()
-                                            else Toast.makeText(context, "加密失败", Toast.LENGTH_SHORT).show()
-                                            gpgState = null
-                                            refreshTrigger++
-                                        } finally {
-                                            gpgPubEncryptInProgress = false
-                                        }
-                                    }
-                                }
-                                is GpgOpState.BatchEncrypt -> {
-                                    val batchOp = op
-                                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
-                                    val dirUri = normalizeContentUriString(batchOp.dirUri)
-                                    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                    gpgPubEncryptInProgress = true
-                                    scope.launch {
-                                        try {
-                                            runWithProgress("公钥加密", batchOp.list.size) { setProgress ->
-                                                withContext(Dispatchers.IO) {
-                                                    batchOp.list.forEachIndexed { index, fileModel ->
-                                                        context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                                                            val plain = input.readBytes()
-                                                            val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name)
-                                                            if (encrypted != null) {
-                                                                val outName = if (safeName.isNotEmpty()) "${fileModel.name}_$safeName.gpg" else "${fileModel.name}.gpg"
-                                                                createFileWithBytes(context, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                                            }
-                                                        }
-                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                                    }
-                                                }
-                                            }
-                                            Toast.makeText(context, "已公钥加密 ${batchOp.list.size} 个文件", Toast.LENGTH_SHORT).show()
-                                            pendingList.clear()
-                                            showPendingList = false
-                                            gpgState = null
-                                            refreshTrigger++
-                                        } finally {
-                                            gpgPubEncryptInProgress = false
-                                        }
-                                    }
-                                }
-                                else -> { }
-                            }
-                        }
-                    },
-                    onDismiss = { showGpgKeyPicker = false; gpgState = null }
-                )
-            }
             if (showChangeRootConfirm && rootUri != null) {
                 val r = rootUri!!
                 val root = Uri.parse(normalizeContentUriString(r))
@@ -2733,63 +2734,48 @@ fun FileBrowserApp(
             }
             var gpgInProgress by remember { mutableStateOf(false) }
             gpgState?.let { op ->
-                if (gpgMethod == GpgMethod.Symmetric || gpgMethod == GpgMethod.SecretKeyDec) {
-                    if (gpgMethod == GpgMethod.SecretKeyDec) {
-                        LaunchedEffect(op, gpgMethod) {
-                            if (gpgTriedCache) return@LaunchedEffect
-                            val cached = SecretKeyPasswordCache.get() ?: run { gpgTriedCache = true; return@LaunchedEffect }
-                            gpgTriedCache = true
+                val ctx = context
+                val dirUri = normalizeContentUriString(op.dirUri)
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+
+                fun resetGpgUiState() {
+                    gpgState = null
+                    gpgPassword = ""
+                    gpgDecryptMode = null
+                    gpgDecryptAutoTried = false
+                    gpgEncryptSelectedKeyId = null
+                }
+
+                if (op.isDecrypt) {
+                    LaunchedEffect(op) {
+                        gpgDecryptMode = detectGpgDecryptMode(op)
+                        gpgDecryptAutoTried = SecretKeyPasswordCache.get() == null
+                    }
+
+                    if (gpgDecryptMode == GpgDecryptUiMode.SECRET_KEY && !gpgDecryptAutoTried && SecretKeyPasswordCache.get() != null) {
+                        LaunchedEffect(op, gpgDecryptMode) {
+                            gpgDecryptAutoTried = true
                             gpgInProgress = true
-                            val ctx = context
-                            val dirUri = normalizeContentUriString(op.dirUri)
-                            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                            val autoKeyPass = SecretKeyPasswordCache.get() ?: return@LaunchedEffect
                             val ok = when (op) {
                                 is GpgOpState.BatchDecrypt -> {
+                                    var allOk = true
                                     runWithProgress("解密", op.list.size) { setProgress ->
-                                        withContext(Dispatchers.IO) {
-                                            op.list.forEachIndexed { index, fileModel ->
-                                                val secretRings = loadSecretKeyRings(ctx)
-                                                if (secretRings != null) {
-                                                    ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                                                        val encBytes = input.readBytes()
-                                                        val decrypted = GpgHelper.decryptWithSecretKey(
-                                                            java.io.ByteArrayInputStream(encBytes),
-                                                            secretRings, cached
-                                                        ) { _ -> }
-                                                        if (decrypted != null) {
-                                                            val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
-                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                        }
-                                                    }
-                                                }
-                                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                        op.list.forEachIndexed { index, fileModel ->
+                                            if (!decryptGpgFile(fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
+                                                allOk = false
                                             }
+                                            setProgress(index + 1)
                                         }
                                     }
-                                    true
+                                    allOk
                                 }
-                                else -> if (op.isDecrypt) {
-                                    withContext(Dispatchers.IO) {
-                                        val secretRings = loadSecretKeyRings(ctx)
-                                        if (secretRings == null) false
-                                        else ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
-                                            val encBytes = input.readBytes()
-                                            val decrypted = GpgHelper.decryptWithSecretKey(
-                                                java.io.ByteArrayInputStream(encBytes),
-                                                secretRings, cached
-                                            ) { _ -> }
-                                            if (decrypted != null) {
-                                                val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
-                                                createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                            } else false
-                                            } ?: false
-                                    }
-                                } else false
+                                is GpgOpState.Decrypt -> decryptGpgFile(op.fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)
+                                else -> false
                             }
                             gpgInProgress = false
                             if (ok) {
-                                gpgState = null
-                                gpgMethod = null
+                                resetGpgUiState()
                                 refreshTrigger++
                                 if (op is GpgOpState.BatchDecrypt) {
                                     pendingList.clear()
@@ -2798,157 +2784,158 @@ fun FileBrowserApp(
                                 } else {
                                     Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
                                 }
-                            } else {
-                                Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
-                    if (gpgMethod == GpgMethod.Symmetric || SecretKeyPasswordCache.get() == null || gpgTriedCache) {
-                    GpgPasswordDialog(
-                        isDecrypt = op.isDecrypt,
+
+                    val decryptMode = gpgDecryptMode
+                    if (decryptMode != null && (decryptMode != GpgDecryptUiMode.SECRET_KEY || gpgDecryptAutoTried)) {
+                        GpgPasswordDialog(
+                            isDecrypt = true,
+                            fileName = op.displayName,
+                            password = gpgPassword,
+                            passwordLabel = when (decryptMode) {
+                                GpgDecryptUiMode.SECRET_KEY -> "密钥密码"
+                                GpgDecryptUiMode.MIXED -> "密码（公钥文件会自动尝试私钥）"
+                                GpgDecryptUiMode.SYMMETRIC -> "密码"
+                            },
+                            inProgress = gpgInProgress,
+                            onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
+                            onConfirm = { pwd ->
+                                if (gpgInProgress) return@GpgPasswordDialog
+                                gpgInProgress = true
+                                scope.launch {
+                                    try {
+                                        val pwdChars = pwd.toCharArray()
+                                        val ok = when (op) {
+                                            is GpgOpState.BatchDecrypt -> {
+                                                runWithProgress("解密", op.list.size) { setProgress ->
+                                                    op.list.forEachIndexed { index, fileModel ->
+                                                        decryptGpgFile(
+                                                            fileModel,
+                                                            dirUri,
+                                                            treeUri,
+                                                            symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
+                                                            keyPassphrase = when (decryptMode) {
+                                                                GpgDecryptUiMode.SYMMETRIC -> null
+                                                                GpgDecryptUiMode.SECRET_KEY -> pwdChars
+                                                                GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
+                                                            }
+                                                        )
+                                                        setProgress(index + 1)
+                                                    }
+                                                }
+                                                true
+                                            }
+                                            is GpgOpState.Decrypt -> decryptGpgFile(
+                                                op.fileModel,
+                                                dirUri,
+                                                treeUri,
+                                                symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
+                                                keyPassphrase = when (decryptMode) {
+                                                    GpgDecryptUiMode.SYMMETRIC -> null
+                                                    GpgDecryptUiMode.SECRET_KEY -> pwdChars
+                                                    GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
+                                                }
+                                            )
+                                            else -> false
+                                        }
+                                        if (ok) {
+                                            if (op is GpgOpState.BatchDecrypt) {
+                                                pendingList.clear()
+                                                showPendingList = false
+                                                Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                                            }
+                                            resetGpgUiState()
+                                            refreshTrigger++
+                                        } else {
+                                            Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
+                                        }
+                                    } finally {
+                                        gpgInProgress = false
+                                    }
+                                }
+                            },
+                            onDismiss = { if (!gpgInProgress) resetGpgUiState() }
+                        )
+                    }
+                } else {
+                    val pubRings = loadPublicKeyRings(context)
+                    val keys = listEncryptionPublicKeyRings(pubRings)
+                    GpgEncryptDialog(
                         fileName = op.displayName,
+                        keys = keys,
+                        selectedKeyId = gpgEncryptSelectedKeyId,
                         password = gpgPassword,
-                        passwordLabel = if (gpgMethod == GpgMethod.SecretKeyDec) "密钥密码" else "密码",
-                        inProgress = gpgInProgress,
-                        onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
-                        onConfirm = { pwd ->
-                            if (gpgInProgress) return@GpgPasswordDialog
-                            gpgInProgress = true
-                            val ctx = context
-                            val dirUri = normalizeContentUriString(op.dirUri)
-                            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        inProgress = gpgInProgress || gpgPubEncryptInProgress,
+                        onSelectPassword = {
+                            if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = null
+                        },
+                        onSelectKey = { keyId ->
+                            if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = keyId
+                        },
+                        onPasswordChange = {
+                            if (!gpgInProgress && !gpgPubEncryptInProgress) {
+                                gpgPassword = it
+                                if (it.isNotEmpty()) gpgEncryptSelectedKeyId = null
+                            }
+                        },
+                        onConfirm = { password, keyId ->
+                            if (gpgInProgress || gpgPubEncryptInProgress) return@GpgEncryptDialog
+                            if (keyId == null && password.isBlank()) return@GpgEncryptDialog
+                            gpgInProgress = keyId == null
+                            gpgPubEncryptInProgress = keyId != null
                             scope.launch {
                                 try {
+                                    val pwdChars = password.toCharArray()
                                     val ok = when (op) {
-                                        is GpgOpState.BatchDecrypt -> {
-                                            runWithProgress("解密", op.list.size) { setProgress ->
-                                                withContext(Dispatchers.IO) {
-                                                    op.list.forEachIndexed { index, fileModel ->
-                                                        when (gpgMethod) {
-                                                            GpgMethod.SecretKeyDec -> {
-                                                                val secretRings = loadSecretKeyRings(ctx)
-                                                                if (secretRings != null) {
-                                                                    ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                                                                        val encBytes = input.readBytes()
-                                                                        val decrypted = GpgHelper.decryptWithSecretKey(
-                                                                            java.io.ByteArrayInputStream(encBytes),
-                                                                            secretRings, pwd.toCharArray()
-                                                                        ) { _ -> }
-                                                                        if (decrypted != null) {
-                                                                            val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
-                                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                            else -> {
-                                                                ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                                                                    val encBytes = input.readBytes()
-                                                                    val decrypted = GpgHelper.decryptSymmetric(
-                                                                        java.io.ByteArrayInputStream(encBytes),
-                                                                        pwd.toCharArray()
-                                                                    ) { _ -> }
-                                                                    if (decrypted != null) {
-                                                                        val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
-                                                                        createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                                    }
-                                                }
-                                            }
-                                            true
-                                        }
                                         is GpgOpState.BatchEncrypt -> {
-                                            runWithProgress("加密", op.list.size) { setProgress ->
-                                                withContext(Dispatchers.IO) {
-                                                    op.list.forEachIndexed { index, fileModel ->
-                                                        ctx.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                                                            val plain = input.readBytes()
-                                                            val encrypted = GpgHelper.encryptSymmetric(
-                                                                plain, pwd.toCharArray(), fileModel.name
-                                                            ) { _ -> }
-                                                            if (encrypted != null) {
-                                                                val outName = fileModel.name + ".gpg"
-                                                                createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                                            }
-                                                        }
-                                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                                    }
+                                            runWithProgress(if (keyId != null) "公钥加密" else "加密", op.list.size) { setProgress ->
+                                                op.list.forEachIndexed { index, fileModel ->
+                                                    encryptGpgFile(
+                                                        fileModel,
+                                                        dirUri,
+                                                        treeUri,
+                                                        symmetricPassword = if (keyId == null) pwdChars else null,
+                                                        publicKeyId = keyId
+                                                    )
+                                                    setProgress(index + 1)
                                                 }
                                             }
                                             true
                                         }
-                                        else -> withContext(Dispatchers.IO) {
-                                            when {
-                                                op.isDecrypt && gpgMethod == GpgMethod.SecretKeyDec -> {
-                                                    val secretRings = loadSecretKeyRings(ctx)
-                                                    if (secretRings == null) false
-                                                    else ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
-                                                        val encBytes = input.readBytes()
-                                                        val decrypted = GpgHelper.decryptWithSecretKey(
-                                                            java.io.ByteArrayInputStream(encBytes),
-                                                            secretRings, pwd.toCharArray()
-                                                        ) { _ -> }
-                                                        if (decrypted != null) {
-                                                            val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
-                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                        } else false
-                                                    } ?: false
-                                                }
-                                                op.isDecrypt -> {
-                                                    ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Decrypt).fileModel.uri)?.use { input ->
-                                                        val encBytes = input.readBytes()
-                                                        val decrypted = GpgHelper.decryptSymmetric(
-                                                            java.io.ByteArrayInputStream(encBytes),
-                                                            pwd.toCharArray()
-                                                        ) { _ -> }
-                                                        if (decrypted != null) {
-                                                            val outName = (op as GpgOpState.Decrypt).fileModel.name.removeSuffix(".gpg").ifEmpty { (op as GpgOpState.Decrypt).fileModel.name + ".dec" }
-                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", decrypted)
-                                                        } else false
-                                                    } ?: false
-                                                }
-                                                else -> {
-                                                    ctx.contentResolver.openInputStreamSafe((op as GpgOpState.Encrypt).fileModel.uri)?.use { input ->
-                                                        val plain = input.readBytes()
-                                                        val encrypted = GpgHelper.encryptSymmetric(
-                                                            plain, pwd.toCharArray(), (op as GpgOpState.Encrypt).fileModel.name
-                                                        ) { _ -> }
-                                                        if (encrypted != null) {
-                                                            val outName = (op as GpgOpState.Encrypt).fileModel.name + ".gpg"
-                                                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                                        } else false
-                                                    } ?: false
-                                                }
-                                            }
-                                        }
+                                        is GpgOpState.Encrypt -> encryptGpgFile(
+                                            op.fileModel,
+                                            dirUri,
+                                            treeUri,
+                                            symmetricPassword = if (keyId == null) pwdChars else null,
+                                            publicKeyId = keyId
+                                        )
+                                        else -> false
                                     }
                                     if (ok) {
-                                        Toast.makeText(ctx, when (op) {
-                                            is GpgOpState.BatchDecrypt -> "已解密 ${op.list.size} 个文件"
-                                            is GpgOpState.BatchEncrypt -> "已加密 ${op.list.size} 个文件"
-                                            else -> if (op.isDecrypt) "解密完成" else "加密完成"
-                                        }, Toast.LENGTH_SHORT).show()
-                                        if (op is GpgOpState.BatchDecrypt || op is GpgOpState.BatchEncrypt) {
+                                        if (op is GpgOpState.BatchEncrypt) {
                                             pendingList.clear()
                                             showPendingList = false
+                                            Toast.makeText(ctx, if (keyId != null) "已公钥加密 ${op.list.size} 个文件" else "已加密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(ctx, if (keyId != null) "公钥加密完成" else "加密完成", Toast.LENGTH_SHORT).show()
                                         }
-                                    } else Toast.makeText(ctx, if (op.isDecrypt) "解密失败" else "加密失败", Toast.LENGTH_LONG).show()
-                                    gpgState = null
-                                    gpgMethod = null
-                                    gpgPassword = ""
-                                    refreshTrigger++
+                                        resetGpgUiState()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(ctx, "加密失败", Toast.LENGTH_LONG).show()
+                                    }
                                 } finally {
                                     gpgInProgress = false
+                                    gpgPubEncryptInProgress = false
                                 }
                             }
                         },
-                        onDismiss = { if (!gpgInProgress) { gpgState = null; gpgMethod = null; gpgPassword = "" } }
+                        onDismiss = { if (!gpgInProgress && !gpgPubEncryptInProgress) resetGpgUiState() }
                     )
-                    }
                 }
             }
             }
@@ -3117,6 +3104,12 @@ private sealed class GpgOpState {
         override val isDecrypt = false
         override val displayName get() = "共 ${list.size} 个文件"
     }
+}
+
+private enum class GpgDecryptUiMode {
+    SYMMETRIC,
+    SECRET_KEY,
+    MIXED
 }
 
 /** 加密/解密方式：对称(密码)、公钥加密、私钥解密 */
@@ -3531,6 +3524,8 @@ internal fun FileBrowserScreen(
                                                 onRequestPdfView(item)
                                             item.name.endsWith(".zip", ignoreCase = true) ->
                                                 onUnzipRequest(item)
+                                            item.name.endsWith(".gpg", ignoreCase = true) ->
+                                                onRequestGpgDecrypt(item, currentUri)
                                             item.name.endsWith(".pass", ignoreCase = true) ->
                                                 onRequestPassView(item)
                                             item.name.endsWith(".md", ignoreCase = true) || item.name.endsWith(".rst", ignoreCase = true) ->
@@ -3589,8 +3584,7 @@ internal fun FileBrowserScreen(
                         TextButton(
                             onClick = {
                                 showContextMenu = false
-                                val enc = menuTarget.name.endsWith(".gpg", ignoreCase = true)
-                                onOpenFile(menuTarget.uri.toString(), menuTarget.name, enc)
+                                onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
                                 contextMenuTarget = null
                             }
                         ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
@@ -5104,6 +5098,91 @@ fun GpgPasswordDialog(
                     Button(
                         onClick = { onConfirm(password) },
                         enabled = !inProgress
+                    ) { Text("确定") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun GpgEncryptDialog(
+    fileName: String,
+    keys: List<Pair<Long, String>>,
+    selectedKeyId: Long?,
+    password: String,
+    inProgress: Boolean = false,
+    onSelectPassword: () -> Unit,
+    onSelectKey: (Long) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onConfirm: (String, Long?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    "GnuPG 加密",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !inProgress) { onSelectPassword() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = selectedKeyId == null,
+                        onClick = if (inProgress) null else onSelectPassword
+                    )
+                    Text("使用密码对称加密", style = MaterialTheme.typography.bodyMedium)
+                }
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("密码") },
+                    singleLine = true,
+                    enabled = !inProgress
+                )
+                if (keys.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    Text("或选择一个公钥进行非对称加密", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(8.dp))
+                    keys.forEach { (keyId, desc) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !inProgress) { onSelectKey(keyId) },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = selectedKeyId == keyId,
+                                onClick = if (inProgress) null else { { onSelectKey(keyId) } }
+                            )
+                            Text(desc, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+                if (inProgress) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(8.dp))
+                    Text("加密中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
+                    Button(
+                        onClick = { onConfirm(password, selectedKeyId) },
+                        enabled = !inProgress && (selectedKeyId != null || password.isNotBlank())
                     ) { Text("确定") }
                 }
             }

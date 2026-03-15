@@ -2,10 +2,15 @@ package com.kenny.localmanager.gpg
 
 import android.content.Context
 import org.bouncycastle.bcpg.ArmoredOutputStream
+import org.bouncycastle.openpgp.PGPEncryptedDataList
+import org.bouncycastle.openpgp.PGPPBEEncryptedData
 import org.bouncycastle.jce.provider.BouncyCastleProvider
+import org.bouncycastle.openpgp.PGPPublicKeyEncryptedData
 import org.bouncycastle.openpgp.PGPPublicKey
 import org.bouncycastle.openpgp.PGPPublicKeyRing
 import org.bouncycastle.openpgp.PGPPublicKeyRingCollection
+import org.bouncycastle.openpgp.PGPUtil
+import org.bouncycastle.openpgp.bc.BcPGPObjectFactory
 import org.pgpainless.PGPainless
 import org.pgpainless.decryption_verification.ConsumerOptions
 import org.pgpainless.decryption_verification.DecryptionStream
@@ -23,6 +28,12 @@ import java.security.Security
  * 公钥加密仍用 Bouncy Castle；私钥解密改用 PGPainless 规避 Android P+ 限制。
  */
 object GpgHelper {
+
+    enum class GpgEncryptedKind {
+        SYMMETRIC,
+        PUBLIC_KEY,
+        UNKNOWN
+    }
 
     init {
         if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
@@ -66,6 +77,28 @@ object GpgHelper {
             decryptBytes(input.readBytes(), password = null, secretKeyRings = null, keyPassphrase = null)
         } catch (_: Exception) {
             null
+        }
+    }
+
+    fun detectEncryptedKind(input: InputStream): GpgEncryptedKind {
+        return try {
+            val decoder = PGPUtil.getDecoderStream(input)
+            val factory = BcPGPObjectFactory(decoder)
+            var obj = factory.nextObject()
+            while (obj != null) {
+                if (obj is PGPEncryptedDataList) {
+                    val entries = obj.encryptedDataObjects.asSequence().toList()
+                    return when {
+                        entries.any { it is PGPPBEEncryptedData } -> GpgEncryptedKind.SYMMETRIC
+                        entries.any { it is PGPPublicKeyEncryptedData } -> GpgEncryptedKind.PUBLIC_KEY
+                        else -> GpgEncryptedKind.UNKNOWN
+                    }
+                }
+                obj = factory.nextObject()
+            }
+            GpgEncryptedKind.UNKNOWN
+        } catch (_: Exception) {
+            GpgEncryptedKind.UNKNOWN
         }
     }
 
