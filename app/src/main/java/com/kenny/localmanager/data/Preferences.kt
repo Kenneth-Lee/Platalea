@@ -11,6 +11,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.util.UUID
 
 private val Context.dataStore: DataStore<androidx.datastore.preferences.core.Preferences> by preferencesDataStore(name = "settings")
 
@@ -203,6 +204,33 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             val list = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "") + playlist
             prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(list)
+        }
+    }
+
+    suspend fun appendPlaylists(playlists: List<Playlist>) {
+        if (playlists.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val existing = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
+            val usedIds = existing.map { it.id }.toMutableSet()
+            val normalized = playlists.map { playlist ->
+                if (playlist.id !in usedIds) {
+                    usedIds += playlist.id
+                    playlist
+                } else {
+                    var newId = UUID.randomUUID().toString()
+                    while (newId in usedIds) newId = UUID.randomUUID().toString()
+                    usedIds += newId
+                    playlist.copy(id = newId)
+                }
+            }
+            prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(existing + normalized)
+        }
+    }
+
+    suspend fun replacePlaylists(playlists: List<Playlist>) {
+        context.dataStore.edit { prefs ->
+            if (playlists.isEmpty()) prefs.remove(PLAYER_PLAYLISTS_JSON)
+            else prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(playlists)
         }
     }
 

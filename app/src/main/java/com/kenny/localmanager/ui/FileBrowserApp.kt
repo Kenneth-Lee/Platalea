@@ -124,9 +124,11 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.Playlist
-import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.configJsonContainsKeys
+import com.kenny.localmanager.data.configJsonPlaylistCount
+import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
@@ -242,10 +244,24 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+private const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
+
 /** 文件列表项副标题：大小与修改时间（与排序方式对应，便于对照）。 */
 private fun fileItemSubtitle(model: DocumentFileModel): String {
     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
     return if (model.displaySize.isNotEmpty()) "${model.displaySize}  $dateStr" else dateStr
+}
+
+private fun formatPlaybackTime(ms: Int): String {
+    val totalSeconds = (ms.coerceAtLeast(0) / 1000)
+    val hours = totalSeconds / 3600
+    val minutes = (totalSeconds % 3600) / 60
+    val seconds = totalSeconds % 60
+    return if (hours > 0) {
+        String.format(Locale.getDefault(), "%d:%02d:%02d", hours, minutes, seconds)
+    } else {
+        String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
+    }
 }
 
 /** 规范化 content URI 字符串，修正 authority 中可能被错误成空格的句点（如 android .externalstorage -> android.externalstorage） */
@@ -731,7 +747,10 @@ fun FileBrowserApp(
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
             var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
+            var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
             var pendingImportJson by remember { mutableStateOf<String?>(null) }
+            var pendingImportPlaylistCount by remember { mutableStateOf(0) }
+            var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
             var showCacheManagementDialog by remember { mutableStateOf(false) }
             var showAboutDialog by remember { mutableStateOf(false) }
             var showKeyManagementDialog by remember { mutableStateOf(false) }
@@ -1092,6 +1111,80 @@ fun FileBrowserApp(
                 }
             }
 
+            fun clearPendingConfigImportState() {
+                pendingImportJson = null
+                pendingImportPlaylistCount = 0
+                pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                showImportKeyConfirmDialog = false
+                showImportPlaylistConfirmDialog = false
+            }
+
+            suspend fun exportConfigToRoot(): Boolean {
+                val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return false
+                val targetUri = Uri.parse(targetRoot)
+                val jsonBytes = exportConfig(context, prefs).toByteArray(Charsets.UTF_8)
+                val existing = findChildByName(context, targetUri, CONFIG_EXPORT_FILE_NAME)
+                if (existing != null && !context.contentResolver.deleteDocument(existing)) return false
+                return createFileWithBytes(
+                    context,
+                    targetUri,
+                    targetUri,
+                    CONFIG_EXPORT_FILE_NAME,
+                    "application/json",
+                    jsonBytes
+                )
+            }
+
+            suspend fun performConfigImport(jsonString: String, importKeys: Boolean) {
+                val ok = importConfig(
+                    context,
+                    prefs,
+                    jsonString,
+                    importKeys = importKeys,
+                    playlistImportMode = pendingImportPlaylistMode
+                )
+                refreshTrigger++
+                val msg = when {
+                    !ok -> "导入失败：无法解析 JSON"
+                    pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
+                    pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
+                    pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
+                    pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
+                    importKeys -> "配置已导入（含密钥）"
+                    else -> "配置已导入"
+                }
+                clearPendingConfigImportState()
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            }
+
+            fun continueConfigImportAfterPlaylistChoice() {
+                val jsonString = pendingImportJson ?: return
+                if (configJsonContainsKeys(jsonString)) {
+                    showImportKeyConfirmDialog = true
+                } else {
+                    scope.launch { performConfigImport(jsonString, importKeys = true) }
+                }
+            }
+
+            fun startConfigImport(jsonString: String) {
+                if (jsonString.isBlank()) {
+                    Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                pendingImportJson = jsonString
+                pendingImportPlaylistCount = configJsonPlaylistCount(jsonString)
+                scope.launch {
+                    val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
+                    if (pendingImportPlaylistCount > 0 && hasExistingPlaylists) {
+                        pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                        showImportPlaylistConfirmDialog = true
+                    } else {
+                        pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                        continueConfigImportAfterPlaylistChoice()
+                    }
+                }
+            }
+
             suspend fun detectGpgDecryptMode(op: GpgOpState): GpgDecryptUiMode = withContext(Dispatchers.IO) {
                 val files = when (op) {
                     is GpgOpState.Decrypt -> listOf(op.fileModel)
@@ -1403,6 +1496,18 @@ fun FileBrowserApp(
                         passEditRequest = Pair(model, dirUri)
                         passEditTriedCache = false
                     },
+                    onRequestImportConfig = { model ->
+                        scope.launch {
+                            val jsonString = withContext(Dispatchers.IO) {
+                                try {
+                                    context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
+                                } catch (_: Exception) {
+                                    ""
+                                }
+                            }
+                            startConfigImport(jsonString)
+                        }
+                    },
                     playbackState = playbackState,
                     onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
@@ -1602,48 +1707,43 @@ fun FileBrowserApp(
                     dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
                 )
             }
-            val configExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
-                if (uri != null) scope.launch {
-                    val json = exportConfig(context, prefs)
-                    val ok = withContext(Dispatchers.IO) {
-                        try {
-                            context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray(Charsets.UTF_8)) }
-                            true
-                        } catch (_: Exception) { false }
-                    }
-                    Toast.makeText(context, if (ok) "配置已导出" else "导出失败", Toast.LENGTH_SHORT).show()
-                }
-            }
-            val configImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-                if (uri != null) scope.launch {
-                    val jsonString = withContext(Dispatchers.IO) {
-                        try {
-                            context.contentResolver.openInputStream(uri)?.use { it.bufferedReader().readText() } ?: ""
-                        } catch (_: Exception) { "" }
-                    }
-                    if (jsonString.isBlank()) {
-                        Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
-                        return@launch
-                    }
-                    if (configJsonContainsKeys(jsonString)) {
-                        pendingImportJson = jsonString
-                        showImportKeyConfirmDialog = true
-                    } else {
-                        val ok = importConfig(context, prefs, jsonString)
-                        refreshTrigger++
-                        Toast.makeText(context, if (ok) "配置已导入" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
             if (showAboutDialog) {
                 AboutDialog(onDismiss = { showAboutDialog = false })
+            }
+            if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
+                AlertDialog(
+                    onDismissRequest = { clearPendingConfigImportState() },
+                    title = { Text("导入播放列表") },
+                    text = {
+                        Text(
+                            "导入配置包含 ${pendingImportPlaylistCount} 个播放列表。当前已有播放列表，导入时要覆盖当前列表，还是追加到当前列表？",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    },
+                    confirmButton = {
+                        Button(onClick = {
+                            showImportPlaylistConfirmDialog = false
+                            pendingImportPlaylistMode = ConfigPlaylistImportMode.APPEND
+                            continueConfigImportAfterPlaylistChoice()
+                        }) { Text("追加") }
+                    },
+                    dismissButton = {
+                        Row {
+                            TextButton(onClick = {
+                                showImportPlaylistConfirmDialog = false
+                                pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                                continueConfigImportAfterPlaylistChoice()
+                            }) { Text("覆盖") }
+                            TextButton(onClick = { clearPendingConfigImportState() }) { Text("取消") }
+                        }
+                    }
+                )
             }
             if (showImportKeyConfirmDialog && pendingImportJson != null) {
                 val jsonToImport = pendingImportJson!!
                 AlertDialog(
                     onDismissRequest = {
-                        showImportKeyConfirmDialog = false
-                        pendingImportJson = null
+                        clearPendingConfigImportState()
                     },
                     title = { Text("导入配置") },
                     text = {
@@ -1656,11 +1756,8 @@ fun FileBrowserApp(
                         Button(
                             onClick = {
                                 showImportKeyConfirmDialog = false
-                                pendingImportJson = null
                                 scope.launch {
-                                    val ok = importConfig(context, prefs, jsonToImport, importKeys = true)
-                                    refreshTrigger++
-                                    Toast.makeText(context, if (ok) "配置已导入（含密钥）" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                                    performConfigImport(jsonToImport, importKeys = true)
                                 }
                             }
                         ) { Text("全部替换") }
@@ -1669,11 +1766,8 @@ fun FileBrowserApp(
                         TextButton(
                             onClick = {
                                 showImportKeyConfirmDialog = false
-                                pendingImportJson = null
                                 scope.launch {
-                                    val ok = importConfig(context, prefs, jsonToImport, importKeys = false)
-                                    refreshTrigger++
-                                    Toast.makeText(context, if (ok) "配置已导入（已跳过密钥）" else "导入失败：无法解析 JSON", Toast.LENGTH_SHORT).show()
+                                    performConfigImport(jsonToImport, importKeys = false)
                                 }
                             }
                         ) { Text("跳过密钥（保留本机密钥）") }
@@ -1707,8 +1801,13 @@ fun FileBrowserApp(
                     onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
                     onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
                     onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
-                    onExportConfig = { configExportLauncher.launch("local_manager_config.json") },
-                    onImportConfig = { configImportLauncher.launch(arrayOf("application/json", "*/*")) },
+                    onExportConfig = {
+                        scope.launch {
+                            val ok = exportConfigToRoot()
+                            Toast.makeText(context, if (ok) "配置已导出到根目录" else "导出失败", Toast.LENGTH_SHORT).show()
+                            if (ok) refreshTrigger++
+                        }
+                    },
                     onChangeRoot = {
                         val r = rootUri
                         if (r == null) {
@@ -3188,6 +3287,7 @@ internal fun FileBrowserScreen(
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
+    onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -3660,6 +3760,15 @@ internal fun FileBrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text("直接编辑", color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                        if (menuTarget.name.endsWith(".json", ignoreCase = true) && onRequestImportConfig != null) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestImportConfig(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("导入配置", color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
@@ -4798,6 +4907,19 @@ fun PlaybackScreen(
                                 )
                             )
                         }
+                        Row(Modifier.fillMaxWidth()) {
+                            Text(
+                                formatPlaybackTime(state.positionMs),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                if (state.durationMs > 0) formatPlaybackTime(state.durationMs) else "--:--",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
                         Row(
                             Modifier.fillMaxWidth().padding(top = 8.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -4841,13 +4963,6 @@ fun PlaybackScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            if (restorePlaylist != null) {
-                                Button(onClick = { startPlaylist(restorePlaylist) }) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, Modifier.size(20.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("恢复播放")
-                                }
-                            }
                             IconButton(onClick = {}) {
                                 Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
                             }
@@ -5561,7 +5676,6 @@ fun ConfigDialog(
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
     onExportConfig: () -> Unit,
-    onImportConfig: () -> Unit,
     onChangeRoot: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
@@ -5678,8 +5792,6 @@ fun ConfigDialog(
                 DesktopShortcutButtons()
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = onImportConfig, modifier = Modifier.fillMaxWidth()) { Text("导入配置") }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { onDismiss(); onChangeRoot() },

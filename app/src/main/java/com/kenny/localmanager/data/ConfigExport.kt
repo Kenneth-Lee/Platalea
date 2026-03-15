@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Base64
 import com.kenny.localmanager.gpg.getGpgKeyDir
 import kotlinx.coroutines.flow.first
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
@@ -19,6 +20,12 @@ private const val KEY_GIT_HTTPS_PASSWORD = "git_https_password"
 private const val KEY_GIT_CONFIG_APPLIED = "git_config_applied"
 private const val KEY_GPG_PUBLIC_KEYS_BASE64 = "gpg_public_keys_base64"
 private const val KEY_GPG_SECRET_KEYS_BASE64 = "gpg_secret_keys_base64"
+private const val KEY_PLAYER_PLAYLISTS = "player_playlists"
+
+enum class ConfigPlaylistImportMode {
+    OVERWRITE,
+    APPEND
+}
 
 /**
  * 导出当前配置为 JSON 字符串。包含：过滤条件、隐藏点文件、查看器预览长度、
@@ -36,6 +43,7 @@ suspend fun exportConfig(context: Context, prefs: Preferences): String {
     prefs.gitUserEmail.first()?.let { obj.put(KEY_GIT_USER_EMAIL, it) }
     prefs.gitHttpsPassword.first()?.let { obj.put(KEY_GIT_HTTPS_PASSWORD, it) }
     obj.put(KEY_GIT_CONFIG_APPLIED, prefs.gitConfigApplied.first())
+    obj.put(KEY_PLAYER_PLAYLISTS, JSONArray(prefs.playlists.first().map { it.toJson() }))
 
     val keyDir = getGpgKeyDir(context)
     File(keyDir, "pubring.gpg").takeIf { it.exists() }?.readBytes()?.let { bytes ->
@@ -60,12 +68,27 @@ fun configJsonContainsKeys(jsonString: String): Boolean {
     return obj.has(KEY_GPG_PUBLIC_KEYS_BASE64) || obj.has(KEY_GPG_SECRET_KEYS_BASE64)
 }
 
+fun configJsonPlaylistCount(jsonString: String): Int {
+    val obj = try {
+        JSONObject(jsonString)
+    } catch (_: Exception) {
+        return 0
+    }
+    return obj.optJSONArray(KEY_PLAYER_PLAYLISTS)?.length() ?: 0
+}
+
 /**
  * 从 JSON 字符串导入配置。仅对存在的键写入，缺失的键不修改。
  * @param importKeys 是否导入并覆盖公钥/私钥；为 false 时跳过密钥，保留本机现有密钥
  * @return 成功为 true，解析失败为 false
  */
-suspend fun importConfig(context: Context, prefs: Preferences, jsonString: String, importKeys: Boolean = true): Boolean {
+suspend fun importConfig(
+    context: Context,
+    prefs: Preferences,
+    jsonString: String,
+    importKeys: Boolean = true,
+    playlistImportMode: ConfigPlaylistImportMode = ConfigPlaylistImportMode.OVERWRITE
+): Boolean {
     val obj = try {
         JSONObject(jsonString)
     } catch (_: Exception) {
@@ -82,6 +105,16 @@ suspend fun importConfig(context: Context, prefs: Preferences, jsonString: Strin
     if (obj.has(KEY_GIT_USER_EMAIL)) prefs.setGitUserEmail(obj.optString(KEY_GIT_USER_EMAIL).ifBlank { null })
     if (obj.has(KEY_GIT_HTTPS_PASSWORD)) prefs.setGitHttpsPassword(obj.optString(KEY_GIT_HTTPS_PASSWORD).ifBlank { null })
     if (obj.has(KEY_GIT_CONFIG_APPLIED)) prefs.setGitConfigApplied(obj.getBoolean(KEY_GIT_CONFIG_APPLIED))
+    if (obj.has(KEY_PLAYER_PLAYLISTS)) {
+        val playlists = runCatching {
+            val arr = obj.optJSONArray(KEY_PLAYER_PLAYLISTS) ?: JSONArray()
+            (0 until arr.length()).map { Playlist.fromJson(arr.getJSONObject(it)) }
+        }.getOrDefault(emptyList())
+        when (playlistImportMode) {
+            ConfigPlaylistImportMode.OVERWRITE -> prefs.replacePlaylists(playlists)
+            ConfigPlaylistImportMode.APPEND -> prefs.appendPlaylists(playlists)
+        }
+    }
 
     if (importKeys) {
         val keyDir = getGpgKeyDir(context)
