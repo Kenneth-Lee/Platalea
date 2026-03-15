@@ -83,6 +83,7 @@ fun PicZipViewerScreen(
     isEncrypted: Boolean,
     password: CharArray?,
     initialIndex: Int = 0,
+    onSaveCurrentImage: suspend (File, String) -> Boolean = { _, _ -> false },
     onBack: (deleteCache: Boolean?) -> Unit
 ) {
     val context = LocalContext.current
@@ -101,6 +102,7 @@ fun PicZipViewerScreen(
     var jumpToInput by remember { mutableStateOf("") }
     var showExitCacheDialog by remember { mutableStateOf(false) }
     var rotationDegrees by remember { mutableFloatStateOf(0f) }
+    var saveInProgress by remember { mutableStateOf(false) }
 
     fun loadBitmapForIndex(index: Int, onLoaded: (() -> Unit)? = null) {
         if (index < 0 || index >= imagePaths.size) {
@@ -139,7 +141,6 @@ fun PicZipViewerScreen(
             loading = false
             return@LaunchedEffect
         }
-        currentBitmap = null
         loading = true
         val idx = currentIndex
         val batchStart = (idx / BATCH_SIZE) * BATCH_SIZE
@@ -370,6 +371,41 @@ fun PicZipViewerScreen(
                                         )
                                     }
                             )
+                        }
+                        if (!isZoomed) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(16.dp)
+                            ) {
+                                Button(
+                                    onClick = {
+                                        val relativePath = imagePaths.getOrNull(currentIndex) ?: return@Button
+                                        val sourceFile = File(contentDir, relativePath)
+                                        if (!sourceFile.exists() || saveInProgress) return@Button
+                                        scope.launch {
+                                            saveInProgress = true
+                                            try {
+                                                onSaveCurrentImage(sourceFile, relativePath.substringAfterLast('/'))
+                                            } finally {
+                                                saveInProgress = false
+                                            }
+                                        }
+                                    },
+                                    enabled = !saveInProgress
+                                ) {
+                                    Text(if (saveInProgress) "保存中" else "保存到根目录")
+                                }
+                            }
+                        }
+                        if (loading) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopCenter)
+                                    .padding(top = 16.dp)
+                            ) {
+                                CircularProgressIndicator()
+                            }
                         }
                     } ?: run {
                         if (loading) {

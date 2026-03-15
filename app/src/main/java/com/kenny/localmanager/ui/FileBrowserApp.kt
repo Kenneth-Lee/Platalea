@@ -378,6 +378,43 @@ fun FileBrowserApp(
         resetQuickNotePromptState()
     }
 
+    suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
+        val targetRoot = rootUri?.let { normalizeContentUriString(it) }
+        if (targetRoot == null) {
+            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val bytes = withContext(Dispatchers.IO) {
+            runCatching { sourceFile.readBytes() }.getOrNull()
+        } ?: run {
+            Toast.makeText(context, "保存失败：无法读取图片", Toast.LENGTH_SHORT).show()
+            return false
+        }
+        val targetUri = Uri.parse(targetRoot)
+        val dotIndex = fileName.lastIndexOf('.')
+        val baseName = if (dotIndex > 0) fileName.substring(0, dotIndex) else fileName
+        val ext = if (dotIndex > 0) fileName.substring(dotIndex) else ""
+        var outName = fileName
+        var copyIndex = 1
+        while (findChildByName(context, targetUri, outName) != null) {
+            outName = "$baseName ($copyIndex)$ext"
+            copyIndex++
+        }
+        val mimeType = when (fileName.substringAfterLast('.', "").lowercase()) {
+            "jpg", "jpeg" -> "image/jpeg"
+            "png" -> "image/png"
+            "gif" -> "image/gif"
+            "webp" -> "image/webp"
+            "bmp" -> "image/bmp"
+            else -> "application/octet-stream"
+        }
+        val ok = withContext(Dispatchers.IO) {
+            createFileWithBytes(context, targetUri, targetUri, outName, mimeType, bytes)
+        }
+        Toast.makeText(context, if (ok) "已保存到根目录：$outName" else "保存失败", Toast.LENGTH_SHORT).show()
+        return ok
+    }
+
     fun requestCloseQuickNote(entries: List<QuickNoteEntry>) {
         val currentData = quickNoteData ?: run {
             closeQuickNote()
@@ -664,6 +701,9 @@ fun FileBrowserApp(
                 isEncrypted = state.isEncrypted,
                 password = state.password,
                 initialIndex = state.initialIndex,
+                onSaveCurrentImage = { sourceFile, fileName ->
+                    savePicZipImageToRoot(sourceFile, fileName)
+                },
                 onBack = { doDelete ->
                     if (doDelete == true) cleanPicZipCache(context, state.zipUri)
                     picZipViewState = null
