@@ -832,7 +832,15 @@ private fun parseRstListTable(lines: List<String>, startIndex: Int): RstTablePar
     return RstTableParseResult(renderRstTableHtml(renderedRows, headerRows, title), nextIndex)
 }
 
-/** 简易 reStructuredText → HTML，覆盖标题、图片、表格、list-table、代码高亮、脚注等常用语法。 */
+/** RST 中独立一行的“引用段/字面块”标记，不参与显示；仅用于引入后续缩进块。支持 "::"、":: " 等。 */
+private fun isRstStandaloneLiteralMarker(trimmed: String): Boolean =
+    trimmed == ".." || trimmed.matches(Regex("^::\\s*$"))
+
+/** 简易 reStructuredText → HTML，覆盖标题、图片、表格、list-table、代码高亮、脚注等常用语法。
+ * 块类型判定顺序（避免改一处破坏另一处）：
+ * 1) 标题(下划线) 2) 网格/简单表格 3) list-table 4) figure/image 5) math 6) code-block 7) 元数据/注释
+ * 8) 无序/有序列表 9) 独立 "::"/".." 引用段标记 10) 空行 11) 以空格/制表开头的缩进块 12) 普通段落(含段末::引用段)
+ */
 private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
     val normalizedLines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     val (lines, footnotes) = extractRstFootnotes(normalizedLines)
@@ -1061,7 +1069,8 @@ private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
             out.append("</li></ol>")
             continue
         }
-        if (trimmed == ".." || trimmed == "::") {
+        // 独立一行的 "::" / ".."：仅作引用段标记，不输出；其后（可含空行）的缩进块为字面内容
+        if (isRstStandaloneLiteralMarker(trimmed)) {
             i++
             val (block, nextIndex) = collectIndentedBlock(lines, i)
             i = nextIndex
@@ -1073,6 +1082,7 @@ private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
             i++
             continue
         }
+        // 以空格/制表开头的缩进块（在独立 "::" 之后判断，避免 "  ::" 被当成块首行输出）
         if (line.startsWith(" ") || line.startsWith("\t")) {
             val (block, nextIndex) = collectIndentedBlock(lines, i)
             i = nextIndex
@@ -1085,7 +1095,7 @@ private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
             i++
             paraLines += lines[i]
         }
-        val hasLiteralBlockAfter = paraLines.last().trimEnd().endsWith("::") && lines.getOrNull(i + 1)?.let { countIndent(it) > 0 } == true
+        val hasLiteralBlockAfter = paraLines.last().trimEnd().endsWith("::") && hasIndentedBlockAfter(lines, i + 1)
         if (hasLiteralBlockAfter) {
             paraLines[paraLines.lastIndex] = paraLines.last().replace(Regex("::\\s*$"), "")
         }
@@ -1095,7 +1105,8 @@ private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
         } else {
             paraLines.joinToString(" ")
         }
-        out.append("<p>").append(renderRstInlineText(paraText)).append("</p>")
+        val paraTrimmed = paraText.trim()
+        if (paraTrimmed.isNotEmpty()) out.append("<p>").append(renderRstInlineText(paraText)).append("</p>")
         i++
         if (hasLiteralBlockAfter) {
             val (block, nextIndex) = collectIndentedBlock(lines, i)
@@ -1114,7 +1125,7 @@ private fun rstLineStartsBlock(line: String, next: String?, peekUnderlineChar: (
     if (trimmed.startsWith(".. list-table::")) return true
     if (trimmed.startsWith(".. code-block::") || trimmed.startsWith(".. sourcecode::")) return true
     if (trimmed.startsWith(".. ")) return true
-    if (trimmed == ".." || trimmed == "::") return true
+    if (isRstStandaloneLiteralMarker(trimmed)) return true
     if (isRstGridBorder(line) || isRstSimpleTableBorder(line)) return true
     if (trimmed.matches(Regex("^[-*•]\\s.+"))) return true
     if (trimmed.matches(Regex("^\\d+\\.\\s.+"))) return true
