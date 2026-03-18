@@ -22,6 +22,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private var initialFileUriState: MutableState<String?>? = null
+    private var initialLaunchTargetState: MutableState<String?>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,12 +34,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state = remember { mutableStateOf<String?>(intent?.data?.toString()) }
             initialFileUriState = state
+            val launchTargetState = remember { mutableStateOf(launchTarget) }
+            initialLaunchTargetState = launchTargetState
             LocalManagerTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTarget)
+                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTargetState)
                 }
             }
         }
@@ -48,5 +51,6 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         initialFileUriState?.value = intent.data?.toString()
+        initialLaunchTargetState?.value = intent.getStringExtra(LAUNCH_TARGET_EXTRA)
     }
 }

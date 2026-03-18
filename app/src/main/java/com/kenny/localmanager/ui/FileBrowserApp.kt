@@ -342,7 +342,7 @@ private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String)
 @Composable
 fun FileBrowserApp(
     initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
-    initialLaunchTarget: String? = null
+    initialLaunchTarget: androidx.compose.runtime.MutableState<String?>? = null
 ) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
@@ -365,6 +365,7 @@ fun FileBrowserApp(
     var quickNotePassword by remember { mutableStateOf("") }
     var quickNotePasswordRequired by remember { mutableStateOf(false) }
     var quickNoteInProgress by remember { mutableStateOf(false) }
+    var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget?.value == "player") }
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
@@ -485,7 +486,7 @@ fun FileBrowserApp(
             result.onSuccess { saved ->
                 markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
                 closeQuickNote()
-                if (initialLaunchTarget == "quick_note") (context as? Activity)?.finish()
+                if (initialLaunchTarget?.value == "quick_note") (context as? Activity)?.finish()
             }.onFailure { throwable ->
                 Toast.makeText(context, throwable.message ?: "快速笔记保存失败", Toast.LENGTH_SHORT).show()
             }
@@ -520,12 +521,13 @@ fun FileBrowserApp(
         }
     }
 
-    var quickNoteLaunchTriggered by remember { mutableStateOf(false) }
-    LaunchedEffect(initialLaunchTarget, rootUri) {
-        if (initialLaunchTarget == "quick_note" && !quickNoteLaunchTriggered) {
-            quickNoteLaunchTriggered = true
+    LaunchedEffect(initialLaunchTarget?.value) {
+        val target = initialLaunchTarget?.value
+        if (target == "quick_note") {
             if (rootUri != null) requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
             else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_LONG).show()
+        } else if (target == "player") {
+            showPlaybackScreen = true
         }
     }
 
@@ -838,7 +840,6 @@ fun FileBrowserApp(
             val displayUri = currentUri ?: initialDirUri ?: rootUri!!
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
-            var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showPlaybackTargetDialog by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
@@ -1168,7 +1169,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
-                    showPlaybackScreen -> if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
+                    showPlaybackScreen -> if (initialLaunchTarget?.value == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
@@ -1835,7 +1836,7 @@ fun FileBrowserApp(
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                     },
-                    onDismiss = { if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
+                    onDismiss = { if (initialLaunchTarget?.value == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
                 )
             }
             if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
