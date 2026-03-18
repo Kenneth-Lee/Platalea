@@ -944,24 +944,52 @@ private fun rstToHtml(rst: String): String {
             i = consumeRstCommentBlock(lines, i)
             continue
         }
+        // 处理无序列表（- * •）
         if (trimmed.matches(Regex("^[-*•]\\s.+"))) {
             out.append("<ul>")
-            while (i < lines.size && lines[i].trim().matches(Regex("^[-*•]\\s.+"))) {
-                out.append("<li>").append(renderRstInlineText(lines[i].trim().drop(1).trim())).append("</li>")
+            while (i < lines.size && lines[i].isNotBlank()) {
+                val currentLine = lines[i]
+                val currentTrimmed = currentLine.trim()
+                // 检查是否是列表项：要么匹配列表项正则，要么缩进大于0且前一行是列表项或其续行
+                val isListItem = currentTrimmed.matches(Regex("^[-*•]\\s.+"))
+                val isIndentedContinuation = countIndent(currentLine) > 0 && i > 0 && (lines[i - 1].trim().matches(Regex("^[-*•]\\s.+")) || countIndent(lines[i - 1]) > 0)
+                if (isListItem) {
+                    val content = currentTrimmed.drop(1).trim()
+                    out.append("<li>").append(renderRstInlineText(content))
+                } else if (isIndentedContinuation) {
+                    // 列表项内的缩进行，作为列表项内容的一部分（与前一行合并）
+                    val content = currentLine.trim()
+                    out.append(" ").append(renderRstInlineText(content))
+                } else {
+                    break
+                }
                 i++
             }
-            out.append("</ul>")
+            out.append("</li></ul>")
             continue
         }
+        // 处理有序列表（1. 2. 等）
         if (trimmed.matches(Regex("^\\d+\\.\\s.+"))) {
             out.append("<ol>")
-            while (i < lines.size && lines[i].trim().matches(Regex("^\\d+\\.\\s.+"))) {
-                out.append("<li>")
-                    .append(renderRstInlineText(lines[i].trim().replaceFirst(Regex("^\\d+\\.\\s"), "")))
-                    .append("</li>")
+            while (i < lines.size && lines[i].isNotBlank()) {
+                val currentLine = lines[i]
+                val currentTrimmed = currentLine.trim()
+                // 检查是否是列表项：要么匹配列表项正则，要么缩进大于0且前一行是列表项或其续行
+                val isListItem = currentTrimmed.matches(Regex("^\\d+\\.\\s.+"))
+                val isIndentedContinuation = countIndent(currentLine) > 0 && i > 0 && (lines[i - 1].trim().matches(Regex("^\\d+\\.\\s.+")) || countIndent(lines[i - 1]) > 0)
+                if (isListItem) {
+                    val content = currentTrimmed.replaceFirst(Regex("^\\d+\\.\\s"), "")
+                    out.append("<li>").append(renderRstInlineText(content))
+                } else if (isIndentedContinuation) {
+                    // 列表项内的缩进行，作为列表项内容的一部分（与前一行合并）
+                    val content = currentLine.trim()
+                    out.append(" ").append(renderRstInlineText(content))
+                } else {
+                    break
+                }
                 i++
             }
-            out.append("</ol>")
+            out.append("</li></ol>")
             continue
         }
         if (trimmed == ".." || trimmed == "::") {
@@ -992,7 +1020,13 @@ private fun rstToHtml(rst: String): String {
         if (hasLiteralBlockAfter) {
             paraLines[paraLines.lastIndex] = paraLines.last().replace(Regex("::\\s*$"), ":")
         }
-        out.append("<p>").append(renderRstInlineText(paraLines.joinToString(" "))).append("</p>")
+        // 合并段落行：包含中文不加空格，纯英文/数字/符号加空格
+        val paraText = if (paraLines.any { it.any { ch -> ch in '\u4e00'..'\u9fff' } }) {
+            paraLines.joinToString("")
+        } else {
+            paraLines.joinToString(" ")
+        }
+        out.append("<p>").append(renderRstInlineText(paraText)).append("</p>")
         i++
         if (hasLiteralBlockAfter) {
             val (block, nextIndex) = collectIndentedBlock(lines, i)
@@ -1028,6 +1062,8 @@ private fun escapeHtmlAttr(s: String): String = s
 
 private fun rstInlineToHtml(escaped: String): String {
     var s = escaped
+    // 处理反斜杠转义：\ 后跟空格表示普通空格（RST 标准）
+    s = s.replace("\\ ", " ")
     // 先处理 :math:，用 data-latex 供前端 KaTeX 显式渲染，避免 delimiter 解析问题
     s = Regex(""":math:`([^`]+?)`""").replace(s) {
         val latex = it.groupValues[1].replace("&amp;", "&")
@@ -1295,7 +1331,7 @@ figcaption { font-size: 0.9em; color: rgba(128,128,128,0.9); margin-top: 0.4em; 
 a { color: #2196F3; }
 ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
 table { border-collapse: collapse; width: 100%; }
-th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
+th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; }
 th { background: rgba(128,128,128,0.15); }
 del, s { text-decoration: line-through; }
 .task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
@@ -2333,7 +2369,7 @@ fun PassContentViewerScreen(
                     a { color: #2196F3; }
                     ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
                     table { border-collapse: collapse; width: 100%; }
-                    th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; text-align: left; }
+                    th, td { border: 1px solid rgba(128,128,128,0.4); padding: 6px 10px; }
                     th { background: rgba(128,128,128,0.15); }
                     del, s { text-decoration: line-through; }
                     .task-list-item { list-style: none; margin-left: -1.5em; display: flex; align-items: flex-start; gap: 6px; }
