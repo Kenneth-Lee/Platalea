@@ -833,11 +833,37 @@ private fun parseRstListTable(lines: List<String>, startIndex: Int): RstTablePar
 }
 
 /** 简易 reStructuredText → HTML，覆盖标题、图片、表格、list-table、代码高亮、脚注等常用语法。 */
-private fun rstToHtml(rst: String): String {
+private fun rstToHtml(rst: String, showMeta: Boolean = false): String {
     val normalizedLines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     val (lines, footnotes) = extractRstFootnotes(normalizedLines)
     val out = StringBuilder()
     var i = 0
+    // RST 标题级别映射：按首次出现顺序确定级别
+    fun collectUnderlineLevels(lines: List<String>): Map<Char, Int> {
+        val levelMap = mutableMapOf<Char, Int>()
+        var currentLevel = 1
+        for (line in lines) {
+            val trimmed = line.trim()
+            val underline = if (trimmed.isNotEmpty() && trimmed.all { ch ->
+                ch in charArrayOf('=', '-', '`', '.', '\'', '"', '~', '^', '_', '*', '#', '+')
+            }) trimmed[0] else null
+            if (underline != null && !levelMap.containsKey(underline)) {
+                levelMap[underline] = currentLevel++
+            }
+        }
+        return levelMap
+    }
+    val underlineLevels = collectUnderlineLevels(lines)
+    fun getLevelFromUnderline(c: Char): Int = underlineLevels.getOrDefault(c, 2)
+
+    // 标题编号计数器
+    var h1Number = 0
+    var h2Number = 0
+    var h3Number = 0
+    var h4Number = 0
+    var h5Number = 0
+    var h6Number = 0
+
     fun peekUnderlineChar(line: String): Char? =
         line.takeIf {
             it.isNotEmpty() && it.all { ch -> ch == it[0] && ch in charArrayOf('=', '-', '`', '.', '\'', '"', '~', '^', '_', '*', '#', '+') }
@@ -848,15 +874,53 @@ private fun rstToHtml(rst: String): String {
         val next = lines.getOrNull(i + 1)
         val underline = next?.let { peekUnderlineChar(it) }
         if (underline != null && next.isNotBlank() && trimmed.isNotBlank() && next.length >= trimmed.length) {
-            val level = when (underline) {
-                '=', '#' -> 1
-                '-', '^' -> 2
-                '~', '"', '\'' -> 3
-                else -> 2
+            val level = getLevelFromUnderline(underline)
+            val tag = "h${level.coerceIn(1, 6)}"
+            // 添加标题编号
+            val titleText = when (level) {
+                1 -> {
+                    h1Number++
+                    h2Number = 0
+                    h3Number = 0
+                    h4Number = 0
+                    h5Number = 0
+                    h6Number = 0
+                    "$h1Number. $trimmed"
+                }
+                2 -> {
+                    h2Number++
+                    h3Number = 0
+                    h4Number = 0
+                    h5Number = 0
+                    h6Number = 0
+                    "$h1Number.$h2Number. $trimmed"
+                }
+                3 -> {
+                    h3Number++
+                    h4Number = 0
+                    h5Number = 0
+                    h6Number = 0
+                    "$h1Number.$h2Number.$h3Number. $trimmed"
+                }
+                4 -> {
+                    h4Number++
+                    h5Number = 0
+                    h6Number = 0
+                    "$h1Number.$h2Number.$h3Number.$h4Number. $trimmed"
+                }
+                5 -> {
+                    h5Number++
+                    h6Number = 0
+                    "$h1Number.$h2Number.$h3Number.$h4Number.$h5Number. $trimmed"
+                }
+                6 -> {
+                    h6Number++
+                    "$h1Number.$h2Number.$h3Number.$h4Number.$h5Number.$h6Number. $trimmed"
+                }
+                else -> "$level. $trimmed"
             }
-            val tag = "h${level.coerceIn(1, 3)}"
             out.append("<").append(tag).append(">")
-                .append(renderRstInlineText(trimmed))
+                .append(renderRstInlineText(titleText))
                 .append("</").append(tag).append(">")
             i += 2
             continue
@@ -940,6 +1004,11 @@ private fun rstToHtml(rst: String): String {
             if (codeLines.isNotEmpty()) out.append(buildCodeBlockHtml(codeLines, language))
             continue
         }
+        // 文档元数据标记，如 :Authors:、:Version:、:Date:、:dtag:`xxx` 等，通常不显示
+        if (!showMeta && trimmed.matches(Regex("^:\\w+:.*"))) {
+            i = consumeRstCommentBlock(lines, i)
+            continue
+        }
         if (trimmed.startsWith(".. ") && !trimmed.startsWith(".. [")) {
             i = consumeRstCommentBlock(lines, i)
             continue
@@ -1018,7 +1087,7 @@ private fun rstToHtml(rst: String): String {
         }
         val hasLiteralBlockAfter = paraLines.last().trimEnd().endsWith("::") && lines.getOrNull(i + 1)?.let { countIndent(it) > 0 } == true
         if (hasLiteralBlockAfter) {
-            paraLines[paraLines.lastIndex] = paraLines.last().replace(Regex("::\\s*$"), ":")
+            paraLines[paraLines.lastIndex] = paraLines.last().replace(Regex("::\\s*$"), "")
         }
         // 合并段落行：包含中文不加空格，纯英文/数字/符号加空格
         val paraText = if (paraLines.any { it.any { ch -> ch in '\u4e00'..'\u9fff' } }) {
@@ -1054,16 +1123,68 @@ private fun rstLineStartsBlock(line: String, next: String?, peekUnderlineChar: (
     return false
 }
 
+/** 检查从 startIndex 开始是否有缩进块（跳过空行） */
+private fun hasIndentedBlockAfter(lines: List<String>, startIndex: Int): Boolean {
+    var index = startIndex
+    while (index < lines.size) {
+        val line = lines[index]
+        if (line.isBlank()) {
+            index++
+            continue
+        }
+        return countIndent(line) > 0
+    }
+    return false
+}
+
 private fun escapeHtmlAttr(s: String): String = s
     .replace("&", "&amp;")
     .replace("\"", "&quot;")
     .replace("<", "&lt;")
     .replace(">", "&gt;")
 
+/** 提取 RST 元数据 */
+private fun extractRstMeta(rst: String): List<Pair<String, String>> {
+    val normalizedLines = rst.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    val meta = mutableListOf<Pair<String, String>>()
+    var i = 0
+    while (i < normalizedLines.size) {
+        val line = normalizedLines[i]
+        val trimmed = line.trim()
+        if (trimmed.matches(Regex("^:\\w+:.*"))) {
+            val (key, value) = if (trimmed.contains("`")) {
+                val parts = trimmed.split("`")
+                if (parts.size >= 2) {
+                    parts[0].removeSuffix(":").trim() to parts[1].trim()
+                } else {
+                    trimmed to ""
+                }
+            } else {
+                val colonIndex = trimmed.indexOf(':')
+                if (colonIndex > 0) {
+                    trimmed.substring(0, colonIndex).trim() to trimmed.substring(colonIndex + 1).trim()
+                } else {
+                    trimmed to ""
+                }
+            }
+            meta.add(key to value)
+        }
+        i++
+    }
+    return meta
+}
+
 private fun rstInlineToHtml(escaped: String): String {
     var s = escaped
     // 处理反斜杠转义：\ 后跟空格表示普通空格（RST 标准）
     s = s.replace("\\ ", " ")
+    // 处理 Sphinx 角色标记
+    // :index:`xxx` 显示 xxx 内容
+    s = Regex(":index:`([^`]+?)`").replace(s) { it.groupValues[1] }
+    // :ref:`xxx` 显示 xxx 内容
+    s = Regex(":ref:`([^`]+?)`").replace(s) { it.groupValues[1] }
+    // 其他自定义 role（如 :dtag:`xxx`）完全移除
+    s = Regex(":\\w+:`[^`]+?`").replace(s) { "" }
     // 先处理 :math:，用 data-latex 供前端 KaTeX 显式渲染，避免 delimiter 解析问题
     s = Regex(""":math:`([^`]+?)`""").replace(s) {
         val latex = it.groupValues[1].replace("&amp;", "&")
