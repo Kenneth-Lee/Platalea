@@ -412,6 +412,33 @@ fun findChildByName(context: Context, parentUri: Uri, childName: String): Uri? {
     return parent.listFilesSafe().find { it.name == childName }?.uri
 }
 
+/**
+ * 从根 URI（tree URI）得到根文档的 document URI。
+ */
+fun getRootDocumentUri(context: Context, rootUri: String): Uri? {
+    val treeUri = Uri.parse(rootUri)
+    if (!DocumentsContract.isTreeUri(treeUri)) return null
+    return try {
+        DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+    } catch (_: Exception) { null }
+}
+
+/**
+ * 根据根 URI 与相对路径解析出目录的 document URI。
+ * @param relativePath 以 "/" 表示根，"/a/b" 表示根下 a/b，不含末尾斜杠
+ * @return 目录 URI，路径不存在或无效时返回 null
+ */
+fun resolvePathUnderRoot(context: Context, rootUri: String, relativePath: String): Uri? {
+    val rootDocUri = getRootDocumentUri(context, rootUri) ?: return null
+    val segments = relativePath.trim('/').split('/').filter { it.isNotBlank() }
+    if (segments.isEmpty()) return rootDocUri
+    var current = rootDocUri
+    for (seg in segments) {
+        current = findChildByName(context, current, seg) ?: return null
+    }
+    return current
+}
+
 fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
     try {
         DocumentsContract.renameDocument(this, uri, newName)

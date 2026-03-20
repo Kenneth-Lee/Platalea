@@ -13,9 +13,10 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,6 +69,9 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkAdd
+import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
@@ -113,6 +117,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -132,12 +137,14 @@ import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
 import com.kenny.localmanager.data.exportConfig
-import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
+import com.kenny.localmanager.data.RootBookmarkManager
+import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
+import com.kenny.localmanager.file.resolvePathUnderRoot
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
@@ -321,21 +328,32 @@ private fun launchExternalOpen(context: Context, uriString: String, packageName:
     }.getOrElse { false }
 }
 
-/** 从根目录算起的相对路径（用于待处理列表显示当前目录） */
+/** 从根目录算起的相对路径（用于待处理列表、书签等）。优先用 document ID 拼接，避免 DocumentFile.parentFile 在深层目录只回溯一层。 */
 private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
     if (rootUri == null) return currentUri
-    val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(normalizeContentUriString(rootUri))) ?: return currentUri
-    val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
-        else DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
-    val current = currentDoc ?: return currentUri
-    val parts = mutableListOf<String>()
-    var c: DocumentFile? = current
-    while (c != null) {
-        if (c.uri == rootDoc.uri) break
-        parts.add(0, c.name ?: "?")
-        c = c.parentFile
-    }
-    return "/" + parts.joinToString("/")
+    val rootParsed = Uri.parse(normalizeContentUriString(rootUri))
+    val currentParsed = Uri.parse(normalizeContentUriString(currentUri))
+    return try {
+        val rootDocId = DocumentsContract.getTreeDocumentId(rootParsed)
+        val currentDocId = DocumentsContract.getDocumentId(currentParsed)
+        if (currentDocId == rootDocId) "/"
+        else if (currentDocId.startsWith(rootDocId)) "/" + currentDocId.removePrefix(rootDocId).trimStart('/')
+        else {
+            // document ID 格式与根不一致时回退到逐级 parent 回溯
+            val rootDoc = DocumentFile.fromTreeUri(context, rootParsed) ?: return currentUri
+            val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, currentParsed)
+                else DocumentFile.fromSingleUri(context, currentParsed)
+            val current = currentDoc ?: return currentUri
+            val parts = mutableListOf<String>()
+            var c: DocumentFile? = current
+            while (c != null) {
+                if (DocumentsContract.getDocumentId(c.uri) == rootDocId) break
+                parts.add(0, c.name ?: "?")
+                c = c.parentFile
+            }
+            "/" + parts.joinToString("/")
+        }
+    } catch (_: Exception) { currentUri }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -379,6 +397,7 @@ fun FileBrowserApp(
     var saveCompletedToken by remember { mutableStateOf(0) }
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
+    val rootBookmarkManager = remember { RootBookmarkManager(context) }
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
@@ -403,14 +422,13 @@ fun FileBrowserApp(
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
     }
     LaunchedEffect(rootUri, initialDirUri) {
-        if (rootUri != null) {
-            val normalizedRoot = normalizeContentUriString(rootUri!!)
-            val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
-            if (currentUri == null) {
-                currentUri = target
-            } else if (!currentUri!!.startsWith(normalizedRoot)) {
-                currentUri = target
-            }
+        val r = rootUri ?: return@LaunchedEffect
+        val normalizedRoot = normalizeContentUriString(r)
+        val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
+        if (currentUri == null) {
+            currentUri = target
+        } else if (!currentUri!!.startsWith(normalizedRoot)) {
+            currentUri = target
         }
     }
     LaunchedEffect(rootUri) {
@@ -880,6 +898,25 @@ fun FileBrowserApp(
                     pathFromRoot(context, rootUri, displayUri)
                 }
             }
+            fun normalizeBookmarkPath(p: String): String {
+                val t = p.trim().trim('/')
+                return if (t.isEmpty()) "/" else "/$t"
+            }
+            var bookmarks by remember { mutableStateOf<List<String>>(emptyList()) }
+            LaunchedEffect(rootUri) {
+                bookmarks = if (rootUri != null) {
+                    rootBookmarkManager.getBookmarksForRoot(rootUri)
+                        .map { normalizeBookmarkPath(it) }
+                        .distinct()
+                } else {
+                    emptyList()
+                }
+            }
+            val isCurrentDirBookmarked = remember(bookmarks, currentDirPath) {
+                val norm = normalizeBookmarkPath(currentDirPath)
+                bookmarks.any { normalizeBookmarkPath(it) == norm }
+            }
+            var showBookmarkDialog by remember { mutableStateOf(false) }
             var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
             LaunchedEffect(rootUri) {
                 cachedTrashUri = rootUri?.let { r ->
@@ -1686,7 +1723,86 @@ fun FileBrowserApp(
                         }
                     },
                     playbackState = playbackState,
-                    onOpenPlaybackScreen = { showPlaybackScreen = true }
+                    onOpenPlaybackScreen = { showPlaybackScreen = true },
+                    isCurrentDirBookmarked = isCurrentDirBookmarked,
+                    onAddToBookmark = {
+                        val r = rootUri ?: return@FileBrowserScreen
+                        val path = normalizeBookmarkPath(currentDirPath)
+                        val exists = bookmarks.any { normalizeBookmarkPath(it) == path }
+                        scope.launch {
+                            val newList = if (exists) {
+                                bookmarks.filter { normalizeBookmarkPath(it) != path }
+                            } else {
+                                bookmarks + path
+                            }
+                            rootBookmarkManager.setBookmarksForRoot(r, newList)
+                            bookmarks = newList
+                            Toast.makeText(
+                                context,
+                                if (exists) "已从书签中移除" else "已添加到书签",
+                                Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                    },
+                    onOpenBookmarkList = { showBookmarkDialog = true }
+                )
+            }
+            if (showBookmarkDialog) {
+                AlertDialog(
+                    onDismissRequest = { showBookmarkDialog = false },
+                    title = { Text("书签") },
+                    text = {
+                        Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
+                            if (bookmarks.isEmpty()) {
+                                Text("暂无书签。在菜单中选「添加到书签」可把当前目录加入书签。", style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                bookmarks.forEach { path ->
+                                    val normPath = normalizeBookmarkPath(path)
+                                    val isCurrent = normPath == normalizeBookmarkPath(currentDirPath)
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = if (path.trim().isEmpty() || path == "/") "根目录" else path,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    val r = rootUri ?: return@clickable
+                                                    val uri = resolvePathUnderRoot(context, normalizeContentUriString(r), normPath)
+                                                    if (uri != null) {
+                                                        currentUri = uri.toString()
+                                                        showBookmarkDialog = false
+                                                    } else {
+                                                        Toast.makeText(context, "路径无效或已不存在", Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                        )
+                                        if (isCurrent) {
+                                            Icon(Icons.Default.Bookmark, contentDescription = null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                val newList = bookmarks.filter { normalizeBookmarkPath(it) != normPath }
+                                                scope.launch {
+                                                    rootBookmarkManager.setBookmarksForRoot(rootUri, newList)
+                                                    bookmarks = newList
+                                                }
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "删除书签", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { showBookmarkDialog = false }) { Text("关闭") }
+                    }
                 )
             }
             if (showPendingList) {
@@ -3501,7 +3617,10 @@ internal fun FileBrowserScreen(
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
-    onOpenPlaybackScreen: () -> Unit = {}
+    onOpenPlaybackScreen: () -> Unit = {},
+    isCurrentDirBookmarked: Boolean = false,
+    onAddToBookmark: () -> Unit = {},
+    onOpenBookmarkList: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -3605,11 +3724,24 @@ internal fun FileBrowserScreen(
                     title = {
                         val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
                             ?: DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
-                        Text(
-                            doc?.name ?: "根目录",
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                doc?.name ?: "根目录",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .pointerInput(currentUri, isCurrentDirBookmarked) {
+                                        detectTapGestures(
+                                            onDoubleTap = { onAddToBookmark() }
+                                        )
+                                    }
+                            )
+                            if (isCurrentDirBookmarked) {
+                                Spacer(Modifier.width(4.dp))
+                                Icon(Icons.Default.Bookmark, contentDescription = "已在书签中", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
                     },
                     navigationIcon = {
                         if (canGoBack) {
@@ -3649,12 +3781,20 @@ internal fun FileBrowserScreen(
                             }
                         }
                         IconButton(onClick = { showOverflowMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "菜单")
+                        Icon(Icons.Default.MoreVert, contentDescription = "菜单")
                         }
                         DropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text("书签") },
+                                leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenBookmarkList()
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("把当前过滤结果全部加入待处理列表") },
                                 leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
