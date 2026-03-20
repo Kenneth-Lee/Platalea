@@ -17,7 +17,7 @@
 这个软件完全没有广告，我做出来就是为了解决自己的问题，开放出来也顺便解决你的问
 题，没指望用它赚钱，但我不为任何数据破坏负责，请你自担风险。
 
-最新一个发布版本在这里：[LocalManager-V0.8](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V.08/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.9](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.9/app-release.apk)
 
 ## 设计思路
 
