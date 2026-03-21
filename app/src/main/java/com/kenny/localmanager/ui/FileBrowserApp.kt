@@ -13,10 +13,9 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -69,9 +68,6 @@ import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
-import androidx.compose.material.icons.filled.Bookmark
-import androidx.compose.material.icons.filled.BookmarkAdd
-import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
@@ -117,7 +113,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -137,14 +132,12 @@ import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
 import com.kenny.localmanager.data.exportConfig
-import com.kenny.localmanager.data.Preferences
-import com.kenny.localmanager.data.RootBookmarkManager
 import com.kenny.localmanager.data.importConfig
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
-import com.kenny.localmanager.file.resolvePathUnderRoot
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
@@ -163,8 +156,9 @@ import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.unzipToParent
-import com.kenny.localmanager.file.isZipEncrypted
-import com.kenny.localmanager.file.getZipFirstLevelEntries
+import com.kenny.localmanager.file.isArchiveEncrypted
+import com.kenny.localmanager.file.getArchiveFirstLevelEntries
+import com.kenny.localmanager.file.isRarV5Archive
 import com.kenny.localmanager.file.ZipFirstLevelResult
 import com.kenny.localmanager.file.extractMdZipToCache
 import com.kenny.localmanager.file.getMdZipCacheDir
@@ -328,39 +322,28 @@ private fun launchExternalOpen(context: Context, uriString: String, packageName:
     }.getOrElse { false }
 }
 
-/** 从根目录算起的相对路径（用于待处理列表、书签等）。优先用 document ID 拼接，避免 DocumentFile.parentFile 在深层目录只回溯一层。 */
+/** 从根目录算起的相对路径（用于待处理列表显示当前目录） */
 private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
     if (rootUri == null) return currentUri
-    val rootParsed = Uri.parse(normalizeContentUriString(rootUri))
-    val currentParsed = Uri.parse(normalizeContentUriString(currentUri))
-    return try {
-        val rootDocId = DocumentsContract.getTreeDocumentId(rootParsed)
-        val currentDocId = DocumentsContract.getDocumentId(currentParsed)
-        if (currentDocId == rootDocId) "/"
-        else if (currentDocId.startsWith(rootDocId)) "/" + currentDocId.removePrefix(rootDocId).trimStart('/')
-        else {
-            // document ID 格式与根不一致时回退到逐级 parent 回溯
-            val rootDoc = DocumentFile.fromTreeUri(context, rootParsed) ?: return currentUri
-            val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, currentParsed)
-                else DocumentFile.fromSingleUri(context, currentParsed)
-            val current = currentDoc ?: return currentUri
-            val parts = mutableListOf<String>()
-            var c: DocumentFile? = current
-            while (c != null) {
-                if (DocumentsContract.getDocumentId(c.uri) == rootDocId) break
-                parts.add(0, c.name ?: "?")
-                c = c.parentFile
-            }
-            "/" + parts.joinToString("/")
-        }
-    } catch (_: Exception) { currentUri }
+    val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(normalizeContentUriString(rootUri))) ?: return currentUri
+    val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
+        else DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
+    val current = currentDoc ?: return currentUri
+    val parts = mutableListOf<String>()
+    var c: DocumentFile? = current
+    while (c != null) {
+        if (c.uri == rootDoc.uri) break
+        parts.add(0, c.name ?: "?")
+        c = c.parentFile
+    }
+    return "/" + parts.joinToString("/")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserApp(
     initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
-    initialLaunchTarget: androidx.compose.runtime.MutableState<String?>? = null
+    initialLaunchTarget: String? = null
 ) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
@@ -383,7 +366,6 @@ fun FileBrowserApp(
     var quickNotePassword by remember { mutableStateOf("") }
     var quickNotePasswordRequired by remember { mutableStateOf(false) }
     var quickNoteInProgress by remember { mutableStateOf(false) }
-    var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget?.value == "player") }
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
@@ -397,7 +379,6 @@ fun FileBrowserApp(
     var saveCompletedToken by remember { mutableStateOf(0) }
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     val scope = rememberCoroutineScope()
-    val rootBookmarkManager = remember { RootBookmarkManager(context) }
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
@@ -422,13 +403,14 @@ fun FileBrowserApp(
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
     }
     LaunchedEffect(rootUri, initialDirUri) {
-        val r = rootUri ?: return@LaunchedEffect
-        val normalizedRoot = normalizeContentUriString(r)
-        val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
-        if (currentUri == null) {
-            currentUri = target
-        } else if (!currentUri!!.startsWith(normalizedRoot)) {
-            currentUri = target
+        if (rootUri != null) {
+            val normalizedRoot = normalizeContentUriString(rootUri!!)
+            val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
+            if (currentUri == null) {
+                currentUri = target
+            } else if (!currentUri!!.startsWith(normalizedRoot)) {
+                currentUri = target
+            }
         }
     }
     LaunchedEffect(rootUri) {
@@ -504,7 +486,7 @@ fun FileBrowserApp(
             result.onSuccess { saved ->
                 markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
                 closeQuickNote()
-                if (initialLaunchTarget?.value == "quick_note") (context as? Activity)?.finish()
+                if (initialLaunchTarget == "quick_note") (context as? Activity)?.finish()
             }.onFailure { throwable ->
                 Toast.makeText(context, throwable.message ?: "快速笔记保存失败", Toast.LENGTH_SHORT).show()
             }
@@ -539,13 +521,12 @@ fun FileBrowserApp(
         }
     }
 
-    LaunchedEffect(initialLaunchTarget?.value) {
-        val target = initialLaunchTarget?.value
-        if (target == "quick_note") {
+    var quickNoteLaunchTriggered by remember { mutableStateOf(false) }
+    LaunchedEffect(initialLaunchTarget, rootUri) {
+        if (initialLaunchTarget == "quick_note" && !quickNoteLaunchTriggered) {
+            quickNoteLaunchTriggered = true
             if (rootUri != null) requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
             else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_LONG).show()
-        } else if (target == "player") {
-            showPlaybackScreen = true
         }
     }
 
@@ -858,6 +839,7 @@ fun FileBrowserApp(
             val displayUri = currentUri ?: initialDirUri ?: rootUri!!
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
+            var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showPlaybackTargetDialog by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
@@ -898,25 +880,6 @@ fun FileBrowserApp(
                     pathFromRoot(context, rootUri, displayUri)
                 }
             }
-            fun normalizeBookmarkPath(p: String): String {
-                val t = p.trim().trim('/')
-                return if (t.isEmpty()) "/" else "/$t"
-            }
-            var bookmarks by remember { mutableStateOf<List<String>>(emptyList()) }
-            LaunchedEffect(rootUri) {
-                bookmarks = if (rootUri != null) {
-                    rootBookmarkManager.getBookmarksForRoot(rootUri)
-                        .map { normalizeBookmarkPath(it) }
-                        .distinct()
-                } else {
-                    emptyList()
-                }
-            }
-            val isCurrentDirBookmarked = remember(bookmarks, currentDirPath) {
-                val norm = normalizeBookmarkPath(currentDirPath)
-                bookmarks.any { normalizeBookmarkPath(it) == norm }
-            }
-            var showBookmarkDialog by remember { mutableStateOf(false) }
             var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
             LaunchedEffect(rootUri) {
                 cachedTrashUri = rootUri?.let { r ->
@@ -979,7 +942,15 @@ fun FileBrowserApp(
                 zipUnzipEncrypted = null
                 zipUnzipPassword = ""
                 val target = zipUnzipTarget ?: return@LaunchedEffect
-                zipUnzipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                if (target.name.endsWith(".rar", ignoreCase = true)) {
+                    val rarV5 = withContext(Dispatchers.IO) { isRarV5Archive(context, target.uri) }
+                    if (rarV5) {
+                        Toast.makeText(context, "暂不支持 RAR5 解压，请转为 ZIP 或 RAR4", Toast.LENGTH_LONG).show()
+                        zipUnzipTarget = null
+                        return@LaunchedEffect
+                    }
+                }
+                zipUnzipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
             }
             LaunchedEffect(mdZipTarget) {
                 mdZipEncrypted = null
@@ -1009,7 +980,7 @@ fun FileBrowserApp(
                     // 缓存内容为空，废弃并重新解压
                     cacheDir.deleteRecursively()
                 }
-                mdZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                mdZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
                 // 非加密的直接解压
                 if (mdZipEncrypted == false) {
                     mdZipInProgress = true
@@ -1052,7 +1023,7 @@ fun FileBrowserApp(
                     }
                     cacheDir.deleteRecursively()
                 }
-                htmlZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
                 if (htmlZipEncrypted == false) {
                     htmlZipInProgress = true
                     val result = withContext(Dispatchers.IO) { extractHtmlZipToCache(context, target.uri, null, target.name) }
@@ -1087,7 +1058,7 @@ fun FileBrowserApp(
                             if (cachedResult != null) return@withContext
                             cacheDir.deleteRecursively()
                         }
-                        encrypted = isZipEncrypted(context, target.uri)
+                        encrypted = isArchiveEncrypted(context, target.uri, target.name)
                     }
                     val cached = cachedResult
                     if (cached != null) {
@@ -1147,7 +1118,7 @@ fun FileBrowserApp(
                     }
                     cacheDir.deleteRecursively()
                 }
-                picZipEncrypted = withContext(Dispatchers.IO) { isZipEncrypted(context, target.uri) }
+                picZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
                 if (picZipEncrypted == false) {
                     picZipInProgress = true
                     val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
@@ -1206,7 +1177,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
-                    showPlaybackScreen -> if (initialLaunchTarget?.value == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
+                    showPlaybackScreen -> if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
@@ -1723,86 +1694,7 @@ fun FileBrowserApp(
                         }
                     },
                     playbackState = playbackState,
-                    onOpenPlaybackScreen = { showPlaybackScreen = true },
-                    isCurrentDirBookmarked = isCurrentDirBookmarked,
-                    onAddToBookmark = {
-                        val r = rootUri ?: return@FileBrowserScreen
-                        val path = normalizeBookmarkPath(currentDirPath)
-                        val exists = bookmarks.any { normalizeBookmarkPath(it) == path }
-                        scope.launch {
-                            val newList = if (exists) {
-                                bookmarks.filter { normalizeBookmarkPath(it) != path }
-                            } else {
-                                bookmarks + path
-                            }
-                            rootBookmarkManager.setBookmarksForRoot(r, newList)
-                            bookmarks = newList
-                            Toast.makeText(
-                                context,
-                                if (exists) "已从书签中移除" else "已添加到书签",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                    },
-                    onOpenBookmarkList = { showBookmarkDialog = true }
-                )
-            }
-            if (showBookmarkDialog) {
-                AlertDialog(
-                    onDismissRequest = { showBookmarkDialog = false },
-                    title = { Text("书签") },
-                    text = {
-                        Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                            if (bookmarks.isEmpty()) {
-                                Text("暂无书签。在菜单中选「添加到书签」可把当前目录加入书签。", style = MaterialTheme.typography.bodyMedium)
-                            } else {
-                                bookmarks.forEach { path ->
-                                    val normPath = normalizeBookmarkPath(path)
-                                    val isCurrent = normPath == normalizeBookmarkPath(currentDirPath)
-                                    Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 4.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Text(
-                                            text = if (path.trim().isEmpty() || path == "/") "根目录" else path,
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            modifier = Modifier
-                                                .weight(1f)
-                                                .clickable {
-                                                    val r = rootUri ?: return@clickable
-                                                    val uri = resolvePathUnderRoot(context, normalizeContentUriString(r), normPath)
-                                                    if (uri != null) {
-                                                        currentUri = uri.toString()
-                                                        showBookmarkDialog = false
-                                                    } else {
-                                                        Toast.makeText(context, "路径无效或已不存在", Toast.LENGTH_SHORT).show()
-                                                    }
-                                                }
-                                        )
-                                        if (isCurrent) {
-                                            Icon(Icons.Default.Bookmark, contentDescription = null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                val newList = bookmarks.filter { normalizeBookmarkPath(it) != normPath }
-                                                scope.launch {
-                                                    rootBookmarkManager.setBookmarksForRoot(rootUri, newList)
-                                                    bookmarks = newList
-                                                }
-                                            }
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除书签", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { showBookmarkDialog = false }) { Text("关闭") }
-                    }
+                    onOpenPlaybackScreen = { showPlaybackScreen = true }
                 )
             }
             if (showPendingList) {
@@ -1952,7 +1844,7 @@ fun FileBrowserApp(
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                     },
-                    onDismiss = { if (initialLaunchTarget?.value == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
+                    onDismiss = { if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
                 )
             }
             if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
@@ -2619,7 +2511,7 @@ fun FileBrowserApp(
                 val encrypted = zipUnzipEncrypted
                 AlertDialog(
                     onDismissRequest = { zipUnzipTarget = null; zipUnzipPassword = "" },
-                    title = { Text("解压 ZIP") },
+                    title = { Text("解压压缩包") },
                     text = {
                         Column {
                             Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
@@ -2629,7 +2521,7 @@ fun FileBrowserApp(
                                     value = zipUnzipPassword,
                                     onValueChange = { zipUnzipPassword = it },
                                     modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("密码（加密 ZIP）") },
+                                    label = { Text("密码（加密压缩包）") },
                                     singleLine = true
                                 )
                             } else if (encrypted == null) {
@@ -2652,6 +2544,7 @@ fun FileBrowserApp(
                                             target.uri,
                                             parentDirUri,
                                             treeUri,
+                                            target.name,
                                             pwd
                                         ) { cur, tot ->
                                             scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("解压", cur, tot) }
@@ -3461,6 +3354,10 @@ private fun isCompressedHtml(name: String): Boolean =
 private fun isPicZip(name: String): Boolean =
     name.endsWith(".pic.zip", ignoreCase = true)
 
+/** 判断文件名是否为可解压压缩包（.zip / .rar）。 */
+private fun isExtractableArchive(name: String): Boolean =
+    name.endsWith(".zip", ignoreCase = true) || name.endsWith(".rar", ignoreCase = true)
+
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
     name.endsWith(".epub", ignoreCase = true)
@@ -3617,10 +3514,7 @@ internal fun FileBrowserScreen(
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
-    onOpenPlaybackScreen: () -> Unit = {},
-    isCurrentDirBookmarked: Boolean = false,
-    onAddToBookmark: () -> Unit = {},
-    onOpenBookmarkList: () -> Unit = {}
+    onOpenPlaybackScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -3724,24 +3618,11 @@ internal fun FileBrowserScreen(
                     title = {
                         val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
                             ?: DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
-                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                            Text(
-                                doc?.name ?: "根目录",
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier
-                                    .weight(1f, fill = false)
-                                    .pointerInput(currentUri, isCurrentDirBookmarked) {
-                                        detectTapGestures(
-                                            onDoubleTap = { onAddToBookmark() }
-                                        )
-                                    }
-                            )
-                            if (isCurrentDirBookmarked) {
-                                Spacer(Modifier.width(4.dp))
-                                Icon(Icons.Default.Bookmark, contentDescription = "已在书签中", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                            }
-                        }
+                        Text(
+                            doc?.name ?: "根目录",
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     },
                     navigationIcon = {
                         if (canGoBack) {
@@ -3781,20 +3662,12 @@ internal fun FileBrowserScreen(
                             }
                         }
                         IconButton(onClick = { showOverflowMenu = true }) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "菜单")
+                            Icon(Icons.Default.MoreVert, contentDescription = "菜单")
                         }
                         DropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("书签") },
-                                leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenBookmarkList()
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text("把当前过滤结果全部加入待处理列表") },
                                 leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
@@ -3987,7 +3860,7 @@ internal fun FileBrowserScreen(
                                                 onRequestPicZipView(item)
                                             isPdfFile(item.name) ->
                                                 onRequestPdfView(item)
-                                            item.name.endsWith(".zip", ignoreCase = true) ->
+                                            isExtractableArchive(item.name) ->
                                                 onUnzipRequest(item)
                                             item.name.endsWith(".gpg", ignoreCase = true) ->
                                                 onRequestGpgDecrypt(item, currentUri)
@@ -4516,15 +4389,17 @@ internal fun FileBrowserScreen(
         var detailRenameValue by remember(detailTarget.uri) { mutableStateOf(detailTarget.name) }
         var detailMeta by remember(detailTarget.uri) { mutableStateOf<Map<String, String>>(emptyMap()) }
         val detailRenameFocus = remember { FocusRequester() }
-        val isZipFile = detailTarget.name.endsWith(".zip", ignoreCase = true)
+        val isArchiveFile = isExtractableArchive(detailTarget.name)
         var zipDetailResult by remember(detailTarget.uri) { mutableStateOf<ZipFirstLevelResult?>(null) }
         var zipDetailPassword by remember(detailTarget.uri) { mutableStateOf("") }
         var zipDetailShowPasswordInput by remember(detailTarget.uri) { mutableStateOf(false) }
         val detailScope = rememberCoroutineScope()
 
         LaunchedEffect(detailTarget.uri) {
-            if (isZipFile) {
-                zipDetailResult = withContext(Dispatchers.IO) { getZipFirstLevelEntries(context, detailTarget.uri, null) }
+            if (isArchiveFile) {
+                zipDetailResult = withContext(Dispatchers.IO) {
+                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, null)
+                }
             }
         }
 
@@ -4661,9 +4536,9 @@ internal fun FileBrowserScreen(
                     if (!detailTarget.isDirectory) MetaRow("大小", sizeStr)
                     MetaRow("修改时间", displayModified)
 
-                    if (isZipFile) {
+                    if (isArchiveFile) {
                         Spacer(Modifier.height(16.dp))
-                        Text("ZIP 内容（第一层）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("压缩包内容（第一层）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
                         when (val r = zipDetailResult) {
                             is ZipFirstLevelResult.Ok -> {
@@ -4712,7 +4587,7 @@ internal fun FileBrowserScreen(
                                                 onClick = {
                                                     detailScope.launch {
                                                         val res = withContext(Dispatchers.IO) {
-                                                            getZipFirstLevelEntries(context, detailTarget.uri, zipDetailPassword.toCharArray())
+                                                            getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, zipDetailPassword.toCharArray())
                                                         }
                                                         zipDetailResult = res
                                                         if (res is ZipFirstLevelResult.Error) {
@@ -4727,7 +4602,7 @@ internal fun FileBrowserScreen(
                                 }
                             }
                             ZipFirstLevelResult.Error -> {
-                                Text("无法读取 ZIP 内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                Text("无法读取压缩包内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                             null -> {
                                 CircularProgressIndicator(Modifier.size(24.dp))
@@ -4767,7 +4642,7 @@ fun FileItem(
         isEpubFile(model.name) -> Icons.Default.MenuBook
         isPdfFile(model.name) -> Icons.Default.PictureAsPdf
         isPicZip(model.name) -> Icons.Default.Archive
-        model.name.endsWith(".zip", ignoreCase = true) -> Icons.Default.Archive
+        isExtractableArchive(model.name) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.Default.InsertDriveFile
     }
@@ -4779,7 +4654,7 @@ fun FileItem(
         isEpubFile(model.name) -> Color(0xFF8B4513)  // 棕色，适合书籍
         isPdfFile(model.name) -> Color(0xFFD32F2F)  // 红色，PDF 标志色
         isPicZip(model.name) -> MaterialTheme.colorScheme.tertiary
-        model.name.endsWith(".zip", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
+        isExtractableArchive(model.name) -> MaterialTheme.colorScheme.tertiary
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }

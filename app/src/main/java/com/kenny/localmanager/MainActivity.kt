@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTargetState)
+                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTargetState.value)
                 }
             }
         }

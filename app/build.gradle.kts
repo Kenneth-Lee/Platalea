@@ -94,6 +94,7 @@ dependencies {
     implementation("org.commonmark:commonmark-ext-footnotes:0.24.0")
     implementation("org.commonmark:commonmark-ext-heading-anchor:0.24.0")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
+    implementation("com.github.junrar:junrar:7.5.8")
     implementation("org.eclipse.jgit:org.eclipse.jgit:5.12.0.202106070339-r")
     implementation("org.eclipse.jgit:org.eclipse.jgit.ssh.apache:5.12.0.202106070339-r") {
         exclude(group = "org.apache.sshd", module = "sshd-osgi")

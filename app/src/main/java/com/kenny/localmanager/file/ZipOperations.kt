@@ -5,13 +5,68 @@ import android.net.Uri
 import android.util.Log
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import com.github.junrar.Archive
+import com.github.junrar.rarfile.FileHeader
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.CompressionLevel
 import java.io.File
+import java.io.FileOutputStream
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
+
+private fun isRarName(name: String?): Boolean =
+    name?.endsWith(".rar", ignoreCase = true) == true
+
+private fun hasRarSignature(file: File): Boolean {
+    if (!file.exists() || file.length() < 7) return false
+    return try {
+        file.inputStream().use { input ->
+            val header = ByteArray(7)
+            val read = input.read(header)
+            if (read < 7) return false
+            // RAR4: 52 61 72 21 1A 07 00 / RAR5: ... 01 00
+            header[0] == 0x52.toByte() &&
+                header[1] == 0x61.toByte() &&
+                header[2] == 0x72.toByte() &&
+                header[3] == 0x21.toByte() &&
+                header[4] == 0x1A.toByte() &&
+                header[5] == 0x07.toByte() &&
+                (header[6] == 0x00.toByte() || header[6] == 0x01.toByte())
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun isRarV5Signature(file: File): Boolean {
+    if (!hasRarSignature(file)) return false
+    return try {
+        file.inputStream().use { input ->
+            val header = ByteArray(7)
+            val read = input.read(header)
+            read >= 7 && header[6] == 0x01.toByte()
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/** 是否为 RAR5（当前解压库不支持）。 */
+fun isRarV5Archive(context: Context, archiveUri: Uri): Boolean {
+    val cache = File(context.cacheDir, "rar_ver_${System.currentTimeMillis()}.rar")
+    return try {
+        context.contentResolver.openInputStream(archiveUri)?.use { input ->
+            cache.outputStream().use { output -> input.copyTo(output) }
+        } ?: return false
+        isRarV5Signature(cache)
+    } catch (_: Exception) {
+        false
+    } finally {
+        cache.delete()
+    }
+}
 
 /** 用 treeUri 解析文档 URI，使 openInputStream 等有权限。 */
 private fun resolveDocUriWithTree(uri: Uri, treeUri: Uri?): Uri = when {
@@ -55,6 +110,7 @@ fun unzipToParent(
     zipUri: Uri,
     parentDirUri: Uri,
     treeUri: Uri?,
+    archiveName: String?,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit
 ): Boolean {
@@ -65,6 +121,10 @@ fun unzipToParent(
         cr.openInputStream(zipUri)?.use { input ->
             zipFile.outputStream().use { output -> input.copyTo(output) }
         } ?: return false
+        if (isRarName(archiveName) || hasRarSignature(zipFile)) {
+            return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
+        }
+
         val zip = ZipFile(zipFile)
         if (zip.isEncrypted) {
             if (password == null || password.isEmpty()) return false
@@ -88,6 +148,97 @@ fun unzipToParent(
     } finally {
         zipFile.delete()
         cacheDir.deleteRecursively()
+    }
+}
+
+private fun unrarToParent(
+    context: Context,
+    rarFile: File,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): Boolean {
+    val tempExtractDir = File(rarFile.parentFile, "extract").apply {
+        deleteRecursively()
+        mkdirs()
+    }
+    var archive: Archive? = null
+    return try {
+        archive = openRarArchive(rarFile, password)
+        if (archive == null) return false
+        if (isRarArchivePasswordProtected(archive) && (password == null || password.isEmpty())) return false
+
+        val headers = archive.fileHeaders.orEmpty()
+        val total = headers.size.coerceAtLeast(1)
+        setProgress(0, total)
+        var current = 0
+        headers.forEach { header ->
+            val path = sanitizeArchivePath(rarEntryName(header))
+            if (path.isEmpty()) {
+                current++
+                setProgress(current, total)
+                return@forEach
+            }
+            val outFile = File(tempExtractDir, path)
+            if (header.isDirectory) {
+                outFile.mkdirs()
+            } else {
+                outFile.parentFile?.mkdirs()
+                FileOutputStream(outFile).use { output ->
+                    archive.extractFile(header, output)
+                }
+            }
+            current++
+            setProgress(current, total)
+        }
+
+        // RAR 与 ZIP 保持一致：只复制归档顶层内容到目标目录。
+        tempExtractDir.listFiles()?.orEmpty()?.forEach { child ->
+            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
+        }
+        true
+    } catch (e: Exception) {
+        Log.e(TAG, "unrarToParent failed", e)
+        false
+    } finally {
+        try {
+            archive?.close()
+        } catch (_: Exception) {}
+        tempExtractDir.deleteRecursively()
+    }
+}
+
+private fun openRarArchive(rarFile: File, password: CharArray?): Archive? {
+    return try {
+        if (password != null && password.isNotEmpty()) {
+            Archive(rarFile, String(password))
+        } else {
+            Archive(rarFile)
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "openRarArchive failed: ${e.message}")
+        null
+    }
+}
+
+private fun rarEntryName(header: FileHeader): String {
+    val raw = header.fileName ?: ""
+    return raw.replace('\\', '/')
+}
+
+private fun sanitizeArchivePath(path: String): String {
+    val normalized = path.trim().replace('\\', '/').trimStart('/')
+    if (normalized.isEmpty()) return ""
+    if (normalized.split('/').any { it == ".." }) return ""
+    return normalized
+}
+
+private fun isRarArchivePasswordProtected(archive: Archive): Boolean {
+    return try {
+        archive.isPasswordProtected || archive.isEncrypted || archive.fileHeaders.orEmpty().any { it.isEncrypted }
+    } catch (_: Exception) {
+        false
     }
 }
 
@@ -251,14 +402,41 @@ private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, t
 
 /** 检测 zip 是否加密（需先打开）。 */
 fun isZipEncrypted(context: Context, zipUri: Uri): Boolean {
+    return isArchiveEncrypted(context, zipUri)
+}
+
+/** 检测归档（zip/rar）是否加密。 */
+fun isArchiveEncrypted(context: Context, archiveUri: Uri, archiveName: String? = null): Boolean {
     val cache = File(context.cacheDir, "zip_check_${System.currentTimeMillis()}.zip")
     return try {
-        context.contentResolver.openInputStream(zipUri)?.use { input ->
+        context.contentResolver.openInputStream(archiveUri)?.use { input ->
             cache.outputStream().use { output -> input.copyTo(output) }
         } ?: return false
-        ZipFile(cache).isEncrypted
+        if (isRarName(archiveName) || hasRarSignature(cache)) {
+            isRarEncrypted(cache)
+        } else {
+            ZipFile(cache).isEncrypted
+        }
     } catch (_: Exception) { false }
     finally { cache.delete() }
+}
+
+private fun isRarEncrypted(rarFile: File): Boolean {
+    var archive: Archive? = null
+    return try {
+        archive = Archive(rarFile)
+        isRarArchivePasswordProtected(archive)
+    } catch (e: Exception) {
+        // 某些加密 RAR 在无密码打开时直接抛异常。
+        val msg = e.message.orEmpty()
+        msg.contains("password", ignoreCase = true) ||
+            msg.contains("encrypted", ignoreCase = true) ||
+            msg.contains("decrypt", ignoreCase = true)
+    } finally {
+        try {
+            archive?.close()
+        } catch (_: Exception) {}
+    }
 }
 
 /** 获取 zip 第一层目录/文件列表时的结果。 */
@@ -279,11 +457,24 @@ sealed class ZipFirstLevelResult {
  * @param password 加密 zip 的密码，无密码传 null；为 Encrypted 时可带密码重试。
  */
 fun getZipFirstLevelEntries(context: Context, zipUri: Uri, password: CharArray?): ZipFirstLevelResult {
+    return getArchiveFirstLevelEntries(context, zipUri, null, password)
+}
+
+/** 读取归档第一层内容（zip/rar）。 */
+fun getArchiveFirstLevelEntries(
+    context: Context,
+    archiveUri: Uri,
+    archiveName: String?,
+    password: CharArray?
+): ZipFirstLevelResult {
     val cache = File(context.cacheDir, "zip_list_${System.currentTimeMillis()}.zip")
     return try {
-        context.contentResolver.openInputStream(zipUri)?.use { input ->
+        context.contentResolver.openInputStream(archiveUri)?.use { input ->
             cache.outputStream().use { output -> input.copyTo(output) }
         } ?: return ZipFirstLevelResult.Error
+        if (isRarName(archiveName) || hasRarSignature(cache)) {
+            return getRarFirstLevelEntries(cache, password)
+        }
         val zip = ZipFile(cache)
         if (zip.isEncrypted) {
             if (password == null || password.isEmpty()) return ZipFirstLevelResult.Encrypted
@@ -323,6 +514,64 @@ fun getZipFirstLevelEntries(context: Context, zipUri: Uri, password: CharArray?)
         ZipFirstLevelResult.Error
     } finally {
         cache.delete()
+    }
+}
+
+private fun getRarFirstLevelEntries(rarFile: File, password: CharArray?): ZipFirstLevelResult {
+    var archive: Archive? = null
+    return try {
+        archive = openRarArchive(rarFile, password)
+        if (archive == null) return ZipFirstLevelResult.Error
+        if (isRarArchivePasswordProtected(archive) && (password == null || password.isEmpty())) {
+            return ZipFirstLevelResult.Encrypted
+        }
+
+        val firstLevel = mutableSetOf<String>()
+        val firstLevelDirs = mutableSetOf<String>()
+        archive.fileHeaders.orEmpty().forEach { header ->
+            val path = sanitizeArchivePath(rarEntryName(header))
+            if (path.isEmpty()) return@forEach
+            val top = path.substringBefore("/")
+            if (top.isNotEmpty()) {
+                firstLevel.add(top)
+                if (header.isDirectory || path.contains("/")) {
+                    firstLevelDirs.add(top)
+                }
+            }
+        }
+
+        val sortedFirst = firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it }
+        if (firstLevel.size == 1) {
+            val rootName = firstLevel.single()
+            val prefix = "$rootName/"
+            val childToDir = mutableMapOf<String, Boolean>()
+            archive.fileHeaders.orEmpty().forEach { header ->
+                val path = sanitizeArchivePath(rarEntryName(header))
+                if (!path.startsWith(prefix)) return@forEach
+                val rest = path.removePrefix(prefix)
+                val childName = rest.substringBefore("/")
+                if (childName.isEmpty()) return@forEach
+                val isDir = header.isDirectory || rest.startsWith("$childName/")
+                childToDir[childName] = childToDir[childName] == true || isDir
+            }
+            if (childToDir.isNotEmpty()) {
+                val children = childToDir.entries
+                    .sortedBy { it.key }
+                    .map { (name, isDir) -> if (isDir) "$name/" else name }
+                return ZipFirstLevelResult.OkSingleDir(rootName, children)
+            }
+        }
+        ZipFirstLevelResult.Ok(sortedFirst)
+    } catch (e: Exception) {
+        if (e.message?.contains("password", ignoreCase = true) == true) {
+            ZipFirstLevelResult.Encrypted
+        } else {
+            ZipFirstLevelResult.Error
+        }
+    } finally {
+        try {
+            archive?.close()
+        } catch (_: Exception) {}
     }
 }
 
