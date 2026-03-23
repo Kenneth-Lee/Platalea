@@ -155,6 +155,7 @@ import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
+import com.kenny.localmanager.file.compressTo7z
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.isArchiveEncrypted
 import com.kenny.localmanager.file.getArchiveFirstLevelEntries
@@ -243,6 +244,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -908,9 +912,11 @@ fun FileBrowserApp(
             var shareGitDone by remember { mutableStateOf(false) }
             var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var sevenZCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var zipUnzipPassword by remember { mutableStateOf("") }
             var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var zipCompressPassword by remember { mutableStateOf("") }
+            var sevenZCompressPassword by remember { mutableStateOf("") }
             var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var mdZipPassword by remember { mutableStateOf("") }
@@ -928,8 +934,11 @@ fun FileBrowserApp(
             var picZipPassword by remember { mutableStateOf("") }
             var picZipInProgress by remember { mutableStateOf(false) }
             var showPendingCompressToZip by remember { mutableStateOf(false) }
+            var showPendingCompressTo7z by remember { mutableStateOf(false) }
             var pendingCompressZipName by remember { mutableStateOf("") }
             var pendingCompressPassword by remember { mutableStateOf("") }
+            var pendingCompress7zName by remember { mutableStateOf("") }
+            var pendingCompress7zPassword by remember { mutableStateOf("") }
             var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
             var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
             LaunchedEffect(Unit) {
@@ -1185,7 +1194,9 @@ fun FileBrowserApp(
                     picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
                     pdfViewState != null -> pdfViewState = null
                     zipCompressTarget != null -> zipCompressTarget = null
+                    sevenZCompressTarget != null -> sevenZCompressTarget = null
                     showPendingCompressToZip -> showPendingCompressToZip = false
+                    showPendingCompressTo7z -> showPendingCompressTo7z = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                     else -> {
                         val now = System.currentTimeMillis()
@@ -1671,6 +1682,7 @@ fun FileBrowserApp(
                     onRequestPicZipView = { picZipTarget = it },
                     onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                     onCompressToZipRequest = { zipCompressTarget = it },
+                    onCompressTo7zRequest = { sevenZCompressTarget = it },
                     onRequestPassProtect = { model -> passProtectTarget = model },
                     onRequestPassView = { model ->
                         passViewTarget = model
@@ -1753,6 +1765,16 @@ fun FileBrowserApp(
                             pendingCompressZipName = "archive_$ts.zip"
                             pendingCompressPassword = ""
                             showPendingCompressToZip = true
+                        }
+                    },
+                    onRequestCompressTo7z = {
+                        if (pendingList.isEmpty()) {
+                            Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                        } else {
+                            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                            pendingCompress7zName = "archive_$ts.7z"
+                            pendingCompress7zPassword = ""
+                            showPendingCompressTo7z = true
                         }
                     },
                     onClearFilteredList = { toRemove ->
@@ -2942,6 +2964,74 @@ fun FileBrowserApp(
                     dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
                 )
             }
+            sevenZCompressTarget?.let { target ->
+                val suggested7zName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.7z" else "${target.name}.7z"
+                val parentDirUri = Uri.parse(displayUri)
+                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                AlertDialog(
+                    onDismissRequest = { sevenZCompressTarget = null; sevenZCompressPassword = "" },
+                    title = { Text("压缩为 7Z") },
+                    text = {
+                        Column {
+                            Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = sevenZCompressPassword,
+                                onValueChange = { sevenZCompressPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("密码（留空则不加密）") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    progressOp = OperationProgress("压缩", 0, 1)
+                                    delay(50)
+                                    val pwd = sevenZCompressPassword.ifBlank { null }?.toCharArray()
+                                    var timeout = false
+                                    val ok = withContext(Dispatchers.IO) {
+                                        val executor = Executors.newSingleThreadExecutor()
+                                        try {
+                                            val future = executor.submit<Boolean> {
+                                                compressTo7z(
+                                                    context,
+                                                    listOf(target.uri),
+                                                    parentDirUri,
+                                                    treeUri,
+                                                    suggested7zName,
+                                                    pwd
+                                                ) { cur, tot ->
+                                                    scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                                }
+                                            }
+                                            future.get(2, TimeUnit.MINUTES)
+                                        } catch (_: TimeoutException) {
+                                            timeout = true
+                                            false
+                                        } finally {
+                                            executor.shutdownNow()
+                                        }
+                                    }
+                                    delay(120)
+                                    progressOp = null
+                                    sevenZCompressTarget = null
+                                    sevenZCompressPassword = ""
+                                    if (ok) {
+                                        Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("压缩") }
+                    },
+                    dismissButton = { TextButton(onClick = { sevenZCompressTarget = null; sevenZCompressPassword = "" }) { Text("取消") } }
+                )
+            }
             if (showPendingCompressToZip && pendingList.isNotEmpty()) {
                 val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                 val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
@@ -3016,6 +3106,95 @@ fun FileBrowserApp(
                     },
                     dismissButton = {
                         TextButton(onClick = { showPendingCompressToZip = false }) { Text("取消") }
+                    }
+                )
+            }
+            if (showPendingCompressTo7z && pendingList.isNotEmpty()) {
+                val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+                AlertDialog(
+                    onDismissRequest = { showPendingCompressTo7z = false },
+                    title = { Text("压缩待处理列表为 7Z") },
+                    text = {
+                        Column {
+                            Text(
+                                "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到根目录。",
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = pendingCompress7zName,
+                                onValueChange = { pendingCompress7zName = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("文件名") },
+                                singleLine = true
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = pendingCompress7zPassword,
+                                onValueChange = { pendingCompress7zPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("密码（留空则不加密）") },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            enabled = pendingCompress7zName.isNotBlank(),
+                            onClick = {
+                                val sevenZName = pendingCompress7zName.trim().let {
+                                    if (it.endsWith(".7z", ignoreCase = true)) it else "$it.7z"
+                                }
+                                val items = pendingList.toList()
+                                val pwd = pendingCompress7zPassword.ifBlank { null }?.toCharArray()
+                                showPendingCompressTo7z = false
+                                scope.launch {
+                                    progressOp = OperationProgress("压缩", 0, items.size)
+                                    delay(50)
+                                    var timeout = false
+                                    val ok = withContext(Dispatchers.IO) {
+                                        val executor = Executors.newSingleThreadExecutor()
+                                        try {
+                                            val future = executor.submit<Boolean> {
+                                                compressTo7z(
+                                                    context,
+                                                    items.map { it.uri },
+                                                    rootDirUri,
+                                                    rootTreeUri,
+                                                    sevenZName,
+                                                    pwd
+                                                ) { cur, tot ->
+                                                    scope.launch(Dispatchers.Main.immediate) {
+                                                        progressOp = OperationProgress("压缩", cur, tot)
+                                                    }
+                                                }
+                                            }
+                                            future.get(2, TimeUnit.MINUTES)
+                                        } catch (_: TimeoutException) {
+                                            timeout = true
+                                            false
+                                        } finally {
+                                            executor.shutdownNow()
+                                        }
+                                    }
+                                    delay(120)
+                                    progressOp = null
+                                    pendingCompress7zName = ""
+                                    pendingCompress7zPassword = ""
+                                    if (ok) {
+                                        pendingList.clear()
+                                        Toast.makeText(context, "压缩完成：$sevenZName", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("压缩") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showPendingCompressTo7z = false }) { Text("取消") }
                     }
                 )
             }
@@ -3356,7 +3535,9 @@ private fun isPicZip(name: String): Boolean =
 
 /** 判断文件名是否为可解压压缩包（.zip / .rar）。 */
 private fun isExtractableArchive(name: String): Boolean =
-    name.endsWith(".zip", ignoreCase = true) || name.endsWith(".rar", ignoreCase = true)
+    name.endsWith(".zip", ignoreCase = true) ||
+        name.endsWith(".rar", ignoreCase = true) ||
+        name.endsWith(".7z", ignoreCase = true)
 
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
@@ -3509,6 +3690,7 @@ internal fun FileBrowserScreen(
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
+    onCompressTo7zRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
@@ -4054,6 +4236,13 @@ internal fun FileBrowserScreen(
                             contextMenuTarget = null
                         }
                     ) { Text("压缩为 ZIP", color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            onCompressTo7zRequest(menuTarget)
+                            contextMenuTarget = null
+                        }
+                    ) { Text("压缩为 7Z", color = MaterialTheme.colorScheme.onSurface) }
                     if (!menuTarget.isDirectory && onShareFileToGit != null) {
                         TextButton(
                             onClick = {
@@ -4744,6 +4933,7 @@ fun PendingListScreen(
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
     onRequestCompressToZip: () -> Unit = {},
+    onRequestCompressTo7z: () -> Unit = {},
     onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
     onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
     onDismiss: () -> Unit
@@ -4873,6 +5063,9 @@ fun PendingListScreen(
                     IconButton(onClick = onRequestCompressToZip) {
                         Icon(Icons.Default.Archive, contentDescription = "压缩为 ZIP")
                     }
+                    IconButton(onClick = onRequestCompressTo7z) {
+                        Icon(Icons.Default.Archive, contentDescription = "压缩为 7Z", tint = MaterialTheme.colorScheme.primary)
+                    }
                 }
             LazyColumn(
                 Modifier.weight(1f),
@@ -4952,6 +5145,12 @@ fun PendingListScreen(
                         Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.size(8.dp))
                         Text("加密：对列表中非 .gpg 文件进行 GPG 加密，可选对称加密（密码）或公钥加密（选一个公钥，全部用该密钥加密）", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.size(8.dp))
+                        Text("压缩：支持将列表内容打包为 ZIP 或 7Z，可设置压缩包密码。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {

@@ -7,6 +7,10 @@ import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.github.junrar.Archive
 import com.github.junrar.rarfile.FileHeader
+import org.apache.commons.compress.PasswordRequiredException
+import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
+import org.apache.commons.compress.archivers.sevenz.SevenZFile
+import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.CompressionLevel
@@ -15,9 +19,13 @@ import java.io.FileOutputStream
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
+private const val MIME_7Z = "application/x-7z-compressed"
 
 private fun isRarName(name: String?): Boolean =
     name?.endsWith(".rar", ignoreCase = true) == true
+
+private fun is7zName(name: String?): Boolean =
+    name?.endsWith(".7z", ignoreCase = true) == true
 
 private fun hasRarSignature(file: File): Boolean {
     if (!file.exists() || file.length() < 7) return false
@@ -124,6 +132,9 @@ fun unzipToParent(
         if (isRarName(archiveName) || hasRarSignature(zipFile)) {
             return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
         }
+        if (is7zName(archiveName) || has7zSignature(zipFile)) {
+            return un7zToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
+        }
 
         val zip = ZipFile(zipFile)
         if (zip.isEncrypted) {
@@ -148,6 +159,89 @@ fun unzipToParent(
     } finally {
         zipFile.delete()
         cacheDir.deleteRecursively()
+    }
+}
+
+private fun has7zSignature(file: File): Boolean {
+    if (!file.exists() || file.length() < 6) return false
+    return try {
+        file.inputStream().use { input ->
+            val header = ByteArray(6)
+            val read = input.read(header)
+            read >= 6 &&
+                header[0] == 0x37.toByte() &&
+                header[1] == 0x7A.toByte() &&
+                header[2] == 0xBC.toByte() &&
+                header[3] == 0xAF.toByte() &&
+                header[4] == 0x27.toByte() &&
+                header[5] == 0x1C.toByte()
+        }
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun openSevenZFile(archiveFile: File, password: CharArray?): SevenZFile {
+    return if (password != null && password.isNotEmpty()) {
+        SevenZFile(archiveFile, password)
+    } else {
+        SevenZFile(archiveFile)
+    }
+}
+
+private fun un7zToParent(
+    context: Context,
+    archiveFile: File,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): Boolean {
+    val tempExtractDir = File(archiveFile.parentFile, "extract").apply {
+        deleteRecursively()
+        mkdirs()
+    }
+    return try {
+        openSevenZFile(archiveFile, password).use { sevenZ ->
+            val total = sevenZ.entries.count().coerceAtLeast(1)
+            setProgress(0, total)
+            var current = 0
+            var entry = sevenZ.nextEntry
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (entry != null) {
+                val path = sanitizeArchivePath(entry.name.orEmpty())
+                if (path.isNotEmpty()) {
+                    val outFile = File(tempExtractDir, path)
+                    if (entry.isDirectory) {
+                        outFile.mkdirs()
+                    } else {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { output ->
+                            while (true) {
+                                val read = sevenZ.read(buffer)
+                                if (read <= 0) break
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                }
+                current++
+                setProgress(current, total)
+                entry = sevenZ.nextEntry
+            }
+        }
+
+        tempExtractDir.listFiles().orEmpty().forEach { child ->
+            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
+        }
+        true
+    } catch (e: PasswordRequiredException) {
+        false
+    } catch (e: Throwable) {
+        Log.e(TAG, "un7zToParent failed", e)
+        false
+    } finally {
+        tempExtractDir.deleteRecursively()
     }
 }
 
@@ -382,6 +476,99 @@ fun compressToZip(
     }
 }
 
+/** 将若干文件/目录压缩为 7z，保存到指定目录。 */
+fun compressTo7z(
+    context: Context,
+    sourceUris: List<Uri>,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    sevenZFileName: String,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): Boolean {
+    val cr = context.contentResolver
+    val cacheDir = File(context.cacheDir, "7z_compress_${System.currentTimeMillis()}").apply { mkdirs() }
+    val sevenZPath = File(cacheDir, sevenZFileName)
+    try {
+        val total = sourceUris.size.coerceAtLeast(1)
+        val out = if (password != null && password.isNotEmpty()) {
+            SevenZOutputFile(sevenZPath, password)
+        } else {
+            SevenZOutputFile(sevenZPath)
+        }
+        out.use { sevenZOut ->
+            sourceUris.forEachIndexed { index, uri ->
+                setProgress(index, total)
+                val resolvedUri = resolveDocUriWithTree(uri, treeUri)
+                val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
+                val name = doc.name ?: return false
+                val localEntry = File(cacheDir, name)
+                if (doc.isDirectory) {
+                    localEntry.mkdirs()
+                    copyDocumentToLocal(context, resolvedUri, localEntry, treeUri)
+                    addLocalTo7z(sevenZOut, localEntry, name)
+                    localEntry.deleteRecursively()
+                } else {
+                    cr.openInputStream(resolvedUri)?.use { input ->
+                        localEntry.outputStream().use { input.copyTo(it) }
+                    } ?: return false
+                    addLocalTo7z(sevenZOut, localEntry, name)
+                    localEntry.delete()
+                }
+            }
+            setProgress(total, total)
+            sevenZOut.finish()
+        }
+
+        if (!sevenZPath.exists() || sevenZPath.length() <= 0L) return false
+        val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
+        val outUri = try {
+            DocumentsContract.createDocument(cr, parentResolved, MIME_7Z, sevenZFileName)
+        } catch (_: Exception) {
+            null
+        } ?: return false
+        sevenZPath.inputStream().use { inp ->
+            cr.openOutputStream(outUri)?.use { inp.copyTo(it) }
+        }
+        return true
+    } catch (e: Throwable) {
+        Log.e(TAG, "compressTo7z failed", e)
+        return false
+    } finally {
+        sevenZPath.delete()
+        cacheDir.deleteRecursively()
+    }
+}
+
+private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String) {
+    val normalized = entryName.replace('\\', '/')
+    if (local.isDirectory) {
+        val dirEntryName = if (normalized.endsWith('/')) normalized else "$normalized/"
+        val dirEntry: SevenZArchiveEntry = out.createArchiveEntry(local, dirEntryName)
+        out.putArchiveEntry(dirEntry)
+        out.closeArchiveEntry()
+        local.listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
+            val childName = "$normalized/${child.name}"
+            addLocalTo7z(out, child, childName)
+        }
+    } else {
+        val fileEntry: SevenZArchiveEntry = out.createArchiveEntry(local, normalized)
+        out.putArchiveEntry(fileEntry)
+        try {
+            local.inputStream().use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    out.write(buffer, 0, read)
+                }
+            }
+        } finally {
+            out.closeArchiveEntry()
+        }
+    }
+}
+
 /** 将 DocumentFile（目录）内容递归复制到已存在的本地目录 localDir。 */
 private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, treeUri: Uri?) {
     // 必须用树遍历得到的 DocumentFile，否则 SingleDocumentFile.listFiles() 会抛 UnsupportedOperationException
@@ -414,11 +601,30 @@ fun isArchiveEncrypted(context: Context, archiveUri: Uri, archiveName: String? =
         } ?: return false
         if (isRarName(archiveName) || hasRarSignature(cache)) {
             isRarEncrypted(cache)
+        } else if (is7zName(archiveName) || has7zSignature(cache)) {
+            is7zEncrypted(cache)
         } else {
             ZipFile(cache).isEncrypted
         }
     } catch (_: Exception) { false }
     finally { cache.delete() }
+}
+
+private fun is7zEncrypted(archiveFile: File): Boolean {
+    return try {
+        SevenZFile(archiveFile).use { sevenZ ->
+            // 触发读取首个条目，部分场景下会在这里抛密码异常。
+            sevenZ.nextEntry
+            false
+        }
+    } catch (e: PasswordRequiredException) {
+        true
+    } catch (e: Throwable) {
+        val msg = e.message.orEmpty()
+        msg.contains("password", ignoreCase = true) ||
+            msg.contains("encrypted", ignoreCase = true) ||
+            msg.contains("decrypt", ignoreCase = true)
+    }
 }
 
 private fun isRarEncrypted(rarFile: File): Boolean {
@@ -460,7 +666,7 @@ fun getZipFirstLevelEntries(context: Context, zipUri: Uri, password: CharArray?)
     return getArchiveFirstLevelEntries(context, zipUri, null, password)
 }
 
-/** 读取归档第一层内容（zip/rar）。 */
+/** 读取归档第一层内容（zip/rar/7z）。 */
 fun getArchiveFirstLevelEntries(
     context: Context,
     archiveUri: Uri,
@@ -474,6 +680,9 @@ fun getArchiveFirstLevelEntries(
         } ?: return ZipFirstLevelResult.Error
         if (isRarName(archiveName) || hasRarSignature(cache)) {
             return getRarFirstLevelEntries(cache, password)
+        }
+        if (is7zName(archiveName) || has7zSignature(cache)) {
+            return get7zFirstLevelEntries(cache, password)
         }
         val zip = ZipFile(cache)
         if (zip.isEncrypted) {
@@ -514,6 +723,54 @@ fun getArchiveFirstLevelEntries(
         ZipFirstLevelResult.Error
     } finally {
         cache.delete()
+    }
+}
+
+private fun get7zFirstLevelEntries(archiveFile: File, password: CharArray?): ZipFirstLevelResult {
+    return try {
+        openSevenZFile(archiveFile, password).use { sevenZ ->
+            val firstLevel = mutableSetOf<String>()
+            val firstLevelDirs = mutableSetOf<String>()
+            for (entry in sevenZ.entries) {
+                val path = sanitizeArchivePath(entry.name.orEmpty())
+                if (path.isEmpty()) continue
+                val top = path.substringBefore("/")
+                if (top.isNotEmpty()) {
+                    firstLevel.add(top)
+                    if (entry.isDirectory || path.contains('/')) {
+                        firstLevelDirs.add(top)
+                    }
+                }
+            }
+            val sortedFirst = firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it }
+            if (firstLevel.size == 1) {
+                val rootName = firstLevel.single()
+                val prefix = "$rootName/"
+                val childToDir = mutableMapOf<String, Boolean>()
+                for (entry in sevenZ.entries) {
+                    val path = sanitizeArchivePath(entry.name.orEmpty())
+                    if (!path.startsWith(prefix)) continue
+                    val rest = path.removePrefix(prefix)
+                    val childName = rest.substringBefore("/")
+                    if (childName.isEmpty()) continue
+                    val isDir = entry.isDirectory || rest.startsWith("$childName/")
+                    childToDir[childName] = childToDir[childName] == true || isDir
+                }
+                if (childToDir.isNotEmpty()) {
+                    val children = childToDir.entries
+                        .sortedBy { it.key }
+                        .map { (name, isDir) -> if (isDir) "$name/" else name }
+                    return ZipFirstLevelResult.OkSingleDir(rootName, children)
+                }
+            }
+            ZipFirstLevelResult.Ok(sortedFirst)
+        }
+    } catch (e: PasswordRequiredException) {
+        ZipFirstLevelResult.Encrypted
+    } catch (e: Throwable) {
+        val msg = e.message.orEmpty()
+        if (msg.contains("password", ignoreCase = true)) ZipFirstLevelResult.Encrypted
+        else ZipFirstLevelResult.Error
     }
 }
 
