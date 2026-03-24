@@ -16,6 +16,7 @@ import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.CompressionLevel
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.charset.Charset
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
@@ -1712,3 +1713,152 @@ fun getEpubChapterFile(result: EpubExtractResult, chapter: EpubChapter): File? {
 
 /** 判断文件名是否为 EPUB 文件。 */
 fun isEpubFile(name: String): Boolean = name.endsWith(".epub", ignoreCase = true)
+
+/** 判断文件名是否为 TXT 文件。 */
+fun isTxtFile(name: String): Boolean = name.endsWith(".txt", ignoreCase = true)
+
+/**
+ * 将 TXT 文件转换为 EPUB 兼容格式，使用与 EPUB 相同的缓存结构
+ * 按空行分隔为段落，整个文档作为一个章节
+ *
+ * @param context 上下文
+ * @param txtFile TXT 文件
+ * @param txtUri TXT 文件的 URI（用于生成缓存目录）
+ * @return EpubExtractResult 或 null
+ */
+fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractResult? {
+    if (!txtFile.exists()) return null
+
+    try {
+        // 使用与 EPUB 相同的缓存目录结构
+        val cacheDir = getEpubCacheDir(context, txtUri)
+        cacheDir.deleteRecursively()
+        cacheDir.mkdirs()
+
+        // 读取 TXT 文件内容（尝试多种编码）
+        val content = try {
+            txtFile.readText(Charsets.UTF_8)
+        } catch (e: Exception) {
+            try {
+                txtFile.readText(Charset.forName("GBK"))
+            } catch (e2: Exception) {
+                txtFile.readText()
+            }
+        }
+
+        // 按空行分隔为段落（连续空行视为一个分隔）
+        val paragraphs = content.split(Regex("\\n\\s*\\n"))
+            .map { para -> para.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ") }
+            .filter { it.isNotEmpty() }
+
+        // 创建 EPUB 标准目录结构
+        val contentDir = File(cacheDir, "content")
+        val metaInfDir = File(contentDir, "META-INF")
+        val oebpsDir = File(contentDir, "OEBPS")
+        metaInfDir.mkdirs()
+        oebpsDir.mkdirs()
+
+        val bookTitle = txtFile.nameWithoutExtension
+
+        // 1. 创建 META-INF/container.xml（EPUB 标准入口）
+        val containerXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                </rootfiles>
+            </container>
+        """.trimIndent()
+        File(metaInfDir, "container.xml").writeText(containerXml)
+
+        // 2. 生成 HTML 内容文件
+        val htmlFileName = "chapter_0.html"
+        val htmlFile = File(oebpsDir, htmlFileName)
+
+        val paragraphsHtml = paragraphs.joinToString("\n") { para ->
+            "<p>${escapeHtml(para)}</p>"
+        }
+
+        val htmlContent = """
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml">
+            <head>
+                <meta charset="UTF-8"/>
+                <title>${escapeHtml(bookTitle)}</title>
+                <style>
+                    body {
+                        font-family: sans-serif;
+                        line-height: 1.8;
+                        padding: 16px;
+                    }
+                    p { margin: 0.5em 0; text-indent: 2em; }
+                </style>
+            </head>
+            <body>
+                <h1>${escapeHtml(bookTitle)}</h1>
+                $paragraphsHtml
+            </body>
+            </html>
+        """.trimIndent()
+        htmlFile.writeText(htmlContent)
+
+        // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
+        val opfContent = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                    <dc:title>$bookTitle</dc:title>
+                    <dc:language>zh</dc:language>
+                    <dc:identifier id="uid">txt-${txtFile.name.hashCode()}</dc:identifier>
+                </metadata>
+                <manifest>
+                    <item id="chapter_0" href="$htmlFileName" media-type="application/xhtml+xml"/>
+                </manifest>
+                <spine>
+                    <itemref idref="chapter_0"/>
+                </spine>
+            </package>
+        """.trimIndent()
+        File(oebpsDir, "content.opf").writeText(opfContent)
+
+        // 4. 创建缓存时间戳文件（与 EPUB 结构一致）
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+
+        // 5. 创建 TXT 标记文件（用于区分 EPUB 和 TXT 缓存）
+        File(cacheDir, ".txt_source").writeText(txtFile.name)
+
+        val epubChapters = listOf(EpubChapter(
+            id = "chapter_0",
+            href = htmlFileName,
+            title = bookTitle
+        ))
+
+        val bookInfo = EpubBookInfo(
+            title = bookTitle,
+            author = null,
+            language = "zh"
+        )
+
+        return EpubExtractResult(
+            cacheDir = cacheDir,
+            contentDir = contentDir,
+            opfDir = oebpsDir,
+            bookInfo = bookInfo,
+            chapters = epubChapters,
+            isEncrypted = false
+        )
+    } catch (e: Exception) {
+        Log.e("TxtToEpub", "Failed to convert TXT to EPUB format", e)
+        return null
+    }
+}
+
+/** 简单的 HTML 转义 */
+private fun escapeHtml(text: String): String {
+    return text
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("\"", "&quot;")
+        .replace("'", "&#39;")
+}

@@ -3805,20 +3805,33 @@ fun EpubViewerScreen(
 
     // 恢复阅读进度
     LaunchedEffect(Unit) {
-        val progress = bookmarkManager.loadProgress(epubUri.toString())
+        val uriString = epubUri.toString()
+        val uriHash = uriString.hashCode().toUInt().toString(16)
+        Log.d("EpubViewer", "尝试恢复进度: URI=$uriString, hash=$uriHash")
+        logDebug?.invoke("[EPUB] 尝试恢复进度: URI hash=$uriHash")
+
+        val progress = bookmarkManager.loadProgress(uriString)
         if (progress != null) {
             // 先设置滚动比例，再设置章节索引，避免中间状态
             currentScrollRatio = progress.scrollRatio
             currentChapterIndex = progress.chapterIndex
+            Log.d("EpubViewer", "恢复进度成功: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
             logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
+        } else {
+            Log.d("EpubViewer", "没有找到保存的进度")
+            logDebug?.invoke("[EPUB] 没有找到保存的进度")
         }
         isRestoringProgress = false
+        Log.d("EpubViewer", "恢复阶段结束，isRestoringProgress=false")
     }
 
     // 保存阅读进度（章节变化或滚动位置变化时）
     LaunchedEffect(currentChapterIndex, currentScrollRatio) {
         // 恢复进度期间不保存
-        if (isRestoringProgress) return@LaunchedEffect
+        if (isRestoringProgress) {
+            Log.d("EpubViewer", "跳过保存（正在恢复进度）")
+            return@LaunchedEffect
+        }
         // 延迟保存，避免频繁写入
         kotlinx.coroutines.delay(500)
         val progress = EpubReadingProgress(
@@ -3830,6 +3843,7 @@ fun EpubViewerScreen(
             scrollRatio = currentScrollRatio,
             lastReadTime = System.currentTimeMillis()
         )
+        Log.d("EpubViewer", "准备保存进度: URI=${epubUri.toString()}, 章节$currentChapterIndex, 比例$currentScrollRatio")
         bookmarkManager.saveProgress(progress)
         logDebug?.invoke("[EPUB] 保存进度: 章节$currentChapterIndex, 比例${"%.2f".format(currentScrollRatio)}")
     }
@@ -4225,9 +4239,11 @@ fun EpubViewerScreen(
             )
         },
         bottomBar = {
-            if (chapters.size > 1) {
-                val hasDictLoaded = dictLoaded != null
-                val hasDictResult = dictLookupResult != null
+            val hasDictLoaded = dictLoaded != null
+            val hasDictResult = dictLookupResult != null
+            val hasMultipleChapters = chapters.size > 1
+            // 只有在有词典或多章节时才显示底部栏
+            if (hasDictLoaded || hasMultipleChapters) {
                 // 展开时使用更大的高度，收起时使用较小高度
                 val barHeight = when {
                     !dictAreaExpanded -> 56.dp
@@ -4245,41 +4261,43 @@ fun EpubViewerScreen(
                         modifier = Modifier.fillMaxSize(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // 左侧：上一章按钮（窄一些）
-                        Box(
-                            modifier = Modifier
-                                .width(60.dp)
-                                .fillMaxHeight()
-                                .clickable(enabled = currentChapterIndex > 0) {
-                                    if (currentChapterIndex > 0) {
-                                        currentChapterIndex--
-                                        currentScrollRatio = 0f
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                        // 左侧：上一章按钮（窄一些）- 只在多章节时显示
+                        if (hasMultipleChapters) {
+                            Box(
+                                modifier = Modifier
+                                    .width(60.dp)
+                                    .fillMaxHeight()
+                                    .clickable(enabled = currentChapterIndex > 0) {
+                                        if (currentChapterIndex > 0) {
+                                            currentChapterIndex--
+                                            currentScrollRatio = 0f
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "上一章",
-                                    tint = if (currentChapterIndex > 0)
-                                        MaterialTheme.colorScheme.primary
-                                    else
-                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                )
-                                if (dictAreaExpanded) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        "上一章",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (currentChapterIndex > 0)
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "上一章",
+                                        tint = if (currentChapterIndex > 0)
                                             MaterialTheme.colorScheme.primary
                                         else
                                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                     )
+                                    if (dictAreaExpanded) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "上一章",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (currentChapterIndex > 0)
+                                                MaterialTheme.colorScheme.primary
+                                            else
+                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -4378,41 +4396,43 @@ fun EpubViewerScreen(
                             }
                         }
 
-                        // 右侧：下一章按钮（窄一些）
-                        Box(
-                            modifier = Modifier
-                                .width(60.dp)
-                                .fillMaxHeight()
-                                .clickable(enabled = currentChapterIndex < chapters.size - 1) {
-                                    if (currentChapterIndex < chapters.size - 1) {
-                                        currentChapterIndex++
-                                        currentScrollRatio = 0f
-                                    }
-                                },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
+                        // 右侧：下一章按钮（窄一些）- 只在多章节时显示
+                        if (hasMultipleChapters) {
+                            Box(
+                                modifier = Modifier
+                                    .width(60.dp)
+                                    .fillMaxHeight()
+                                    .clickable(enabled = currentChapterIndex < chapters.size - 1) {
+                                        if (currentChapterIndex < chapters.size - 1) {
+                                            currentChapterIndex++
+                                            currentScrollRatio = 0f
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = "下一章",
-                                    tint = if (currentChapterIndex < chapters.size - 1)
-                                        MaterialTheme.colorScheme.primary
-                                    else
-                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                                )
-                                if (dictAreaExpanded) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        "下一章",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = if (currentChapterIndex < chapters.size - 1)
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = "下一章",
+                                        tint = if (currentChapterIndex < chapters.size - 1)
                                             MaterialTheme.colorScheme.primary
                                         else
                                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                     )
+                                    if (dictAreaExpanded) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            "下一章",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (currentChapterIndex < chapters.size - 1)
+                                                MaterialTheme.colorScheme.primary
+                                            else
+                                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -4422,8 +4442,10 @@ fun EpubViewerScreen(
         }
     ) { padding ->
         // 计算底部栏高度（与bottomBar保持一致）
+        val hasDictLoaded = dictLoaded != null
+        val hasMultipleChapters = chapters.size > 1
         val bottomBarHeight = when {
-            chapters.size <= 1 -> 0.dp
+            !(hasDictLoaded || hasMultipleChapters) -> 0.dp
             !dictAreaExpanded -> 56.dp
             else -> 200.dp
         }
@@ -4453,7 +4475,6 @@ fun EpubViewerScreen(
 
                     val chapterFileForUpdate = chapterFile
                     val chaptersSize = chapters.size
-                    val currentScrollRatioForUpdate = currentScrollRatio
                     val onChapterChanged: (Int) -> Unit = { newIndex ->
                         currentChapterIndex = newIndex
                         currentScrollRatio = 0f // 章节切换时重置滚动位置
@@ -4514,8 +4535,11 @@ fun EpubViewerScreen(
                                 if (webView.tag != loadKey) {
                                     webView.tag = loadKey
                                     // 设置待恢复的滚动位置
-                                    webView.setPendingScrollRatio(currentScrollRatioForUpdate)
+                                    webView.setPendingScrollRatio(currentScrollRatio)
                                     webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
+                                } else if (currentScrollRatio > 0f) {
+                                    // 内容没变但滚动比例变化时（如恢复进度），直接设置滚动位置
+                                    webView.scrollToRatio(currentScrollRatio)
                                 }
                                 webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             } catch (e: Exception) {
@@ -4625,6 +4649,25 @@ private class GestureWebView(
     /** 设置待恢复的滚动位置 */
     fun setPendingScrollRatio(ratio: Float) {
         pendingScrollRatio = ratio
+    }
+
+    /** 直接滚动到指定比例（用于恢复进度时内容未变的情况） */
+    fun scrollToRatio(ratio: Float) {
+        if (ratio <= 0f) return
+        val js = """
+            (function() {
+                var ratio = $ratio;
+                var docHeight = document.documentElement.scrollHeight;
+                var viewHeight = window.innerHeight;
+                if (docHeight > viewHeight) {
+                    var maxScroll = docHeight - viewHeight;
+                    var adjustedRatio = ratio * 0.97;
+                    var targetY = Math.floor(adjustedRatio * maxScroll);
+                    window.scrollTo(0, targetY);
+                }
+            })();
+        """.trimIndent()
+        post { evaluateJavascript(js, null) }
     }
 
     /** 尝试恢复滚动位置，在页面加载完成后调用 */

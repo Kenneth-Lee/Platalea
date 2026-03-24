@@ -131,7 +131,7 @@ class EpubBookmarkManager(private val context: Context) {
             // 使用URI hash作为文件名，支持多本书
             val progressFile = getProgressFileForUri(progress.epubUri)
             progressFile.writeText(json.toString())
-            Log.d(TAG, "保存阅读进度: ${progress.epubFileName} 章节${progress.chapterIndex}")
+            Log.d(TAG, "保存阅读进度: ${progress.epubFileName} 章节${progress.chapterIndex}, 比例${progress.scrollRatio}, URI hash=${progress.epubUri.hashCode().toUInt().toString(16)}, 文件=${progressFile.absolutePath}")
         } catch (e: Exception) {
             Log.e(TAG, "保存阅读进度失败", e)
         }
@@ -141,9 +141,10 @@ class EpubBookmarkManager(private val context: Context) {
     fun loadProgress(epubUri: String): EpubReadingProgress? {
         return try {
             val file = getProgressFileForUri(epubUri)
+            Log.d(TAG, "加载阅读进度: URI hash=${epubUri.hashCode().toUInt().toString(16)}, 文件=${file.absolutePath}, 存在=${file.exists()}")
             if (!file.exists()) return null
             val json = JSONObject(file.readText())
-            EpubReadingProgress(
+            val progress = EpubReadingProgress(
                 epubUri = json.getString("epubUri"),
                 epubFileName = json.optString("epubFileName", ""),
                 chapterIndex = json.getInt("chapterIndex"),
@@ -152,6 +153,8 @@ class EpubBookmarkManager(private val context: Context) {
                 scrollRatio = json.optDouble("scrollRatio", 0.0).toFloat(),
                 lastReadTime = json.optLong("lastReadTime", System.currentTimeMillis())
             )
+            Log.d(TAG, "加载阅读进度成功: ${progress.epubFileName} 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
+            progress
         } catch (e: Exception) {
             Log.e(TAG, "加载阅读进度失败", e)
             null

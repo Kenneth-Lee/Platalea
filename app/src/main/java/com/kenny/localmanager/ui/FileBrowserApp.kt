@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutManager
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import androidx.compose.material.icons.filled.ArrowBack
 import android.app.Activity
 import androidx.activity.compose.BackHandler
@@ -180,6 +181,7 @@ import com.kenny.localmanager.file.HtmlZipParseResult
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
+import com.kenny.localmanager.file.prepareTxtAsEpub
 import com.kenny.localmanager.file.loadEpubFromCache
 import com.kenny.localmanager.file.getEpubChapterFile
 import com.kenny.localmanager.file.getEpubCacheDir
@@ -945,6 +947,9 @@ fun FileBrowserApp(
             var epubInProgress by remember { mutableStateOf(false) }
             var epubLog by remember { mutableStateOf("") }
             var epubLoadError by remember { mutableStateOf<String?>(null) }
+            var txtTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var txtInProgress by remember { mutableStateOf(false) }
+            var txtLoadError by remember { mutableStateOf<String?>(null) }
             var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var picZipPassword by remember { mutableStateOf("") }
@@ -1154,6 +1159,56 @@ fun FileBrowserApp(
                     epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
                     epubInProgress = false
                 }
+            }
+            // 处理 TXT 文件，转换为 EPUB 格式查看
+            LaunchedEffect(txtTarget) {
+                val target = txtTarget ?: return@LaunchedEffect
+                txtInProgress = true
+                txtLoadError = null
+                try {
+                    val cacheDir = getEpubCacheDir(context, target.uri)
+                    val cacheTs = getEpubCacheTimestamp(cacheDir)
+
+                    var result: EpubExtractResult? = null
+
+                    // 检查是否有有效缓存
+                    if (cacheTs > 0 && cacheTs >= target.lastModified) {
+                        result = loadEpubFromCache(cacheDir)
+                        // 如果缓存加载失败，清除旧缓存
+                        if (result == null) {
+                            Log.w("FileBrowserApp", "TXT cache load failed, clearing old cache")
+                            cacheDir.deleteRecursively()
+                        }
+                    }
+
+                    // 如果没有有效缓存，重新生成
+                    if (result == null) {
+                        // 将 TXT 文件复制到临时目录
+                        val tempFile = File(context.cacheDir, "txt_temp/${target.name}")
+                        tempFile.parentFile?.mkdirs()
+                        context.contentResolver.openInputStream(target.uri)?.use { input ->
+                            tempFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        // 转换为 EPUB 格式（使用 URI 作为缓存键）
+                        result = prepareTxtAsEpub(context, tempFile, target.uri)
+                    }
+
+                    if (result != null) {
+                        epubViewState = EpubViewState(
+                            extractResult = result,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                        txtTarget = null
+                    } else {
+                        txtLoadError = "无法解析 TXT 文件"
+                    }
+                } catch (e: Exception) {
+                    Log.e("FileBrowserApp", "TXT processing failed", e)
+                    txtLoadError = "${e.javaClass.simpleName}: ${e.message}"
+                }
+                txtInProgress = false
             }
             LaunchedEffect(picZipTarget) {
                 picZipEncrypted = null
@@ -1736,6 +1791,7 @@ fun FileBrowserApp(
                     onRequestMdZipView = { mdZipTarget = it },
                     onRequestHtmlZipView = { htmlZipTarget = it },
                     onRequestEpubView = { epubTarget = it },
+                    onRequestTxtView = { txtTarget = it },
                     onRequestPicZipView = { picZipTarget = it },
                     onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                     onCompressToZipRequest = { zipCompressTarget = it },
@@ -2992,6 +3048,29 @@ fun FileBrowserApp(
                     )
                 }
             }
+            // ---- TXT 错误对话框 ----
+            txtLoadError?.let { error ->
+                AlertDialog(
+                    onDismissRequest = { txtLoadError = null; txtTarget = null },
+                    title = { Text("TXT 文件解析失败") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp)
+                        ) {
+                            Text(
+                                error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text("确定") }
+                    }
+                )
+            }
             // ---- .pic.zip 密码输入对话框 ----
             picZipTarget?.let { target ->
                 val encrypted = picZipEncrypted
@@ -3719,6 +3798,10 @@ private fun isExtractableArchive(name: String): Boolean =
 private fun isEpubFile(name: String): Boolean =
     name.endsWith(".epub", ignoreCase = true)
 
+/** 判断文件名是否为 TXT 文件。 */
+private fun isTxtFile(name: String): Boolean =
+    name.endsWith(".txt", ignoreCase = true)
+
 /** 判断文件名是否为 PDF 文件。 */
 private fun isPdfFile(name: String): Boolean =
     name.endsWith(".pdf", ignoreCase = true)
@@ -3871,6 +3954,7 @@ internal fun FileBrowserScreen(
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
     onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
+    onRequestTxtView: (DocumentFileModel) -> Unit = {},
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
@@ -4215,6 +4299,8 @@ internal fun FileBrowserScreen(
                                                 onRequestHtmlZipView(item)
                                             isEpubFile(item.name) ->
                                                 onRequestEpubView(item)
+                                            isTxtFile(item.name) ->
+                                                onRequestTxtView(item)
                                             isPicZip(item.name) ->
                                                 onRequestPicZipView(item)
                                             isPdfFile(item.name) ->
