@@ -1717,6 +1717,9 @@ fun isEpubFile(name: String): Boolean = name.endsWith(".epub", ignoreCase = true
 /** 判断文件名是否为 TXT 文件。 */
 fun isTxtFile(name: String): Boolean = name.endsWith(".txt", ignoreCase = true)
 
+/** 判断文件名是否为 LLM 对话文件。 */
+fun isLlmFile(name: String): Boolean = name.endsWith(".llm", ignoreCase = true)
+
 /**
  * 将 TXT 文件转换为 EPUB 兼容格式，使用与 EPUB 相同的缓存结构
  * 按空行分隔为段落，整个文档作为一个章节
@@ -1849,6 +1852,256 @@ fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractR
         )
     } catch (e: Exception) {
         Log.e("TxtToEpub", "Failed to convert TXT to EPUB format", e)
+        return null
+    }
+}
+
+/**
+ * 将 LLM 对话文件转换为 EPUB 兼容格式
+ * Assistant 内容正常显示，其他角色（Configure/System/User）用灰色显示并可折叠
+ *
+ * @param context 上下文
+ * @param llmFile LLM 文件
+ * @param llmUri LLM 文件的 URI（用于生成缓存目录）
+ * @return EpubExtractResult 或 null
+ */
+fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractResult? {
+    if (!llmFile.exists()) return null
+
+    try {
+        // 使用与 EPUB 相同的缓存目录结构
+        val cacheDir = getEpubCacheDir(context, llmUri)
+        cacheDir.deleteRecursively()
+        cacheDir.mkdirs()
+
+        // 读取 LLM 文件内容（尝试多种编码）
+        val content = try {
+            llmFile.readText(Charsets.UTF_8)
+        } catch (e: Exception) {
+            try {
+                llmFile.readText(Charset.forName("GBK"))
+            } catch (e2: Exception) {
+                llmFile.readText()
+            }
+        }
+
+        // 创建 EPUB 标准目录结构
+        val contentDir = File(cacheDir, "content")
+        val metaInfDir = File(contentDir, "META-INF")
+        val oebpsDir = File(contentDir, "OEBPS")
+        metaInfDir.mkdirs()
+        oebpsDir.mkdirs()
+
+        val bookTitle = llmFile.nameWithoutExtension
+
+        // 1. 创建 META-INF/container.xml（EPUB 标准入口）
+        val containerXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                </rootfiles>
+            </container>
+        """.trimIndent()
+        File(metaInfDir, "container.xml").writeText(containerXml)
+
+        // 2. 解析对话内容并生成 HTML
+        val htmlFileName = "chapter_0.html"
+        val htmlFile = File(oebpsDir, htmlFileName)
+
+        // 解析对话块
+        data class DialogBlock(
+            val role: String,
+            val content: String,
+            val isAssistant: Boolean
+        )
+
+        val dialogBlocks = mutableListOf<DialogBlock>()
+        val lines = content.lines()
+        val currentBlock = StringBuilder()
+        var currentRole: String? = null
+
+        for (line in lines) {
+            val trimmedLine = line.trimEnd()
+            // 检测角色标记行（如 "Configure:", "System:", "User:", "Assistant:"）
+            val roleMatch = Regex("^(Configure|System|User|Assistant)\\s*:\\s*(.*)$").find(trimmedLine)
+            if (roleMatch != null) {
+                // 保存之前的块
+                if (currentRole != null && currentBlock.isNotEmpty()) {
+                    val isAssistant = currentRole == "Assistant"
+                    dialogBlocks.add(DialogBlock(currentRole, currentBlock.toString().trim(), isAssistant))
+                }
+                currentRole = roleMatch.groupValues[1]
+                currentBlock.clear()
+                // 如果角色标记后还有内容，加入当前块
+                val remainingContent = roleMatch.groupValues[2].trim()
+                if (remainingContent.isNotEmpty()) {
+                    currentBlock.append(remainingContent).append("\n")
+                }
+            } else if (currentRole != null) {
+                // 注释行（以 // 或 # 开头）也加入当前块
+                currentBlock.append(trimmedLine).append("\n")
+            } else {
+                // 没有角色标记的内容，当作普通文本处理（可能是文件开头的注释）
+                if (trimmedLine.isNotEmpty()) {
+                    if (currentBlock.isNotEmpty() || trimmedLine.startsWith("//") || trimmedLine.startsWith("#")) {
+                        currentBlock.append(trimmedLine).append("\n")
+                    }
+                }
+            }
+        }
+        // 保存最后一个块
+        if (currentRole != null && currentBlock.isNotEmpty()) {
+            val isAssistant = currentRole == "Assistant"
+            dialogBlocks.add(DialogBlock(currentRole, currentBlock.toString().trim(), isAssistant))
+        } else if (currentBlock.isNotEmpty()) {
+            // 没有角色标记的开头内容
+            dialogBlocks.add(DialogBlock("Comment", currentBlock.toString().trim(), false))
+        }
+
+        // 生成 HTML 内容
+        val blocksHtml = dialogBlocks.joinToString("\n\n") { block ->
+            val escapedContent = escapeHtml(block.content)
+            val formattedContent = escapedContent.replace("\n", "<br/>\n")
+            if (block.isAssistant) {
+                // Assistant 内容正常显示
+                """
+                <div class="assistant-block">
+                    <div class="role-label assistant-label">Assistant</div>
+                    <div class="content assistant-content">$formattedContent</div>
+                </div>
+                """.trimIndent()
+            } else {
+                // 其他角色用灰色显示，可折叠
+                """
+                <details class="other-block">
+                    <summary class="role-label other-label">${block.role}</summary>
+                    <div class="content other-content">$formattedContent</div>
+                </details>
+                """.trimIndent()
+            }
+        }
+
+        val htmlContent = """
+            <!DOCTYPE html>
+            <html xmlns="http://www.w3.org/1999/xhtml">
+            <head>
+                <meta charset="UTF-8"/>
+                <meta name="viewport" content="width=device-width, initial-scale=1"/>
+                <title>${escapeHtml(bookTitle)}</title>
+                <style>
+                    body {
+                        font-family: sans-serif;
+                        line-height: 1.6;
+                        padding: 16px;
+                        background: #fafafa;
+                    }
+                    h1 {
+                        font-size: 1.4em;
+                        margin-bottom: 1em;
+                        border-bottom: 1px solid #ddd;
+                        padding-bottom: 0.5em;
+                    }
+                    .assistant-block {
+                        margin: 1em 0;
+                        padding: 0.8em;
+                        background: #fff;
+                        border-radius: 8px;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                    }
+                    .assistant-label {
+                        color: #1976d2;
+                        font-weight: bold;
+                        font-size: 0.85em;
+                        margin-bottom: 0.5em;
+                    }
+                    .assistant-content {
+                        color: #333;
+                    }
+                    .other-block {
+                        margin: 0.5em 0;
+                    }
+                    .other-label {
+                        color: #999;
+                        font-size: 0.8em;
+                        cursor: pointer;
+                        padding: 0.3em 0;
+                    }
+                    .other-label:hover {
+                        color: #666;
+                    }
+                    .other-content {
+                        color: #888;
+                        font-size: 0.9em;
+                        padding: 0.5em;
+                        background: #f5f5f5;
+                        border-radius: 4px;
+                        margin-top: 0.3em;
+                    }
+                    details[open] .other-label {
+                        color: #666;
+                    }
+                    .content {
+                        white-space: pre-wrap;
+                        word-wrap: break-word;
+                    }
+                </style>
+            </head>
+            <body>
+                <h1>${escapeHtml(bookTitle)}</h1>
+                $blocksHtml
+            </body>
+            </html>
+        """.trimIndent()
+        htmlFile.writeText(htmlContent)
+
+        // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
+        val opfContent = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                    <dc:title>$bookTitle</dc:title>
+                    <dc:language>zh</dc:language>
+                    <dc:identifier id="uid">llm-${llmFile.name.hashCode()}</dc:identifier>
+                </metadata>
+                <manifest>
+                    <item id="chapter_0" href="$htmlFileName" media-type="application/xhtml+xml"/>
+                </manifest>
+                <spine>
+                    <itemref idref="chapter_0"/>
+                </spine>
+            </package>
+        """.trimIndent()
+        File(oebpsDir, "content.opf").writeText(opfContent)
+
+        // 4. 创建缓存时间戳文件
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+
+        // 5. 创建 LLM 标记文件
+        File(cacheDir, ".llm_source").writeText(llmFile.name)
+
+        val epubChapters = listOf(EpubChapter(
+            id = "chapter_0",
+            href = htmlFileName,
+            title = bookTitle
+        ))
+
+        val bookInfo = EpubBookInfo(
+            title = bookTitle,
+            author = null,
+            language = "zh"
+        )
+
+        return EpubExtractResult(
+            cacheDir = cacheDir,
+            contentDir = contentDir,
+            opfDir = oebpsDir,
+            bookInfo = bookInfo,
+            chapters = epubChapters,
+            isEncrypted = false
+        )
+    } catch (e: Exception) {
+        Log.e("LlmToEpub", "Failed to convert LLM to EPUB format", e)
         return null
     }
 }

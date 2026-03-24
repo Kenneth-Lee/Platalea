@@ -182,6 +182,7 @@ import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
 import com.kenny.localmanager.file.prepareTxtAsEpub
+import com.kenny.localmanager.file.prepareLlmAsEpub
 import com.kenny.localmanager.file.loadEpubFromCache
 import com.kenny.localmanager.file.getEpubChapterFile
 import com.kenny.localmanager.file.getEpubCacheDir
@@ -950,6 +951,9 @@ fun FileBrowserApp(
             var txtTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var txtInProgress by remember { mutableStateOf(false) }
             var txtLoadError by remember { mutableStateOf<String?>(null) }
+            var llmTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var llmInProgress by remember { mutableStateOf(false) }
+            var llmLoadError by remember { mutableStateOf<String?>(null) }
             var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var picZipPassword by remember { mutableStateOf("") }
@@ -1209,6 +1213,57 @@ fun FileBrowserApp(
                     txtLoadError = "${e.javaClass.simpleName}: ${e.message}"
                 }
                 txtInProgress = false
+            }
+            // 处理 LLM 对话文件，转换为 EPUB 格式查看
+            LaunchedEffect(llmTarget) {
+                val target = llmTarget ?: return@LaunchedEffect
+                llmInProgress = true
+                llmLoadError = null
+                try {
+                    val cacheDir = getEpubCacheDir(context, target.uri)
+                    val cacheTs = getEpubCacheTimestamp(cacheDir)
+
+                    var result: EpubExtractResult? = null
+
+                    // 检查是否有有效缓存
+                    if (cacheTs > 0 && cacheTs >= target.lastModified) {
+                        result = loadEpubFromCache(cacheDir)
+                        // 如果缓存加载失败，清除旧缓存
+                        if (result == null) {
+                            Log.w("FileBrowserApp", "LLM cache load failed, clearing old cache")
+                            cacheDir.deleteRecursively()
+                        }
+                    }
+
+                    // 如果没有有效缓存，重新生成
+                    if (result == null) {
+                        // 将 LLM 文件复制到临时目录
+                        val tempFile = File(context.cacheDir, "llm_temp/${target.name}")
+                        tempFile.parentFile?.mkdirs()
+                        context.contentResolver.openInputStream(target.uri)?.use { input ->
+                            tempFile.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        // 转换为 EPUB 格式（使用 URI 作为缓存键）
+                        result = prepareLlmAsEpub(context, tempFile, target.uri)
+                    }
+
+                    val finalResult = result
+                    if (finalResult != null) {
+                        epubViewState = EpubViewState(
+                            extractResult = finalResult,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                        llmTarget = null
+                    } else {
+                        llmLoadError = "无法解析 LLM 对话文件"
+                    }
+                } catch (e: Exception) {
+                    Log.e("FileBrowserApp", "LLM processing failed", e)
+                    llmLoadError = "${e.javaClass.simpleName}: ${e.message}"
+                }
+                llmInProgress = false
             }
             LaunchedEffect(picZipTarget) {
                 picZipEncrypted = null
@@ -1792,6 +1847,7 @@ fun FileBrowserApp(
                     onRequestHtmlZipView = { htmlZipTarget = it },
                     onRequestEpubView = { epubTarget = it },
                     onRequestTxtView = { txtTarget = it },
+                    onRequestLlmView = { llmTarget = it },
                     onRequestPicZipView = { picZipTarget = it },
                     onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                     onCompressToZipRequest = { zipCompressTarget = it },
@@ -3071,6 +3127,29 @@ fun FileBrowserApp(
                     }
                 )
             }
+            // ---- LLM 错误对话框 ----
+            llmLoadError?.let { error ->
+                AlertDialog(
+                    onDismissRequest = { llmLoadError = null; llmTarget = null },
+                    title = { Text("LLM 对话文件解析失败") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 300.dp)
+                        ) {
+                            Text(
+                                error,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text("确定") }
+                    }
+                )
+            }
             // ---- .pic.zip 密码输入对话框 ----
             picZipTarget?.let { target ->
                 val encrypted = picZipEncrypted
@@ -3802,6 +3881,10 @@ private fun isEpubFile(name: String): Boolean =
 private fun isTxtFile(name: String): Boolean =
     name.endsWith(".txt", ignoreCase = true)
 
+/** 判断文件名是否为 LLM 对话文件。 */
+private fun isLlmFile(name: String): Boolean =
+    name.endsWith(".llm", ignoreCase = true)
+
 /** 判断文件名是否为 PDF 文件。 */
 private fun isPdfFile(name: String): Boolean =
     name.endsWith(".pdf", ignoreCase = true)
@@ -3955,6 +4038,7 @@ internal fun FileBrowserScreen(
     onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
     onRequestTxtView: (DocumentFileModel) -> Unit = {},
+    onRequestLlmView: (DocumentFileModel) -> Unit = {},
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
@@ -4301,6 +4385,8 @@ internal fun FileBrowserScreen(
                                                 onRequestEpubView(item)
                                             isTxtFile(item.name) ->
                                                 onRequestTxtView(item)
+                                            isLlmFile(item.name) ->
+                                                onRequestLlmView(item)
                                             isPicZip(item.name) ->
                                                 onRequestPicZipView(item)
                                             isPdfFile(item.name) ->
