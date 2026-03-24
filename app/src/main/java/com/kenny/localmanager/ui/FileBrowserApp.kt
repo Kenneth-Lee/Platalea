@@ -6379,10 +6379,8 @@ fun CacheManagementDialog(
         loading = false
     }
     fun refresh() {
-        loading = true
         scope.launch {
             entries = withContext(Dispatchers.IO) { getCacheEntries(context) }
-            loading = false
         }
     }
     Dialog(onDismissRequest = onDismiss) {
