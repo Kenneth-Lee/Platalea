@@ -5186,7 +5186,7 @@ fun FileItem(
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
         isCompressedMarkdown(model.name) -> Icons.Default.Article
         isCompressedHtml(model.name) -> Icons.Default.Article
-        isEpubFile(model.name) -> Icons.Default.MenuBook
+        isEpubFile(model.name) || isTxtFile(model.name) || isLlmFile(model.name) -> Icons.Default.MenuBook
         isPdfFile(model.name) -> Icons.Default.PictureAsPdf
         isPicZip(model.name) -> Icons.Default.Archive
         isExtractableArchive(model.name) -> Icons.Default.Archive
