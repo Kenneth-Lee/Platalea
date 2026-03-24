@@ -3666,6 +3666,74 @@ fun EpubViewerScreen(
         dictLoading = false
     }
 
+    // 生成词形变体的候选词列表
+    fun generateWordCandidates(word: String): List<String> {
+        val candidates = mutableListOf<String>()
+        val lowerWord = word.lowercase()
+
+        // 尝试去掉常见后缀
+        // 过去式/过去分词 -ed
+        if (lowerWord.endsWith("ied")) {
+            candidates.add(word.dropLast(3) + "y")  // tried -> try
+        }
+        if (lowerWord.endsWith("ed") && word.length > 3) {
+            candidates.add(word.dropLast(1))  // moved -> move
+            candidates.add(word.dropLast(2))  // stopped -> stop (doubled consonant)
+            candidates.add(word.dropLast(3))  // stopped -> stop
+        }
+
+        // 现在分词 -ing
+        if (lowerWord.endsWith("ying") && word.length > 4) {
+            candidates.add(word.dropLast(4) + "ie")  // dying -> die
+        }
+        if (lowerWord.endsWith("ing") && word.length > 4) {
+            candidates.add(word.dropLast(3))  // moving -> move
+            candidates.add(word.dropLast(3) + "e")  // moving -> move (if stored as move)
+            candidates.add(word.dropLast(4))  // stopping -> stop (doubled consonant)
+        }
+
+        // 复数 -s/-es
+        if (lowerWord.endsWith("ies") && word.length > 4) {
+            candidates.add(word.dropLast(3) + "y")  // countries -> country
+        }
+        if (lowerWord.endsWith("es") && word.length > 3) {
+            candidates.add(word.dropLast(2))  // watches -> watch
+            candidates.add(word.dropLast(1))  // watches -> watche (try anyway)
+        }
+        if (lowerWord.endsWith("s") && word.length > 2) {
+            candidates.add(word.dropLast(1))  // cats -> cat
+        }
+
+        // 比较级/最高级 -er/-est
+        if (lowerWord.endsWith("ier")) {
+            candidates.add(word.dropLast(3) + "y")  // happier -> happy
+        }
+        if (lowerWord.endsWith("er") && word.length > 3) {
+            candidates.add(word.dropLast(1))  // bigger -> big (doubled consonant)
+            candidates.add(word.dropLast(2))  // taller -> tall
+            candidates.add(word.dropLast(1) + "e")  // nicer -> nice
+        }
+        if (lowerWord.endsWith("iest")) {
+            candidates.add(word.dropLast(4) + "y")  // happiest -> happy
+        }
+        if (lowerWord.endsWith("est") && word.length > 4) {
+            candidates.add(word.dropLast(2))  // biggest -> big (doubled consonant)
+            candidates.add(word.dropLast(3))  // tallest -> tall
+            candidates.add(word.dropLast(2) + "e")  // nicest -> nice
+        }
+
+        // 副词 -ly
+        if (lowerWord.endsWith("ily")) {
+            candidates.add(word.dropLast(3) + "y")  // happily -> happy
+        }
+        if (lowerWord.endsWith("ly") && word.length > 3) {
+            candidates.add(word.dropLast(2))  // slowly -> slow
+            candidates.add(word.dropLast(1))  // quickly -> quick
+        }
+
+        return candidates.distinct()
+    }
+
     // 词典查询函数
     fun lookupWord(word: String) {
         val loaded = dictLoaded
@@ -3673,13 +3741,29 @@ fun EpubViewerScreen(
             dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
             return
         }
-        val found = lookupExactWord(loaded, word)
+
+        // 尝试精确匹配
+        var found = lookupExactWord(loaded, word)
+        var matchedWord = word
+
+        // 如果精确匹配失败，尝试去掉常见后缀
+        if (found == null) {
+            val candidates = generateWordCandidates(word)
+            for (candidate in candidates) {
+                found = lookupExactWord(loaded, candidate)
+                if (found != null) {
+                    matchedWord = candidate
+                    break
+                }
+            }
+        }
+
         if (found == null) {
             dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
             return
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
-        dictLookupResult = DictLookupResult(word, definition, null)
+        dictLookupResult = DictLookupResult(matchedWord, definition, null)
     }
 
     // 剪贴板监听器 - 当词典区域展开时，监控剪贴板变化并自动查词
