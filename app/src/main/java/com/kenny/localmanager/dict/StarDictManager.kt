@@ -126,6 +126,17 @@ fun searchStarDictWords(loaded: StarDictLoaded, pattern: String, maxResults: Int
     }
 }
 
+/**
+ * 精确查词：在已加载的词典中查找完全匹配的单词
+ * @param word 要查找的单词
+ * @return 找到的词条，或 null 如果未找到
+ */
+fun lookupExactWord(loaded: StarDictLoaded, word: String): StarDictWord? {
+    if (word.isBlank()) return null
+    val normalizedWord = word.trim().lowercase(Locale.getDefault())
+    return loaded.words.find { it.word.lowercase(Locale.getDefault()) == normalizedWord }
+}
+
 fun readStarDictExplanation(context: Context, dictId: String, loaded: StarDictLoaded, word: StarDictWord): String {
     val dictFile = File(File(getBaseDir(context), dictId), DICT_FILE_NAME)
     if (!dictFile.exists()) return "词典数据文件不存在: ${dictFile.absolutePath}"

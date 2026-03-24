@@ -1078,6 +1078,12 @@ data class HtmlZipExtractResult(
     val isEncrypted: Boolean
 )
 
+/** .html.zip 解析结果：成功或失败（带详细信息）。 */
+sealed class HtmlZipParseResult {
+    data class Success(val result: HtmlZipExtractResult) : HtmlZipParseResult()
+    data class Error(val message: String, val detail: String? = null) : HtmlZipParseResult()
+}
+
 /** 获取 .html.zip 的缓存目录，基于 URI 哈希。 */
 fun getHtmlZipCacheDir(context: Context, zipUri: Uri): File {
     val key = zipUri.toString().hashCode().toUInt().toString(16)
@@ -1104,7 +1110,7 @@ fun findHtmlZipIndexFile(contentDir: File): File? {
 /** 缓存是否标记为加密来源（.html.zip）。 */
 fun isHtmlZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
 
-/** 解压 .html.zip 到缓存目录，查找 index.html。
+/** 解压 .html.zip 到缓存目录，查找 index.html（简化版，保持兼容）。
  * @return 解压结果（indexFile 可能为 null），解压失败返回 null */
 fun extractHtmlZipToCache(
     context: Context,
@@ -1112,34 +1118,107 @@ fun extractHtmlZipToCache(
     password: CharArray?,
     zipFileName: String
 ): HtmlZipExtractResult? {
+    val result = extractHtmlZipToCacheWithProgress(context, zipUri, password, zipFileName) {}
+    return when (result) {
+        is HtmlZipParseResult.Success -> result.result
+        is HtmlZipParseResult.Error -> null
+    }
+}
+
+/**
+ * 解压 .html.zip 到缓存目录，带进度回调和详细错误信息。
+ * @param onLog 进度日志回调
+ * @return 解析结果（成功或失败）
+ */
+fun extractHtmlZipToCacheWithProgress(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String,
+    onLog: (String) -> Unit = {}
+): HtmlZipParseResult {
     val cacheDir = getHtmlZipCacheDir(context, zipUri)
     cacheDir.deleteRecursively()
     cacheDir.mkdirs()
     val tmpZip = File(cacheDir, "__archive.zip")
+
     try {
-        context.contentResolver.openInputStream(zipUri)?.use { input ->
-            tmpZip.outputStream().use { output -> input.copyTo(output) }
-        } ?: return null
+        onLog("开始读取文件: $zipFileName")
+
+        // 复制文件到临时位置
+        val inputStream = context.contentResolver.openInputStream(zipUri)
+        if (inputStream == null) {
+            return HtmlZipParseResult.Error("无法打开文件", "ContentResolver.openInputStream 返回 null，URI: $zipUri")
+        }
+
+        inputStream.use { input ->
+            tmpZip.outputStream().use { output ->
+                val buffer = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                    total += read
+                    if (total % (1024 * 1024) < 8192) {  // 每MB更新一次
+                        onLog("已复制 ${total / 1024 / 1024} MB...")
+                    }
+                }
+            }
+        }
+
+        if (!tmpZip.exists() || tmpZip.length() == 0L) {
+            return HtmlZipParseResult.Error("文件复制失败", "临时文件为空或不存在，路径: ${tmpZip.path}")
+        }
+        onLog("文件读取完成 (${tmpZip.length() / 1024 / 1024} MB)")
+
+        onLog("检查压缩包...")
         val zip = ZipFile(tmpZip)
         val encrypted = zip.isEncrypted
+        onLog("压缩包检查完成，加密: $encrypted")
+
         if (encrypted) {
-            if (password == null || password.isEmpty()) return null
+            if (password == null || password.isEmpty()) {
+                return HtmlZipParseResult.Error("需要密码", "HTML.zip 文件已加密，请输入密码")
+            }
             zip.setPassword(password)
         }
+
+        onLog("解压文件...")
         val contentDir = File(cacheDir, "content").apply { mkdirs() }
-        zip.extractAll(contentDir.path)
+        try {
+            zip.extractAll(contentDir.path)
+        } catch (e: net.lingala.zip4j.exception.ZipException) {
+            val msg = e.message ?: "未知ZipException"
+            return HtmlZipParseResult.Error("解压失败", "ZipException: $msg")
+        }
         tmpZip.delete()
+        onLog("解压完成")
+
+        onLog("查找入口文件...")
         val indexFile = findHtmlZipIndexFile(contentDir)
         if (indexFile == null) {
-            Log.w(TAG, "extractHtmlZipToCache: no index.html found in $zipUri")
+            val files = contentDir.listFiles()?.take(20)?.map { it.name } ?: emptyList()
+            return HtmlZipParseResult.Error(
+                "未找到入口文件",
+                "在解压目录中未找到 index.html 或 README.html\n目录文件列表: ${files.joinToString(", ")}"
+            )
         }
+        onLog("入口文件: ${indexFile.name}")
+
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
-        return HtmlZipExtractResult(cacheDir, contentDir, indexFile, encrypted)
+
+        onLog("完成！")
+        return HtmlZipParseResult.Success(HtmlZipExtractResult(cacheDir, contentDir, indexFile, encrypted))
+
     } catch (e: Exception) {
         Log.e(TAG, "extractHtmlZipToCache failed", e)
         cacheDir.deleteRecursively()
-        return null
+        return HtmlZipParseResult.Error(
+            "${e.javaClass.simpleName}: ${e.message}",
+            e.stackTraceToString().take(500)
+        )
     } finally {
         if (tmpZip.exists()) tmpZip.delete()
     }

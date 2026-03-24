@@ -23,12 +23,14 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -38,12 +40,15 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkAdd
 import androidx.compose.material.icons.filled.Bookmarks
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Bookmarks
@@ -59,12 +64,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -127,10 +134,30 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Size
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.getEpubChapterFile
+import com.kenny.localmanager.dict.listImportedStarDicts
+import com.kenny.localmanager.dict.loadImportedStarDict
+import com.kenny.localmanager.dict.lookupExactWord
+import com.kenny.localmanager.dict.readStarDictExplanation
+import com.kenny.localmanager.dict.StarDictLoaded
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
 private const val STANDALONE_MD_CACHE_LIMIT = 6
+
+/** 词典查询结果 */
+data class DictLookupResult(
+    val word: String,
+    val definition: String?,
+    val error: String?
+)
+
+/**
+ * 从 WebView 中提取指定位置的单词
+ * @param webView WebView 实例
+ * @param x 点击的 x 坐标
+ * @param y 点击的 y 坐标
+ * @param callback 回调函数，返回提取的单词（可能为空）
+ */
 
 class MarkdownViewerSessionCache(
     private val maxEntries: Int = STANDALONE_MD_CACHE_LIMIT
@@ -1982,6 +2009,35 @@ fun MarkdownViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
+    // 词典查询状态
+    var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
+    var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
+
+    // 加载词典（只加载一次）
+    LaunchedEffect(Unit) {
+        val dicts = listImportedStarDicts(context)
+        val firstDict = dicts.firstOrNull()
+        if (firstDict != null) {
+            dictLoaded = loadImportedStarDict(context, firstDict.id)
+        }
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        val loaded = dictLoaded
+        if (loaded == null) {
+            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return
+        }
+        val found = lookupExactWord(loaded, word)
+        if (found == null) {
+            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return
+        }
+        val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
+        dictLookupResult = DictLookupResult(word, definition, null)
+    }
+
     val katexInline = remember(context) {
         try {
             val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
@@ -2374,6 +2430,35 @@ fun PassContentViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
+    // 词典查询状态
+    var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
+    var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
+
+    // 加载词典（只加载一次）
+    LaunchedEffect(Unit) {
+        val dicts = listImportedStarDicts(context)
+        val firstDict = dicts.firstOrNull()
+        if (firstDict != null) {
+            dictLoaded = loadImportedStarDict(context, firstDict.id)
+        }
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        val loaded = dictLoaded
+        if (loaded == null) {
+            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return
+        }
+        val found = lookupExactWord(loaded, word)
+        if (found == null) {
+            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return
+        }
+        val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
+        dictLookupResult = DictLookupResult(word, definition, null)
+    }
+
     val katexInline = remember(context) {
         try {
             val css = context.assets.open("katex/katex.min.css").use { it.bufferedReader().readText() }
@@ -2647,6 +2732,35 @@ fun MdZipViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+
+    // 词典查询状态
+    var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
+    var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
+
+    // 加载词典（只加载一次）
+    LaunchedEffect(Unit) {
+        val dicts = listImportedStarDicts(context)
+        val firstDict = dicts.firstOrNull()
+        if (firstDict != null) {
+            dictLoaded = loadImportedStarDict(context, firstDict.id)
+        }
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        val loaded = dictLoaded
+        if (loaded == null) {
+            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return
+        }
+        val found = lookupExactWord(loaded, word)
+        if (found == null) {
+            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return
+        }
+        val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
+        dictLookupResult = DictLookupResult(word, definition, null)
+    }
 
     fun resetCurrentPageState(message: String = "正在准备文档…") {
         webViewRef.value = null
@@ -3226,6 +3340,35 @@ fun HtmlZipViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
 
+    // 词典查询状态
+    var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
+    var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
+
+    // 加载词典（只加载一次）
+    LaunchedEffect(Unit) {
+        val dicts = listImportedStarDicts(context)
+        val firstDict = dicts.firstOrNull()
+        if (firstDict != null) {
+            dictLoaded = loadImportedStarDict(context, firstDict.id)
+        }
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        val loaded = dictLoaded
+        if (loaded == null) {
+            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return
+        }
+        val found = lookupExactWord(loaded, word)
+        if (found == null) {
+            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return
+        }
+        val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
+        dictLookupResult = DictLookupResult(word, definition, null)
+    }
+
     logDebug?.invoke("[HTMLZIP] 打开 zipFileName=$zipFileName indexFile=${initialIndexFile.absolutePath}")
 
     BackHandler {
@@ -3505,6 +3648,60 @@ fun EpubViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+
+    // 词典查询状态
+    var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
+    var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
+    var dictLoading by remember { mutableStateOf(false) }
+    var dictAreaExpanded by remember { mutableStateOf(false) }
+
+    // 加载词典（只加载一次）
+    LaunchedEffect(Unit) {
+        dictLoading = true
+        val dicts = listImportedStarDicts(context)
+        val firstDict = dicts.firstOrNull()
+        if (firstDict != null) {
+            dictLoaded = loadImportedStarDict(context, firstDict.id)
+        }
+        dictLoading = false
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        val loaded = dictLoaded
+        if (loaded == null) {
+            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return
+        }
+        val found = lookupExactWord(loaded, word)
+        if (found == null) {
+            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return
+        }
+        val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
+        dictLookupResult = DictLookupResult(word, definition, null)
+    }
+
+    // 剪贴板监听器 - 当词典区域展开时，监控剪贴板变化并自动查词
+    val clipboardManager = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager }
+    val lookupWordRef = remember { { word: String -> lookupWord(word) } }
+    DisposableEffect(clipboardManager, dictAreaExpanded) {
+        val listener = ClipboardManager.OnPrimaryClipChangedListener {
+            if (dictAreaExpanded) {
+                val clip = clipboardManager?.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    val text = clip.getItemAt(0)?.text?.toString()?.trim()
+                    if (!text.isNullOrBlank()) {
+                        lookupWordRef(text)
+                    }
+                }
+            }
+        }
+        clipboardManager?.addPrimaryClipChangedListener(listener)
+        onDispose {
+            clipboardManager?.removePrimaryClipChangedListener(listener)
+        }
+    }
 
     // 收藏夹管理器
     val bookmarkManager = remember { EpubBookmarkManager(context) }
@@ -3945,58 +4142,211 @@ fun EpubViewerScreen(
         },
         bottomBar = {
             if (chapters.size > 1) {
-                androidx.compose.material3.BottomAppBar(
-                    containerColor = MaterialTheme.colorScheme.surface
+                val hasDictLoaded = dictLoaded != null
+                val hasDictResult = dictLookupResult != null
+                // 展开时使用更大的高度，收起时使用较小高度
+                val barHeight = when {
+                    !dictAreaExpanded -> 56.dp
+                    else -> 200.dp
+                }
+
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(barHeight),
+                    tonalElevation = 3.dp,
+                    color = MaterialTheme.colorScheme.surface
                 ) {
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxSize(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        // 上一章
-                        TextButton(
-                            onClick = {
-                                if (currentChapterIndex > 0) {
-                                    currentChapterIndex--
-                                    currentScrollRatio = 0f
-                                }
-                            },
-                            enabled = currentChapterIndex > 0
+                        // 左侧：上一章按钮（窄一些）
+                        Box(
+                            modifier = Modifier
+                                .width(60.dp)
+                                .fillMaxHeight()
+                                .clickable(enabled = currentChapterIndex > 0) {
+                                    if (currentChapterIndex > 0) {
+                                        currentChapterIndex--
+                                        currentScrollRatio = 0f
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一章")
-                            Spacer(Modifier.width(4.dp))
-                            Text("上一章")
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "上一章",
+                                    tint = if (currentChapterIndex > 0)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                )
+                                if (dictAreaExpanded) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "上一章",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (currentChapterIndex > 0)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                }
+                            }
                         }
 
-                        // 页码显示
-                        Text(
-                            "${currentChapterIndex + 1} / ${chapters.size}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        // 下一章
-                        TextButton(
-                            onClick = {
-                                if (currentChapterIndex < chapters.size - 1) {
-                                    currentChapterIndex++
-                                    currentScrollRatio = 0f
-                                }
-                            },
-                            enabled = currentChapterIndex < chapters.size - 1
+                        // 中间：章节信息 + 词典结果（宽一些）
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
                         ) {
-                            Text("下一章")
-                            Spacer(Modifier.width(4.dp))
-                            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "下一章")
+                            // 顶部：章节信息 + 展开/收起按钮
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp, vertical = 2.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${currentChapterIndex + 1} / ${chapters.size}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                // 展开/收起按钮（有词典时显示）
+                                if (hasDictLoaded) {
+                                    IconButton(
+                                        onClick = { dictAreaExpanded = !dictAreaExpanded },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            if (dictAreaExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
+                                            contentDescription = if (dictAreaExpanded) "收起" else "展开",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+
+                            // 词典/调试信息区域（可滚动）- 展开时显示
+                            if (dictAreaExpanded) {
+                                dictLookupResult?.let { result ->
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp)
+                                            .verticalScroll(rememberScrollState()),
+                                        horizontalAlignment = Alignment.Start
+                                    ) {
+                                        // 单词标题
+                                        Text(
+                                            result.word.ifBlank { "取词结果" },
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (result.error != null)
+                                                MaterialTheme.colorScheme.error
+                                            else
+                                                MaterialTheme.colorScheme.primary,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Spacer(Modifier.height(4.dp))
+                                        // 内容
+                                        when {
+                                            result.error != null -> {
+                                                Text(
+                                                    result.error,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            }
+                                            result.definition != null -> {
+                                                Text(
+                                                    result.definition,
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                } ?: run {
+                                    // 展开但没有查询结果时，显示提示
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .weight(1f)
+                                            .padding(horizontal = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.Center
+                                    ) {
+                                        Text(
+                                            "选择文字并复制到剪贴板查询",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // 右侧：下一章按钮（窄一些）
+                        Box(
+                            modifier = Modifier
+                                .width(60.dp)
+                                .fillMaxHeight()
+                                .clickable(enabled = currentChapterIndex < chapters.size - 1) {
+                                    if (currentChapterIndex < chapters.size - 1) {
+                                        currentChapterIndex++
+                                        currentScrollRatio = 0f
+                                    }
+                                },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "下一章",
+                                    tint = if (currentChapterIndex < chapters.size - 1)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                )
+                                if (dictAreaExpanded) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "下一章",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (currentChapterIndex < chapters.size - 1)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     ) { padding ->
+        // 计算底部栏高度（与bottomBar保持一致）
+        val bottomBarHeight = when {
+            chapters.size <= 1 -> 0.dp
+            !dictAreaExpanded -> 56.dp
+            else -> 200.dp
+        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = if (chapters.size > 1) 56.dp else 0.dp)
+                .padding(bottom = bottomBarHeight)
         ) {
             when {
                 chapterFile == null || !chapterFile.exists() -> {
@@ -4158,7 +4508,7 @@ private class EpubWebViewClient(
 
 private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[index] else null
 
-/** 支持双击切换章节的WebView：左侧双击上一章，右侧双击下一章 */
+/** 支持章节切换和滚动位置恢复的 WebView */
 private class GestureWebView(
     context: Context,
     private val totalChapters: Int,
@@ -4166,51 +4516,8 @@ private class GestureWebView(
     private val onScrollRatioChange: ((Float) -> Unit)? = null
 ) : WebView(context) {
     var currentChapterIndex: Int = 0
-    private var lastClickTime: Long = 0
-    private var lastClickX: Float = 0f
-    private val doubleClickTimeout: Long = 300 // 双击时间阈值（毫秒）
-    private val edgeZoneRatio = 0.3f // 左右边缘区域占比（30%）
-    private var pendingScrollRatio: Float? = null // 待恢复的滚动比例
-    private var isRestoringScroll = false // 是否正在恢复滚动位置
-
-    private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            val width = width.toFloat()
-            val leftZone = width * edgeZoneRatio
-            val rightZone = width * (1 - edgeZoneRatio)
-
-            val newChapter = when {
-                e.x < leftZone -> {
-                    // 左侧双击 -> 上一章
-                    maxOf(currentChapterIndex - 1, 0)
-                }
-                e.x > rightZone -> {
-                    // 右侧双击 -> 下一章
-                    minOf(currentChapterIndex + 1, totalChapters - 1)
-                }
-                else -> {
-                    // 中间区域，不切换
-                    return false
-                }
-            }
-
-            if (newChapter != currentChapterIndex) {
-                Handler(Looper.getMainLooper()).post {
-                    onChapterChange(newChapter)
-                }
-                return true
-            }
-            return false
-        }
-    })
-
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        // 先让GestureDetector处理双击检测
-        if (gestureDetector.onTouchEvent(event)) {
-            return true
-        }
-        return super.onTouchEvent(event)
-    }
+    private var pendingScrollRatio: Float? = null
+    private var isRestoringScroll = false
 
     private var lastReportedRatio: Float = -1f
 

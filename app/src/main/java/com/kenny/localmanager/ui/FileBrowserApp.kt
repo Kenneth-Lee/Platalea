@@ -175,6 +175,8 @@ import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
 import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
 import com.kenny.localmanager.file.extractHtmlZipToCache
+import com.kenny.localmanager.file.extractHtmlZipToCacheWithProgress
+import com.kenny.localmanager.file.HtmlZipParseResult
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
@@ -935,6 +937,8 @@ fun FileBrowserApp(
             var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var htmlZipPassword by remember { mutableStateOf("") }
             var htmlZipInProgress by remember { mutableStateOf(false) }
+            var htmlZipLog by remember { mutableStateOf("") }
+            var htmlZipLoadError by remember { mutableStateOf<String?>(null) }
             var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var epubPassword by remember { mutableStateOf("") }
@@ -1025,6 +1029,8 @@ fun FileBrowserApp(
                 htmlZipEncrypted = null
                 htmlZipPassword = ""
                 htmlZipInProgress = false
+                htmlZipLog = "准备加载: ${htmlZipTarget?.name ?: ""}\n"
+                htmlZipLoadError = null
                 val target = htmlZipTarget ?: return@LaunchedEffect
                 val cacheDir = getHtmlZipCacheDir(context, target.uri)
                 val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
@@ -1044,23 +1050,36 @@ fun FileBrowserApp(
                     }
                     cacheDir.deleteRecursively()
                 }
+                htmlZipLog += "检查是否加密...\n"
                 htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+                htmlZipLog += "加密状态: $htmlZipEncrypted\n"
                 if (htmlZipEncrypted == false) {
                     htmlZipInProgress = true
-                    val result = withContext(Dispatchers.IO) { extractHtmlZipToCache(context, target.uri, null, target.name) }
+                    val result = withContext(Dispatchers.IO) {
+                        extractHtmlZipToCacheWithProgress(context, target.uri, null, target.name) { log ->
+                            htmlZipLog += "$log\n"
+                        }
+                    }
                     htmlZipInProgress = false
                     htmlZipTarget = null
-                    if (result != null) {
-                        htmlZipViewState = HtmlZipViewState(
-                            indexFile = result.indexFile,
-                            contentDir = result.contentDir,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false
-                        )
-                    } else {
-                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                    when (result) {
+                        is HtmlZipParseResult.Success -> {
+                            htmlZipViewState = HtmlZipViewState(
+                                indexFile = result.result.indexFile,
+                                contentDir = result.result.contentDir,
+                                zipFileName = target.name,
+                                zipUri = target.uri,
+                                isEncrypted = false
+                            )
+                        }
+                        is HtmlZipParseResult.Error -> {
+                            val detail = result.detail?.let { "\n$it" } ?: ""
+                            htmlZipLog += "\n错误: ${result.message}$detail\n"
+                            htmlZipLoadError = "${result.message}$detail"
+                        }
                     }
+                } else if (htmlZipEncrypted == true) {
+                    htmlZipLog += "文件已加密，需要密码\n"
                 }
             }
             LaunchedEffect(epubTarget) {
@@ -2807,17 +2826,39 @@ fun FileBrowserApp(
                         }
                     )
                 } else if (encrypted == null) {
+                    // 加载中或显示错误
                     AlertDialog(
                         onDismissRequest = {},
                         title = { Text("查看压缩 HTML") },
                         text = {
-                            Column {
-                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 100.dp, max = 400.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                if (htmlZipInProgress) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
                                 Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                Text(
+                                    htmlZipLog,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
                             }
                         },
-                        confirmButton = {}
+                        confirmButton = {
+                            if (htmlZipLoadError != null) {
+                                TextButton(onClick = { htmlZipTarget = null; htmlZipLoadError = null; htmlZipLog = "" }) {
+                                    Text("关闭")
+                                }
+                            }
+                        }
                     )
                 }
             }
