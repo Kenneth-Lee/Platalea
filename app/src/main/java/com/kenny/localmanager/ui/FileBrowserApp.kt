@@ -176,6 +176,7 @@ import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
 import com.kenny.localmanager.file.extractHtmlZipToCache
 import com.kenny.localmanager.file.EpubExtractResult
+import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
 import com.kenny.localmanager.file.loadEpubFromCache
 import com.kenny.localmanager.file.getEpubChapterFile
@@ -938,6 +939,8 @@ fun FileBrowserApp(
             var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var epubPassword by remember { mutableStateOf("") }
             var epubInProgress by remember { mutableStateOf(false) }
+            var epubLog by remember { mutableStateOf("") }
+            var epubLoadError by remember { mutableStateOf<String?>(null) }
             var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var picZipPassword by remember { mutableStateOf("") }
@@ -1065,17 +1068,24 @@ fun FileBrowserApp(
                 epubEncrypted = null
                 epubPassword = ""
                 epubInProgress = true
+                epubLog = "准备加载: ${target.name}\n"
+                epubLoadError = null
                 try {
                     var cachedResult: EpubExtractResult? = null
                     var encrypted: Boolean? = null
                     withContext(Dispatchers.IO) {
+                        epubLog += "检查缓存...\n"
                         val cacheDir = getEpubCacheDir(context, target.uri)
                         val cacheTs = getEpubCacheTimestamp(cacheDir)
                         if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
                             cachedResult = loadEpubFromCache(cacheDir)
-                            if (cachedResult != null) return@withContext
+                            if (cachedResult != null) {
+                                epubLog += "使用缓存\n"
+                                return@withContext
+                            }
                             cacheDir.deleteRecursively()
                         }
+                        epubLog += "检查是否加密...\n"
                         encrypted = isArchiveEncrypted(context, target.uri, target.name)
                     }
                     val cached = cachedResult
@@ -1087,24 +1097,42 @@ fun FileBrowserApp(
                             isEncrypted = false
                         )
                         epubTarget = null
+                        epubInProgress = false
                         return@LaunchedEffect
                     }
                     epubEncrypted = encrypted
                     if (encrypted == false) {
-                        val result = withContext(Dispatchers.IO) { extractEpubToCache(context, target.uri, null, target.name) }
-                        epubTarget = null
-                        if (result != null) {
-                            epubViewState = EpubViewState(
-                                extractResult = result,
-                                zipFileName = target.name,
-                                epubUri = target.uri,
-                                isEncrypted = false
-                            )
-                        } else {
-                            Toast.makeText(context, "EPUB解析失败", Toast.LENGTH_SHORT).show()
+                        val result = withContext(Dispatchers.IO) {
+                            extractEpubToCache(context, target.uri, null, target.name) { log ->
+                                epubLog += "$log\n"
+                            }
                         }
+                        when (result) {
+                            is EpubParseResult.Success -> {
+                                epubViewState = EpubViewState(
+                                    extractResult = result.result,
+                                    zipFileName = target.name,
+                                    epubUri = target.uri,
+                                    isEncrypted = false
+                                )
+                                epubTarget = null
+                                epubInProgress = false
+                            }
+                            is EpubParseResult.Error -> {
+                                val detail = result.detail?.let { "\n$it" } ?: ""
+                                epubLog += "\n错误: ${result.message}$detail\n"
+                                epubLoadError = "${result.message}$detail"
+                                epubInProgress = false
+                                // 保留 epubTarget 以便显示错误对话框
+                            }
+                        }
+                    } else {
+                        epubLog += "文件已加密，需要密码\n"
+                        epubInProgress = false
                     }
-                } finally {
+                } catch (e: Exception) {
+                    epubLog += "\n异常: ${e.javaClass.simpleName}: ${e.message}\n"
+                    epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
                     epubInProgress = false
                 }
             }
@@ -2824,23 +2852,31 @@ fun FileBrowserApp(
                                 onClick = {
                                     if (epubInProgress || epubPassword.isBlank()) return@Button
                                     epubInProgress = true
+                                    epubLog = "开始解压加密EPUB...\n"
                                     val pwd = epubPassword.toCharArray()
                                     scope.launch {
                                         val result = withContext(Dispatchers.IO) {
-                                            extractEpubToCache(context, target.uri, pwd, target.name)
+                                            extractEpubToCache(context, target.uri, pwd, target.name) { log ->
+                                                epubLog += "$log\n"
+                                            }
                                         }
                                         epubInProgress = false
-                                        if (result != null) {
-                                            epubTarget = null
-                                            epubPassword = ""
-                                            epubViewState = EpubViewState(
-                                                extractResult = result,
-                                                zipFileName = target.name,
-                                                epubUri = target.uri,
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        when (result) {
+                                            is EpubParseResult.Success -> {
+                                                epubTarget = null
+                                                epubPassword = ""
+                                                epubViewState = EpubViewState(
+                                                    extractResult = result.result,
+                                                    zipFileName = target.name,
+                                                    epubUri = target.uri,
+                                                    isEncrypted = true
+                                                )
+                                            }
+                                            is EpubParseResult.Error -> {
+                                                val detail = result.detail?.let { "\n$it" } ?: ""
+                                                epubLog += "\n错误: ${result.message}$detail\n"
+                                                epubLoadError = "${result.message}$detail"
+                                            }
                                         }
                                     }
                                 }
@@ -2852,19 +2888,66 @@ fun FileBrowserApp(
                             ) { Text("取消") }
                         }
                     )
-                } else if (encrypted == null) {
+                } else {
+                    // encrypted == null 或 encrypted == false，都显示加载对话框
                     AlertDialog(
                         onDismissRequest = {},
-                        title = { Text("查看 EPUB 电子书") },
+                        title = { Text("打开 EPUB") },
                         text = {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                CircularProgressIndicator(modifier = Modifier.padding(bottom = 16.dp))
-                                Text("正在打开 EPUB，请稍候…", color = MaterialTheme.colorScheme.onSurface)
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 100.dp, max = 400.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                if (epubInProgress) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                    }
+                                }
                                 Spacer(Modifier.height(8.dp))
-                                Text("${target.name}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    epubLog,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
                             }
                         },
-                        confirmButton = {}
+                        confirmButton = {
+                            if (epubLoadError != null) {
+                                TextButton(onClick = { epubTarget = null; epubLoadError = null; epubLog = "" }) {
+                                    Text("关闭")
+                                }
+                            }
+                        }
+                    )
+                }
+            }
+            // ---- EPUB 错误对话框（独立于epubTarget） ----
+            epubLoadError?.let { error ->
+                if (epubTarget == null) {
+                    AlertDialog(
+                        onDismissRequest = { epubLoadError = null; epubLog = "" },
+                        title = { Text("EPUB 解析失败") },
+                        text = {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 400.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                Text(
+                                    epubLog,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text("确定") }
+                        }
                     )
                 }
             }

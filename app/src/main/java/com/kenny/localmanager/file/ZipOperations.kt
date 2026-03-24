@@ -1334,6 +1334,12 @@ data class EpubExtractResult(
     val isEncrypted: Boolean
 )
 
+/** EPUB 解析结果（包含错误信息） */
+sealed class EpubParseResult {
+    data class Success(val result: EpubExtractResult) : EpubParseResult()
+    data class Error(val message: String, val detail: String? = null) : EpubParseResult()
+}
+
 /** 获取 EPUB 的缓存目录，基于 URI 哈希。 */
 fun getEpubCacheDir(context: Context, epubUri: Uri): File {
     val key = epubUri.toString().hashCode().toUInt().toString(16)
@@ -1387,11 +1393,16 @@ private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<E
 
     // 解析 manifest（ID -> href 映射）
     val manifest = mutableMapOf<String, String>()
-    val manifestRegex = Regex("""<item[^>]*id\s*=\s*"([^"]+)"[^>]*href\s*=\s*"([^"]+)"[^>]*/?>""", RegexOption.IGNORE_CASE)
-    manifestRegex.findAll(content).forEach { match ->
-        val id = match.groupValues[1]
-        val href = match.groupValues[2]
-        manifest[id] = href
+    val itemRegex = Regex("""<item\s+[^>]+/?>""", RegexOption.IGNORE_CASE)
+    val idAttrRegex = Regex("""id\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+    val hrefAttrRegex = Regex("""href\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+    itemRegex.findAll(content).forEach { match ->
+        val itemText = match.value
+        val id = idAttrRegex.find(itemText)?.groupValues?.get(1)
+        val href = hrefAttrRegex.find(itemText)?.groupValues?.get(1)
+        if (id != null && href != null) {
+            manifest[id] = href
+        }
     }
 
     // 解析 spine（阅读顺序）
@@ -1409,26 +1420,51 @@ private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<E
 }
 
 /** 尝试从 NCX 或 NAV 文件获取章节标题。 */
-private fun parseEpubNavigation(contentDir: File, opfDir: File, chapters: List<EpubChapter>): List<EpubChapter> {
+private fun parseEpubNavigation(
+    contentDir: File,
+    opfDir: File,
+    chapters: List<EpubChapter>,
+    onLog: (String) -> Unit = {}
+): List<EpubChapter> {
     // 尝试查找 NCX 文件
     val ncxFile = opfDir.listFiles()?.find { it.name.endsWith(".ncx", ignoreCase = true) }
     if (ncxFile != null && ncxFile.exists()) {
         try {
+            onLog("读取 NCX 文件...")
             val ncxContent = ncxFile.readText()
-            val navPointRegex = Regex("""<navPoint[^>]*>.*?<navLabel>.*?<text>([^<]*)</text>.*?</navLabel>.*?<content[^>]*src\s*=\s*"([^"]+)""""", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+
+            // 使用更高效的正则：分别匹配 text 和 src
+            onLog("解析导航点...")
             val navMap = mutableMapOf<String, String>()
-            navPointRegex.findAll(ncxContent).iterator().forEach { match ->
-                val title = match.groupValues[1].trim()
-                val src = match.groupValues[2].substringBefore("#").substringBefore("?")
+
+            // 先找到所有 navPoint 块
+            val navPointPattern = Regex("""<navPoint[^>]*>(.*?)</navPoint>""", RegexOption.DOT_MATCHES_ALL)
+            val textPattern = Regex("""<text>([^<]*)</text>""", RegexOption.IGNORE_CASE)
+            val srcPattern = Regex("""src\s*=\s*"([^"]+)"""", RegexOption.IGNORE_CASE)
+
+            var count = 0
+            navPointPattern.findAll(ncxContent).forEach { match ->
+                val block = match.groupValues[1]
+                val title = textPattern.find(block)?.groupValues?.get(1)?.trim() ?: return@forEach
+                val src = srcPattern.find(block)?.groupValues?.get(1)
+                    ?.substringBefore("#")?.substringBefore("?") ?: return@forEach
                 navMap[src] = title
+                count++
+                if (count % 100 == 0) {
+                    onLog("已解析 $count 个导航点...")
+                }
             }
+            onLog("共解析 $count 个导航点")
+
             // 更新章节标题
             return chapters.map { chapter ->
                 val hrefName = chapter.href.substringAfterLast("/")
                 val title = navMap[hrefName] ?: navMap[chapter.href] ?: chapter.href.substringBeforeLast(".")
                 chapter.copy(title = title)
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) {
+            onLog("NCX解析异常: ${e.message}")
+        }
     }
 
     // 如果没有 NCX，使用文件名作为标题
@@ -1442,66 +1478,128 @@ private fun parseEpubNavigation(contentDir: File, opfDir: File, chapters: List<E
 /**
  * 解压 EPUB 到缓存目录，解析 OPF 获取章节列表。
  * @param epubFileName EPUB 文件名（用于日志，可选）
- * @return 解压结果，解压失败返回 null
+ * @param onLog 日志回调，用于显示进度
+ * @return 解压结果，包含详细错误信息
  */
 fun extractEpubToCache(
     context: Context,
     epubUri: Uri,
     password: CharArray?,
-    epubFileName: String? = null
-): EpubExtractResult? {
+    epubFileName: String? = null,
+    onLog: (String) -> Unit = {}
+): EpubParseResult {
     val cacheDir = getEpubCacheDir(context, epubUri)
     cacheDir.deleteRecursively()
     cacheDir.mkdirs()
     val tmpZip = File(cacheDir, "__archive.zip")
     try {
-        context.contentResolver.openInputStream(epubUri)?.use { input ->
-            tmpZip.outputStream().use { output -> input.copyTo(output) }
-        } ?: return null
+        onLog("开始读取文件...")
+        val inputStream = context.contentResolver.openInputStream(epubUri)
+        if (inputStream == null) {
+            return EpubParseResult.Error("无法打开文件", "ContentResolver.openInputStream 返回 null")
+        }
+        inputStream.use { input ->
+            tmpZip.outputStream().use { output ->
+                val buffer = ByteArray(8192)
+                var total = 0L
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                    total += read
+                    if (total % (1024 * 1024) < 8192) {  // 每MB更新一次
+                        onLog("已复制 ${total / 1024 / 1024} MB...")
+                    }
+                }
+            }
+        }
+
+        if (!tmpZip.exists() || tmpZip.length() == 0L) {
+            return EpubParseResult.Error("文件复制失败", "临时文件为空或不存在")
+        }
+        onLog("文件读取完成 (${tmpZip.length() / 1024 / 1024} MB)")
+
+        onLog("检查压缩包...")
         val zip = ZipFile(tmpZip)
         val encrypted = zip.isEncrypted
         if (encrypted) {
-            if (password == null || password.isEmpty()) return null
+            if (password == null || password.isEmpty()) {
+                return EpubParseResult.Error("需要密码", "EPUB 文件已加密")
+            }
             zip.setPassword(password)
         }
-        val contentDir = File(cacheDir, "content").apply { mkdirs() }
-        zip.extractAll(contentDir.path)
-        tmpZip.delete()
+        onLog("压缩包检查完成，加密: $encrypted")
 
-        // 解析 container.xml 获取 OPF 路径
+        onLog("解压文件...")
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        try {
+            zip.extractAll(contentDir.path)
+        } catch (e: net.lingala.zip4j.exception.ZipException) {
+            val msg = e.message ?: "未知ZipException"
+            return EpubParseResult.Error("解压失败", "ZipException: $msg")
+        }
+        tmpZip.delete()
+        onLog("解压完成")
+
+        onLog("解析 container.xml...")
         val opfRelativePath = parseEpubContainer(contentDir)
         if (opfRelativePath == null) {
-            Log.w(TAG, "extractEpubToCache: META-INF/container.xml not found or invalid")
-            return null
+            val metaInfExists = File(contentDir, "META-INF").exists()
+            val containerExists = File(contentDir, "META-INF/container.xml").exists()
+            val rootFiles = contentDir.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: "(空)"
+            return EpubParseResult.Error(
+                "无法找到 container.xml",
+                "META-INF目录=${metaInfExists}, container.xml=${containerExists}\n根目录文件: $rootFiles"
+            )
         }
+        onLog("OPF路径: $opfRelativePath")
 
         val opfFile = File(contentDir, opfRelativePath)
+        if (!opfFile.exists()) {
+            val opfDirFiles = opfFile.parentFile?.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: "(空)"
+            return EpubParseResult.Error(
+                "OPF文件不存在",
+                "预期路径: $opfRelativePath\nOPF目录文件: $opfDirFiles"
+            )
+        }
+        onLog("找到OPF文件")
+
         val opfDir = opfFile.parentFile ?: contentDir
 
-        // 解析 OPF
+        onLog("解析 OPF...")
         val parseResult = parseEpubOpf(opfFile, opfDir)
         if (parseResult == null) {
-            Log.w(TAG, "extractEpubToCache: Failed to parse OPF file")
-            return null
+            return EpubParseResult.Error("OPF解析失败", "文件: ${opfFile.absolutePath}")
         }
         val (bookInfo, rawChapters) = parseResult
+        onLog("书名: ${bookInfo.title}, 作者: ${bookInfo.author}, 原始章节数: ${rawChapters.size}")
 
-        // 尝试获取章节标题
-        val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+        onLog("解析导航信息...")
+        val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters) { log ->
+            onLog(log)
+        }
+        onLog("最终章节数: ${chapters.size}")
 
         if (chapters.isEmpty()) {
-            Log.w(TAG, "extractEpubToCache: No chapters found in EPUB")
-            return null
+            val spineSample = opfFile.readText().let { text ->
+                val spineMatch = Regex("<spine[^>]*>(.*?)</spine>", RegexOption.DOT_MATCHES_ALL).find(text)
+                spineMatch?.groupValues?.get(1)?.take(500) ?: "(未找到spine)"
+            }
+            return EpubParseResult.Error("未找到章节", "OPF spine 内容: $spineSample")
         }
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
 
-        return EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted)
+        onLog("加载完成!")
+        return EpubParseResult.Success(EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted))
     } catch (e: Exception) {
         Log.e(TAG, "extractEpubToCache failed", e)
         cacheDir.deleteRecursively()
-        return null
+        return EpubParseResult.Error(
+            "解析异常: ${e.javaClass.simpleName}",
+            e.message
+        )
     } finally {
         if (tmpZip.exists()) tmpZip.delete()
     }
