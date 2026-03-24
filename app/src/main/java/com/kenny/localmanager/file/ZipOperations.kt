@@ -1782,26 +1782,10 @@ fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractR
             "<p>${escapeHtml(para)}</p>"
         }
 
+        // 只生成HTML片段，样式由EpubViewerScreen统一注入
         val htmlContent = """
-            <!DOCTYPE html>
-            <html xmlns="http://www.w3.org/1999/xhtml">
-            <head>
-                <meta charset="UTF-8"/>
-                <title>${escapeHtml(bookTitle)}</title>
-                <style>
-                    body {
-                        font-family: sans-serif;
-                        line-height: 1.8;
-                        padding: 16px;
-                    }
-                    p { margin: 0.5em 0; text-indent: 2em; }
-                </style>
-            </head>
-            <body>
-                <h1>${escapeHtml(bookTitle)}</h1>
-                $paragraphsHtml
-            </body>
-            </html>
+            <h1>${escapeHtml(bookTitle)}</h1>
+            $paragraphsHtml
         """.trimIndent()
         htmlFile.writeText(htmlContent)
 
@@ -1959,100 +1943,22 @@ fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractR
             dialogBlocks.add(DialogBlock("Comment", currentBlock.toString().trim(), false))
         }
 
-        // 生成 HTML 内容
-        val blocksHtml = dialogBlocks.joinToString("\n\n") { block ->
+        // 生成 HTML 内容（紧凑格式，避免多余空白）
+        val blocksHtml = dialogBlocks.joinToString("\n") { block ->
             val escapedContent = escapeHtml(block.content)
-            val formattedContent = escapedContent.replace("\n", "<br/>\n")
+            val formattedContent = escapedContent.replace("\n", "<br/>")
             if (block.isAssistant) {
                 // Assistant 内容正常显示
-                """
-                <div class="assistant-block">
-                    <div class="role-label assistant-label">Assistant</div>
-                    <div class="content assistant-content">$formattedContent</div>
-                </div>
-                """.trimIndent()
+                """<div class="assistant-block"><div class="role-label assistant-label">Assistant</div><div class="content assistant-content">$formattedContent</div></div>"""
             } else {
                 // 其他角色用灰色显示，可折叠
-                """
-                <details class="other-block">
-                    <summary class="role-label other-label">${block.role}</summary>
-                    <div class="content other-content">$formattedContent</div>
-                </details>
-                """.trimIndent()
+                """<details class="other-block"><summary class="role-label other-label">${block.role}</summary><div class="content other-content">$formattedContent</div></details>"""
             }
         }
 
-        val htmlContent = """
-            <!DOCTYPE html>
-            <html xmlns="http://www.w3.org/1999/xhtml">
-            <head>
-                <meta charset="UTF-8"/>
-                <meta name="viewport" content="width=device-width, initial-scale=1"/>
-                <title>${escapeHtml(bookTitle)}</title>
-                <style>
-                    body {
-                        font-family: sans-serif;
-                        line-height: 1.6;
-                        padding: 16px;
-                        background: #fafafa;
-                    }
-                    h1 {
-                        font-size: 1.4em;
-                        margin-bottom: 1em;
-                        border-bottom: 1px solid #ddd;
-                        padding-bottom: 0.5em;
-                    }
-                    .assistant-block {
-                        margin: 1em 0;
-                        padding: 0.8em;
-                        background: #fff;
-                        border-radius: 8px;
-                        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-                    }
-                    .assistant-label {
-                        color: #1976d2;
-                        font-weight: bold;
-                        font-size: 0.85em;
-                        margin-bottom: 0.5em;
-                    }
-                    .assistant-content {
-                        color: #333;
-                    }
-                    .other-block {
-                        margin: 0.5em 0;
-                    }
-                    .other-label {
-                        color: #999;
-                        font-size: 0.8em;
-                        cursor: pointer;
-                        padding: 0.3em 0;
-                    }
-                    .other-label:hover {
-                        color: #666;
-                    }
-                    .other-content {
-                        color: #888;
-                        font-size: 0.9em;
-                        padding: 0.5em;
-                        background: #f5f5f5;
-                        border-radius: 4px;
-                        margin-top: 0.3em;
-                    }
-                    details[open] .other-label {
-                        color: #666;
-                    }
-                    .content {
-                        white-space: pre-wrap;
-                        word-wrap: break-word;
-                    }
-                </style>
-            </head>
-            <body>
-                <h1>${escapeHtml(bookTitle)}</h1>
-                $blocksHtml
-            </body>
-            </html>
-        """.trimIndent()
+        // 只生成HTML片段，样式由EpubViewerScreen统一注入
+        val htmlContent = """<h1>${escapeHtml(bookTitle)}</h1>
+$blocksHtml"""
         htmlFile.writeText(htmlContent)
 
         // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）

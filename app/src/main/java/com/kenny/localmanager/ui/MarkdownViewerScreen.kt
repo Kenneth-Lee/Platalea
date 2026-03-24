@@ -4514,6 +4514,10 @@ fun EpubViewerScreen(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
 
+                    // 检测源文件类型，注入对应样式
+                    val isLlmContent = File(extractResult.cacheDir, ".llm_source").exists()
+                    val isTxtContent = File(extractResult.cacheDir, ".txt_source").exists()
+
                     val chapterFileForUpdate = chapterFile
                     val chaptersSize = chapters.size
                     val onChapterChanged: (Int) -> Unit = { newIndex ->
@@ -4549,7 +4553,27 @@ fun EpubViewerScreen(
                             webView.currentChapterIndex = currentChapterIndex
                             try {
                                 val htmlContent = chapterFileForUpdate.readText()
-                                // 注入基础样式
+                                // 根据源文件类型注入不同样式
+                                val extraStyles = when {
+                                    isLlmContent -> """
+                                        h1 { font-size: 1.4em; margin: 0 0 0.5em 0; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
+                                        details, div { margin: 0; padding: 0; }
+                                        .assistant-block { margin: 0.5em 0; padding: 0.5em; background: ${bgHex}ee; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+                                        .assistant-label { color: #1976d2; font-weight: bold; font-size: 0.85em; margin: 0 0 0.3em 0; }
+                                        .assistant-content { color: $fgHex; }
+                                        .other-block { margin: 0.3em 0; }
+                                        .other-label { color: #999; font-size: 0.8em; cursor: pointer; padding: 0; margin: 0; }
+                                        .other-label:hover { color: #666; }
+                                        .other-content { color: #888; font-size: 0.9em; padding: 0.5em; background: #f5f5f5; border-radius: 4px; margin-top: 0.3em; }
+                                        details[open] .other-label { color: #666; }
+                                        .content { white-space: pre-wrap; word-wrap: break-word; margin: 0; }
+                                        .role-label { display: block; margin: 0; }
+                                    """
+                                    isTxtContent -> """
+                                        p { margin: 0.5em 0; text-indent: 2em; line-height: 1.8; }
+                                    """
+                                    else -> "" // EPUB使用原始样式
+                                }
                                 val styledHtml = """
                                     <!DOCTYPE html>
                                     <html>
@@ -4567,6 +4591,7 @@ fun EpubViewerScreen(
                                             }
                                             img { max-width: 100%; height: auto; }
                                             a { color: #2196F3; }
+                                            $extraStyles
                                         </style>
                                     </head>
                                     <body>$htmlContent</body>
