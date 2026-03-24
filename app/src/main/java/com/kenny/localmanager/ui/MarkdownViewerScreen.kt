@@ -3519,18 +3519,27 @@ fun EpubViewerScreen(
     logDebug?.invoke("[EPUB] 章节数=${chapters.size}")
     logDebug?.invoke("[EPUB] contentDir=${contentDir.absolutePath}")
 
+    // 初始恢复进度标志
+    var isRestoringProgress by remember { mutableStateOf(true) }
+
     // 恢复阅读进度
     LaunchedEffect(Unit) {
         val progress = bookmarkManager.loadProgress(epubUri.toString())
         if (progress != null) {
-            currentChapterIndex = progress.chapterIndex
+            // 先设置滚动比例，再设置章节索引，避免中间状态
             currentScrollRatio = progress.scrollRatio
+            currentChapterIndex = progress.chapterIndex
             logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
         }
+        isRestoringProgress = false
     }
 
-    // 保存阅读进度（章节变化时）
-    LaunchedEffect(currentChapterIndex) {
+    // 保存阅读进度（章节变化或滚动位置变化时）
+    LaunchedEffect(currentChapterIndex, currentScrollRatio) {
+        // 恢复进度期间不保存
+        if (isRestoringProgress) return@LaunchedEffect
+        // 延迟保存，避免频繁写入
+        kotlinx.coroutines.delay(500)
         val progress = EpubReadingProgress(
             epubUri = epubUri.toString(),
             epubFileName = zipFileName,
@@ -3541,7 +3550,7 @@ fun EpubViewerScreen(
             lastReadTime = System.currentTimeMillis()
         )
         bookmarkManager.saveProgress(progress)
-        logDebug?.invoke("[EPUB] 保存进度: 章节$currentChapterIndex")
+        logDebug?.invoke("[EPUB] 保存进度: 章节$currentChapterIndex, 比例${"%.2f".format(currentScrollRatio)}")
     }
 
     val currentChapter = chapters.getOrNull(currentChapterIndex)
@@ -3554,10 +3563,10 @@ fun EpubViewerScreen(
     }
 
     // 跳转到指定章节
-    fun goToChapter(index: Int) {
+    fun goToChapter(index: Int, scrollRatio: Float = 0f) {
         if (index in chapters.indices) {
             currentChapterIndex = index
-            currentScrollRatio = 0f
+            currentScrollRatio = scrollRatio
             showToc = false
         }
     }
@@ -3948,6 +3957,7 @@ fun EpubViewerScreen(
                             onClick = {
                                 if (currentChapterIndex > 0) {
                                     currentChapterIndex--
+                                    currentScrollRatio = 0f
                                 }
                             },
                             enabled = currentChapterIndex > 0
@@ -3969,6 +3979,7 @@ fun EpubViewerScreen(
                             onClick = {
                                 if (currentChapterIndex < chapters.size - 1) {
                                     currentChapterIndex++
+                                    currentScrollRatio = 0f
                                 }
                             },
                             enabled = currentChapterIndex < chapters.size - 1
@@ -4008,12 +4019,17 @@ fun EpubViewerScreen(
 
                     val chapterFileForUpdate = chapterFile
                     val chaptersSize = chapters.size
+                    val currentScrollRatioForUpdate = currentScrollRatio
                     val onChapterChanged: (Int) -> Unit = { newIndex ->
                         currentChapterIndex = newIndex
+                        currentScrollRatio = 0f // 章节切换时重置滚动位置
+                    }
+                    val onScrollRatioChanged: (Float) -> Unit = { ratio ->
+                        currentScrollRatio = ratio
                     }
                     AndroidView(
                         factory = { ctx ->
-                            GestureWebView(ctx, chaptersSize, onChapterChanged).apply {
+                            GestureWebView(ctx, chaptersSize, onChapterChanged, onScrollRatioChanged).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
@@ -4024,6 +4040,8 @@ fun EpubViewerScreen(
                                 }) { view ->
                                     regexFindUiState = RegexFindUiState()
                                     installRegexFindBridge(view)
+                                    // 页面加载完成后恢复滚动位置
+                                    (view as? GestureWebView)?.restoreScrollPosition()
                                 }
                                 webViewRef.value = this
                             }
@@ -4061,6 +4079,8 @@ fun EpubViewerScreen(
                                 val loadKey = "$baseUrl|${chapterFileForUpdate.absolutePath}|${styledHtml.hashCode()}"
                                 if (webView.tag != loadKey) {
                                     webView.tag = loadKey
+                                    // 设置待恢复的滚动位置
+                                    webView.setPendingScrollRatio(currentScrollRatioForUpdate)
                                     webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
                                 }
                                 webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
@@ -4142,13 +4162,16 @@ private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[i
 private class GestureWebView(
     context: Context,
     private val totalChapters: Int,
-    private val onChapterChange: (Int) -> Unit
+    private val onChapterChange: (Int) -> Unit,
+    private val onScrollRatioChange: ((Float) -> Unit)? = null
 ) : WebView(context) {
     var currentChapterIndex: Int = 0
     private var lastClickTime: Long = 0
     private var lastClickX: Float = 0f
     private val doubleClickTimeout: Long = 300 // 双击时间阈值（毫秒）
     private val edgeZoneRatio = 0.3f // 左右边缘区域占比（30%）
+    private var pendingScrollRatio: Float? = null // 待恢复的滚动比例
+    private var isRestoringScroll = false // 是否正在恢复滚动位置
 
     private val gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onDoubleTap(e: MotionEvent): Boolean {
@@ -4187,6 +4210,60 @@ private class GestureWebView(
             return true
         }
         return super.onTouchEvent(event)
+    }
+
+    private var lastReportedRatio: Float = -1f
+
+    override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
+        super.onScrollChanged(l, t, oldl, oldt)
+        // 如果正在恢复滚动位置，不报告滚动比例
+        if (isRestoringScroll) return
+        // 使用 JavaScript 获取准确的滚动比例
+        evaluateJavascript("(function() { var docH = document.documentElement.scrollHeight; var viewH = window.innerHeight; if (docH <= viewH) return 0; return window.scrollY / (docH - viewH); })();") { result ->
+            try {
+                val ratio = result.trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: 0f
+                // 只在比例变化超过 1% 时才报告，避免频繁更新
+                if (kotlin.math.abs(ratio - lastReportedRatio) > 0.01f) {
+                    lastReportedRatio = ratio
+                    onScrollRatioChange?.invoke(ratio)
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    /** 设置待恢复的滚动位置 */
+    fun setPendingScrollRatio(ratio: Float) {
+        pendingScrollRatio = ratio
+    }
+
+    /** 尝试恢复滚动位置，在页面加载完成后调用 */
+    fun restoreScrollPosition() {
+        val ratio = pendingScrollRatio ?: return
+        pendingScrollRatio = null
+        if (ratio <= 0f) return
+        isRestoringScroll = true
+        // 使用 JavaScript 滚动
+        // 由于文档高度可能在保存和恢复时不同（如图片加载），需要适当调整
+        // 用户反馈：恢复后位置偏上（内容被工具栏遮挡），所以需要减少滚动量
+        val js = """
+            (function() {
+                var ratio = $ratio;
+                var docHeight = document.documentElement.scrollHeight;
+                var viewHeight = window.innerHeight;
+                if (docHeight > viewHeight) {
+                    var maxScroll = docHeight - viewHeight;
+                    // 稍微减少滚动量，补偿文档高度变化带来的误差
+                    var adjustedRatio = ratio * 0.97;
+                    var targetY = Math.floor(adjustedRatio * maxScroll);
+                    window.scrollTo(0, targetY);
+                }
+            })();
+        """.trimIndent()
+        // 延迟执行，确保页面已渲染
+        postDelayed({
+            evaluateJavascript(js, null)
+            postDelayed({ isRestoringScroll = false }, 200)
+        }, 100)
     }
 }
 
