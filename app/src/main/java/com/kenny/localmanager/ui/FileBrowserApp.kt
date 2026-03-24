@@ -135,6 +135,7 @@ import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.DirectoryAccessException
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
@@ -157,6 +158,7 @@ import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
 import com.kenny.localmanager.file.unzipToParent
+import com.kenny.localmanager.file.UnzipResult
 import com.kenny.localmanager.file.isArchiveEncrypted
 import com.kenny.localmanager.file.getArchiveFirstLevelEntries
 import com.kenny.localmanager.file.isRarV5Archive
@@ -233,6 +235,8 @@ import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
+import com.kenny.localmanager.dict.importStarDict
+import com.kenny.localmanager.dict.isStarDictImportCandidate
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
@@ -376,6 +380,7 @@ fun FileBrowserApp(
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
+    var showDictionaryScreen by remember { mutableStateOf(false) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -825,6 +830,10 @@ fun FileBrowserApp(
                 inProgress = quickNoteInProgress,
                 onBack = { entries -> requestCloseQuickNote(entries) }
             )
+        }
+        showDictionaryScreen -> {
+            BackHandler { showDictionaryScreen = false }
+            DictionaryScreen(onBack = { showDictionaryScreen = false })
         }
         viewingFile != null -> {
             val (uri, name, isEncrypted) = viewingFile!!
@@ -1621,6 +1630,7 @@ fun FileBrowserApp(
                     onOpenAbout = { showAboutDialog = true },
                     onOpenQuickNote = { requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) }) },
                     onCreateQuickNote = { requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) }) },
+                    onOpenDictionary = { showDictionaryScreen = true },
                     onRequestGpgDecrypt = { fileModel, dirUri ->
                         gpgPassword = ""
                         gpgDecryptMode = null
@@ -1703,6 +1713,18 @@ fun FileBrowserApp(
                                 }
                             }
                             startConfigImport(jsonString)
+                        }
+                    },
+                    onRequestImportStarDict = { model ->
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                importStarDict(context, model.uri, model.name)
+                            }
+                            result.onSuccess {
+                                Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
+                            }.onFailure {
+                                Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                            }
                         }
                     },
                     playbackState = playbackState,
@@ -2560,7 +2582,7 @@ fun FileBrowserApp(
                                     progressOp = OperationProgress("解压", 0, null)
                                     delay(50)
                                     val pwd = if (encrypted == true) zipUnzipPassword.toCharArray() else null
-                                    val ok = withContext(Dispatchers.IO) {
+                                    val result = withContext(Dispatchers.IO) {
                                         unzipToParent(
                                             context,
                                             target.uri,
@@ -2575,14 +2597,43 @@ fun FileBrowserApp(
                                     // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
                                     delay(120)
                                     progressOp = null
-                                    zipUnzipTarget = null
-                                    zipUnzipPassword = ""
-                                    zipUnzipEncrypted = null
-                                    if (ok) {
-                                        Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, "解压失败（请检查密码或文件）", Toast.LENGTH_SHORT).show()
+                                    when (result) {
+                                        is UnzipResult.Success -> {
+                                            zipUnzipTarget = null
+                                            zipUnzipPassword = ""
+                                            zipUnzipEncrypted = null
+                                            Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                            refreshTrigger++
+                                        }
+                                        is UnzipResult.PasswordRequired -> {
+                                            // 需要密码但未提供，显示密码输入框让用户重试
+                                            zipUnzipEncrypted = true
+                                            Toast.makeText(context, "请输入密码", Toast.LENGTH_SHORT).show()
+                                        }
+                                        is UnzipResult.WrongPassword -> {
+                                            // 密码错误，保留对话框让用户重试
+                                            zipUnzipEncrypted = true
+                                            Toast.makeText(context, "密码错误，请重试", Toast.LENGTH_SHORT).show()
+                                        }
+                                        is UnzipResult.CorruptedFile -> {
+                                            zipUnzipTarget = null
+                                            zipUnzipPassword = ""
+                                            zipUnzipEncrypted = null
+                                            Toast.makeText(context, "解压失败：文件已损坏", Toast.LENGTH_SHORT).show()
+                                        }
+                                        is UnzipResult.UnsupportedFormat -> {
+                                            zipUnzipTarget = null
+                                            zipUnzipPassword = ""
+                                            zipUnzipEncrypted = null
+                                            Toast.makeText(context, "解压失败：不支持的压缩格式", Toast.LENGTH_SHORT).show()
+                                        }
+                                        is UnzipResult.IOError -> {
+                                            zipUnzipTarget = null
+                                            zipUnzipPassword = ""
+                                            zipUnzipEncrypted = null
+                                            val msg = result.message ?: "未知错误"
+                                            Toast.makeText(context, "解压失败：$msg", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
                                 }
                             }
@@ -3184,6 +3235,7 @@ fun FileBrowserApp(
                                     pendingCompress7zPassword = ""
                                     if (ok) {
                                         pendingList.clear()
+                                        showPendingList = false
                                         Toast.makeText(context, "压缩完成：$sevenZName", Toast.LENGTH_SHORT).show()
                                         refreshTrigger++
                                     } else {
@@ -3676,6 +3728,7 @@ internal fun FileBrowserScreen(
     onOpenFileShare: () -> Unit = {},
     onOpenQuickNote: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
+    onOpenDictionary: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
@@ -3695,6 +3748,7 @@ internal fun FileBrowserScreen(
     onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
+    onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -3740,19 +3794,10 @@ internal fun FileBrowserScreen(
             launch {
                 try {
                     val result = withContext(Dispatchers.IO) {
-                        val list = listChildrenFast(context, currentUri)
-                        list.ifEmpty { null }
+                        listChildrenFast(context, currentUri)
                     }
-                    when (result) {
-                        null -> {
-                            error = "无法访问该目录"
-                            items = emptyList()
-                        }
-                        else -> {
-                            items = result
-                            onCacheDir(normalizedUri, result)
-                        }
-                    }
+                    items = result
+                    onCacheDir(normalizedUri, result)
                 } catch (e: Exception) {
                     error = e.message ?: "加载失败"
                     items = emptyList()
@@ -3900,6 +3945,14 @@ internal fun FileBrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenQuickNote()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("词典") },
+                                leadingIcon = { Icon(Icons.Default.MenuBook, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onOpenDictionary()
                                 }
                             )
                             DropdownMenuItem(
@@ -4195,6 +4248,15 @@ internal fun FileBrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text("导入配置", color = MaterialTheme.colorScheme.onSurface) }
+                        }
+                        if (isStarDictImportCandidate(menuTarget.name) && onRequestImportStarDict != null) {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onRequestImportStarDict(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text("导入星际词典", color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {

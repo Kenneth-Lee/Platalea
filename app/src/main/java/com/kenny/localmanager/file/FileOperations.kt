@@ -28,7 +28,10 @@ fun DocumentFile.listFilesSafe(): Array<DocumentFile> =
 /**
  * Fast directory listing using a single ContentResolver cursor query.
  * Much faster than DocumentFile.listFiles() which issues per-file queries.
+ * @throws DirectoryAccessException when directory cannot be accessed, with detailed error message
  */
+class DirectoryAccessException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
 fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileModel> {
     val treeUri = Uri.parse(treeUriStr)
     val docId = if (treeUriStr.contains("/document/")) {
@@ -70,9 +73,17 @@ fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileMod
                     )
                 )
             }
-        }
-    } catch (_: Exception) {
-        // Fall back handled by caller
+        } ?: throw DirectoryAccessException("ContentResolver.query 返回 null，可能是 URI 无效或无权限")
+    } catch (e: SecurityException) {
+        throw DirectoryAccessException("权限不足：${e.message}", e)
+    } catch (e: IllegalArgumentException) {
+        throw DirectoryAccessException("URI 参数无效：${e.message}", e)
+    } catch (e: IllegalStateException) {
+        throw DirectoryAccessException("目录状态异常：${e.message}", e)
+    } catch (e: DirectoryAccessException) {
+        throw e
+    } catch (e: Exception) {
+        throw DirectoryAccessException("访问目录失败：${e.javaClass.simpleName}: ${e.message}", e)
     }
     return result
 }

@@ -21,6 +21,16 @@ private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
 private const val MIME_7Z = "application/x-7z-compressed"
 
+/** 解压结果 */
+sealed class UnzipResult {
+    object Success : UnzipResult()
+    object PasswordRequired : UnzipResult()
+    object WrongPassword : UnzipResult()
+    object CorruptedFile : UnzipResult()
+    object UnsupportedFormat : UnzipResult()
+    data class IOError(val message: String?) : UnzipResult()
+}
+
 private fun isRarName(name: String?): Boolean =
     name?.endsWith(".rar", ignoreCase = true) == true
 
@@ -111,7 +121,7 @@ private fun getDirectoryViaTree(context: Context, dirUri: Uri, treeUri: Uri?): D
  * @param parentDirUri 解压目标目录（通常为 zip 所在目录）
  * @param password 加密 zip 的密码，无密码传 null
  * @param setProgress (current, total) 进度回调，total 为条目数
- * @return 成功 true，失败 false
+ * @return 解压结果，包含成功或具体错误原因
  */
 fun unzipToParent(
     context: Context,
@@ -121,14 +131,14 @@ fun unzipToParent(
     archiveName: String?,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit
-): Boolean {
+): UnzipResult {
     val cr = context.contentResolver
     val cacheDir = File(context.cacheDir, "zip_unzip_${System.currentTimeMillis()}").apply { mkdirs() }
     val zipFile = File(cacheDir, "archive.zip")
     try {
         cr.openInputStream(zipUri)?.use { input ->
             zipFile.outputStream().use { output -> input.copyTo(output) }
-        } ?: return false
+        } ?: return UnzipResult.IOError("无法读取文件")
         if (isRarName(archiveName) || hasRarSignature(zipFile)) {
             return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
         }
@@ -138,13 +148,23 @@ fun unzipToParent(
 
         val zip = ZipFile(zipFile)
         if (zip.isEncrypted) {
-            if (password == null || password.isEmpty()) return false
+            if (password == null || password.isEmpty()) return UnzipResult.PasswordRequired
             zip.setPassword(password)
         }
         val total = zip.fileHeaders.size.coerceAtLeast(1)
         setProgress(0, total)
         val extractDir = File(cacheDir, "extract").apply { mkdirs() }
-        zip.extractAll(extractDir.path)
+        try {
+            zip.extractAll(extractDir.path)
+        } catch (e: net.lingala.zip4j.exception.ZipException) {
+            val msg = e.message.orEmpty().lowercase()
+            return when {
+                msg.contains("wrong password") || msg.contains("incorrect password") -> UnzipResult.WrongPassword
+                msg.contains("password") -> UnzipResult.WrongPassword
+                msg.contains("corrupt") || msg.contains("invalid") -> UnzipResult.CorruptedFile
+                else -> UnzipResult.IOError(e.message)
+            }
+        }
         var current = 0
         // 解压到目标目录时，只复制 zip 顶层内容，不要多出一层 extract 目录。
         // 进度按顶层条目数更新，不传 onEach 避免递归时重复计数导致 current > total。
@@ -153,9 +173,10 @@ fun unzipToParent(
             current++
             setProgress(current, total)
         }
-        return true
+        return UnzipResult.Success
     } catch (e: Exception) {
-        return false
+        Log.e(TAG, "unzipToParent failed", e)
+        return parseUnzipError(e, password)
     } finally {
         zipFile.delete()
         cacheDir.deleteRecursively()
@@ -196,7 +217,7 @@ private fun un7zToParent(
     treeUri: Uri?,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit
-): Boolean {
+): UnzipResult {
     val tempExtractDir = File(archiveFile.parentFile, "extract").apply {
         deleteRecursively()
         mkdirs()
@@ -234,14 +255,35 @@ private fun un7zToParent(
         tempExtractDir.listFiles().orEmpty().forEach { child ->
             copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
         }
-        true
+        UnzipResult.Success
     } catch (e: PasswordRequiredException) {
-        false
+        Log.w(TAG, "un7zToParent: password required")
+        if (password == null || password.isEmpty()) UnzipResult.PasswordRequired
+        else UnzipResult.WrongPassword
     } catch (e: Throwable) {
         Log.e(TAG, "un7zToParent failed", e)
-        false
+        parseUnzipError(e, password)
     } finally {
         tempExtractDir.deleteRecursively()
+    }
+}
+
+private fun parseUnzipError(e: Throwable, password: CharArray?): UnzipResult {
+    val msg = e.message.orEmpty().lowercase()
+    return when {
+        msg.contains("password") || msg.contains("encrypted") || msg.contains("decrypt") -> {
+            if (password == null || password.isEmpty()) UnzipResult.PasswordRequired
+            else UnzipResult.WrongPassword
+        }
+        msg.contains("corrupt") || msg.contains("invalid") || msg.contains("malformed") ||
+        msg.contains("unexpected end") || msg.contains("truncated") || msg.contains("bad signature") -> {
+            UnzipResult.CorruptedFile
+        }
+        msg.contains("unsupported") || msg.contains("unknown method") || msg.contains("not implemented") -> {
+            UnzipResult.UnsupportedFormat
+        }
+        e is java.io.IOException -> UnzipResult.IOError(e.message)
+        else -> UnzipResult.IOError(e.message)
     }
 }
 
@@ -252,7 +294,7 @@ private fun unrarToParent(
     treeUri: Uri?,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit
-): Boolean {
+): UnzipResult {
     val tempExtractDir = File(rarFile.parentFile, "extract").apply {
         deleteRecursively()
         mkdirs()
@@ -260,8 +302,12 @@ private fun unrarToParent(
     var archive: Archive? = null
     return try {
         archive = openRarArchive(rarFile, password)
-        if (archive == null) return false
-        if (isRarArchivePasswordProtected(archive) && (password == null || password.isEmpty())) return false
+        if (archive == null) {
+            return UnzipResult.CorruptedFile
+        }
+        if (isRarArchivePasswordProtected(archive) && (password == null || password.isEmpty())) {
+            return UnzipResult.PasswordRequired
+        }
 
         val headers = archive.fileHeaders.orEmpty()
         val total = headers.size.coerceAtLeast(1)
@@ -291,10 +337,10 @@ private fun unrarToParent(
         tempExtractDir.listFiles()?.orEmpty()?.forEach { child ->
             copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
         }
-        true
+        UnzipResult.Success
     } catch (e: Exception) {
         Log.e(TAG, "unrarToParent failed", e)
-        false
+        parseUnzipError(e, password)
     } finally {
         try {
             archive?.close()
