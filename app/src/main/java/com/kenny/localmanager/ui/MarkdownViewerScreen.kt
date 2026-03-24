@@ -127,6 +127,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.ui.input.pointer.pointerInput
@@ -3654,6 +3655,8 @@ fun EpubViewerScreen(
     var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
     var dictLoading by remember { mutableStateOf(false) }
     var dictAreaExpanded by remember { mutableStateOf(false) }
+    // 词典查询历史记录（用于回退）
+    var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
 
     // 加载词典（只加载一次）
     LaunchedEffect(Unit) {
@@ -3736,6 +3739,12 @@ fun EpubViewerScreen(
 
     // 词典查询函数
     fun lookupWord(word: String) {
+        // 如果当前有查询结果，先保存到历史记录
+        val current = dictLookupResult
+        if (current != null && current.word.isNotBlank()) {
+            dictHistory = dictHistory + current
+        }
+
         val loaded = dictLoaded
         if (loaded == null) {
             dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
@@ -3764,6 +3773,15 @@ fun EpubViewerScreen(
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
         dictLookupResult = DictLookupResult(matchedWord, definition, null)
+    }
+
+    // 回退到上一个查询结果
+    fun goBackInDictHistory() {
+        if (dictHistory.isNotEmpty()) {
+            val last = dictHistory.last()
+            dictHistory = dictHistory.dropLast(1)
+            dictLookupResult = last
+        }
     }
 
     // 剪贴板监听器 - 当词典区域展开时，监控剪贴板变化并自动查词
@@ -4336,7 +4354,7 @@ fun EpubViewerScreen(
                                 }
                             }
 
-                            // 词典/调试信息区域（可滚动）- 展开时显示
+                            // 词典/调试信息区域（可滚动，可选择文本）- 展开时显示
                             if (dictAreaExpanded) {
                                 dictLookupResult?.let { result ->
                                     Column(
@@ -4347,32 +4365,55 @@ fun EpubViewerScreen(
                                             .verticalScroll(rememberScrollState()),
                                         horizontalAlignment = Alignment.Start
                                     ) {
-                                        // 单词标题
-                                        Text(
-                                            result.word.ifBlank { "取词结果" },
-                                            style = MaterialTheme.typography.labelLarge,
-                                            color = if (result.error != null)
-                                                MaterialTheme.colorScheme.error
-                                            else
-                                                MaterialTheme.colorScheme.primary,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Spacer(Modifier.height(4.dp))
-                                        // 内容
-                                        when {
-                                            result.error != null -> {
-                                                Text(
-                                                    result.error,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
+                                        // 单词标题行：左边单词，右边回退按钮
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                result.word.ifBlank { "取词结果" },
+                                                style = MaterialTheme.typography.labelLarge,
+                                                color = if (result.error != null)
+                                                    MaterialTheme.colorScheme.error
+                                                else
+                                                    MaterialTheme.colorScheme.primary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            // 回退按钮（只在有历史记录时显示）
+                                            if (dictHistory.isNotEmpty()) {
+                                                IconButton(
+                                                    onClick = { goBackInDictHistory() },
+                                                    modifier = Modifier.size(32.dp)
+                                                ) {
+                                                    Icon(
+                                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                                        contentDescription = "回退到上一个单词",
+                                                        tint = MaterialTheme.colorScheme.primary,
+                                                        modifier = Modifier.size(18.dp)
+                                                    )
+                                                }
                                             }
-                                            result.definition != null -> {
-                                                Text(
-                                                    result.definition,
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
+                                        }
+                                        Spacer(Modifier.height(4.dp))
+                                        // 内容（可选择）
+                                        SelectionContainer {
+                                            when {
+                                                result.error != null -> {
+                                                    Text(
+                                                        result.error,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                                result.definition != null -> {
+                                                    Text(
+                                                        result.definition,
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
                                             }
                                         }
                                     }
