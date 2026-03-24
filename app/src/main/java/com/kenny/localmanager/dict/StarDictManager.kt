@@ -128,17 +128,23 @@ fun searchStarDictWords(loaded: StarDictLoaded, pattern: String, maxResults: Int
 
 fun readStarDictExplanation(context: Context, dictId: String, loaded: StarDictLoaded, word: StarDictWord): String {
     val dictFile = File(File(getBaseDir(context), dictId), DICT_FILE_NAME)
-    if (!dictFile.exists()) return "词典数据文件不存在"
+    if (!dictFile.exists()) return "词典数据文件不存在: ${dictFile.absolutePath}"
+    if (word.size <= 0) return "词条大小无效: ${word.size}"
+    if (word.offset < 0) return "词条偏移无效: ${word.offset}"
+
     val bytes = try {
         RandomAccessFile(dictFile, "r").use { raf ->
             raf.seek(word.offset)
             val size = word.size.coerceAtLeast(0)
+            if (word.offset + size > raf.length()) {
+                return "词条数据超出文件范围: offset=${word.offset}, size=${word.size}, fileSize=${raf.length()}"
+            }
             val buffer = ByteArray(size)
             raf.readFully(buffer)
             buffer
         }
     } catch (e: Exception) {
-        return "读取释义失败: ${e.message ?: "unknown"}"
+        return "读取释义失败: ${e.javaClass.simpleName}: ${e.message}"
     }
 
     val decoded = decodeDefinition(bytes, loaded.charsetName)
@@ -216,15 +222,25 @@ private fun importFromZip(context: Context, sourceUri: Uri, workDir: File): Impo
     }
 
     val extractDir = File(workDir, "zip_extract").apply { mkdirs() }
-    val ifoFile = extractHeader(zip, ifoHeader, extractDir, "source.ifo")
-    val idxFile = extractHeader(zip, idxHeader, extractDir, "source.idx")
-    val dictFile = extractHeader(zip, dictHeader, extractDir, "source.dict")
+
+    // 保留原始扩展名，以便后续判断是否需要解压
+    val ifoFile = extractHeaderWithOriginalExt(zip, ifoHeader, extractDir, "source")
+    val idxFile = extractHeaderWithOriginalExt(zip, idxHeader, extractDir, "source")
+    val dictFile = extractHeaderWithOriginalExt(zip, dictHeader, extractDir, "source")
 
     val ifoMap = parseIfo(ifoFile)
     val bookName = ifoMap["bookname"].orEmpty().ifBlank { stripExt(ifoHeader.fileName.substringAfterLast('/')) }
     val charsetName = ifoMap["charset"]?.trim()?.ifBlank { null }
     val sameTypeSequence = ifoMap["sametypesequence"]?.trim()?.ifBlank { null }
     return ImportSource(bookName = bookName, idxFile = idxFile, dictFile = dictFile, charsetName = charsetName, sameTypeSequence = sameTypeSequence)
+}
+
+private fun extractHeaderWithOriginalExt(zip: ZipFile, header: FileHeader, extractDir: File, baseName: String): File {
+    val originalName = header.fileName.substringAfterLast('/')
+    val ext = if (originalName.contains('.')) originalName.substringAfterLast('.') else ""
+    val targetName = if (ext.isNotEmpty()) "$baseName.$ext" else baseName
+    zip.extractFile(header, extractDir.absolutePath, targetName)
+    return File(extractDir, targetName)
 }
 
 private fun importFromIfo(context: Context, sourceUri: Uri, workDir: File): ImportSource {
@@ -244,15 +260,28 @@ private fun importFromIfo(context: Context, sourceUri: Uri, workDir: File): Impo
         n.equals("$baseName.dict", ignoreCase = true) || n.equals("$baseName.dict.dz", ignoreCase = true)
     } ?: throw IllegalStateException("同目录未找到 $baseName.dict")
 
-    val ifoFile = copyDocToFile(context, ifoDoc.uri, File(workDir, "source.ifo"))
-    val idxFile = copyDocToFile(context, idxDoc.uri, File(workDir, "source.idx"))
-    val dictFile = copyDocToFile(context, dictDoc.uri, File(workDir, "source.dict"))
+    // 保留原始扩展名
+    val ifoFile = copyDocToFileWithOriginalExt(context, ifoDoc.uri, workDir, "source")
+    val idxFile = copyDocToFileWithOriginalExt(context, idxDoc.uri, workDir, "source")
+    val dictFile = copyDocToFileWithOriginalExt(context, dictDoc.uri, workDir, "source")
 
     val ifoMap = parseIfo(ifoFile)
     val bookName = ifoMap["bookname"].orEmpty().ifBlank { baseName }
     val charsetName = ifoMap["charset"]?.trim()?.ifBlank { null }
     val sameTypeSequence = ifoMap["sametypesequence"]?.trim()?.ifBlank { null }
     return ImportSource(bookName = bookName, idxFile = idxFile, dictFile = dictFile, charsetName = charsetName, sameTypeSequence = sameTypeSequence)
+}
+
+private fun copyDocToFileWithOriginalExt(context: Context, sourceUri: Uri, workDir: File, baseName: String): File {
+    val doc = DocumentFile.fromSingleUri(context, sourceUri) ?: throw IllegalStateException("无法读取文件")
+    val name = doc.name ?: throw IllegalStateException("无法获取文件名")
+    val ext = if (name.contains('.')) name.substringAfterLast('.') else ""
+    val targetName = if (ext.isNotEmpty()) "$baseName.$ext" else baseName
+    val target = File(workDir, targetName)
+    context.contentResolver.openInputStream(sourceUri)?.use { input ->
+        target.outputStream().use { output -> input.copyTo(output) }
+    } ?: throw IllegalStateException("无法读取源文件")
+    return target
 }
 
 private fun parseIfo(ifoFile: File): Map<String, String> {
@@ -356,17 +385,80 @@ private fun buildRegex(pattern: String): Regex {
 }
 
 private fun decodeDefinition(bytes: ByteArray, charsetName: String?): String {
-    val candidates = mutableListOf<Charset>()
-    resolveCharset(charsetName)?.let { candidates.add(it) }
-    candidates.add(Charsets.UTF_8)
-    runCatching { Charset.forName("GB18030") }.getOrNull()?.let { candidates.add(it) }
-    runCatching { Charset.forName("ISO-8859-1") }.getOrNull()?.let { candidates.add(it) }
+    // 1. 优先使用词典指定的编码
+    charsetName?.let { name ->
+        resolveCharset(name)?.let { cs ->
+            try {
+                val text = bytes.toString(cs)
+                if (isValidText(text)) {
+                    return formatDefinition(text)
+                }
+            } catch (_: Exception) {}
+        }
+    }
 
-    val text = candidates.asSequence().map { cs ->
-        runCatching { bytes.toString(cs) }.getOrNull()
-    }.firstOrNull { !it.isNullOrBlank() } ?: ""
+    // 2. 尝试 UTF-8
+    try {
+        val text = bytes.toString(Charsets.UTF_8)
+        if (isValidText(text)) {
+            return formatDefinition(text)
+        }
+    } catch (_: Exception) {}
 
-    return text.replace("\u0000", "\n").trim()
+    // 3. 尝试 GB18030（常见于中文词典）
+    try {
+        val gb18030 = Charset.forName("GB18030")
+        val text = bytes.toString(gb18030)
+        if (isValidText(text)) {
+            return formatDefinition(text)
+        }
+    } catch (_: Exception) {}
+
+    // 4. 尝试 GBK
+    try {
+        val gbk = Charset.forName("GBK")
+        val text = bytes.toString(gbk)
+        if (isValidText(text)) {
+            return formatDefinition(text)
+        }
+    } catch (_: Exception) {}
+
+    // 5. 尝试 Big5（繁体中文）
+    try {
+        val big5 = Charset.forName("Big5")
+        val text = bytes.toString(big5)
+        if (isValidText(text)) {
+            return formatDefinition(text)
+        }
+    } catch (_: Exception) {}
+
+    // 6. 最后使用 UTF-8，即使可能有乱码
+    return formatDefinition(bytes.toString(Charsets.UTF_8))
+}
+
+private fun isValidText(text: String): Boolean {
+    if (text.isBlank()) return false
+    // 检测常见的乱码特征
+    val replacementCharCount = text.count { it == '\uFFFD' }
+    if (replacementCharCount > text.length / 10) return false // 替换字符超过10%
+
+    // 检测连续的高位控制字符（常见于错误编码）
+    var controlCount = 0
+    for (c in text) {
+        val code = c.code
+        if (code in 0x80..0x9F || code == 0xFFFD) {
+            controlCount++
+        }
+    }
+    if (controlCount > text.length / 5) return false
+
+    return true
+}
+
+private fun formatDefinition(text: String): String {
+    return text
+        .replace("\u0000", "\n")
+        .trim()
 }
 
 private fun resolveCharset(name: String?): Charset? {
@@ -388,22 +480,10 @@ private fun findHeader(headers: List<FileHeader>, suffix: String): FileHeader? {
     }
 }
 
-private fun extractHeader(zip: ZipFile, header: FileHeader, extractDir: File, targetName: String): File {
-    zip.extractFile(header, extractDir.absolutePath, targetName)
-    return File(extractDir, targetName)
-}
-
 private fun stripExt(name: String): String {
     val idx = name.lastIndexOf('.')
     if (idx <= 0) return name
     return name.substring(0, idx)
-}
-
-private fun copyDocToFile(context: Context, sourceUri: Uri, target: File): File {
-    context.contentResolver.openInputStream(sourceUri)?.use { input ->
-        target.outputStream().use { output -> input.copyTo(output) }
-    } ?: throw IllegalStateException("无法读取源文件")
-    return target
 }
 
 private fun buildDictId(bookName: String): String {
