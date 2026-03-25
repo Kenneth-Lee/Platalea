@@ -44,14 +44,21 @@ data class EpubReadingProgress(
 )
 
 /** EPUB收藏夹和阅读进度管理器 */
-class EpubBookmarkManager(private val context: Context) {
-    private val bookmarksFile = File(context.filesDir, "epub_bookmarks.json")
-    private val progressFile = File(context.filesDir, "epub_progress.json")
+class EpubBookmarkManager(
+    private val context: Context,
+    private val cacheDir: File? = null,
+    private val scopedUri: String? = null
+) {
+    private val bookmarksFile = cacheDir?.let { File(it, ".epub_bookmarks.json") }
+        ?: File(context.filesDir, "epub_bookmarks.json")
 
     private val _bookmarks = MutableStateFlow<List<EpubBookmark>>(emptyList())
     val bookmarks: StateFlow<List<EpubBookmark>> = _bookmarks.asStateFlow()
 
     init {
+        if (cacheDir != null && !scopedUri.isNullOrBlank()) {
+            clearPersistentDataForUri(scopedUri)
+        }
         loadBookmarks()
     }
 
@@ -130,6 +137,7 @@ class EpubBookmarkManager(private val context: Context) {
             }
             // 使用URI hash作为文件名，支持多本书
             val progressFile = getProgressFileForUri(progress.epubUri)
+            progressFile.parentFile?.mkdirs()
             progressFile.writeText(json.toString())
             Log.d(TAG, "保存阅读进度: ${progress.epubFileName} 章节${progress.chapterIndex}, 比例${progress.scrollRatio}, URI hash=${progress.epubUri.hashCode().toUInt().toString(16)}, 文件=${progressFile.absolutePath}")
         } catch (e: Exception) {
@@ -174,8 +182,44 @@ class EpubBookmarkManager(private val context: Context) {
     // ---- 私有方法 ----
 
     private fun getProgressFileForUri(uri: String): File {
+        if (cacheDir != null) {
+            return File(cacheDir, ".epub_progress.json")
+        }
         val key = uri.hashCode().toUInt().toString(16)
         return File(context.filesDir, "epub_progress_$key.json")
+    }
+
+    private fun clearPersistentDataForUri(uri: String) {
+        try {
+            val persistentBookmarksFile = File(context.filesDir, "epub_bookmarks.json")
+            if (persistentBookmarksFile.exists()) {
+                val json = JSONArray(persistentBookmarksFile.readText())
+                val filtered = JSONArray()
+                var removed = 0
+                for (i in 0 until json.length()) {
+                    val item = json.optJSONObject(i) ?: continue
+                    if (item.optString("epubUri") == uri) {
+                        removed++
+                    } else {
+                        filtered.put(item)
+                    }
+                }
+                if (removed > 0) {
+                    persistentBookmarksFile.writeText(filtered.toString())
+                    Log.w(TAG, "已清除持久区中遗留的加密文件收藏: uri=$uri, count=$removed")
+                }
+            }
+            val persistentProgressFile = File(
+                context.filesDir,
+                "epub_progress_${uri.hashCode().toUInt().toString(16)}.json"
+            )
+            if (persistentProgressFile.exists()) {
+                persistentProgressFile.delete()
+                Log.w(TAG, "已清除持久区中遗留的加密文件进度: uri=$uri")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "清理持久区遗留加密阅读数据失败", e)
+        }
     }
 
     private fun loadBookmarks() {
@@ -211,6 +255,7 @@ class EpubBookmarkManager(private val context: Context) {
 
     private fun saveBookmarks() {
         try {
+            bookmarksFile.parentFile?.mkdirs()
             val json = JSONArray()
             _bookmarks.value.forEach { bookmark ->
                 json.put(JSONObject().apply {

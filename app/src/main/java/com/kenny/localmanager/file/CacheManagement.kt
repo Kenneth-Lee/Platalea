@@ -3,18 +3,18 @@ package com.kenny.localmanager.file
 import android.content.Context
 import java.io.File
 
-/** 仅图片缓存区分加密/非加密；其余类型整类清空。 */
-private val CACHE_TYPES_FULL_CLEAR = listOf(
-    "md_zip_cache" to "Markdown/RST 压缩包缓存",
-    "html_zip_cache" to "HTML 压缩包缓存",
-    "epub_cache" to "EPUB 电子书缓存"
+private val BROWSABLE_CACHE_DIRS = listOf(
+    "md_zip_cache",
+    "html_zip_cache",
+    "epub_cache",
+    "pic_zip_cache"
 )
 private const val PIC_ZIP_CACHE_DIR = "pic_zip_cache"
-private const val PIC_ZIP_DISPLAY_NAME = "图片压缩包缓存"
 
 /** 缓存项：显示名、当前大小、清空时的回调。 */
 data class CacheEntry(
     val displayName: String,
+    val description: String,
     val sizeBytes: Long,
     val onClear: (Context) -> Unit
 )
@@ -30,61 +30,81 @@ fun dirSize(file: File): Long {
 
 private fun isEncryptedSubdir(subdir: File): Boolean = File(subdir, ".encrypted").exists()
 
-/** 返回所有缓存分类。图片缓存拆成（非加密）（加密）两项，其余每类一项、清空时整类删除。需在 IO 线程调用。 */
+private fun collectBrowsableCacheChildren(context: Context): List<File> {
+    return BROWSABLE_CACHE_DIRS.flatMap { dirName ->
+        File(context.cacheDir, dirName).listFiles().orEmpty().toList()
+    }
+}
+
+private fun isEncryptedPicCacheChild(file: File): Boolean {
+    return file.parentFile?.name == PIC_ZIP_CACHE_DIR && file.isDirectory && isEncryptedSubdir(file)
+}
+
+private fun isNonEncryptedBrowsableCacheChild(file: File): Boolean {
+    val parentName = file.parentFile?.name ?: return false
+    if (parentName !in BROWSABLE_CACHE_DIRS) return false
+    if (file.isDirectory) return !isEncryptedSubdir(file)
+    return true
+}
+
+/** 返回缓存分类。仅保留三类：非加密展开浏览缓存、加密图片缓存、其他缓存。需在 IO 线程调用。 */
 fun getCacheEntries(context: Context): List<CacheEntry> {
     val cacheDir = context.cacheDir
+    val rootEntries = cacheDir.listFiles().orEmpty()
     val result = mutableListOf<CacheEntry>()
+    val browsableChildren = collectBrowsableCacheChildren(context)
+    val nonEncryptedBrowsable = browsableChildren.filter(::isNonEncryptedBrowsableCacheChild)
+    val encryptedPic = browsableChildren.filter(::isEncryptedPicCacheChild)
+    val managedBrowsableDirs = BROWSABLE_CACHE_DIRS.toSet()
 
-    for ((dirName, displayName) in CACHE_TYPES_FULL_CLEAR) {
-        val dir = File(cacheDir, dirName)
-        val size = dirSize(dir)
-        result += CacheEntry(displayName, size) { ctx ->
-            val d = File(ctx.cacheDir, dirName)
-            d.deleteRecursively()
-            d.mkdirs()
+    result += CacheEntry(
+        "普通浏览缓存",
+        "所有非加密的需展开后浏览的缓存，含 .md.zip/.rst.zip/.html.zip/.pic.zip 与 .epub/.txt/.llm/.llm.zip。",
+        nonEncryptedBrowsable.sumOf(::dirSize)
+    ) { ctx ->
+        BROWSABLE_CACHE_DIRS.forEach { dirName ->
+            File(ctx.cacheDir, dirName).listFiles()?.forEach { child ->
+                if (isNonEncryptedBrowsableCacheChild(child)) child.deleteRecursively()
+            }
         }
     }
 
-    val picDir = File(cacheDir, PIC_ZIP_CACHE_DIR)
-    if (picDir.exists() && picDir.isDirectory) {
-        var sizeNonEnc = 0L
-        var sizeEnc = 0L
-        picDir.listFiles()?.forEach { sub ->
-            if (!sub.isDirectory) return@forEach
-            val size = dirSize(sub)
-            if (isEncryptedSubdir(sub)) sizeEnc += size else sizeNonEnc += size
-        }
-        result += CacheEntry("$PIC_ZIP_DISPLAY_NAME（非加密）", sizeNonEnc) { ctx ->
-            File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { sub ->
-                if (sub.isDirectory && !isEncryptedSubdir(sub)) sub.deleteRecursively()
-            }
-        }
-        result += CacheEntry("$PIC_ZIP_DISPLAY_NAME（加密）", sizeEnc) { ctx ->
-            File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { sub ->
-                if (sub.isDirectory && isEncryptedSubdir(sub)) sub.deleteRecursively()
-            }
-        }
-    } else {
-        result += CacheEntry("$PIC_ZIP_DISPLAY_NAME（非加密）", 0L) { ctx ->
-            File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).let { it.deleteRecursively(); it.mkdirs() }
-        }
-        result += CacheEntry("$PIC_ZIP_DISPLAY_NAME（加密）", 0L) { ctx ->
-            File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { sub ->
-                if (sub.isDirectory && isEncryptedSubdir(sub)) sub.deleteRecursively()
-            }
+    result += CacheEntry(
+        "加密图片缓存",
+        "仅加密 .pic.zip 允许保留退出后的缓存；可能包含敏感图片明文。",
+        encryptedPic.sumOf(::dirSize)
+    ) { ctx ->
+        File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { child ->
+            if (isEncryptedPicCacheChild(child)) child.deleteRecursively()
         }
     }
 
     var otherSize = 0L
-    cacheDir.listFiles()?.forEach { f ->
-        if (f.name !in CACHE_TYPES_FULL_CLEAR.map { it.first } && f.name != PIC_ZIP_CACHE_DIR) {
+    rootEntries.forEach { f ->
+        if (f.name !in managedBrowsableDirs) {
             otherSize += dirSize(f)
+        } else {
+            f.listFiles()?.forEach { child ->
+                if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedPicCacheChild(child)) {
+                    otherSize += dirSize(child)
+                }
+            }
         }
     }
-    result += CacheEntry("其他临时缓存", otherSize) { ctx ->
+    result += CacheEntry(
+        "其他临时缓存",
+        "未纳入前两类的其他缓存或异常残留。",
+        otherSize
+    ) { ctx ->
         ctx.cacheDir.listFiles()?.forEach { f ->
-            if (f.name !in CACHE_TYPES_FULL_CLEAR.map { it.first } && f.name != PIC_ZIP_CACHE_DIR) {
+            if (f.name !in managedBrowsableDirs) {
                 f.deleteRecursively()
+            } else {
+                f.listFiles()?.forEach { child ->
+                    if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedPicCacheChild(child)) {
+                        child.deleteRecursively()
+                    }
+                }
             }
         }
     }

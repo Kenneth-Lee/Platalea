@@ -3827,7 +3827,13 @@ fun EpubViewerScreen(
     }
 
     // 收藏夹管理器
-    val bookmarkManager = remember { EpubBookmarkManager(context) }
+    val bookmarkManager = remember(epubUri, extractResult.cacheDir.absolutePath, extractResult.isEncrypted) {
+        EpubBookmarkManager(
+            context = context,
+            cacheDir = extractResult.cacheDir.takeIf { extractResult.isEncrypted },
+            scopedUri = epubUri.toString()
+        )
+    }
     val bookmarks by bookmarkManager.bookmarks.collectAsState()
     val epubBookmarks = bookmarks.filter { it.epubUri == epubUri.toString() }
 

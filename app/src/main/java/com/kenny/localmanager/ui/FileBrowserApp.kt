@@ -391,7 +391,6 @@ fun FileBrowserApp(
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
-    var pendingEpubCacheExitConfirm by remember { mutableStateOf<EpubCacheExitRequest?>(null) }
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
     var showDictionaryScreen by remember { mutableStateOf(false) }
     var currentUri by remember { mutableStateOf<String?>(null) }
@@ -755,30 +754,16 @@ fun FileBrowserApp(
         epubViewState != null -> {
             val state = epubViewState!!
             BackHandler {
-                if (state.isEncrypted && isCompressedLlmZip(state.zipFileName)) {
-                    pendingEpubCacheExitConfirm = EpubCacheExitRequest(
-                        zipFileName = state.zipFileName,
-                        epubUri = state.epubUri
-                    )
-                } else {
-                    if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
-                    epubViewState = null
-                }
+                if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
+                epubViewState = null
             }
             EpubViewerScreen(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,
                 onBack = {
-                    if (state.isEncrypted && isCompressedLlmZip(state.zipFileName)) {
-                        pendingEpubCacheExitConfirm = EpubCacheExitRequest(
-                            zipFileName = state.zipFileName,
-                            epubUri = state.epubUri
-                        )
-                    } else {
-                        if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
-                        epubViewState = null
-                    }
+                    if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
+                    epubViewState = null
                 },
                 logDebug = null
             )
@@ -3960,33 +3945,6 @@ fun FileBrowserApp(
         )
     }
 
-    pendingEpubCacheExitConfirm?.let { req ->
-        AlertDialog(
-            onDismissRequest = { pendingEpubCacheExitConfirm = null },
-            title = { Text("退出阅读") },
-            text = {
-                Text("当前文件为加密压缩包 ${req.zipFileName}。是否保留已解压缓存？保留可加快下次打开，但会在本机留下明文内容。")
-            },
-            confirmButton = {
-                Button(onClick = {
-                    // 保留缓存并退出
-                    pendingEpubCacheExitConfirm = null
-                    epubViewState = null
-                }) { Text("保留缓存") }
-            },
-            dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        // 删除缓存并退出
-                        cleanEpubCache(context, req.epubUri)
-                        pendingEpubCacheExitConfirm = null
-                        epubViewState = null
-                    }) { Text("删除缓存") }
-                    TextButton(onClick = { pendingEpubCacheExitConfirm = null }) { Text("取消") }
-                }
-            }
-        )
-    }
 }
 
 /** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
@@ -4078,12 +4036,6 @@ private data class EpubViewState(
     val zipFileName: String,
     val epubUri: Uri,
     val isEncrypted: Boolean
-)
-
-/** 退出加密 .llm.zip 阅读时的缓存确认请求。 */
-private data class EpubCacheExitRequest(
-    val zipFileName: String,
-    val epubUri: Uri
 )
 
 /** .pic.zip 查看器状态。 */
@@ -6838,6 +6790,13 @@ fun CacheManagementDialog(
                             ) {
                                 Column(Modifier.weight(1f)) {
                                     Text(entry.displayName, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                                    if (entry.description.isNotBlank()) {
+                                        Text(
+                                            entry.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     Text(formatSize(entry.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                                 TextButton(
