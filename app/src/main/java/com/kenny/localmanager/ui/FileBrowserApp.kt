@@ -4642,7 +4642,8 @@ internal fun FileBrowserScreen(
                                 }
                             ) { Text("GnuPG 加密", color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true))
+                        if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)
+                            || menuTarget.name.endsWith(".txt", ignoreCase = true))
                             && onRequestPassProtect != null) {
                             TextButton(
                                 onClick = {

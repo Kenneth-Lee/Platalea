@@ -2507,8 +2507,12 @@ fun PassContentViewerScreen(
         val decoded = decryptedBytes.decodeToString()
         val trimmed = decoded.dropLastWhile { it == '\uFFFD' }
         val isRst = innerFileName.endsWith(".rst", ignoreCase = true)
-        if (isRst) rstToHtml(trimmed)
-        else markdownToHtml(trimmed)
+        val isTxt = innerFileName.endsWith(".txt", ignoreCase = true)
+        when {
+            isRst -> rstToHtml(trimmed)
+            isTxt -> "<pre style=\"white-space:pre-wrap;word-break:break-word;font-family:monospace;\">${escapeHtml(trimmed)}</pre>"
+            else -> markdownToHtml(trimmed)
+        }
     }
 
     val doBack = {
