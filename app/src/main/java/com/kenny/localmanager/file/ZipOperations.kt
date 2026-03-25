@@ -1700,7 +1700,12 @@ fun loadEpubFromCache(cacheDir: File): EpubExtractResult? {
 
     val parseResult = parseEpubOpf(opfFile, opfDir) ?: return null
     val (bookInfo, rawChapters) = parseResult
-    val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+    var chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+    val titleMap = loadChapterTitles(cacheDir)
+    chapters = applySavedChapterTitles(chapters, titleMap)
+    if (titleMap.isEmpty() && File(cacheDir, ".llm_source").exists()) {
+        chapters = recoverChapterTitlesFromH1(opfDir, chapters)
+    }
 
     return EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted)
 }
@@ -1722,6 +1727,7 @@ fun isLlmFile(name: String): Boolean = name.endsWith(".llm", ignoreCase = true)
 
 private const val CHAPTER_TYPE_MARKER_TXT = "<!--LM_CHAPTER_TYPE:TXT-->"
 private const val CHAPTER_TYPE_MARKER_LLM = "<!--LM_CHAPTER_TYPE:LLM-->"
+private const val CHAPTER_TITLES_FILE = ".chapter_titles.json"
 
 private data class DialogBlock(
     val role: String,
@@ -1730,13 +1736,17 @@ private data class DialogBlock(
 )
 
 private fun readTextWithFallback(file: File): String {
+    return decodeTextWithFallback(file.readBytes())
+}
+
+private fun decodeTextWithFallback(bytes: ByteArray): String {
     return try {
-        file.readText(Charsets.UTF_8)
+        bytes.toString(Charsets.UTF_8)
     } catch (_: Exception) {
         try {
-            file.readText(Charset.forName("GBK"))
+            bytes.toString(Charset.forName("GBK"))
         } catch (_: Exception) {
-            file.readText()
+            bytes.toString()
         }
     }
 }
@@ -1825,6 +1835,66 @@ private fun buildLlmChapterHtml(bookTitle: String, content: String): String {
     """.trimIndent()
 }
 
+private fun saveChapterTitles(cacheDir: File, chapters: List<EpubChapter>) {
+    runCatching {
+        val arr = org.json.JSONArray()
+        chapters.forEach { chapter ->
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("id", chapter.id)
+                    put("href", chapter.href)
+                    put("title", chapter.title ?: "")
+                }
+            )
+        }
+        File(cacheDir, CHAPTER_TITLES_FILE).writeText(arr.toString())
+    }
+}
+
+private fun loadChapterTitles(cacheDir: File): Map<String, String> {
+    val file = File(cacheDir, CHAPTER_TITLES_FILE)
+    if (!file.exists()) return emptyMap()
+    return runCatching {
+        val arr = org.json.JSONArray(file.readText())
+        buildMap {
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val title = obj.optString("title").trim()
+                if (title.isBlank()) continue
+                val id = obj.optString("id").trim()
+                val href = obj.optString("href").trim()
+                if (id.isNotBlank()) put("id:$id", title)
+                if (href.isNotBlank()) put("href:$href", title)
+            }
+        }
+    }.getOrElse { emptyMap() }
+}
+
+private fun applySavedChapterTitles(chapters: List<EpubChapter>, titleMap: Map<String, String>): List<EpubChapter> {
+    if (titleMap.isEmpty()) return chapters
+    return chapters.map { chapter ->
+        val saved = titleMap["id:${chapter.id}"] ?: titleMap["href:${chapter.href}"]
+        if (saved.isNullOrBlank()) chapter else chapter.copy(title = saved)
+    }
+}
+
+private fun recoverChapterTitlesFromH1(opfDir: File, chapters: List<EpubChapter>): List<EpubChapter> {
+    val h1Regex = Regex("""<h1[^>]*>(.*?)</h1>""", RegexOption.IGNORE_CASE)
+    val tagRegex = Regex("<[^>]+>")
+    return chapters.map { chapter ->
+        val file = File(opfDir, chapter.href)
+        if (!file.exists()) return@map chapter
+        val title = runCatching {
+            val html = file.readText()
+            h1Regex.find(html)?.groupValues?.getOrNull(1)
+                ?.replace(tagRegex, "")
+                ?.replace("&nbsp;", " ")
+                ?.trim()
+        }.getOrNull()
+        if (title.isNullOrBlank()) chapter else chapter.copy(title = title)
+    }
+}
+
 /**
  * 将 TXT 文件转换为 EPUB 兼容格式，使用与 EPUB 相同的缓存结构
  * 按空行分隔为段落，整个文档作为一个章节
@@ -1836,90 +1906,28 @@ private fun buildLlmChapterHtml(bookTitle: String, content: String): String {
  */
 fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractResult? {
     if (!txtFile.exists()) return null
+    return prepareTextBookAsEpub(
+        context = context,
+        sourceUri = txtUri,
+        sourceFileName = txtFile.name,
+        content = readTextWithFallback(txtFile),
+        isLlm = false
+    )
+}
 
-    try {
-        // 使用与 EPUB 相同的缓存目录结构
-        val cacheDir = getEpubCacheDir(context, txtUri)
-        cacheDir.deleteRecursively()
-        cacheDir.mkdirs()
-
-        val content = readTextWithFallback(txtFile)
-
-        // 创建 EPUB 标准目录结构
-        val contentDir = File(cacheDir, "content")
-        val metaInfDir = File(contentDir, "META-INF")
-        val oebpsDir = File(contentDir, "OEBPS")
-        metaInfDir.mkdirs()
-        oebpsDir.mkdirs()
-
-        val bookTitle = txtFile.nameWithoutExtension
-
-        // 1. 创建 META-INF/container.xml（EPUB 标准入口）
-        val containerXml = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-                <rootfiles>
-                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
-                </rootfiles>
-            </container>
-        """.trimIndent()
-        File(metaInfDir, "container.xml").writeText(containerXml)
-
-        // 2. 生成 HTML 内容文件
-        val htmlFileName = "chapter_0.html"
-        val htmlFile = File(oebpsDir, htmlFileName)
-
-        val htmlContent = buildTxtChapterHtml(bookTitle, content)
-        htmlFile.writeText(htmlContent)
-
-        // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
-        val opfContent = """
-            <?xml version="1.0" encoding="UTF-8"?>
-            <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
-                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-                    <dc:title>$bookTitle</dc:title>
-                    <dc:language>zh</dc:language>
-                    <dc:identifier id="uid">txt-${txtFile.name.hashCode()}</dc:identifier>
-                </metadata>
-                <manifest>
-                    <item id="chapter_0" href="$htmlFileName" media-type="application/xhtml+xml"/>
-                </manifest>
-                <spine>
-                    <itemref idref="chapter_0"/>
-                </spine>
-            </package>
-        """.trimIndent()
-        File(oebpsDir, "content.opf").writeText(opfContent)
-
-        // 4. 创建缓存时间戳文件（与 EPUB 结构一致）
-        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
-
-        // 5. 创建 TXT 标记文件（用于区分 EPUB 和 TXT 缓存）
-        File(cacheDir, ".txt_source").writeText(txtFile.name)
-
-        val epubChapters = listOf(EpubChapter(
-            id = "chapter_0",
-            href = htmlFileName,
-            title = bookTitle
-        ))
-
-        val bookInfo = EpubBookInfo(
-            title = bookTitle,
-            author = null,
-            language = "zh"
-        )
-
-        return EpubExtractResult(
-            cacheDir = cacheDir,
-            contentDir = contentDir,
-            opfDir = oebpsDir,
-            bookInfo = bookInfo,
-            chapters = epubChapters,
-            isEncrypted = false
+fun prepareTxtAsEpub(context: Context, txtUri: Uri, txtFileName: String): EpubExtractResult? {
+    return try {
+        val bytes = context.contentResolver.openInputStream(txtUri)?.use { it.readBytes() } ?: return null
+        prepareTextBookAsEpub(
+            context = context,
+            sourceUri = txtUri,
+            sourceFileName = txtFileName,
+            content = decodeTextWithFallback(bytes),
+            isLlm = false
         )
     } catch (e: Exception) {
-        Log.e("TxtToEpub", "Failed to convert TXT to EPUB format", e)
-        return null
+        Log.e("TxtToEpub", "Failed to read TXT uri", e)
+        null
     }
 }
 
@@ -1934,25 +1942,51 @@ fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractR
  */
 fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractResult? {
     if (!llmFile.exists()) return null
+    return prepareTextBookAsEpub(
+        context = context,
+        sourceUri = llmUri,
+        sourceFileName = llmFile.name,
+        content = readTextWithFallback(llmFile),
+        isLlm = true
+    )
+}
 
-    try {
-        // 使用与 EPUB 相同的缓存目录结构
-        val cacheDir = getEpubCacheDir(context, llmUri)
+fun prepareLlmAsEpub(context: Context, llmUri: Uri, llmFileName: String): EpubExtractResult? {
+    return try {
+        val bytes = context.contentResolver.openInputStream(llmUri)?.use { it.readBytes() } ?: return null
+        prepareTextBookAsEpub(
+            context = context,
+            sourceUri = llmUri,
+            sourceFileName = llmFileName,
+            content = decodeTextWithFallback(bytes),
+            isLlm = true
+        )
+    } catch (e: Exception) {
+        Log.e("LlmToEpub", "Failed to read LLM uri", e)
+        null
+    }
+}
+
+private fun prepareTextBookAsEpub(
+    context: Context,
+    sourceUri: Uri,
+    sourceFileName: String,
+    content: String,
+    isLlm: Boolean
+): EpubExtractResult? {
+    return try {
+        val cacheDir = getEpubCacheDir(context, sourceUri)
         cacheDir.deleteRecursively()
         cacheDir.mkdirs()
 
-        val content = readTextWithFallback(llmFile)
-
-        // 创建 EPUB 标准目录结构
         val contentDir = File(cacheDir, "content")
         val metaInfDir = File(contentDir, "META-INF")
         val oebpsDir = File(contentDir, "OEBPS")
         metaInfDir.mkdirs()
         oebpsDir.mkdirs()
 
-        val bookTitle = llmFile.nameWithoutExtension
+        val bookTitle = sourceFileName.substringBeforeLast('.')
 
-        // 1. 创建 META-INF/container.xml（EPUB 标准入口）
         val containerXml = """
             <?xml version="1.0" encoding="UTF-8"?>
             <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -1963,21 +1997,19 @@ fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractR
         """.trimIndent()
         File(metaInfDir, "container.xml").writeText(containerXml)
 
-        // 2. 解析对话内容并生成 HTML
         val htmlFileName = "chapter_0.html"
         val htmlFile = File(oebpsDir, htmlFileName)
-
-        val htmlContent = buildLlmChapterHtml(bookTitle, content)
+        val htmlContent = if (isLlm) buildLlmChapterHtml(bookTitle, content) else buildTxtChapterHtml(bookTitle, content)
         htmlFile.writeText(htmlContent)
 
-        // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
+        val identifierPrefix = if (isLlm) "llm" else "txt"
         val opfContent = """
             <?xml version="1.0" encoding="UTF-8"?>
             <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
                 <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
                     <dc:title>$bookTitle</dc:title>
                     <dc:language>zh</dc:language>
-                    <dc:identifier id="uid">llm-${llmFile.name.hashCode()}</dc:identifier>
+                    <dc:identifier id="uid">$identifierPrefix-${sourceFileName.hashCode()}</dc:identifier>
                 </metadata>
                 <manifest>
                     <item id="chapter_0" href="$htmlFileName" media-type="application/xhtml+xml"/>
@@ -1989,35 +2021,31 @@ fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractR
         """.trimIndent()
         File(oebpsDir, "content.opf").writeText(opfContent)
 
-        // 4. 创建缓存时间戳文件
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (isLlm) File(cacheDir, ".llm_source").writeText(sourceFileName)
+        else File(cacheDir, ".txt_source").writeText(sourceFileName)
 
-        // 5. 创建 LLM 标记文件
-        File(cacheDir, ".llm_source").writeText(llmFile.name)
-
-        val epubChapters = listOf(EpubChapter(
-            id = "chapter_0",
-            href = htmlFileName,
-            title = bookTitle
-        ))
-
-        val bookInfo = EpubBookInfo(
-            title = bookTitle,
-            author = null,
-            language = "zh"
+        val chapters = listOf(
+            EpubChapter(
+                id = "chapter_0",
+                href = htmlFileName,
+                title = bookTitle
+            )
         )
+        saveChapterTitles(cacheDir, chapters)
+        val bookInfo = EpubBookInfo(title = bookTitle, author = null, language = "zh")
 
-        return EpubExtractResult(
+        EpubExtractResult(
             cacheDir = cacheDir,
             contentDir = contentDir,
             opfDir = oebpsDir,
             bookInfo = bookInfo,
-            chapters = epubChapters,
+            chapters = chapters,
             isEncrypted = false
         )
     } catch (e: Exception) {
-        Log.e("LlmToEpub", "Failed to convert LLM to EPUB format", e)
-        return null
+        Log.e(if (isLlm) "LlmToEpub" else "TxtToEpub", "Failed to prepare text book cache", e)
+        null
     }
 }
 
@@ -2121,6 +2149,7 @@ fun extractLlmZipToCache(
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+        saveChapterTitles(cacheDir, chapters)
 
         return EpubExtractResult(
             cacheDir = cacheDir,

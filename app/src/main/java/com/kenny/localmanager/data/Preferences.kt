@@ -54,6 +54,11 @@ data class PlayerListBookmark(
     val savedAt: Long
 )
 
+data class PlayerResumeState(
+    val trackIndex: Int,
+    val positionMs: Long
+)
+
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[ROOT_URI]
@@ -116,20 +121,11 @@ class Preferences(private val context: Context) {
     }
 
     val externalOpenByExtension: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
-        val json = prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON] ?: return@map emptyMap()
-        try {
-            val obj = org.json.JSONObject(json)
-            buildMap {
-                val keys = obj.keys()
-                while (keys.hasNext()) {
-                    val key = keys.next().trim().lowercase()
-                    val value = obj.optString(key).trim()
-                    if (key.isNotBlank() && value.isNotBlank()) put(key, value)
-                }
-            }
-        } catch (_: Exception) {
-            emptyMap()
-        }
+        parseExternalOpenByExtensionMap(prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON])
+    }
+
+    val playerPlaylistResumeStates: Flow<Map<String, PlayerResumeState>> = context.dataStore.data.map { prefs ->
+        parsePlayerResumeStates(prefs[PLAYER_PLAYLIST_RESUME_JSON])
     }
 
     /** 最后一次播放的列表 ID（用于停止后「恢复播放」）。 */
@@ -189,6 +185,16 @@ class Preferences(private val context: Context) {
 
     suspend fun clearExternalOpenPackageForExtension(extension: String) {
         setExternalOpenPackageForExtension(extension, null)
+    }
+
+    suspend fun replaceExternalOpenPackages(map: Map<String, String>) {
+        context.dataStore.edit { prefs ->
+            if (map.isEmpty()) {
+                prefs.remove(EXTERNAL_OPEN_BY_EXTENSION_JSON)
+            } else {
+                prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON] = externalOpenByExtensionMapToJson(map)
+            }
+        }
     }
 
     suspend fun setFtpPort(port: Int) {
@@ -314,24 +320,30 @@ class Preferences(private val context: Context) {
         return PlaylistAppendResult(found = found, appendedCount = appendedCount, skippedCount = skippedCount)
     }
 
-    suspend fun appendPlaylists(playlists: List<Playlist>) {
-        if (playlists.isEmpty()) return
+    suspend fun appendPlaylists(playlists: List<Playlist>): Map<String, String> {
+        if (playlists.isEmpty()) return emptyMap()
+        var idMapping = emptyMap<String, String>()
         context.dataStore.edit { prefs ->
             val existing = Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
             val usedIds = existing.map { it.id }.toMutableSet()
+            val mapping = mutableMapOf<String, String>()
             val normalized = playlists.map { playlist ->
                 if (playlist.id !in usedIds) {
                     usedIds += playlist.id
+                    mapping[playlist.id] = playlist.id
                     playlist
                 } else {
                     var newId = UUID.randomUUID().toString()
                     while (newId in usedIds) newId = UUID.randomUUID().toString()
                     usedIds += newId
+                    mapping[playlist.id] = newId
                     playlist.copy(id = newId)
                 }
             }
             prefs[PLAYER_PLAYLISTS_JSON] = Playlist.listToJson(existing + normalized)
+            idMapping = mapping.toMap()
         }
+        return idMapping
     }
 
     suspend fun replacePlaylists(playlists: List<Playlist>) {
@@ -451,6 +463,49 @@ class Preferences(private val context: Context) {
         }
     }
 
+    suspend fun replacePlayerListBookmarks(bookmarks: List<PlayerListBookmark>) {
+        context.dataStore.edit { prefs ->
+            if (bookmarks.isEmpty()) prefs.remove(PLAYER_LIST_BOOKMARKS_JSON)
+            else prefs[PLAYER_LIST_BOOKMARKS_JSON] = playerListBookmarksToJson(bookmarks)
+        }
+    }
+
+    suspend fun appendPlayerListBookmarks(bookmarks: List<PlayerListBookmark>) {
+        if (bookmarks.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val existing = parsePlayerListBookmarks(prefs[PLAYER_LIST_BOOKMARKS_JSON])
+            val usedIds = existing.map { it.id }.toMutableSet()
+            val normalized = bookmarks.map { bookmark ->
+                if (bookmark.id !in usedIds) {
+                    usedIds += bookmark.id
+                    bookmark
+                } else {
+                    var newId = UUID.randomUUID().toString()
+                    while (newId in usedIds) newId = UUID.randomUUID().toString()
+                    usedIds += newId
+                    bookmark.copy(id = newId)
+                }
+            }
+            prefs[PLAYER_LIST_BOOKMARKS_JSON] = playerListBookmarksToJson(existing + normalized)
+        }
+    }
+
+    suspend fun replacePlayerResumeStates(states: Map<String, PlayerResumeState>) {
+        context.dataStore.edit { prefs ->
+            if (states.isEmpty()) prefs.remove(PLAYER_PLAYLIST_RESUME_JSON)
+            else prefs[PLAYER_PLAYLIST_RESUME_JSON] = playerResumeStatesToJson(states)
+        }
+    }
+
+    suspend fun mergePlayerResumeStates(states: Map<String, PlayerResumeState>) {
+        if (states.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val merged = parsePlayerResumeStates(prefs[PLAYER_PLAYLIST_RESUME_JSON]).toMutableMap()
+            merged.putAll(states)
+            prefs[PLAYER_PLAYLIST_RESUME_JSON] = playerResumeStatesToJson(merged)
+        }
+    }
+
     private fun parsePlayerListBookmarks(json: String?): List<PlayerListBookmark> {
         if (json.isNullOrBlank()) return emptyList()
         return try {
@@ -494,6 +549,72 @@ class Preferences(private val context: Context) {
         } catch (_: Exception) {
             null
         }
+    }
+
+    private fun parsePlayerResumeStates(json: String?): Map<String, PlayerResumeState> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(json)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val playlistId = keys.next()
+                    val value = obj.optJSONObject(playlistId) ?: continue
+                    put(
+                        playlistId,
+                        PlayerResumeState(
+                            trackIndex = value.optInt("i", 0).coerceAtLeast(0),
+                            positionMs = value.optLong("p", 0L).coerceAtLeast(0L)
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun playerResumeStatesToJson(states: Map<String, PlayerResumeState>): String {
+        val obj = org.json.JSONObject()
+        states.forEach { (playlistId, state) ->
+            obj.put(
+                playlistId,
+                org.json.JSONObject().apply {
+                    put("i", state.trackIndex.coerceAtLeast(0))
+                    put("p", state.positionMs.coerceAtLeast(0L))
+                }
+            )
+        }
+        return obj.toString()
+    }
+
+    private fun parseExternalOpenByExtensionMap(json: String?): Map<String, String> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(json)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val key = keys.next().trim().lowercase()
+                    val value = obj.optString(key).trim()
+                    if (key.isNotBlank() && value.isNotBlank()) put(key, value)
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun externalOpenByExtensionMapToJson(map: Map<String, String>): String {
+        val obj = org.json.JSONObject()
+        map.forEach { (extension, packageName) ->
+            val normalizedExtension = extension.trim().lowercase().removePrefix(".")
+            val normalizedPackage = packageName.trim()
+            if (normalizedExtension.isNotBlank() && normalizedPackage.isNotBlank()) {
+                obj.put(normalizedExtension, normalizedPackage)
+            }
+        }
+        return obj.toString()
     }
 
     private fun playerListBookmarksToJson(list: List<PlayerListBookmark>): String {

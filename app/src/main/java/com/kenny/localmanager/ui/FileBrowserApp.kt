@@ -1238,14 +1238,8 @@ fun FileBrowserApp(
 
                     // 如果没有有效缓存，重新生成
                     if (result == null) {
-                        // 将 TXT 文件复制到临时目录
-                        val tempFile = File(context.cacheDir, "txt_temp/${target.name}")
-                        tempFile.parentFile?.mkdirs()
-                        context.contentResolver.openInputStream(target.uri)?.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                        // 转换为 EPUB 格式（使用 URI 作为缓存键）
-                        result = prepareTxtAsEpub(context, tempFile, target.uri)
+                        // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
+                        result = prepareTxtAsEpub(context, target.uri, target.name)
                     }
 
                     if (result != null) {
@@ -1288,14 +1282,8 @@ fun FileBrowserApp(
 
                     // 如果没有有效缓存，重新生成
                     if (result == null) {
-                        // 将 LLM 文件复制到临时目录
-                        val tempFile = File(context.cacheDir, "llm_temp/${target.name}")
-                        tempFile.parentFile?.mkdirs()
-                        context.contentResolver.openInputStream(target.uri)?.use { input ->
-                            tempFile.outputStream().use { output -> input.copyTo(output) }
-                        }
-                        // 转换为 EPUB 格式（使用 URI 作为缓存键）
-                        result = prepareLlmAsEpub(context, tempFile, target.uri)
+                        // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
+                        result = prepareLlmAsEpub(context, target.uri, target.name)
                     }
 
                     val finalResult = result

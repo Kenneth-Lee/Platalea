@@ -99,5 +99,15 @@ class RootBookmarkManager(context: Context) {
         _bookmarksByRoot.value = current
         save()
     }
+
+    fun exportAll(): Map<String, List<String>> = _bookmarksByRoot.value
+
+    fun importAll(bookmarksByRoot: Map<String, List<String>>) {
+        _bookmarksByRoot.value = bookmarksByRoot
+            .mapKeys { normalizeContentUriStringLocal(it.key) }
+            .mapValues { (_, paths) -> paths.distinct().filter { it.isNotBlank() } }
+            .filterValues { it.isNotEmpty() }
+        save()
+    }
 }
 
