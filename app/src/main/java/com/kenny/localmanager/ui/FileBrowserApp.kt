@@ -104,6 +104,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -5562,11 +5564,20 @@ fun PlaybackScreen(
     val scope = rememberCoroutineScope()
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
     var lastPlaylistId by remember { mutableStateOf<String?>(null) }
-    var playerBookmark by remember { mutableStateOf<PlayerListBookmark?>(null) }
+    var playerBookmarks by remember { mutableStateOf<List<PlayerListBookmark>>(emptyList()) }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
     var showPlaylistNoteDialog by remember { mutableStateOf(false) }
     var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
     var playlistNoteEditText by remember { mutableStateOf("") }
+    var showAddBookmarkDialog by remember { mutableStateOf(false) }
+    var bookmarkNoteInput by remember { mutableStateOf("") }
+    var bookmarkPendingPlaylistId by remember { mutableStateOf<String?>(null) }
+    var bookmarkPendingDirUri by remember { mutableStateOf<String?>(null) }
+    var bookmarkPendingTrackIndex by remember { mutableIntStateOf(0) }
+    var bookmarkPendingPositionMs by remember { mutableLongStateOf(0L) }
+    var bookmarkPendingTrackName by remember { mutableStateOf("") }
+    var editingBookmarkId by remember { mutableStateOf<String?>(null) }
+    var editingBookmarkNote by remember { mutableStateOf("") }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -5574,7 +5585,7 @@ fun PlaybackScreen(
         prefs.playerLastPlaylistId.collect { lastPlaylistId = it }
     }
     LaunchedEffect(prefs) {
-        prefs.playerListBookmark.collect { playerBookmark = it }
+        prefs.playerListBookmarks.collect { playerBookmarks = it }
     }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
@@ -5624,42 +5635,89 @@ fun PlaybackScreen(
     ) { padding ->
         if (selectedPlaylist != null) {
             val pl = selectedPlaylist
-            val playlistBookmark = playerBookmark?.takeIf { it.playlistId == pl.id }
+            val playlistBookmarks = playerBookmarks
+                .filter { it.playlistId == pl.id }
+                .sortedByDescending { it.savedAt }
             if (pl.uris.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     Text("列表已空", style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
-                    playlistBookmark?.let { bm ->
-                        Card(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                        ) {
-                            Column(Modifier.padding(10.dp)) {
+                    Card(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    ) {
+                        Column(Modifier.padding(10.dp)) {
+                            Text(
+                                "书签 (${playlistBookmarks.size})",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            if (playlistBookmarks.isEmpty()) {
                                 Text(
-                                    "列表书签：第 ${bm.trackIndex + 1} 首 ${formatPlaybackTime(bm.positionMs.toInt())}",
-                                    style = MaterialTheme.typography.bodyMedium,
+                                    "该播放列表暂无书签",
+                                    style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
-                                if (bm.trackName.isNotBlank()) {
-                                    Text(
-                                        bm.trackName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                TextButton(
-                                    onClick = {
-                                        startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
-                                    },
-                                    enabled = bm.trackIndex in pl.uris.indices
-                                ) {
-                                    Text("跳转到书签位置")
+                            } else {
+                                playlistBookmarks.forEach { bm ->
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(top = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(
+                                                "第 ${bm.trackIndex + 1} 首 ${formatPlaybackTime(bm.positionMs.toInt())}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                                            )
+                                            if (bm.note.isNotBlank()) {
+                                                Text(
+                                                    bm.note,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    maxLines = 2,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            } else if (bm.trackName.isNotBlank()) {
+                                                Text(
+                                                    bm.trackName,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                editingBookmarkId = bm.id
+                                                editingBookmarkNote = bm.note
+                                            }
+                                        ) {
+                                            Icon(Icons.Filled.Edit, contentDescription = "编辑书签备注")
+                                        }
+                                        IconButton(
+                                            onClick = {
+                                                scope.launch {
+                                                    prefs.deletePlayerListBookmark(bm.id)
+                                                }
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.Delete, contentDescription = "删除书签")
+                                        }
+                                        TextButton(
+                                            onClick = {
+                                                startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
+                                            },
+                                            enabled = bm.trackIndex in pl.uris.indices
+                                        ) {
+                                            Text("跳转")
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -5776,7 +5834,7 @@ fun PlaybackScreen(
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (playbackState != null) {
                 val state = playbackState
-                val matchedBookmark = playerBookmark?.takeIf { it.playlistId != null && it.playlistId == state.playlistId }
+                val stateBookmarkCount = playerBookmarks.count { it.playlistId != null && it.playlistId == state.playlistId }
                 var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
                 var seekDragging by remember { mutableStateOf(false) }
                 LaunchedEffect(state.positionMs, state.durationMs) {
@@ -5857,33 +5915,33 @@ fun PlaybackScreen(
                         ) {
                             OutlinedButton(
                                 onClick = {
-                                    scope.launch {
-                                        prefs.setPlayerListBookmark(
-                                            playlistId = state.playlistId,
-                                            dirUri = if (state.playlistId == null) state.dirUri else null,
-                                            trackIndex = state.trackIndex,
-                                            positionMs = state.positionMs.toLong(),
-                                            trackName = state.trackName
-                                        )
-                                        Toast.makeText(context, "已保存播放书签", Toast.LENGTH_SHORT).show()
+                                    if (state.playlistId == null) {
+                                        Toast.makeText(context, "仅播放列表支持书签", Toast.LENGTH_SHORT).show()
+                                        return@OutlinedButton
                                     }
+                                    bookmarkPendingPlaylistId = state.playlistId
+                                    bookmarkPendingDirUri = null
+                                    bookmarkPendingTrackIndex = state.trackIndex
+                                    bookmarkPendingPositionMs = state.positionMs.toLong()
+                                    bookmarkPendingTrackName = state.trackName
+                                    bookmarkNoteInput = ""
+                                    showAddBookmarkDialog = true
                                 }
                             ) {
                                 Text("保存书签")
                             }
                             Button(
                                 onClick = {
-                                    val bm = matchedBookmark ?: return@Button
-                                    val pl = playlists.find { it.id == bm.playlistId }
-                                    if (pl == null) {
-                                        Toast.makeText(context, "未找到书签对应的播放列表", Toast.LENGTH_SHORT).show()
-                                        return@Button
+                                    val pid = state.playlistId
+                                    if (pid == null) {
+                                        Toast.makeText(context, "当前不是播放列表", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        selectedPlaylistId = pid
                                     }
-                                    startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
                                 },
-                                enabled = matchedBookmark != null
+                                enabled = state.playlistId != null
                             ) {
-                                Text("跳转书签")
+                                Text("查看书签($stateBookmarkCount)")
                             }
                         }
                     }
@@ -5966,7 +6024,12 @@ fun PlaybackScreen(
                                     maxLines = if (pl.note.isNotBlank()) 2 else 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Text("${pl.trackCount} 首", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
+                                Text(
+                                    "${pl.trackCount} 首 · 书签 $bookmarkCount",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             IconButton(onClick = { selectedPlaylistId = pl.id }) {
                                 Icon(Icons.Default.List, contentDescription = "查看列表音乐", Modifier.size(24.dp))
@@ -6038,6 +6101,91 @@ fun PlaybackScreen(
                     }) { Text("保存") }
                 },
                 dismissButton = { TextButton(onClick = { playlistNoteEditTarget = null }) { Text("取消") } }
+            )
+        }
+        if (showAddBookmarkDialog) {
+            AlertDialog(
+                onDismissRequest = { showAddBookmarkDialog = false },
+                title = { Text("保存播放书签") },
+                text = {
+                    Column {
+                        Text(
+                            "第 ${bookmarkPendingTrackIndex + 1} 首 ${formatPlaybackTime(bookmarkPendingPositionMs.toInt())}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (bookmarkPendingTrackName.isNotBlank()) {
+                            Text(
+                                bookmarkPendingTrackName,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = bookmarkNoteInput,
+                            onValueChange = { bookmarkNoteInput = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("书签备注") },
+                            placeholder = { Text("例如：副歌开始 / 重点段落") },
+                            minLines = 2,
+                            maxLines = 4
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            val pid = bookmarkPendingPlaylistId
+                            if (pid == null) return@Button
+                            scope.launch {
+                                prefs.addPlayerListBookmark(
+                                    playlistId = pid,
+                                    dirUri = bookmarkPendingDirUri,
+                                    trackIndex = bookmarkPendingTrackIndex,
+                                    positionMs = bookmarkPendingPositionMs,
+                                    trackName = bookmarkPendingTrackName,
+                                    note = bookmarkNoteInput
+                                )
+                                showAddBookmarkDialog = false
+                                Toast.makeText(context, "已保存书签", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    ) { Text("保存") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showAddBookmarkDialog = false }) { Text("取消") }
+                }
+            )
+        }
+        editingBookmarkId?.let { bookmarkId ->
+            AlertDialog(
+                onDismissRequest = { editingBookmarkId = null },
+                title = { Text("编辑书签备注") },
+                text = {
+                    OutlinedTextField(
+                        value = editingBookmarkNote,
+                        onValueChange = { editingBookmarkNote = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("备注") },
+                        minLines = 2,
+                        maxLines = 4
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                prefs.updatePlayerListBookmarkNote(bookmarkId, editingBookmarkNote)
+                                editingBookmarkId = null
+                            }
+                        }
+                    ) { Text("保存") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { editingBookmarkId = null }) { Text("取消") }
+                }
             )
         }
     }

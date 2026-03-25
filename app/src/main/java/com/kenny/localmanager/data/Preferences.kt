@@ -33,7 +33,7 @@ private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_m
 private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist_id")
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
-private val PLAYER_LIST_BOOKMARK_JSON = stringPreferencesKey("player_list_bookmark_json")
+private val PLAYER_LIST_BOOKMARKS_JSON = stringPreferencesKey("player_list_bookmarks_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 
@@ -44,11 +44,13 @@ data class PlaylistAppendResult(
 )
 
 data class PlayerListBookmark(
+    val id: String,
     val playlistId: String?,
     val dirUri: String?,
     val trackIndex: Int,
     val positionMs: Long,
     val trackName: String,
+    val note: String,
     val savedAt: Long
 )
 
@@ -135,21 +137,15 @@ class Preferences(private val context: Context) {
         prefs[PLAYER_LAST_PLAYLIST_ID]
     }
 
-    /** 手动保存的播放书签（用于随时跳转到列表中的特定曲目和进度）。 */
-    val playerListBookmark: Flow<PlayerListBookmark?> = context.dataStore.data.map { prefs ->
-        val json = prefs[PLAYER_LIST_BOOKMARK_JSON] ?: return@map null
-        try {
-            val obj = org.json.JSONObject(json)
-            PlayerListBookmark(
-                playlistId = obj.optString("playlistId").ifBlank { null },
-                dirUri = obj.optString("dirUri").ifBlank { null },
-                trackIndex = obj.optInt("trackIndex", 0).coerceAtLeast(0),
-                positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L),
-                trackName = obj.optString("trackName", ""),
-                savedAt = obj.optLong("savedAt", 0L)
-            )
-        } catch (_: Exception) {
-            null
+    /** 手动保存的播放书签（支持一个播放列表多个书签，可备注）。 */
+    val playerListBookmarks: Flow<List<PlayerListBookmark>> = context.dataStore.data.map { prefs ->
+        // 兼容历史版本：旧版本是单对象字段 player_list_bookmark_json
+        val legacyJson = prefs[stringPreferencesKey("player_list_bookmark_json")]
+        val json = prefs[PLAYER_LIST_BOOKMARKS_JSON]
+        when {
+            !json.isNullOrBlank() -> parsePlayerListBookmarks(json)
+            !legacyJson.isNullOrBlank() -> parseLegacyPlayerListBookmark(legacyJson)?.let { listOf(it) } ?: emptyList()
+            else -> emptyList()
         }
     }
 
@@ -405,30 +401,118 @@ class Preferences(private val context: Context) {
         }
     }
 
-    suspend fun setPlayerListBookmark(
+    suspend fun addPlayerListBookmark(
         playlistId: String?,
         dirUri: String?,
         trackIndex: Int,
         positionMs: Long,
-        trackName: String
+        trackName: String,
+        note: String
     ) {
         context.dataStore.edit { prefs ->
-            val obj = org.json.JSONObject().apply {
-                put("playlistId", playlistId ?: "")
-                put("dirUri", dirUri ?: "")
-                put("trackIndex", trackIndex.coerceAtLeast(0))
-                put("positionMs", positionMs.coerceAtLeast(0L))
-                put("trackName", trackName)
-                put("savedAt", System.currentTimeMillis())
-            }
-            prefs[PLAYER_LIST_BOOKMARK_JSON] = obj.toString()
+            val existing = parsePlayerListBookmarks(prefs[PLAYER_LIST_BOOKMARKS_JSON])
+            val now = System.currentTimeMillis()
+            val added = PlayerListBookmark(
+                id = UUID.randomUUID().toString(),
+                playlistId = playlistId,
+                dirUri = dirUri,
+                trackIndex = trackIndex.coerceAtLeast(0),
+                positionMs = positionMs.coerceAtLeast(0L),
+                trackName = trackName,
+                note = note.trim(),
+                savedAt = now
+            )
+            prefs[PLAYER_LIST_BOOKMARKS_JSON] = playerListBookmarksToJson(existing + added)
         }
     }
 
-    suspend fun clearPlayerListBookmark() {
+    suspend fun updatePlayerListBookmarkNote(bookmarkId: String, note: String) {
         context.dataStore.edit { prefs ->
-            prefs.remove(PLAYER_LIST_BOOKMARK_JSON)
+            val existing = parsePlayerListBookmarks(prefs[PLAYER_LIST_BOOKMARKS_JSON])
+            val updated = existing.map {
+                if (it.id == bookmarkId) it.copy(note = note.trim()) else it
+            }
+            prefs[PLAYER_LIST_BOOKMARKS_JSON] = playerListBookmarksToJson(updated)
         }
+    }
+
+    suspend fun deletePlayerListBookmark(bookmarkId: String) {
+        context.dataStore.edit { prefs ->
+            val existing = parsePlayerListBookmarks(prefs[PLAYER_LIST_BOOKMARKS_JSON])
+            val updated = existing.filterNot { it.id == bookmarkId }
+            if (updated.isEmpty()) prefs.remove(PLAYER_LIST_BOOKMARKS_JSON)
+            else prefs[PLAYER_LIST_BOOKMARKS_JSON] = playerListBookmarksToJson(updated)
+        }
+    }
+
+    suspend fun clearPlayerListBookmarks() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(PLAYER_LIST_BOOKMARKS_JSON)
+        }
+    }
+
+    private fun parsePlayerListBookmarks(json: String?): List<PlayerListBookmark> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").ifBlank { UUID.randomUUID().toString() }
+                    add(
+                        PlayerListBookmark(
+                            id = id,
+                            playlistId = obj.optString("playlistId").ifBlank { null },
+                            dirUri = obj.optString("dirUri").ifBlank { null },
+                            trackIndex = obj.optInt("trackIndex", 0).coerceAtLeast(0),
+                            positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L),
+                            trackName = obj.optString("trackName", ""),
+                            note = obj.optString("note", ""),
+                            savedAt = obj.optLong("savedAt", 0L)
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun parseLegacyPlayerListBookmark(json: String): PlayerListBookmark? {
+        return try {
+            val obj = org.json.JSONObject(json)
+            PlayerListBookmark(
+                id = UUID.randomUUID().toString(),
+                playlistId = obj.optString("playlistId").ifBlank { null },
+                dirUri = obj.optString("dirUri").ifBlank { null },
+                trackIndex = obj.optInt("trackIndex", 0).coerceAtLeast(0),
+                positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L),
+                trackName = obj.optString("trackName", ""),
+                note = "",
+                savedAt = obj.optLong("savedAt", 0L)
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun playerListBookmarksToJson(list: List<PlayerListBookmark>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { bm ->
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("id", bm.id)
+                    put("playlistId", bm.playlistId ?: "")
+                    put("dirUri", bm.dirUri ?: "")
+                    put("trackIndex", bm.trackIndex.coerceAtLeast(0))
+                    put("positionMs", bm.positionMs.coerceAtLeast(0L))
+                    put("trackName", bm.trackName)
+                    put("note", bm.note)
+                    put("savedAt", bm.savedAt)
+                }
+            )
+        }
+        return arr.toString()
     }
 
     /** 启动时解密密钥：开启后启动需输入私钥密码解锁，解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。默认关闭。 */
