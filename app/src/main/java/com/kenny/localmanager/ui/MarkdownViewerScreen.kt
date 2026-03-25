@@ -1,6 +1,7 @@
 package com.kenny.localmanager.ui
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -16,6 +17,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Vibrator
 import android.view.MotionEvent
+import android.view.WindowManager
 import android.view.ViewConfiguration
 import android.view.GestureDetector
 import android.webkit.WebResourceRequest
@@ -1990,6 +1992,7 @@ fun MarkdownViewerScreen(
     onBack: () -> Unit,
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
+    KeepScreenOnEffect()
     val context = LocalContext.current
     var backStack by remember { mutableStateOf(listOf<Triple<String, String, Boolean>>()) }
     var currentUri by remember { mutableStateOf(initialFileUri) }
@@ -2009,7 +2012,6 @@ fun MarkdownViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
-    var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -2412,6 +2414,21 @@ fun MarkdownViewerScreen(
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun KeepScreenOnEffect(enabled: Boolean = true) {
+    val activity = LocalContext.current as? Activity
+    DisposableEffect(activity, enabled) {
+        if (enabled) {
+            activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        onDispose {
+            if (enabled) {
+                activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
     }
@@ -3636,6 +3653,7 @@ fun EpubViewerScreen(
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
+    KeepScreenOnEffect()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }

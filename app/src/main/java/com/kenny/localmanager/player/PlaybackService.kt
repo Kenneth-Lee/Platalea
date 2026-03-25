@@ -48,6 +48,7 @@ const val EXTRA_DIR_URI = "dir_uri"
 const val EXTRA_PLAYLIST_ID = "playlist_id"
 const val EXTRA_START_INDEX = "start_index"
 const val EXTRA_POSITION_MS = "position_ms"
+const val EXTRA_START_POSITION_MS = "start_position_ms"
 
 class PlaybackService : Service() {
 
@@ -104,11 +105,20 @@ class PlaybackService : Service() {
             ACTION_PLAY -> {
                 val plId = intent.getStringExtra(EXTRA_PLAYLIST_ID)
                 val startIndexHint = intent.getIntExtra(EXTRA_START_INDEX, -1)
+                val startPositionHintMs = intent.getIntExtra(EXTRA_START_POSITION_MS, -1)
                 if (plId != null) {
                     scope.launch {
                         val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) }
                         if (pl != null) {
-                            startPlayback(pl.uris, pl.names, dir = "", playlistId = pl.id, playlistName = pl.name, startIndexHint = startIndexHint)
+                            startPlayback(
+                                pl.uris,
+                                pl.names,
+                                dir = "",
+                                playlistId = pl.id,
+                                playlistName = pl.name,
+                                startIndexHint = startIndexHint,
+                                startPositionHintMs = startPositionHintMs
+                            )
                         } else {
                             stopSelf()
                         }
@@ -154,7 +164,8 @@ class PlaybackService : Service() {
         dir: String,
         playlistId: String?,
         playlistName: String?,
-        startIndexHint: Int = -1
+        startIndexHint: Int = -1,
+        startPositionHintMs: Int = -1
     ) {
         if (uris.isEmpty()) {
             stopSelf()
@@ -188,7 +199,7 @@ class PlaybackService : Service() {
             if (playlistId != null) {
                 if (startIndexHint in uris.indices) {
                     startIndex = startIndexHint
-                    startPositionMs = 0
+                    startPositionMs = startPositionHintMs.coerceAtLeast(0)
                 } else {
                     val resume = withContext(Dispatchers.IO) { prefs.getPlayerResumeStateForPlaylist(playlistId) }
                     if (resume != null && resume.first in uris.indices) {

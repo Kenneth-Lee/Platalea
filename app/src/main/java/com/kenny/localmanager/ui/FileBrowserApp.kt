@@ -82,6 +82,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Slider
@@ -129,6 +130,7 @@ import androidx.core.graphics.drawable.IconCompat
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
@@ -217,6 +219,7 @@ import com.kenny.localmanager.player.ACTION_SEEK
 import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
 import com.kenny.localmanager.player.EXTRA_POSITION_MS
 import com.kenny.localmanager.player.EXTRA_START_INDEX
+import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
 import com.kenny.localmanager.player.EXTRA_URIS
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
@@ -5559,6 +5562,7 @@ fun PlaybackScreen(
     val scope = rememberCoroutineScope()
     var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
     var lastPlaylistId by remember { mutableStateOf<String?>(null) }
+    var playerBookmark by remember { mutableStateOf<PlayerListBookmark?>(null) }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
     var showPlaylistNoteDialog by remember { mutableStateOf(false) }
     var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
@@ -5568,6 +5572,9 @@ fun PlaybackScreen(
     }
     LaunchedEffect(prefs) {
         prefs.playerLastPlaylistId.collect { lastPlaylistId = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.playerListBookmark.collect { playerBookmark = it }
     }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
@@ -5584,11 +5591,12 @@ fun PlaybackScreen(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     }
 
-    fun startPlaylistFromIndex(pl: Playlist, index: Int) {
+    fun startPlaylistFromIndex(pl: Playlist, index: Int, startPositionMs: Int = 0) {
         val intent = Intent(context, PlaybackService::class.java).apply {
             action = ACTION_PLAY
             putExtra(EXTRA_PLAYLIST_ID, pl.id)
             putExtra(EXTRA_START_INDEX, index)
+            putExtra(EXTRA_START_POSITION_MS, startPositionMs.coerceAtLeast(0))
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     }
@@ -5616,12 +5624,46 @@ fun PlaybackScreen(
     ) { padding ->
         if (selectedPlaylist != null) {
             val pl = selectedPlaylist
+            val playlistBookmark = playerBookmark?.takeIf { it.playlistId == pl.id }
             if (pl.uris.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                     Text("列表已空", style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
+                    playlistBookmark?.let { bm ->
+                        Card(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                        ) {
+                            Column(Modifier.padding(10.dp)) {
+                                Text(
+                                    "列表书签：第 ${bm.trackIndex + 1} 首 ${formatPlaybackTime(bm.positionMs.toInt())}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                if (bm.trackName.isNotBlank()) {
+                                    Text(
+                                        bm.trackName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                TextButton(
+                                    onClick = {
+                                        startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
+                                    },
+                                    enabled = bm.trackIndex in pl.uris.indices
+                                ) {
+                                    Text("跳转到书签位置")
+                                }
+                            }
+                        }
+                    }
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -5734,6 +5776,7 @@ fun PlaybackScreen(
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (playbackState != null) {
                 val state = playbackState
+                val matchedBookmark = playerBookmark?.takeIf { it.playlistId != null && it.playlistId == state.playlistId }
                 var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
                 var seekDragging by remember { mutableStateOf(false) }
                 LaunchedEffect(state.positionMs, state.durationMs) {
@@ -5806,6 +5849,41 @@ fun PlaybackScreen(
                             }
                             IconButton(onClick = onPlayNext) {
                                 Icon(Icons.Default.SkipNext, contentDescription = "下一首")
+                            }
+                        }
+                        Row(
+                            Modifier.fillMaxWidth().padding(top = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        prefs.setPlayerListBookmark(
+                                            playlistId = state.playlistId,
+                                            dirUri = if (state.playlistId == null) state.dirUri else null,
+                                            trackIndex = state.trackIndex,
+                                            positionMs = state.positionMs.toLong(),
+                                            trackName = state.trackName
+                                        )
+                                        Toast.makeText(context, "已保存播放书签", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            ) {
+                                Text("保存书签")
+                            }
+                            Button(
+                                onClick = {
+                                    val bm = matchedBookmark ?: return@Button
+                                    val pl = playlists.find { it.id == bm.playlistId }
+                                    if (pl == null) {
+                                        Toast.makeText(context, "未找到书签对应的播放列表", Toast.LENGTH_SHORT).show()
+                                        return@Button
+                                    }
+                                    startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
+                                },
+                                enabled = matchedBookmark != null
+                            ) {
+                                Text("跳转书签")
                             }
                         }
                     }
@@ -6844,9 +6922,9 @@ fun KeyManagementDialog(
     }
     pendingDelete?.let { pending ->
         val (title, message) = when (pending) {
-            is PendingDelete.Secret -> "确认删除私钥" to "将删除当前私钥，且无法恢复。请输入 yes 确认删除。"
-            is PendingDelete.AllPublic -> "确认删除所有公钥" to "将删除全部公钥，且无法恢复。请输入 yes 确认删除。"
-            is PendingDelete.SinglePublic -> "确认删除公钥" to "将删除该公钥，且无法恢复。请输入 yes 确认删除。"
+            is PendingDelete.Secret -> "确认删除私钥" to "将删除当前私钥，且无法恢复。这可能导致此前使用该私钥保护的文件无法再解密。请输入 yes 确认删除。"
+            is PendingDelete.AllPublic -> "确认删除所有公钥" to "将删除全部公钥，且无法恢复。这可能导致依赖这些公钥的加密/验证流程失败。请输入 yes 确认删除。"
+            is PendingDelete.SinglePublic -> "确认删除公钥" to "将删除该公钥，且无法恢复。这可能导致与该公钥相关的加密/验证流程失败。请输入 yes 确认删除。"
         }
         AlertDialog(
             onDismissRequest = { pendingDelete = null; deleteConfirmInput = "" },
@@ -6896,6 +6974,7 @@ fun KeyManagementDialog(
     if (showGenerateKeyDialog) {
         GenerateKeyDialog(
             context = context,
+            hasExistingKeys = secretKeys.isNotEmpty() || publicKeys.isNotEmpty(),
             onDismiss = { showGenerateKeyDialog = false },
             onSuccess = { refreshTrigger++; onKeysChanged() }
         )
@@ -6905,11 +6984,13 @@ fun KeyManagementDialog(
 @Composable
 fun GenerateKeyDialog(
     context: Context,
+    hasExistingKeys: Boolean,
     onDismiss: () -> Unit,
     onSuccess: () -> Unit = {}
 ) {
     var identity by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
+    var confirmKeyRisk by remember { mutableStateOf(false) }
     var generatingInProgress by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     Dialog(onDismissRequest = { if (!generatingInProgress) onDismiss() }) {
@@ -6938,6 +7019,27 @@ fun GenerateKeyDialog(
                     singleLine = true,
                     enabled = !generatingInProgress
                 )
+                if (hasExistingKeys) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "检测到现有密钥。继续生成可能覆盖或替换当前默认密钥，导致历史加密文件无法解密。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = confirmKeyRisk,
+                            onCheckedChange = { if (!generatingInProgress) confirmKeyRisk = it },
+                            enabled = !generatingInProgress
+                        )
+                        Text(
+                            "我已知晓风险，并同意继续",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
                 if (generatingInProgress) {
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
@@ -6966,7 +7068,7 @@ fun GenerateKeyDialog(
                                 }
                             }
                         },
-                        enabled = !generatingInProgress
+                        enabled = !generatingInProgress && (!hasExistingKeys || confirmKeyRisk)
                     ) { Text("生成") }
                 }
             }

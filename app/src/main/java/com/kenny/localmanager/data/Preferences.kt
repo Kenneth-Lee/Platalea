@@ -33,6 +33,7 @@ private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_m
 private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist_id")
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
+private val PLAYER_LIST_BOOKMARK_JSON = stringPreferencesKey("player_list_bookmark_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 
@@ -40,6 +41,15 @@ data class PlaylistAppendResult(
     val found: Boolean,
     val appendedCount: Int,
     val skippedCount: Int
+)
+
+data class PlayerListBookmark(
+    val playlistId: String?,
+    val dirUri: String?,
+    val trackIndex: Int,
+    val positionMs: Long,
+    val trackName: String,
+    val savedAt: Long
 )
 
 class Preferences(private val context: Context) {
@@ -123,6 +133,24 @@ class Preferences(private val context: Context) {
     /** 最后一次播放的列表 ID（用于停止后「恢复播放」）。 */
     val playerLastPlaylistId: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[PLAYER_LAST_PLAYLIST_ID]
+    }
+
+    /** 手动保存的播放书签（用于随时跳转到列表中的特定曲目和进度）。 */
+    val playerListBookmark: Flow<PlayerListBookmark?> = context.dataStore.data.map { prefs ->
+        val json = prefs[PLAYER_LIST_BOOKMARK_JSON] ?: return@map null
+        try {
+            val obj = org.json.JSONObject(json)
+            PlayerListBookmark(
+                playlistId = obj.optString("playlistId").ifBlank { null },
+                dirUri = obj.optString("dirUri").ifBlank { null },
+                trackIndex = obj.optInt("trackIndex", 0).coerceAtLeast(0),
+                positionMs = obj.optLong("positionMs", 0L).coerceAtLeast(0L),
+                trackName = obj.optString("trackName", ""),
+                savedAt = obj.optLong("savedAt", 0L)
+            )
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun setRootUri(uri: String?) {
@@ -374,6 +402,32 @@ class Preferences(private val context: Context) {
             idx to pos
         } catch (_: Exception) {
             null
+        }
+    }
+
+    suspend fun setPlayerListBookmark(
+        playlistId: String?,
+        dirUri: String?,
+        trackIndex: Int,
+        positionMs: Long,
+        trackName: String
+    ) {
+        context.dataStore.edit { prefs ->
+            val obj = org.json.JSONObject().apply {
+                put("playlistId", playlistId ?: "")
+                put("dirUri", dirUri ?: "")
+                put("trackIndex", trackIndex.coerceAtLeast(0))
+                put("positionMs", positionMs.coerceAtLeast(0L))
+                put("trackName", trackName)
+                put("savedAt", System.currentTimeMillis())
+            }
+            prefs[PLAYER_LIST_BOOKMARK_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun clearPlayerListBookmark() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(PLAYER_LIST_BOOKMARK_JSON)
         }
     }
 
