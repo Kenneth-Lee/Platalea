@@ -2009,6 +2009,7 @@ fun MarkdownViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -3646,6 +3647,7 @@ fun EpubViewerScreen(
     var editingBookmark by remember { mutableStateOf<EpubBookmark?>(null) }
     var currentChapterIndex by remember { mutableStateOf(0) }
     var currentScrollRatio by remember { mutableStateOf(0f) }
+    var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
@@ -3833,6 +3835,7 @@ fun EpubViewerScreen(
             // 先设置滚动比例，再设置章节索引，避免中间状态
             currentScrollRatio = progress.scrollRatio
             currentChapterIndex = progress.chapterIndex
+            pendingProgrammaticScrollRatio = progress.scrollRatio
             Log.d("EpubViewer", "恢复进度成功: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
             logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
         } else {
@@ -3880,6 +3883,7 @@ fun EpubViewerScreen(
         if (index in chapters.indices) {
             currentChapterIndex = index
             currentScrollRatio = scrollRatio
+            pendingProgrammaticScrollRatio = scrollRatio
             showToc = false
         }
     }
@@ -3888,6 +3892,7 @@ fun EpubViewerScreen(
     fun goToBookmark(bookmark: EpubBookmark) {
         currentChapterIndex = bookmark.chapterIndex
         currentScrollRatio = bookmark.scrollRatio
+        pendingProgrammaticScrollRatio = bookmark.scrollRatio
         showBookmarks = false
     }
 
@@ -4603,9 +4608,14 @@ fun EpubViewerScreen(
                                     // 设置待恢复的滚动位置
                                     webView.setPendingScrollRatio(currentScrollRatio)
                                     webView.loadDataWithBaseURL(baseUrl, styledHtml, "text/html", "UTF-8", null)
-                                } else if (currentScrollRatio > 0f) {
-                                    // 内容没变但滚动比例变化时（如恢复进度），直接设置滚动位置
-                                    webView.scrollToRatio(currentScrollRatio)
+                                } else {
+                                    // 仅在显式触发（恢复进度/跳转目录/跳转收藏）时才程序化滚动，
+                                    // 避免用户手势滚动时被重复拉回导致闪烁。
+                                    val ratioToApply = pendingProgrammaticScrollRatio
+                                    if (ratioToApply != null && ratioToApply > 0f) {
+                                        webView.scrollToRatio(ratioToApply)
+                                    }
+                                    pendingProgrammaticScrollRatio = null
                                 }
                                 webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             } catch (e: Exception) {
