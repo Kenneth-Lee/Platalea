@@ -78,6 +78,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
@@ -3840,6 +3841,7 @@ fun EpubViewerScreen(
 
     // 初始恢复进度标志
     var isRestoringProgress by remember { mutableStateOf(true) }
+    var restoredProgressMarker by remember { mutableStateOf<EpubReadingProgress?>(null) }
 
     // 恢复阅读进度
     LaunchedEffect(Unit) {
@@ -3854,6 +3856,7 @@ fun EpubViewerScreen(
             currentScrollRatio = progress.scrollRatio
             currentChapterIndex = progress.chapterIndex
             pendingProgrammaticScrollRatio = progress.scrollRatio
+            restoredProgressMarker = progress
             Log.d("EpubViewer", "恢复进度成功: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
             logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
         } else {
@@ -3891,6 +3894,33 @@ fun EpubViewerScreen(
     val chapterFile = if (currentChapter != null) {
         getEpubChapterFile(extractResult, currentChapter)
     } else null
+    val currentChapterBookmarks = remember(epubBookmarks, currentChapterIndex) {
+        epubBookmarks.filter { it.chapterIndex == currentChapterIndex }
+    }
+    val currentChapterRestoredMarker = remember(restoredProgressMarker, currentChapterIndex) {
+        restoredProgressMarker?.takeIf { it.chapterIndex == currentChapterIndex }
+    }
+    val latestChapterIndex by rememberUpdatedState(currentChapterIndex)
+    val latestScrollRatio by rememberUpdatedState(currentScrollRatio)
+    val latestIsRestoringProgress by rememberUpdatedState(isRestoringProgress)
+
+    DisposableEffect(bookmarkManager, epubUri, zipFileName, chapters) {
+        onDispose {
+            if (!latestIsRestoringProgress) {
+                val progress = EpubReadingProgress(
+                    epubUri = epubUri.toString(),
+                    epubFileName = zipFileName,
+                    chapterIndex = latestChapterIndex,
+                    chapterTitle = chapters.getOrNull(latestChapterIndex)?.title ?: "",
+                    scrollPosition = 0,
+                    scrollRatio = latestScrollRatio,
+                    lastReadTime = System.currentTimeMillis()
+                )
+                bookmarkManager.saveProgress(progress)
+                logDebug?.invoke("[EPUB] 退出时保存进度: 章节${latestChapterIndex}, 比例${"%.2f".format(latestScrollRatio)}")
+            }
+        }
+    }
 
     LaunchedEffect(currentChapterIndex) {
         regexFindUiState = RegexFindUiState()
@@ -4097,6 +4127,12 @@ fun EpubViewerScreen(
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        text = formatEpubBookmarkPosition(bookmark.scrollRatio),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                     if (bookmark.note.isNotBlank()) {
                                         Spacer(Modifier.height(4.dp))
                                         Text(
@@ -4183,6 +4219,12 @@ fun EpubViewerScreen(
                     Text(
                         "位置：第${bookmark.chapterIndex + 1}章 - ${bookmark.chapterTitle}",
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        formatEpubBookmarkPosition(bookmark.scrollRatio),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
@@ -4505,18 +4547,10 @@ fun EpubViewerScreen(
             }
         }
     ) { padding ->
-        // 计算底部栏高度（与bottomBar保持一致）
-        val hasDictLoaded = dictLoaded != null
-        val hasMultipleChapters = chapters.size > 1
-        val bottomBarHeight = when {
-            !(hasDictLoaded || hasMultipleChapters) -> 0.dp
-            !dictAreaExpanded -> 56.dp
-            else -> 200.dp
-        }
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(bottom = bottomBarHeight)
+                .padding(padding)
         ) {
             when {
                 chapterFile == null || !chapterFile.exists() -> {
@@ -4537,9 +4571,9 @@ fun EpubViewerScreen(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
 
-                    // 检测源文件类型，注入对应样式
-                    val isLlmContent = File(extractResult.cacheDir, ".llm_source").exists()
-                    val isTxtContent = File(extractResult.cacheDir, ".txt_source").exists()
+                    // 检测源文件类型，注入对应样式（支持混合章节：按章节标记优先）
+                    val cacheIsLlmContent = File(extractResult.cacheDir, ".llm_source").exists()
+                    val cacheIsTxtContent = File(extractResult.cacheDir, ".txt_source").exists()
 
                     val chapterFileForUpdate = chapterFile
                     val chaptersSize = chapters.size
@@ -4576,9 +4610,11 @@ fun EpubViewerScreen(
                             webView.currentChapterIndex = currentChapterIndex
                             try {
                                 val htmlContent = chapterFileForUpdate.readText()
+                                val chapterIsLlm = htmlContent.contains("<!--LM_CHAPTER_TYPE:LLM-->") || cacheIsLlmContent
+                                val chapterIsTxt = htmlContent.contains("<!--LM_CHAPTER_TYPE:TXT-->") || cacheIsTxtContent
                                 // 根据源文件类型注入不同样式
                                 val extraStyles = when {
-                                    isLlmContent -> """
+                                    chapterIsLlm -> """
                                         h1 { font-size: 1.4em; margin: 0 0 0.5em 0; border-bottom: 1px solid #ddd; padding-bottom: 0.3em; }
                                         details, div { margin: 0; padding: 0; }
                                         .assistant-block { margin: 0.5em 0; padding: 0.5em; background: ${bgHex}ee; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
@@ -4592,7 +4628,7 @@ fun EpubViewerScreen(
                                         .content { white-space: pre-wrap; word-wrap: break-word; margin: 0; }
                                         .role-label { display: block; margin: 0; }
                                     """
-                                    isTxtContent -> """
+                                    chapterIsTxt -> """
                                         p { margin: 0.5em 0; text-indent: 2em; line-height: 1.8; }
                                     """
                                     else -> "" // EPUB使用原始样式
@@ -4614,10 +4650,49 @@ fun EpubViewerScreen(
                                             }
                                             img { max-width: 100%; height: auto; }
                                             a { color: #2196F3; }
+                                            .lm-epub-bookmark-marker {
+                                                position: absolute;
+                                                right: 6px;
+                                                min-width: 22px;
+                                                height: 22px;
+                                                padding: 0 6px;
+                                                border-radius: 999px;
+                                                background: rgba(255, 179, 0, 0.92);
+                                                color: #1f1f1f;
+                                                font-size: 11px;
+                                                line-height: 22px;
+                                                text-align: center;
+                                                box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+                                                transform: translateY(-50%);
+                                                z-index: 9999;
+                                                opacity: 0.72;
+                                                pointer-events: none;
+                                            }
+                                            .lm-epub-bookmark-marker.active {
+                                                opacity: 1;
+                                                background: rgba(255, 111, 0, 0.96);
+                                                color: #ffffff;
+                                                box-shadow: 0 4px 12px rgba(255, 111, 0, 0.35);
+                                            }
+                                            .lm-epub-last-read-marker {
+                                                background: rgba(33, 150, 243, 0.95);
+                                                color: #ffffff;
+                                                opacity: 0.92;
+                                                box-shadow: 0 4px 12px rgba(33, 150, 243, 0.28);
+                                            }
+                                            .lm-epub-last-read-marker.active {
+                                                background: rgba(13, 110, 253, 0.98);
+                                                color: #ffffff;
+                                                box-shadow: 0 6px 16px rgba(13, 110, 253, 0.34);
+                                            }
                                             $extraStyles
                                         </style>
                                     </head>
-                                    <body>$htmlContent</body>
+                                    <body>$htmlContent
+                                    <script>
+                                        ${buildEpubBookmarkMarkerScript(currentChapterBookmarks, currentChapterRestoredMarker)}
+                                    </script>
+                                    </body>
                                     </html>
                                 """.trimIndent()
                                 val loadKey = "$baseUrl|${chapterFileForUpdate.absolutePath}|${styledHtml.hashCode()}"
@@ -4709,6 +4784,104 @@ private class EpubWebViewClient(
 }
 
 private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[index] else null
+
+private fun buildEpubBookmarkMarkerScript(
+    bookmarks: List<EpubBookmark>,
+    restoredProgress: EpubReadingProgress? = null
+): String {
+    if (bookmarks.isEmpty() && restoredProgress == null) {
+        return """
+            (function() {
+                document.querySelectorAll('.lm-epub-bookmark-marker').forEach(function(node) { node.remove(); });
+                document.querySelectorAll('.lm-epub-last-read-marker').forEach(function(node) { node.remove(); });
+            })();
+        """.trimIndent()
+    }
+    val markersJson = bookmarks.joinToString(prefix = "[", postfix = "]") { bookmark ->
+        val note = bookmark.note.ifBlank { bookmark.chapterTitle.ifBlank { "书签" } }
+        val label = if (bookmark.note.isBlank()) "签" else bookmark.note.take(2)
+        """{
+            ratio:${bookmark.scrollRatio.coerceIn(0f, 1f)},
+            note:${org.json.JSONObject.quote(note)},
+            label:${org.json.JSONObject.quote(label)}
+        }""".trimIndent()
+    }
+    val restoredMarkerJson = restoredProgress?.let {
+        """{
+            ratio:${it.scrollRatio.coerceIn(0f, 1f)},
+            note:${org.json.JSONObject.quote("上次阅读到这里")},
+            label:${org.json.JSONObject.quote("上次")}
+        }""".trimIndent()
+    } ?: "null"
+    return """
+        (function() {
+            var markers = $markersJson;
+            var restoredMarker = $restoredMarkerJson;
+            function ensureMarkers() {
+                document.querySelectorAll('.lm-epub-bookmark-marker').forEach(function(node) { node.remove(); });
+                document.querySelectorAll('.lm-epub-last-read-marker').forEach(function(node) { node.remove(); });
+                var body = document.body;
+                if (!body) return;
+                if (window.getComputedStyle(body).position === 'static') {
+                    body.style.position = 'relative';
+                }
+                var docEl = document.documentElement;
+                var viewH = window.innerHeight || docEl.clientHeight || 0;
+                var docH = Math.max(docEl.scrollHeight, body.scrollHeight, docEl.offsetHeight, body.offsetHeight);
+                var maxScroll = Math.max(1, docH - viewH);
+                markers.forEach(function(marker, index) {
+                    var node = document.createElement('div');
+                    node.className = 'lm-epub-bookmark-marker';
+                    node.textContent = marker.label || '签';
+                    node.title = marker.note || ('书签 ' + (index + 1));
+                    node.dataset.targetY = String(Math.round(marker.ratio * maxScroll));
+                    node.style.top = (marker.ratio * maxScroll + 16) + 'px';
+                    body.appendChild(node);
+                });
+                if (restoredMarker) {
+                    var restoredNode = document.createElement('div');
+                    restoredNode.className = 'lm-epub-bookmark-marker lm-epub-last-read-marker';
+                    restoredNode.textContent = restoredMarker.label || '上次';
+                    restoredNode.title = restoredMarker.note || '上次阅读到这里';
+                    restoredNode.dataset.targetY = String(Math.round(restoredMarker.ratio * maxScroll));
+                    restoredNode.style.top = (restoredMarker.ratio * maxScroll + 16) + 'px';
+                    restoredNode.style.right = '38px';
+                    body.appendChild(restoredNode);
+                }
+                updateActiveState();
+            }
+            function updateActiveState() {
+                var currentY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+                document.querySelectorAll('.lm-epub-bookmark-marker, .lm-epub-last-read-marker').forEach(function(node) {
+                    var targetY = Number(node.dataset.targetY || '0');
+                    var active = Math.abs(targetY - currentY) <= 28;
+                    node.classList.toggle('active', active);
+                });
+            }
+            ensureMarkers();
+            var resizeTimer = null;
+            window.addEventListener('resize', function() {
+                if (resizeTimer) window.clearTimeout(resizeTimer);
+                resizeTimer = window.setTimeout(ensureMarkers, 60);
+            }, { passive: true });
+            document.addEventListener('scroll', updateActiveState, { passive: true });
+        })();
+    """.trimIndent()
+}
+
+private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
+    val percent = (scrollRatio.coerceIn(0f, 1f) * 100f).toInt().coerceIn(0, 100)
+    val section = when {
+        percent <= 5 -> "开头"
+        percent <= 25 -> "前段"
+        percent <= 45 -> "前中段"
+        percent <= 65 -> "中段"
+        percent <= 85 -> "后中段"
+        percent <= 97 -> "后段"
+        else -> "末尾"
+    }
+    return "章节内$section ($percent%)"
+}
 
 /** 支持章节切换和滚动位置恢复的 WebView */
 private class GestureWebView(

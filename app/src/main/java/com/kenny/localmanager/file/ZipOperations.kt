@@ -1720,6 +1720,111 @@ fun isTxtFile(name: String): Boolean = name.endsWith(".txt", ignoreCase = true)
 /** 判断文件名是否为 LLM 对话文件。 */
 fun isLlmFile(name: String): Boolean = name.endsWith(".llm", ignoreCase = true)
 
+private const val CHAPTER_TYPE_MARKER_TXT = "<!--LM_CHAPTER_TYPE:TXT-->"
+private const val CHAPTER_TYPE_MARKER_LLM = "<!--LM_CHAPTER_TYPE:LLM-->"
+
+private data class DialogBlock(
+    val role: String,
+    val content: String,
+    val isAssistant: Boolean
+)
+
+private fun readTextWithFallback(file: File): String {
+    return try {
+        file.readText(Charsets.UTF_8)
+    } catch (_: Exception) {
+        try {
+            file.readText(Charset.forName("GBK"))
+        } catch (_: Exception) {
+            file.readText()
+        }
+    }
+}
+
+private fun buildTxtChapterHtml(bookTitle: String, content: String): String {
+    val paragraphs = content
+        .split(Regex("\\n\\s*\\n"))
+        .map { para -> para.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ") }
+        .filter { it.isNotEmpty() }
+
+    val paragraphsHtml = paragraphs.joinToString("\n") { para ->
+        "<p>${escapeHtml(para)}</p>"
+    }
+
+    return """
+        $CHAPTER_TYPE_MARKER_TXT
+        <h1>${escapeHtml(bookTitle)}</h1>
+        $paragraphsHtml
+    """.trimIndent()
+}
+
+private fun parseLlmDialogBlocks(content: String): List<DialogBlock> {
+    val dialogBlocks = mutableListOf<DialogBlock>()
+    val lines = content.lines()
+    val currentBlock = StringBuilder()
+    var currentRole: String? = null
+
+    for (line in lines) {
+        val trimmedLine = line.trimEnd()
+        val roleMatch = Regex("^(Configure|System|User|Assistant)\\s*:\\s*(.*)$").find(trimmedLine)
+        if (roleMatch != null) {
+            if (currentRole != null && currentBlock.isNotEmpty()) {
+                dialogBlocks.add(
+                    DialogBlock(
+                        role = currentRole,
+                        content = currentBlock.toString().trim(),
+                        isAssistant = currentRole == "Assistant"
+                    )
+                )
+            }
+            currentRole = roleMatch.groupValues[1]
+            currentBlock.clear()
+            val remainingContent = roleMatch.groupValues[2].trim()
+            if (remainingContent.isNotEmpty()) {
+                currentBlock.append(remainingContent).append("\n")
+            }
+        } else if (currentRole != null) {
+            currentBlock.append(trimmedLine).append("\n")
+        } else if (trimmedLine.isNotEmpty()) {
+            if (currentBlock.isNotEmpty() || trimmedLine.startsWith("//") || trimmedLine.startsWith("#")) {
+                currentBlock.append(trimmedLine).append("\n")
+            }
+        }
+    }
+
+    if (currentRole != null && currentBlock.isNotEmpty()) {
+        dialogBlocks.add(
+            DialogBlock(
+                role = currentRole,
+                content = currentBlock.toString().trim(),
+                isAssistant = currentRole == "Assistant"
+            )
+        )
+    } else if (currentBlock.isNotEmpty()) {
+        dialogBlocks.add(DialogBlock("Comment", currentBlock.toString().trim(), false))
+    }
+    return dialogBlocks
+}
+
+private fun buildLlmChapterHtml(bookTitle: String, content: String): String {
+    val dialogBlocks = parseLlmDialogBlocks(content)
+    val blocksHtml = dialogBlocks.joinToString("\n") { block ->
+        val escapedContent = escapeHtml(block.content)
+        val formattedContent = escapedContent.replace("\n", "<br/>")
+        if (block.isAssistant) {
+            """<div class="assistant-block"><div class="role-label assistant-label">Assistant</div><div class="content assistant-content">$formattedContent</div></div>"""
+        } else {
+            """<details class="other-block"><summary class="role-label other-label">${block.role}</summary><div class="content other-content">$formattedContent</div></details>"""
+        }
+    }
+
+    return """
+        $CHAPTER_TYPE_MARKER_LLM
+        <h1>${escapeHtml(bookTitle)}</h1>
+        $blocksHtml
+    """.trimIndent()
+}
+
 /**
  * 将 TXT 文件转换为 EPUB 兼容格式，使用与 EPUB 相同的缓存结构
  * 按空行分隔为段落，整个文档作为一个章节
@@ -1738,21 +1843,7 @@ fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractR
         cacheDir.deleteRecursively()
         cacheDir.mkdirs()
 
-        // 读取 TXT 文件内容（尝试多种编码）
-        val content = try {
-            txtFile.readText(Charsets.UTF_8)
-        } catch (e: Exception) {
-            try {
-                txtFile.readText(Charset.forName("GBK"))
-            } catch (e2: Exception) {
-                txtFile.readText()
-            }
-        }
-
-        // 按空行分隔为段落（连续空行视为一个分隔）
-        val paragraphs = content.split(Regex("\\n\\s*\\n"))
-            .map { para -> para.lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ") }
-            .filter { it.isNotEmpty() }
+        val content = readTextWithFallback(txtFile)
 
         // 创建 EPUB 标准目录结构
         val contentDir = File(cacheDir, "content")
@@ -1778,15 +1869,7 @@ fun prepareTxtAsEpub(context: Context, txtFile: File, txtUri: Uri): EpubExtractR
         val htmlFileName = "chapter_0.html"
         val htmlFile = File(oebpsDir, htmlFileName)
 
-        val paragraphsHtml = paragraphs.joinToString("\n") { para ->
-            "<p>${escapeHtml(para)}</p>"
-        }
-
-        // 只生成HTML片段，样式由EpubViewerScreen统一注入
-        val htmlContent = """
-            <h1>${escapeHtml(bookTitle)}</h1>
-            $paragraphsHtml
-        """.trimIndent()
+        val htmlContent = buildTxtChapterHtml(bookTitle, content)
         htmlFile.writeText(htmlContent)
 
         // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
@@ -1858,16 +1941,7 @@ fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractR
         cacheDir.deleteRecursively()
         cacheDir.mkdirs()
 
-        // 读取 LLM 文件内容（尝试多种编码）
-        val content = try {
-            llmFile.readText(Charsets.UTF_8)
-        } catch (e: Exception) {
-            try {
-                llmFile.readText(Charset.forName("GBK"))
-            } catch (e2: Exception) {
-                llmFile.readText()
-            }
-        }
+        val content = readTextWithFallback(llmFile)
 
         // 创建 EPUB 标准目录结构
         val contentDir = File(cacheDir, "content")
@@ -1893,72 +1967,7 @@ fun prepareLlmAsEpub(context: Context, llmFile: File, llmUri: Uri): EpubExtractR
         val htmlFileName = "chapter_0.html"
         val htmlFile = File(oebpsDir, htmlFileName)
 
-        // 解析对话块
-        data class DialogBlock(
-            val role: String,
-            val content: String,
-            val isAssistant: Boolean
-        )
-
-        val dialogBlocks = mutableListOf<DialogBlock>()
-        val lines = content.lines()
-        val currentBlock = StringBuilder()
-        var currentRole: String? = null
-
-        for (line in lines) {
-            val trimmedLine = line.trimEnd()
-            // 检测角色标记行（如 "Configure:", "System:", "User:", "Assistant:"）
-            val roleMatch = Regex("^(Configure|System|User|Assistant)\\s*:\\s*(.*)$").find(trimmedLine)
-            if (roleMatch != null) {
-                // 保存之前的块
-                if (currentRole != null && currentBlock.isNotEmpty()) {
-                    val isAssistant = currentRole == "Assistant"
-                    dialogBlocks.add(DialogBlock(currentRole, currentBlock.toString().trim(), isAssistant))
-                }
-                currentRole = roleMatch.groupValues[1]
-                currentBlock.clear()
-                // 如果角色标记后还有内容，加入当前块
-                val remainingContent = roleMatch.groupValues[2].trim()
-                if (remainingContent.isNotEmpty()) {
-                    currentBlock.append(remainingContent).append("\n")
-                }
-            } else if (currentRole != null) {
-                // 注释行（以 // 或 # 开头）也加入当前块
-                currentBlock.append(trimmedLine).append("\n")
-            } else {
-                // 没有角色标记的内容，当作普通文本处理（可能是文件开头的注释）
-                if (trimmedLine.isNotEmpty()) {
-                    if (currentBlock.isNotEmpty() || trimmedLine.startsWith("//") || trimmedLine.startsWith("#")) {
-                        currentBlock.append(trimmedLine).append("\n")
-                    }
-                }
-            }
-        }
-        // 保存最后一个块
-        if (currentRole != null && currentBlock.isNotEmpty()) {
-            val isAssistant = currentRole == "Assistant"
-            dialogBlocks.add(DialogBlock(currentRole, currentBlock.toString().trim(), isAssistant))
-        } else if (currentBlock.isNotEmpty()) {
-            // 没有角色标记的开头内容
-            dialogBlocks.add(DialogBlock("Comment", currentBlock.toString().trim(), false))
-        }
-
-        // 生成 HTML 内容（紧凑格式，避免多余空白）
-        val blocksHtml = dialogBlocks.joinToString("\n") { block ->
-            val escapedContent = escapeHtml(block.content)
-            val formattedContent = escapedContent.replace("\n", "<br/>")
-            if (block.isAssistant) {
-                // Assistant 内容正常显示
-                """<div class="assistant-block"><div class="role-label assistant-label">Assistant</div><div class="content assistant-content">$formattedContent</div></div>"""
-            } else {
-                // 其他角色用灰色显示，可折叠
-                """<details class="other-block"><summary class="role-label other-label">${block.role}</summary><div class="content other-content">$formattedContent</div></details>"""
-            }
-        }
-
-        // 只生成HTML片段，样式由EpubViewerScreen统一注入
-        val htmlContent = """<h1>${escapeHtml(bookTitle)}</h1>
-$blocksHtml"""
+        val htmlContent = buildLlmChapterHtml(bookTitle, content)
         htmlFile.writeText(htmlContent)
 
         // 3. 创建 OEBPS/content.opf（EPUB 标准包文件）
@@ -2009,6 +2018,124 @@ $blocksHtml"""
     } catch (e: Exception) {
         Log.e("LlmToEpub", "Failed to convert LLM to EPUB format", e)
         return null
+    }
+}
+
+/** 解压 .llm.zip，并将包内所有 .txt/.llm 文件转换为 EPUB 多章节。 */
+fun extractLlmZipToCache(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String
+): EpubExtractResult? {
+    val cacheDir = getEpubCacheDir(context, zipUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+        }
+
+        val rawDir = File(cacheDir, "raw").apply { mkdirs() }
+        zip.extractAll(rawDir.path)
+        tmpZip.delete()
+
+        val effectiveRawDir = unwrapSingleChildDir(rawDir)
+        val txtFiles = collectFilesWithExtension(effectiveRawDir, "txt")
+        val llmFiles = collectFilesWithExtension(effectiveRawDir, "llm")
+        val sourceFiles = (txtFiles + llmFiles).sortedBy { it.first.lowercase() }
+        if (sourceFiles.isEmpty()) {
+            Log.w(TAG, "extractLlmZipToCache: no .txt/.llm files found in $zipUri")
+            cacheDir.deleteRecursively()
+            return null
+        }
+
+        val contentDir = File(cacheDir, "content")
+        val metaInfDir = File(contentDir, "META-INF")
+        val oebpsDir = File(contentDir, "OEBPS")
+        metaInfDir.mkdirs()
+        oebpsDir.mkdirs()
+
+        val containerXml = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+                <rootfiles>
+                    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+                </rootfiles>
+            </container>
+        """.trimIndent()
+        File(metaInfDir, "container.xml").writeText(containerXml)
+
+        val chapters = mutableListOf<EpubChapter>()
+        val manifestBuilder = StringBuilder()
+        val spineBuilder = StringBuilder()
+
+        sourceFiles.forEachIndexed { index, (relativePath, sourceFile) ->
+            val chapterId = "chapter_$index"
+            val htmlFileName = "$chapterId.html"
+            val chapterTitle = relativePath.substringBeforeLast('.').ifBlank { sourceFile.nameWithoutExtension }
+            val chapterText = readTextWithFallback(sourceFile)
+            val chapterHtml = if (sourceFile.name.endsWith(".llm", ignoreCase = true)) {
+                buildLlmChapterHtml(chapterTitle, chapterText)
+            } else {
+                buildTxtChapterHtml(chapterTitle, chapterText)
+            }
+            File(oebpsDir, htmlFileName).writeText(chapterHtml)
+
+            chapters += EpubChapter(
+                id = chapterId,
+                href = htmlFileName,
+                title = chapterTitle
+            )
+            manifestBuilder.append("<item id=\"").append(chapterId).append("\" href=\"")
+                .append(htmlFileName).append("\" media-type=\"application/xhtml+xml\"/>")
+            spineBuilder.append("<itemref idref=\"").append(chapterId).append("\"/>")
+        }
+
+        val bookTitle = zipFileName.removeSuffix(".llm.zip").ifBlank { zipFileName.removeSuffix(".zip") }
+        val opfContent = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+                <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+                    <dc:title>${escapeHtml(bookTitle)}</dc:title>
+                    <dc:language>zh</dc:language>
+                    <dc:identifier id="uid">llmzip-${zipFileName.hashCode()}</dc:identifier>
+                </metadata>
+                <manifest>
+                    ${manifestBuilder}
+                </manifest>
+                <spine>
+                    ${spineBuilder}
+                </spine>
+            </package>
+        """.trimIndent()
+        File(oebpsDir, "content.opf").writeText(opfContent)
+
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+
+        return EpubExtractResult(
+            cacheDir = cacheDir,
+            contentDir = contentDir,
+            opfDir = oebpsDir,
+            bookInfo = EpubBookInfo(title = bookTitle, author = null, language = "zh"),
+            chapters = chapters,
+            isEncrypted = encrypted
+        )
+    } catch (e: Exception) {
+        Log.e(TAG, "extractLlmZipToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    } finally {
+        if (tmpZip.exists()) tmpZip.delete()
     }
 }
 

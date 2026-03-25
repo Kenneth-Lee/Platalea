@@ -185,6 +185,7 @@ import com.kenny.localmanager.file.HtmlZipParseResult
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
+import com.kenny.localmanager.file.extractLlmZipToCache
 import com.kenny.localmanager.file.prepareTxtAsEpub
 import com.kenny.localmanager.file.prepareLlmAsEpub
 import com.kenny.localmanager.file.loadEpubFromCache
@@ -947,6 +948,10 @@ fun FileBrowserApp(
             var htmlZipInProgress by remember { mutableStateOf(false) }
             var htmlZipLog by remember { mutableStateOf("") }
             var htmlZipLoadError by remember { mutableStateOf<String?>(null) }
+            var llmZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+            var llmZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+            var llmZipPassword by remember { mutableStateOf("") }
+            var llmZipInProgress by remember { mutableStateOf(false) }
             var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
             var epubPassword by remember { mutableStateOf("") }
@@ -1094,6 +1099,47 @@ fun FileBrowserApp(
                     }
                 } else if (htmlZipEncrypted == true) {
                     htmlZipLog += "文件已加密，需要密码\n"
+                }
+            }
+            LaunchedEffect(llmZipTarget) {
+                llmZipEncrypted = null
+                llmZipPassword = ""
+                llmZipInProgress = false
+                val target = llmZipTarget ?: return@LaunchedEffect
+                val cacheDir = getEpubCacheDir(context, target.uri)
+                val cacheTs = getEpubCacheTimestamp(cacheDir)
+                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                    val cached = loadEpubFromCache(cacheDir)
+                    if (cached != null) {
+                        llmZipTarget = null
+                        epubViewState = EpubViewState(
+                            extractResult = cached,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                        return@LaunchedEffect
+                    }
+                    cacheDir.deleteRecursively()
+                }
+                llmZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+                if (llmZipEncrypted == false) {
+                    llmZipInProgress = true
+                    val result = withContext(Dispatchers.IO) {
+                        extractLlmZipToCache(context, target.uri, null, target.name)
+                    }
+                    llmZipInProgress = false
+                    llmZipTarget = null
+                    if (result != null) {
+                        epubViewState = EpubViewState(
+                            extractResult = result,
+                            zipFileName = target.name,
+                            epubUri = target.uri,
+                            isEncrypted = false
+                        )
+                    } else {
+                        Toast.makeText(context, "未找到可读的 .txt/.llm 文件或解压失败", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
             LaunchedEffect(epubTarget) {
@@ -1361,6 +1407,7 @@ fun FileBrowserApp(
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
+                    llmZipTarget != null -> { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
                     epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
                     picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
                     pdfViewState != null -> pdfViewState = null
@@ -1850,6 +1897,7 @@ fun FileBrowserApp(
                     onUnzipRequest = { zipUnzipTarget = it },
                     onRequestMdZipView = { mdZipTarget = it },
                     onRequestHtmlZipView = { htmlZipTarget = it },
+                    onRequestLlmZipView = { llmZipTarget = it },
                     onRequestEpubView = { epubTarget = it },
                     onRequestTxtView = { txtTarget = it },
                     onRequestLlmView = { llmTarget = it },
@@ -2979,6 +3027,80 @@ fun FileBrowserApp(
                     )
                 }
             }
+            // ---- .llm.zip 密码输入对话框 ----
+            llmZipTarget?.let { target ->
+                val encrypted = llmZipEncrypted
+                if (encrypted == true) {
+                    AlertDialog(
+                        onDismissRequest = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } },
+                        title = { Text("查看压缩 LLM") },
+                        text = {
+                            Column {
+                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = llmZipPassword,
+                                    onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("ZIP 密码") },
+                                    singleLine = true,
+                                    visualTransformation = PasswordVisualTransformation(),
+                                    enabled = !llmZipInProgress
+                                )
+                                if (llmZipInProgress) {
+                                    Spacer(Modifier.height(8.dp))
+                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                }
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    if (llmZipInProgress || llmZipPassword.isBlank()) return@Button
+                                    llmZipInProgress = true
+                                    val pwd = llmZipPassword.toCharArray()
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            extractLlmZipToCache(context, target.uri, pwd, target.name)
+                                        }
+                                        llmZipInProgress = false
+                                        if (result != null) {
+                                            llmZipTarget = null
+                                            llmZipPassword = ""
+                                            epubViewState = EpubViewState(
+                                                extractResult = result,
+                                                zipFileName = target.name,
+                                                epubUri = target.uri,
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            Toast.makeText(context, "解压失败（请检查密码或文件内容）", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                }
+                            ) { Text("确定") }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
+                            ) { Text("取消") }
+                        }
+                    )
+                } else if (encrypted == null) {
+                    AlertDialog(
+                        onDismissRequest = {},
+                        title = { Text("查看压缩 LLM") },
+                        text = {
+                            Column {
+                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        },
+                        confirmButton = {}
+                    )
+                }
+            }
             // ---- .epub 密码输入对话框 ----
             epubTarget?.let { target ->
                 val encrypted = epubEncrypted
@@ -3868,6 +3990,10 @@ private data class MdZipViewState(
 private fun isCompressedHtml(name: String): Boolean =
     name.endsWith(".html.zip", ignoreCase = true)
 
+/** 判断文件名是否为压缩 LLM 包（.llm.zip）。 */
+private fun isCompressedLlmZip(name: String): Boolean =
+    name.endsWith(".llm.zip", ignoreCase = true)
+
 /** 判断文件名是否为 .pic.zip 图片压缩包。 */
 private fun isPicZip(name: String): Boolean =
     name.endsWith(".pic.zip", ignoreCase = true)
@@ -4034,6 +4160,7 @@ internal fun FileBrowserScreen(
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
+    onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
@@ -4386,6 +4513,8 @@ internal fun FileBrowserScreen(
                                                 onRequestMdZipView(item)
                                             isCompressedHtml(item.name) ->
                                                 onRequestHtmlZipView(item)
+                                            isCompressedLlmZip(item.name) ->
+                                                onRequestLlmZipView(item)
                                             isEpubFile(item.name) ->
                                                 onRequestEpubView(item)
                                             isTxtFile(item.name) ->
@@ -4495,6 +4624,15 @@ internal fun FileBrowserScreen(
                                         contextMenuTarget = null
                                     }
                                 ) { Text("查看压缩 HTML", color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                            if (isCompressedLlmZip(menuTarget.name)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRequestLlmZipView(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text("查看压缩 LLM", color = MaterialTheme.colorScheme.onSurface) }
                             }
                             if (isPicZip(menuTarget.name)) {
                                 TextButton(
