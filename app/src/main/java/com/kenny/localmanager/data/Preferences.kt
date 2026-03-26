@@ -41,6 +41,7 @@ private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_ope
 private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
+private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -96,6 +97,10 @@ class Preferences(private val context: Context) {
 
     val quickNoteLastCategory: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[QUICK_NOTE_LAST_CATEGORY]?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    val recentRootUris: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        parseStringListJson(prefs[RECENT_ROOT_URIS_JSON])
     }
 
     val ftpPort: Flow<Int> = context.dataStore.data.map { prefs ->
@@ -184,6 +189,27 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (uri == null) prefs.remove(ROOT_URI)
             else prefs[ROOT_URI] = uri
+        }
+    }
+
+    suspend fun recordRecentRootSwitch(fromUri: String?, toUri: String?) {
+        context.dataStore.edit { prefs ->
+            val normalizedFrom = fromUri?.trim()?.takeIf { it.isNotEmpty() }
+            val normalizedTo = toUri?.trim()?.takeIf { it.isNotEmpty() }
+            val updated = buildList {
+                normalizedFrom?.let { add(it) }
+                addAll(parseStringListJson(prefs[RECENT_ROOT_URIS_JSON]))
+            }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .filterNot { it == normalizedTo }
+                .distinct()
+                .take(2)
+            if (updated.isEmpty()) {
+                prefs.remove(RECENT_ROOT_URIS_JSON)
+            } else {
+                prefs[RECENT_ROOT_URIS_JSON] = stringListToJson(updated)
+            }
         }
     }
 

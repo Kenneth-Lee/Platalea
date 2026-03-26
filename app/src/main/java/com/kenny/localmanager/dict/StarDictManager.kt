@@ -17,6 +17,7 @@ private const val STAR_DICT_DIR_NAME = "stardict"
 private const val META_FILE_NAME = "meta.json"
 private const val INDEX_FILE_NAME = "index.tsv"
 private const val DICT_FILE_NAME = "dict.bin"
+private const val MAX_IMPORTED_STAR_DICTS = 3
 
 data class StarDictSummary(
     val id: String,
@@ -36,6 +37,11 @@ data class StarDictLoaded(
     val words: List<StarDictWord>,
     val charsetName: String?,
     val sameTypeSequence: String?
+)
+
+data class StarDictImportResult(
+    val imported: StarDictSummary,
+    val evicted: StarDictSummary?
 )
 
 private data class StarDictMeta(
@@ -60,17 +66,32 @@ fun listImportedStarDicts(context: Context): List<StarDictSummary> {
     return baseDir.listFiles().orEmpty()
         .asSequence()
         .filter { it.isDirectory }
-        .mapNotNull { dir -> readMeta(dir) }
-        .map { meta ->
-            StarDictSummary(
-                id = meta.id,
-                name = meta.name,
-                wordCount = meta.wordCount,
-                importedAt = meta.importedAt
-            )
+        .mapNotNull { dir ->
+            readMeta(dir)?.let { meta ->
+                StarDictSummary(
+                    id = meta.id,
+                    name = meta.name,
+                    wordCount = meta.wordCount,
+                    importedAt = meta.importedAt
+                )
+            } ?: inferSummaryWithoutMeta(dir)
         }
         .sortedByDescending { it.importedAt }
         .toList()
+}
+
+private fun inferSummaryWithoutMeta(dir: File): StarDictSummary? {
+    val indexFile = File(dir, INDEX_FILE_NAME)
+    if (!indexFile.exists()) return null
+    val wordCount = runCatching {
+        indexFile.useLines { lines -> lines.count() }
+    }.getOrDefault(0)
+    return StarDictSummary(
+        id = dir.name,
+        name = dir.name,
+        wordCount = wordCount,
+        importedAt = dir.lastModified().takeIf { it > 0 } ?: 0L
+    )
 }
 
 fun deleteImportedStarDict(context: Context, id: String): Boolean {
@@ -162,7 +183,7 @@ fun readStarDictExplanation(context: Context, dictId: String, loaded: StarDictLo
     return if (decoded.isBlank()) "(无释义内容)" else decoded
 }
 
-fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result<StarDictSummary> {
+fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result<StarDictImportResult> {
     return runCatching {
         val workDir = File(context.cacheDir, "stardict_import_${System.currentTimeMillis()}")
         workDir.mkdirs()
@@ -202,11 +223,23 @@ fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result
                 sameTypeSequence = imported.sameTypeSequence
             )
             writeMeta(targetDir, meta)
-            summary
+            val evicted = evictOldDictionariesIfNeeded(context, MAX_IMPORTED_STAR_DICTS)
+            StarDictImportResult(imported = summary, evicted = evicted)
         } finally {
             workDir.deleteRecursively()
         }
     }
+}
+
+private fun evictOldDictionariesIfNeeded(context: Context, maxCount: Int): StarDictSummary? {
+    if (maxCount <= 0) return null
+    val imported = listImportedStarDicts(context)
+    if (imported.size <= maxCount) return null
+
+    // listImportedStarDicts 按 importedAt 倒序，最后一个即最旧词典
+    val oldest = imported.last()
+    val removed = deleteImportedStarDict(context, oldest.id)
+    return if (removed) oldest else null
 }
 
 private data class ImportSource(

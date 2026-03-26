@@ -1,5 +1,8 @@
 package com.kenny.localmanager.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -20,12 +23,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -60,9 +62,6 @@ import com.kenny.localmanager.dict.searchStarDictWords
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -72,22 +71,20 @@ fun DictionaryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
 
     var dictionaries by remember { mutableStateOf<List<StarDictSummary>>(emptyList()) }
     var selectedDictId by remember { mutableStateOf<String?>(null) }
     var loadedDict by remember { mutableStateOf<StarDictLoaded?>(null) }
     var loading by remember { mutableStateOf(false) }
-
     var query by remember { mutableStateOf("") }
     var results by remember { mutableStateOf<List<StarDictWord>>(emptyList()) }
     var searchError by remember { mutableStateOf<String?>(null) }
-
-    var dropdownExpanded by remember { mutableStateOf(false) }
     var definitionWord by remember { mutableStateOf<StarDictWord?>(null) }
     var definitionText by remember { mutableStateOf("") }
     var definitionLoading by remember { mutableStateOf(false) }
-
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showManageDialog by remember { mutableStateOf(false) }
+    var pendingDeleteSummary by remember { mutableStateOf<StarDictSummary?>(null) }
 
     suspend fun reloadDictList() {
         loading = true
@@ -120,10 +117,6 @@ fun DictionaryScreen(
         loading = false
     }
 
-    val selectedSummary = remember(dictionaries, selectedDictId) {
-        dictionaries.firstOrNull { it.id == selectedDictId }
-    }
-
     fun doSearch() {
         val dict = loadedDict ?: return
         val (hits, err) = searchStarDictWords(dict, query)
@@ -145,16 +138,11 @@ fun DictionaryScreen(
                     { }
                 },
                 actions = {
-                    IconButton(onClick = {
-                        scope.launch { reloadDictList() }
-                    }) {
+                    IconButton(onClick = { scope.launch { reloadDictList() } }) {
                         Icon(Icons.Default.Refresh, contentDescription = "刷新")
                     }
-                    IconButton(
-                        onClick = { showDeleteConfirm = true },
-                        enabled = selectedSummary != null
-                    ) {
-                        Icon(Icons.Default.Delete, contentDescription = "删除词典")
+                    IconButton(onClick = { showManageDialog = true }, enabled = dictionaries.isNotEmpty()) {
+                        Icon(Icons.Default.MenuBook, contentDescription = "管理词典")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -171,138 +159,109 @@ fun DictionaryScreen(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("已导入词典", style = MaterialTheme.typography.titleSmall)
-            Box {
-                OutlinedTextField(
-                    value = selectedSummary?.name ?: "(无)",
-                    onValueChange = {},
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = dictionaries.isNotEmpty()) { dropdownExpanded = true },
-                    readOnly = true,
-                    enabled = dictionaries.isNotEmpty(),
-                    placeholder = { Text("还没有导入词典，请在文件列表中长按 .zip/.ifo 导入") }
-                )
-                DropdownMenu(
-                    expanded = dropdownExpanded,
-                    onDismissRequest = { dropdownExpanded = false }
-                ) {
-                    dictionaries.forEach { dict ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(dict.name)
-                                    Text(
-                                        "词条 ${dict.wordCount}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            },
-                            onClick = {
-                                selectedDictId = dict.id
-                                dropdownExpanded = false
-                            }
-                        )
-                    }
-                }
-            }
-
-            selectedSummary?.let { summary ->
-                Text(
-                    "导入时间：${SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(summary.importedAt))}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            OutlinedTextField(
-                value = query,
-                onValueChange = { query = it },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("正则表达式") },
-                placeholder = { Text("例如 /^(ab|ac)/i 或 (?i)^test") },
-                singleLine = true,
-                enabled = loadedDict != null
-            )
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text("正则表达式") },
+                    placeholder = { Text("例如 /^(ab|ac)/i 或 (?i)^test") },
+                    singleLine = true,
+                    enabled = loadedDict != null
+                )
                 Button(onClick = { doSearch() }, enabled = loadedDict != null) {
                     Text("查询")
                 }
+            }
+
+            if (loadedDict != null) {
                 TextButton(onClick = {
                     query = ""
                     results = emptyList()
                     searchError = null
-                }, enabled = loadedDict != null) {
-                    Text("清空")
+                }) {
+                    Text("清空结果")
                 }
             }
 
             when {
                 loading -> {
-                    Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
                     }
                 }
                 loadedDict == null -> {
-                    Text(
-                        "没有可用词典。请先在文件列表里导入 StarDict（支持 .zip 或 .ifo）。",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(
+                            "没有可用词典。请先在文件列表里导入 StarDict（支持 .zip 或 .ifo）。",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
                 searchError != null -> {
-                    Text(searchError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(searchError.orEmpty(), color = MaterialTheme.colorScheme.error)
+                    }
                 }
                 results.isEmpty() && query.isNotBlank() -> {
-                    Text("未找到匹配词条", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("未找到匹配词条", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 else -> {
-                    Text(
-                        if (results.isEmpty()) "输入正则后点击“查询”" else "匹配到 ${results.size} 个词条（最多展示 500）",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(results, key = { "${it.word}_${it.offset}_${it.size}" }) { word ->
-                            Surface(
-                                tonalElevation = 1.dp,
-                                shape = MaterialTheme.shapes.small,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        definitionWord = word
-                                        definitionText = ""
-                                        definitionLoading = true
-                                        scope.launch {
-                                            val dict = loadedDict
-                                            val id = selectedDictId
-                                            if (dict == null || id == null) {
-                                                definitionText = "词典未加载"
-                                            } else {
-                                                definitionText = withContext(Dispatchers.IO) {
-                                                    readStarDictExplanation(context, id, dict, word)
-                                                }
-                                            }
-                                            definitionLoading = false
-                                        }
-                                    }
-                            ) {
-                                Row(
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        Text(
+                            if (results.isEmpty()) "输入正则后点击“查询”" else "匹配到 ${results.size} 个词条（最多展示 500）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(results, key = { "${it.word}_${it.offset}_${it.size}" }) { word ->
+                                Surface(
+                                    tonalElevation = 1.dp,
+                                    shape = MaterialTheme.shapes.small,
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                        .clickable {
+                                            definitionWord = word
+                                            definitionText = ""
+                                            definitionLoading = true
+                                            scope.launch {
+                                                val dict = loadedDict
+                                                val id = selectedDictId
+                                                if (dict == null || id == null) {
+                                                    definitionText = "词典未加载"
+                                                } else {
+                                                    definitionText = withContext(Dispatchers.IO) {
+                                                        readStarDictExplanation(context, id, dict, word)
+                                                    }
+                                                }
+                                                definitionLoading = false
+                                            }
+                                        }
                                 ) {
-                                    Text(
-                                        word.word,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            word.word,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -312,14 +271,79 @@ fun DictionaryScreen(
         }
     }
 
+    if (showManageDialog) {
+        AlertDialog(
+            onDismissRequest = { showManageDialog = false },
+            title = { Text("已导入词典") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 420.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    if (dictionaries.isEmpty()) {
+                        Text("暂无已导入词典", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    } else {
+                        dictionaries.forEach { dict ->
+                            val isSelected = dict.id == selectedDictId
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable {
+                                            selectedDictId = dict.id
+                                            showManageDialog = false
+                                        }
+                                        .padding(vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        dict.name,
+                                        color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Text(
+                                        "词条 ${dict.wordCount}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                if (isSelected) {
+                                    Text(
+                                        "当前",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(end = 8.dp)
+                                    )
+                                }
+                                IconButton(onClick = { pendingDeleteSummary = dict }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "删除词典", tint = MaterialTheme.colorScheme.error)
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showManageDialog = false }) { Text("关闭") }
+            }
+        )
+    }
+
     if (definitionWord != null) {
+        val currentWord = definitionWord!!
         AlertDialog(
             onDismissRequest = {
                 definitionWord = null
                 definitionText = ""
                 definitionLoading = false
             },
-            title = { Text(definitionWord!!.word) },
+            title = { Text(currentWord.word) },
             text = {
                 if (definitionLoading) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -344,19 +368,33 @@ fun DictionaryScreen(
                     definitionText = ""
                     definitionLoading = false
                 }) { Text("关闭") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        val content = buildString {
+                            append(currentWord.word)
+                            if (definitionText.isNotBlank()) {
+                                append("\n\n")
+                                append(definitionText)
+                            }
+                        }
+                        clipboardManager?.setPrimaryClip(ClipData.newPlainText("词典释义", content))
+                    },
+                    enabled = !definitionLoading && definitionText.isNotBlank()
+                ) { Text("复制内容") }
             }
         )
     }
 
-    if (showDeleteConfirm && selectedSummary != null) {
-        val summary = selectedSummary
+    pendingDeleteSummary?.let { summary ->
         AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
+            onDismissRequest = { pendingDeleteSummary = null },
             title = { Text("删除词典") },
             text = { Text("确定删除已导入词典「${summary.name}」吗？") },
             confirmButton = {
                 TextButton(onClick = {
-                    showDeleteConfirm = false
+                    pendingDeleteSummary = null
                     scope.launch {
                         withContext(Dispatchers.IO) {
                             deleteImportedStarDict(context, summary.id)
@@ -368,7 +406,7 @@ fun DictionaryScreen(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteSummary = null }) { Text("取消") }
             }
         )
     }

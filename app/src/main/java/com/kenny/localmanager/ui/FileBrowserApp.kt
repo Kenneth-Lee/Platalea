@@ -1145,6 +1145,32 @@ private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String)
     return "/" + parts.joinToString("/")
 }
 
+private fun humanReadableRootUri(uriString: String): String {
+    val normalized = normalizeContentUriString(uriString)
+    return runCatching {
+        val uri = Uri.parse(normalized)
+        val treeId = DocumentsContract.getTreeDocumentId(uri)
+        val decoded = Uri.decode(treeId)
+        val parts = decoded.split(':', limit = 2)
+        val volume = parts.getOrNull(0)?.trim().orEmpty()
+        val relative = parts.getOrNull(1)?.trim().orEmpty()
+        when {
+            // SAF 中 home:xxx 常映射到用户的 Documents 目录
+            volume.equals("home", ignoreCase = true) -> {
+                if (relative.isNotBlank()) "/sdcard/Documents/$relative" else "/sdcard/Documents"
+            }
+            volume.equals("primary", ignoreCase = true) -> {
+                if (relative.isNotBlank()) "/sdcard/$relative" else "/sdcard"
+            }
+            relative.isNotBlank() -> "/$relative"
+            volume.isNotBlank() -> volume
+            else -> decoded.ifBlank { normalized }
+        }
+    }.getOrElse {
+        normalized.substringAfterLast('/').substringAfterLast('%').ifBlank { normalized }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FileBrowserApp(
@@ -1166,6 +1192,7 @@ private fun FileBrowserAppScreen(
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
     var rootUri by remember { mutableStateOf<String?>(null) }
+    var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
     var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
     var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
@@ -1226,6 +1253,9 @@ private fun FileBrowserAppScreen(
     }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+    }
+    LaunchedEffect(prefs) {
+        prefs.recentRootUris.collect { recentRootUris = it }
     }
     LaunchedEffect(rootUri, initialDirUri) {
         if (rootUri != null) {
@@ -1415,8 +1445,14 @@ private fun FileBrowserAppScreen(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             val normalized = normalizeContentUriString(uri.toString())
-            scope.launch { prefs.setRootUri(normalized) }
+            val previousRoot = rootUri?.let { normalizeContentUriString(it) }
+            scope.launch {
+                prefs.recordRecentRootSwitch(previousRoot, normalized)
+                prefs.setRootUri(normalized)
+            }
             rootUri = normalized
+            initialDirUri = normalized
+            currentUri = normalized
         }
     }
 
@@ -1495,6 +1531,7 @@ private fun FileBrowserAppScreen(
         var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
         var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
         var showChangeRootConfirm by remember { mutableStateOf(false) }
+        var showRootSwitchDialog by remember { mutableStateOf(false) }
         var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
         var quickObfuscatePassword by remember { mutableStateOf("") }
         var quickObfuscateInProgress by remember { mutableStateOf(false) }
@@ -1943,9 +1980,8 @@ private fun FileBrowserAppScreen(
             if (picZipEncrypted == false) {
                 picZipInProgress = true
                 val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
-                picZipInProgress = false
-                picZipTarget = null
                 if (result != null) {
+                    picZipTarget = null
                     picZipViewState = PicZipViewState(
                         contentDir = result.contentDir,
                         imagePaths = result.imagePaths,
@@ -1956,8 +1992,10 @@ private fun FileBrowserAppScreen(
                         initialIndex = 0
                     )
                 } else {
+                    picZipTarget = null
                     Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
                 }
+                picZipInProgress = false
             }
         }
         LaunchedEffect(prefs) {
@@ -2422,7 +2460,12 @@ private fun FileBrowserAppScreen(
                                         importStarDict(context, model.uri, model.name)
                                     }
                                     result.onSuccess {
-                                        Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
+                                        val message = if (it.evicted != null) {
+                                            "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）；已移除最旧词典：${it.evicted.name}"
+                                        } else {
+                                            "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）"
+                                        }
+                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                     }.onFailure {
                                         Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
                                     }
@@ -2788,27 +2831,77 @@ private fun FileBrowserAppScreen(
                     }
                 },
                 onChangeRoot = {
-                    val r = rootUri
-                    if (r == null) {
-                        treeLauncher.launch(null)
-                        return@ConfigDialog
-                    }
-                    scope.launch {
-                        val count = withContext(Dispatchers.IO) {
-                            cachedTrashUri?.let { trash ->
-                                val doc = if (trash.toString().contains("/tree/")) {
-                                    DocumentFile.fromTreeUri(context, trash)
-                                } else {
-                                    DocumentFile.fromSingleUri(context, trash)
+                    showRootSwitchDialog = true
+                }
+            )
+        }
+        if (showRootSwitchDialog) {
+            AlertDialog(
+                onDismissRequest = { showRootSwitchDialog = false },
+                title = { Text("更换根目录") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("可直接切换到最近使用的目录（不会清空当前回收站）：")
+                        if (recentRootUris.isEmpty()) {
+                            Text("暂无历史目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else {
+                            recentRootUris.forEach { recentUri ->
+                                val displayName = humanReadableRootUri(recentUri)
+                                OutlinedButton(
+                                    onClick = {
+                                        val normalized = normalizeContentUriString(recentUri)
+                                        val previousRoot = rootUri?.let { normalizeContentUriString(it) }
+                                        showRootSwitchDialog = false
+                                        if (previousRoot == normalized) return@OutlinedButton
+                                        scope.launch {
+                                            prefs.recordRecentRootSwitch(previousRoot, normalized)
+                                            prefs.setRootUri(normalized)
+                                        }
+                                        rootUri = normalized
+                                        initialDirUri = normalized
+                                        currentUri = normalized
+                                        refreshTrigger++
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text(
+                                        displayName,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                 }
-                                doc?.listFilesSafe()?.size ?: 0
-                            } ?: 0
-                        }
-                        withContext(Dispatchers.Main.immediate) {
-                            if (count > 0) showChangeRootConfirm = true
-                            else treeLauncher.launch(null)
+                            }
                         }
                     }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showRootSwitchDialog = false
+                        val r = rootUri
+                        if (r == null) {
+                            treeLauncher.launch(null)
+                            return@Button
+                        }
+                        scope.launch {
+                            val count = withContext(Dispatchers.IO) {
+                                cachedTrashUri?.let { trash ->
+                                    val doc = if (trash.toString().contains("/tree/")) {
+                                        DocumentFile.fromTreeUri(context, trash)
+                                    } else {
+                                        DocumentFile.fromSingleUri(context, trash)
+                                    }
+                                    doc?.listFilesSafe()?.size ?: 0
+                                } ?: 0
+                            }
+                            withContext(Dispatchers.Main.immediate) {
+                                if (count > 0) showChangeRootConfirm = true
+                                else treeLauncher.launch(null)
+                            }
+                        }
+                    }) { Text("选择新目录") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRootSwitchDialog = false }) { Text("取消") }
                 }
             )
         }
@@ -3821,7 +3914,6 @@ private fun FileBrowserAppScreen(
                                             result = extractPicZipToCache(context, target.uri, pwd, target.name)
                                         }
                                     }
-                                    picZipInProgress = false
                                     val res = result
                                     if (res != null) {
                                         picZipTarget = null
@@ -3838,6 +3930,7 @@ private fun FileBrowserAppScreen(
                                     } else {
                                         Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
                                     }
+                                    picZipInProgress = false
                                 }
                             }
                         ) { Text("确定") }
@@ -3855,6 +3948,19 @@ private fun FileBrowserAppScreen(
                     text = {
                         Column {
                             Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            } else if (encrypted == false && picZipInProgress) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("查看图片压缩包") },
+                    text = {
+                        Column {
+                            Text("正在解压 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -6773,9 +6879,11 @@ fun PlaybackScreen(
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(horizontal = 4.dp)
                                 )
-                            }
-                            IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "从此处播放", Modifier.size(24.dp))
+                                IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = "从此处播放", Modifier.size(24.dp))
+                                }
+                            } else {
+                                Spacer(Modifier.size(48.dp))
                             }
                             IconButton(
                                 onClick = {
@@ -7003,15 +7111,19 @@ fun PlaybackScreen(
                                 .padding(4.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            IconButton(
-                                onClick = { startPlaylist(pl) },
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.PlayArrow,
-                                    contentDescription = "播放",
-                                    tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                            if (isCurrent) {
+                                IconButton(
+                                    onClick = { startPlaylist(pl) },
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = "播放",
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            } else {
+                                Spacer(Modifier.size(40.dp))
                             }
                             Column(Modifier.weight(1f)) {
                                 Text(
