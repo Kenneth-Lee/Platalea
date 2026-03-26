@@ -35,18 +35,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,10 +61,12 @@ import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.writeBytesFull
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
+import kotlinx.coroutines.launch
 
 const val QUICK_NOTE_FILE_NAME: String = ".lm.note.md"
 const val QUICK_NOTE_GPG_FILE_NAME: String = ".lm.note.md.gpg"
@@ -425,16 +430,21 @@ private val QUICK_NOTE_ENTRY_REGEX = Regex("^\\* \\[([xX ]?)\\]\\s?(.*)$")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QuickNoteScreen(
+    prefs: Preferences,
     loadedData: QuickNoteLoadedData,
     startWithAddDialog: Boolean,
     inProgress: Boolean,
     onEntriesChanged: (List<QuickNoteEntry>) -> Unit
 ) {
     val composeContext = LocalContext.current
+    val scope = rememberCoroutineScope()
     val clipboardManager = composeContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    val lastUsedCategory by prefs.quickNoteLastCategory.collectAsState(initial = null)
     var entries by remember(loadedData.fileInfo.uri, loadedData.rawText) { mutableStateOf(loadedData.entries) }
     var editorState by remember(loadedData.fileInfo.uri, startWithAddDialog) {
-        mutableStateOf(if (startWithAddDialog) QuickNoteEditorState() else null)
+        mutableStateOf(
+            if (startWithAddDialog) QuickNoteEditorState(category = lastUsedCategory.orEmpty()) else null
+        )
     }
     var deleteConfirmEntry by remember { mutableStateOf<QuickNoteEntry?>(null) }
     var categoryEditState by remember { mutableStateOf<QuickNoteCategoryEditState?>(null) }
@@ -474,11 +484,6 @@ fun QuickNoteScreen(
                             )
                         }
                     },
-                    actions = {
-                        IconButton(onClick = { editorState = QuickNoteEditorState() }, enabled = !inProgress) {
-                            Icon(Icons.Default.Add, contentDescription = "新增记录")
-                        }
-                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.surface,
                         titleContentColor = MaterialTheme.colorScheme.onSurface
@@ -487,6 +492,15 @@ fun QuickNoteScreen(
                 if (inProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
+            }
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { editorState = QuickNoteEditorState(category = lastUsedCategory.orEmpty()) },
+                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
+                contentColor = MaterialTheme.colorScheme.onPrimary
+            ) {
+                Icon(Icons.Default.Add, contentDescription = "新增记录")
             }
         }
     ) { padding ->
@@ -599,6 +613,9 @@ fun QuickNoteScreen(
                         deleted = updated.deleted
                     )
                     categoryExpandedStates[quickNoteCategoryKey(normalizedCategory)] = true
+                    scope.launch {
+                        prefs.setQuickNoteLastCategory(normalizedCategory)
+                    }
                     entries + newEntry
                 } else {
                     categoryExpandedStates[quickNoteCategoryKey(normalizedCategory)] = true

@@ -998,6 +998,7 @@ private fun PlayerTabContent(
 
 @Composable
 private fun QuickNoteTabContent(
+    prefs: Preferences,
     quickNoteData: QuickNoteLoadedData?,
     quickNoteStartWithAddDialog: Boolean,
     quickNoteInProgress: Boolean,
@@ -1006,6 +1007,7 @@ private fun QuickNoteTabContent(
     val data = quickNoteData
     if (data != null) {
         QuickNoteScreen(
+            prefs = prefs,
             loadedData = data,
             startWithAddDialog = quickNoteStartWithAddDialog,
             inProgress = quickNoteInProgress,
@@ -2325,6 +2327,8 @@ private fun FileBrowserAppScreen(
                             },
                             onAddToPendingList = { pendingList.add(it) },
                             onRemoveFromPendingList = { pendingList.remove(it) },
+                            onCopyPendingToCurrentDir = doCopyHere,
+                            onMovePendingToCurrentDir = doMoveHere,
                             onShowPendingList = { showPendingList = it },
                             onRefresh = { refreshTrigger++ },
                             onOpenConfig = { showConfigDialog = true },
@@ -2456,6 +2460,7 @@ private fun FileBrowserAppScreen(
                     },
                     quickNoteContent = {
                         QuickNoteTabContent(
+                            prefs = prefs,
                             quickNoteData = quickNoteData,
                             quickNoteStartWithAddDialog = quickNoteStartWithAddDialog,
                             quickNoteInProgress = quickNoteInProgress,
@@ -2477,6 +2482,7 @@ private fun FileBrowserAppScreen(
             PendingListScreen(
                 pendingList = pendingList,
                 currentDirPath = currentDirPath,
+                rootUri = rootUri,
                 onRemove = { pendingList.remove(it) },
                 onCopyHere = doCopyHere,
                 onMoveHere = doMoveHere,
@@ -3983,14 +3989,14 @@ private fun FileBrowserAppScreen(
         }
         if (showPendingCompressToZip && pendingList.isNotEmpty()) {
             val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-            val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+            val currentDirUri = Uri.parse(displayUri)
             AlertDialog(
                 onDismissRequest = { showPendingCompressToZip = false },
                 title = { Text("压缩待处理列表为 ZIP") },
                 text = {
                     Column {
                         Text(
-                            "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到根目录。",
+                            "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到当前目录。",
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
@@ -4028,7 +4034,7 @@ private fun FileBrowserAppScreen(
                                     compressToZip(
                                         context,
                                         items.map { it.uri },
-                                        rootDirUri,
+                                        currentDirUri,
                                         rootTreeUri,
                                         zipName,
                                         pwd
@@ -4060,14 +4066,14 @@ private fun FileBrowserAppScreen(
         }
         if (showPendingCompressTo7z && pendingList.isNotEmpty()) {
             val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-            val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+            val currentDirUri = Uri.parse(displayUri)
             AlertDialog(
                 onDismissRequest = { showPendingCompressTo7z = false },
                 title = { Text("压缩待处理列表为 7Z") },
                 text = {
                     Column {
                         Text(
-                            "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到根目录。",
+                            "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到当前目录。",
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
@@ -4109,7 +4115,7 @@ private fun FileBrowserAppScreen(
                                             compressTo7z(
                                                 context,
                                                 items.map { it.uri },
-                                                rootDirUri,
+                                                currentDirUri,
                                                 rootTreeUri,
                                                 sevenZName,
                                                 pwd
@@ -4910,6 +4916,8 @@ internal fun FileBrowserScreen(
     onClearExternalOpenPreference: (name: String) -> Unit = {},
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
+    onCopyPendingToCurrentDir: () -> Unit = {},
+    onMovePendingToCurrentDir: () -> Unit = {},
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
@@ -5026,6 +5034,8 @@ internal fun FileBrowserScreen(
 
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showQuickCopyConfirm by remember { mutableStateOf(false) }
+    var showQuickMoveConfirm by remember { mutableStateOf(false) }
     Scaffold(
         modifier = modifier,
         topBar = {
@@ -5178,8 +5188,22 @@ internal fun FileBrowserScreen(
                 ) {
                     if (pendingList.isNotEmpty()) {
                         FloatingActionButton(
+                            onClick = { showQuickCopyConfirm = true },
+                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
+                            contentColor = MaterialTheme.colorScheme.onSecondary
+                        ) {
+                            Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到当前目录")
+                        }
+                        FloatingActionButton(
+                            onClick = { showQuickMoveConfirm = true },
+                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
+                            contentColor = MaterialTheme.colorScheme.onSecondary
+                        ) {
+                            Icon(Icons.Default.DriveFileMove, contentDescription = "移动到当前目录")
+                        }
+                        FloatingActionButton(
                             onClick = { onShowPendingList(true) },
-                            containerColor = MaterialTheme.colorScheme.tertiary,
+                            containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onTertiary
                         ) {
                             Icon(Icons.Default.List, contentDescription = "待处理列表")
@@ -5187,7 +5211,7 @@ internal fun FileBrowserScreen(
                     }
                     FloatingActionButton(
                         onClick = { showFabMenu = true },
-                        containerColor = MaterialTheme.colorScheme.primary,
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ) {
                         Icon(Icons.Default.Add, contentDescription = "新建")
@@ -6048,6 +6072,68 @@ internal fun FileBrowserScreen(
             }
         }
     }
+
+    if (showQuickCopyConfirm || showQuickMoveConfirm) {
+        val isCopy = showQuickCopyConfirm
+        val title = if (isCopy) "确认拷贝到当前目录" else "确认移动到当前目录"
+        val actionLabel = if (isCopy) "拷贝" else "移动"
+        AlertDialog(
+            onDismissRequest = {
+                showQuickCopyConfirm = false
+                showQuickMoveConfirm = false
+            },
+            title = { Text(title) },
+            text = {
+                Column {
+                    Text(
+                        "将处理 ${pendingList.size} 项。为避免误操作，请确认以下待处理列表：",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    val preview = pendingList.take(20)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        preview.forEach { item ->
+                            Text(
+                                item.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (pendingList.size > preview.size) {
+                            Text(
+                                "... 另有 ${pendingList.size - preview.size} 项",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showQuickCopyConfirm = false
+                        showQuickMoveConfirm = false
+                        if (isCopy) onCopyPendingToCurrentDir() else onMovePendingToCurrentDir()
+                    }
+                ) { Text(actionLabel) }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showQuickCopyConfirm = false
+                        showQuickMoveConfirm = false
+                    }
+                ) { Text("取消") }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -6165,6 +6251,7 @@ fun FileItem(
 fun PendingListScreen(
     pendingList: List<DocumentFileModel>,
     currentDirPath: String = "",
+    rootUri: String? = null,
     onRemove: (DocumentFileModel) -> Unit,
     onCopyHere: () -> Unit = {},
     onMoveHere: () -> Unit = {},
@@ -6181,7 +6268,6 @@ fun PendingListScreen(
 ) {
     val context = LocalContext.current
     var showHelpDialog by remember { mutableStateOf(false) }
-    var showCopyMoveDialog by remember { mutableStateOf(false) }
     var filterText by remember { mutableStateOf("") }
     val filteredPendingItems = if (filterText.isBlank()) pendingList
     else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
@@ -6207,13 +6293,7 @@ fun PendingListScreen(
                 )
             )
         },
-        floatingActionButton = {
-            if (pendingList.isNotEmpty()) {
-                FloatingActionButton(onClick = { showCopyMoveDialog = true }) {
-                    Icon(Icons.Default.DriveFileMove, contentDescription = "拷贝或移动")
-                }
-            }
-        }
+        floatingActionButton = {}
     ) { padding ->
         if (pendingList.isEmpty()) {
             Box(
@@ -6261,6 +6341,12 @@ fun PendingListScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    IconButton(onClick = onCopyHere) {
+                        Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到当前目录")
+                    }
+                    IconButton(onClick = onMoveHere) {
+                        Icon(Icons.Default.DriveFileMove, contentDescription = "移动到当前目录")
+                    }
                     IconButton(onClick = onRequestDelete) {
                         Icon(
                             Icons.Default.Delete,
@@ -6316,6 +6402,9 @@ fun PendingListScreen(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 items(filteredPendingItems) { item ->
+                    val relativePath = remember(item.uri, rootUri) {
+                        pathFromRoot(context, rootUri, normalizeContentUriString(item.uri.toString()))
+                    }
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
@@ -6328,13 +6417,21 @@ fun PendingListScreen(
                             else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.size(8.dp))
-                        Text(
-                            item.name,
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                item.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                relativePath,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         IconButton(onClick = { onRemove(item) }) {
                             Icon(
                                 Icons.Default.RemoveCircle,
@@ -6417,7 +6514,7 @@ fun PendingListScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
-                        Text("压缩：将待处理列表中所有文件和目录压缩为一个 ZIP 文件，保存到根目录，支持设置密码。", style = MaterialTheme.typography.bodyMedium)
+                        Text("压缩：将待处理列表中所有文件和目录压缩为一个 ZIP/7Z 文件，保存到当前目录，支持设置密码。", style = MaterialTheme.typography.bodyMedium)
                     }
                     Spacer(Modifier.height(8.dp))
                     Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -6427,63 +6524,6 @@ fun PendingListScreen(
         )
     }
 
-    if (showCopyMoveDialog) {
-        AlertDialog(
-            onDismissRequest = { showCopyMoveDialog = false },
-            title = { Text("确认待处理列表") },
-            text = {
-                Column {
-                    Text(
-                        "当前将处理 ${pendingList.size} 项，确认后请选择拷贝或移动到当前目录。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    val preview = pendingList.take(20)
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        preview.forEach { item ->
-                            Text(
-                                item.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        if (pendingList.size > preview.size) {
-                            Text(
-                                "... 另有 ${pendingList.size - preview.size} 项",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(
-                        onClick = {
-                            showCopyMoveDialog = false
-                            onCopyHere()
-                        }
-                    ) { Text("拷贝") }
-                    TextButton(
-                        onClick = {
-                            showCopyMoveDialog = false
-                            onMoveHere()
-                        }
-                    ) { Text("移动") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCopyMoveDialog = false }) { Text("取消") }
-            }
-        )
-    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -40,6 +40,7 @@ private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
+private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -91,6 +92,10 @@ class Preferences(private val context: Context) {
 
     val epubDictLookupWords: Flow<List<String>> = context.dataStore.data.map { prefs ->
         parseStringListJson(prefs[EPUB_DICT_LOOKUP_WORDS_JSON])
+    }
+
+    val quickNoteLastCategory: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[QUICK_NOTE_LAST_CATEGORY]?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     val ftpPort: Flow<Int> = context.dataStore.data.map { prefs ->
@@ -207,6 +212,17 @@ class Preferences(private val context: Context) {
                 prefs.remove(EPUB_DICT_LOOKUP_WORDS_JSON)
             } else {
                 prefs[EPUB_DICT_LOOKUP_WORDS_JSON] = stringListToJson(normalized)
+            }
+        }
+    }
+
+    suspend fun setQuickNoteLastCategory(category: String?) {
+        context.dataStore.edit { prefs ->
+            val normalized = category?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalized == null) {
+                prefs.remove(QUICK_NOTE_LAST_CATEGORY)
+            } else {
+                prefs[QUICK_NOTE_LAST_CATEGORY] = normalized
             }
         }
     }
