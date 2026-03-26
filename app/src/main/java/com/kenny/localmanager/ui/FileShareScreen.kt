@@ -105,6 +105,25 @@ fun FileShareScreen(
         httpsPassword = prefs.gitHttpsPassword.first() ?: ""
     }
 
+    // 先读取本地 .sysgit/share 缓存，让 Tab 进入时可立即显示已有内容。
+    LaunchedEffect(rootUri) {
+        if (rootUri.isNullOrBlank()) {
+            sharedFiles = emptyList()
+            if (!autoRefreshOnEnter) loading = false
+            return@LaunchedEffect
+        }
+        val cached = withContext(Dispatchers.IO) {
+            listSharedFiles(context, rootUri)
+        }
+        sharedFiles = cached
+        if (!autoRefreshOnEnter) {
+            loading = false
+            if (cached.isNotEmpty()) {
+                syncState = ShareSyncState.Success("已显示缓存内容")
+            }
+        }
+    }
+
     fun syncAndLoad() {
         if (rootUri.isNullOrBlank() || repoUrl.isBlank()) {
             syncState = ShareSyncState.Error("请先配置 Git 仓库")

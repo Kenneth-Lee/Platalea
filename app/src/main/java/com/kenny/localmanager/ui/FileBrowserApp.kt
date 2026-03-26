@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -73,6 +74,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -282,6 +284,11 @@ private const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
 private const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
 private const val RECENT_TYPE_PLAYLIST = "playlist"
 private const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
+private typealias RunProgressBlock = suspend (
+    label: String,
+    total: Int?,
+    block: suspend ((Int) -> Unit) -> Unit
+) -> Unit
 
 private enum class MainTab(val key: String, val label: String) {
     DIRECTORY("directory", "目录"),
@@ -316,43 +323,480 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
     }
 }
 
+private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
+    return DocumentFileModel(
+        name = name,
+        isDirectory = false,
+        uri = Uri.parse(uri),
+        lastModified = 0L,
+        size = 0L
+    )
+}
+
+private fun openRecentItemByType(
+    context: Context,
+    item: RecentOpenItem,
+    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
+    switchMainTab: (MainTab) -> Unit,
+    onMdZipTarget: (DocumentFileModel) -> Unit,
+    onHtmlZipTarget: (DocumentFileModel) -> Unit,
+    onPicZipTarget: (DocumentFileModel) -> Unit,
+    onLlmZipTarget: (DocumentFileModel) -> Unit,
+    onTxtTarget: (DocumentFileModel) -> Unit,
+    onLlmTarget: (DocumentFileModel) -> Unit,
+    onEpubTarget: (DocumentFileModel) -> Unit
+) {
+    when (item.type) {
+        RECENT_TYPE_PLAYLIST -> {
+            val playlistId = item.playlistId
+            if (playlistId.isNullOrBlank()) {
+                Toast.makeText(context, "条目无效：缺少播放列表 ID", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val intent = Intent(context, PlaybackService::class.java).apply {
+                action = ACTION_PLAY
+                putExtra(EXTRA_PLAYLIST_ID, playlistId)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            recordRecentOpen(
+                RECENT_TYPE_PLAYLIST,
+                playlistId,
+                item.title,
+                null,
+                playlistId
+            )
+            switchMainTab(MainTab.PLAYER)
+        }
+
+        RECENT_TYPE_EXTERNAL_OPEN -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val opened = launchExternalOpen(context, uri, null)
+            if (!opened) {
+                Toast.makeText(context, "外部打开失败：没有可打开的应用", Toast.LENGTH_SHORT).show()
+                return
+            }
+            recordRecentOpen(
+                RECENT_TYPE_EXTERNAL_OPEN,
+                item.key,
+                item.title,
+                uri,
+                null
+            )
+        }
+
+        RECENT_TYPE_ZIP_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val model = buildRecentModel(uri, item.title)
+            when {
+                item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> onMdZipTarget(model)
+                item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
+                item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
+                else -> {
+                    Toast.makeText(context, "暂不支持从最近条目打开此 ZIP 类型", Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
+        }
+
+        RECENT_TYPE_EPUB_RENDERER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val model = buildRecentModel(uri, item.title)
+            when {
+                item.title.endsWith(".llm.zip", ignoreCase = true) -> onLlmZipTarget(model)
+                item.title.endsWith(".txt", ignoreCase = true) -> onTxtTarget(model)
+                item.title.endsWith(".llm", ignoreCase = true) -> onLlmTarget(model)
+                else -> onEpubTarget(model)
+            }
+        }
+
+        else -> {
+            Toast.makeText(context, "未知条目类型：${item.type}", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+private fun doCopyPendingToCurrentDir(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    displayUri: String,
+    pendingList: List<DocumentFileModel>,
+    rootUri: String?,
+    copyMoveLog: ((String) -> Unit)?,
+    runWithProgress: RunProgressBlock,
+    onSuccessAll: () -> Unit,
+    onRefreshDone: () -> Unit
+) {
+    val targetDirUri = normalizeContentUriString(displayUri)
+    copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
+    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+    scope.launch {
+        runWithProgress("拷贝", pendingList.size) { setProgress ->
+            val (ok, fail) = withContext(Dispatchers.IO) {
+                var o = 0
+                var f = 0
+                pendingList.forEachIndexed { index, model ->
+                    if (copyDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
+                    else f++
+                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                }
+                Pair(o, f)
+            }
+            copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
+            if (fail == 0 && ok > 0) {
+                onSuccessAll()
+                Toast.makeText(context, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+            } else if (ok > 0) {
+                Toast.makeText(context, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "拷贝失败", Toast.LENGTH_SHORT).show()
+            }
+            onRefreshDone()
+        }
+    }
+}
+
+private fun doMovePendingToCurrentDir(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    displayUri: String,
+    pendingList: List<DocumentFileModel>,
+    rootUri: String?,
+    copyMoveLog: ((String) -> Unit)?,
+    runWithProgress: RunProgressBlock,
+    onSuccessAll: () -> Unit,
+    onRefreshDone: () -> Unit
+) {
+    val targetDirUri = normalizeContentUriString(displayUri)
+    copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
+    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+    scope.launch {
+        runWithProgress("移动", pendingList.size) { setProgress ->
+            val (ok, fail) = withContext(Dispatchers.IO) {
+                var o = 0
+                var f = 0
+                pendingList.forEachIndexed { index, model ->
+                    if (moveDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
+                    else f++
+                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                }
+                Pair(o, f)
+            }
+            copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
+            if (fail == 0 && ok > 0) {
+                onSuccessAll()
+                Toast.makeText(context, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+            } else if (ok > 0) {
+                Toast.makeText(context, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "移动失败", Toast.LENGTH_SHORT).show()
+            }
+            onRefreshDone()
+        }
+    }
+}
+
+private suspend fun runWithUiProgress(
+    setProgressState: (OperationProgress?) -> Unit,
+    label: String,
+    total: Int? = null,
+    block: suspend ((Int) -> Unit) -> Unit
+) {
+    setProgressState(OperationProgress(label, 0, total))
+    delay(50)
+    try {
+        val setProgress: (Int) -> Unit = { i -> setProgressState(OperationProgress(label, i, total)) }
+        block(setProgress)
+    } finally {
+        setProgressState(null)
+    }
+}
+
+private suspend fun createNewPlaybackPlaylistAndStart(
+    context: Context,
+    prefs: Preferences,
+    audioList: List<DocumentFileModel>
+): Playlist? {
+    if (audioList.isEmpty()) return null
+    val playlist = Playlist(
+        id = java.util.UUID.randomUUID().toString(),
+        name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
+        uris = audioList.map { it.uri.toString() },
+        names = audioList.map { it.name }
+    )
+    withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_PLAY
+        putExtra(EXTRA_PLAYLIST_ID, playlist.id)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    return playlist
+}
+
+private suspend fun appendToPlaybackPlaylistAndStart(
+    context: Context,
+    prefs: Preferences,
+    target: Playlist,
+    audioList: List<DocumentFileModel>
+): String? {
+    if (audioList.isEmpty()) return null
+    val result = withContext(Dispatchers.IO) {
+        prefs.appendTracksToPlaylist(
+            target.id,
+            audioList.map { it.uri.toString() },
+            audioList.map { it.name }
+        )
+    }
+    if (!result.found) return null
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_PLAY
+        putExtra(EXTRA_PLAYLIST_ID, target.id)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    return when {
+        result.appendedCount > 0 && result.skippedCount > 0 ->
+            "已加入 ${result.appendedCount} 首到「${target.name}」，跳过 ${result.skippedCount} 首重复项，并开始播放"
+        result.appendedCount > 0 ->
+            "已加入 ${result.appendedCount} 首到「${target.name}」，并开始播放"
+        result.skippedCount > 0 ->
+            "所选音频已存在于「${target.name}」，已直接开始播放"
+        else ->
+            "已开始播放「${target.name}」"
+    }
+}
+
+private suspend fun detectGpgDecryptModeForOp(context: Context, op: GpgOpState): GpgDecryptUiMode = withContext(Dispatchers.IO) {
+    val files = when (op) {
+        is GpgOpState.Decrypt -> listOf(op.fileModel)
+        is GpgOpState.BatchDecrypt -> op.list
+        else -> emptyList()
+    }
+    var hasSymmetric = false
+    var hasPublicKey = false
+    files.forEach { fileModel ->
+        val kind = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
+            GpgHelper.detectEncryptedKind(input)
+        } ?: GpgEncryptedKind.UNKNOWN
+        when (kind) {
+            GpgEncryptedKind.PUBLIC_KEY -> hasPublicKey = true
+            GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> hasSymmetric = true
+        }
+    }
+    when {
+        hasSymmetric && hasPublicKey -> GpgDecryptUiMode.MIXED
+        hasPublicKey -> GpgDecryptUiMode.SECRET_KEY
+        else -> GpgDecryptUiMode.SYMMETRIC
+    }
+}
+
+private suspend fun decryptGpgFileToDir(
+    context: Context,
+    fileModel: DocumentFileModel,
+    targetDirUri: String,
+    treeUri: Uri?,
+    symmetricPassword: CharArray?,
+    keyPassphrase: CharArray?
+): Boolean = withContext(Dispatchers.IO) {
+    val encBytes = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
+    val kind = GpgHelper.detectEncryptedKind(java.io.ByteArrayInputStream(encBytes))
+    val decrypted = when (kind) {
+        GpgEncryptedKind.PUBLIC_KEY -> {
+            val secretRings = loadSecretKeyRings(context) ?: return@withContext false
+            val effectiveKeyPass = keyPassphrase ?: SecretKeyPasswordCache.get() ?: CharArray(0)
+            GpgHelper.decryptWithSecretKey(
+                java.io.ByteArrayInputStream(encBytes),
+                secretRings,
+                effectiveKeyPass
+            ) { }
+        }
+        GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> {
+            val pwd = symmetricPassword ?: return@withContext false
+            GpgHelper.decryptSymmetric(
+                java.io.ByteArrayInputStream(encBytes),
+                pwd
+            ) { }
+        }
+    } ?: return@withContext false
+    val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
+    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", decrypted)
+}
+
+private suspend fun encryptGpgFileToDir(
+    context: Context,
+    fileModel: DocumentFileModel,
+    targetDirUri: String,
+    treeUri: Uri?,
+    symmetricPassword: CharArray?,
+    publicKeyId: Long?
+): Boolean = withContext(Dispatchers.IO) {
+    val plain = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
+    if (publicKeyId != null) {
+        val pubRings = loadPublicKeyRings(context) ?: return@withContext false
+        val pubKeyRing = findPublicKeyRing(pubRings, publicKeyId) ?: return@withContext false
+        val keyDesc = listEncryptionPublicKeyRings(pubRings).find { it.first == publicKeyId }?.second.orEmpty()
+        val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
+        val baseName = fileModel.name.removeSuffix(".gpg")
+        val outName = if (safeName.isNotEmpty()) "${baseName}_${safeName}.gpg" else "${baseName}.gpg"
+        val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name) ?: return@withContext false
+        createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", encrypted)
+    } else {
+        val pwd = symmetricPassword ?: return@withContext false
+        val encrypted = GpgHelper.encryptSymmetric(plain, pwd, fileModel.name) { } ?: return@withContext false
+        createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, fileModel.name + ".gpg", "application/octet-stream", encrypted)
+    }
+}
+
 @Composable
 private fun ScrollableMainTabBar(
     activeMainTab: MainTab,
     onSwitchMainTab: (MainTab) -> Unit
 ) {
+    val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
+    val candidateTabs = listOf(
+        MainTab.QUICK_NOTE,
+        MainTab.PLAYER,
+        MainTab.DICTIONARY,
+        MainTab.FTP,
+        MainTab.GIT_SHARE
+    )
+    var candidateUsageOrder by remember { mutableStateOf(candidateTabs) }
+    var overflowExpanded by remember { mutableStateOf(false) }
+    var pendingOverflowPromotion by remember { mutableStateOf<MainTab?>(null) }
+    var previousActiveTab by remember { mutableStateOf<MainTab?>(null) }
+
+    fun moveCandidateToFront(tab: MainTab) {
+        if (tab !in candidateTabs) return
+        candidateUsageOrder = listOf(tab) + candidateUsageOrder.filter { it != tab }
+    }
+
+    LaunchedEffect(activeMainTab) {
+        if (previousActiveTab == activeMainTab) return@LaunchedEffect
+        val pending = pendingOverflowPromotion
+        if (pending != null && activeMainTab != pending) {
+            moveCandidateToFront(pending)
+            pendingOverflowPromotion = null
+        }
+        if (activeMainTab in candidateTabs) {
+            moveCandidateToFront(activeMainTab)
+        }
+        previousActiveTab = activeMainTab
+    }
+
+    val dynamicTabs = candidateUsageOrder.take(2)
+    val overflowTabs = candidateTabs.filter { it !in dynamicTabs }
+
     Surface(tonalElevation = 2.dp) {
-        val tabs = listOf(
-            MainTab.DIRECTORY,
-            MainTab.RECENT,
-            MainTab.PLAYER,
-            MainTab.FTP,
-            MainTab.GIT_SHARE,
-            MainTab.QUICK_NOTE,
-            MainTab.DICTIONARY
-        )
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
                 .padding(horizontal = 8.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            tabs.forEach { tab ->
+            fixedTabs.forEach { tab ->
                 val selected = activeMainTab == tab
                 OutlinedButton(
                     onClick = { onSwitchMainTab(tab) },
-                    modifier = Modifier.widthIn(min = 82.dp),
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
                         containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
                         contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
                     )
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(18.dp))
+                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.height(2.dp))
-                        Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(
+                            tab.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            dynamicTabs.forEach { tab ->
+                val selected = activeMainTab == tab
+                OutlinedButton(
+                    onClick = { onSwitchMainTab(tab) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            tab.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                val overflowSelected = activeMainTab in overflowTabs
+                OutlinedButton(
+                    onClick = { overflowExpanded = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (overflowSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        contentColor = if (overflowSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "更多",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                DropdownMenu(
+                    expanded = overflowExpanded,
+                    onDismissRequest = { overflowExpanded = false }
+                ) {
+                    overflowTabs.forEach { tab ->
+                        DropdownMenuItem(
+                            text = { Text(tab.label) },
+                            leadingIcon = {
+                                Icon(
+                                    mainTabIcon(tab),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            },
+                            onClick = {
+                                overflowExpanded = false
+                                pendingOverflowPromotion = tab
+                                onSwitchMainTab(tab)
+                            }
+                        )
                     }
                 }
             }
@@ -363,49 +807,107 @@ private fun ScrollableMainTabBar(
 @Composable
 private fun RecentTabContent(
     items: List<RecentOpenItem>,
-    onOpenRecentItem: (RecentOpenItem) -> Unit
+    playlistNoteById: Map<String, String>,
+    onOpenRecentItem: (RecentOpenItem) -> Unit,
+    onDeleteRecentItem: (RecentOpenItem) -> Unit,
+    onClearRecentItems: () -> Unit
 ) {
+    fun recentTypeLabel(item: RecentOpenItem): String {
+        return when (item.type) {
+            RECENT_TYPE_ZIP_VIEWER -> "ZIP 查看器"
+            RECENT_TYPE_EPUB_RENDERER -> "EPUB 渲染器"
+            RECENT_TYPE_PLAYLIST -> "播放列表"
+            RECENT_TYPE_EXTERNAL_OPEN -> "外部打开"
+            else -> item.type
+        }
+    }
+
+    fun recentItemIcon(item: RecentOpenItem): ImageVector {
+        val lower = item.title.lowercase(Locale.getDefault())
+        return when {
+            item.type == RECENT_TYPE_PLAYLIST -> Icons.Default.QueueMusic
+            item.type == RECENT_TYPE_EXTERNAL_OPEN && (lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".avi")) -> Icons.Default.PlayArrow
+            lower.endsWith(".md.zip") || lower.endsWith(".rst.zip") || lower.endsWith(".html.zip") || lower.endsWith(".llm.zip") || lower.endsWith(".zip") -> Icons.Default.Archive
+            lower.endsWith(".epub") || lower.endsWith(".txt") || lower.endsWith(".llm") -> Icons.Default.Article
+            lower.endsWith(".pdf") -> Icons.Default.PictureAsPdf
+            else -> Icons.Default.InsertDriveFile
+        }
+    }
+
     if (items.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("暂无最近打开条目", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }
-    LazyColumn(
+    Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .padding(horizontal = 8.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        items(items) { item ->
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onOpenRecentItem(item) },
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(
-                        item.title,
-                        style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    val typeLabel = when (item.type) {
-                        RECENT_TYPE_ZIP_VIEWER -> "ZIP 查看器"
-                        RECENT_TYPE_EPUB_RENDERER -> "EPUB 渲染器"
-                        RECENT_TYPE_PLAYLIST -> "播放列表"
-                        RECENT_TYPE_EXTERNAL_OPEN -> "外部打开"
-                        else -> item.type
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = onClearRecentItems) {
+                Text("清空最近")
+            }
+        }
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 4.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(items, key = { "${it.type}:${it.key}" }) { item ->
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenRecentItem(item) },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            recentItemIcon(item),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                item.title,
+                                style = MaterialTheme.typography.bodyLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            val timeLabel = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(item.openedAt))
+                            Text(
+                                "${recentTypeLabel(item)} · $timeLabel",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (item.type == RECENT_TYPE_PLAYLIST) {
+                                val note = item.playlistId?.let { playlistNoteById[it] }?.trim().orEmpty()
+                                if (note.isNotEmpty()) {
+                                    Text(
+                                        "备注: $note",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
+                        IconButton(onClick = { onDeleteRecentItem(item) }) {
+                            Icon(Icons.Default.Delete, contentDescription = "删除最近条目")
+                        }
                     }
-                    val timeLabel = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(item.openedAt))
-                    Text(
-                        "$typeLabel · $timeLabel",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
                 }
             }
         }
@@ -529,7 +1031,10 @@ private fun DictionaryTabContent(onRequestExitApp: () -> Unit) {
 private fun MainTabContentHost(
     activeMainTab: MainTab,
     recentOpenItems: List<RecentOpenItem>,
+    playlistNoteById: Map<String, String>,
     onOpenRecentItem: (RecentOpenItem) -> Unit,
+    onDeleteRecentItem: (RecentOpenItem) -> Unit,
+    onClearRecentItems: () -> Unit,
     directoryContent: @Composable () -> Unit,
     ftpContent: @Composable () -> Unit,
     gitShareContent: @Composable () -> Unit,
@@ -539,7 +1044,13 @@ private fun MainTabContentHost(
 ) {
     when (activeMainTab) {
         MainTab.DIRECTORY -> directoryContent()
-        MainTab.RECENT -> RecentTabContent(items = recentOpenItems.take(30), onOpenRecentItem = onOpenRecentItem)
+        MainTab.RECENT -> RecentTabContent(
+            items = recentOpenItems.take(30),
+            playlistNoteById = playlistNoteById,
+            onOpenRecentItem = onOpenRecentItem,
+            onDeleteRecentItem = onDeleteRecentItem,
+            onClearRecentItems = onClearRecentItems
+        )
         MainTab.FTP -> ftpContent()
         MainTab.GIT_SHARE -> gitShareContent()
         MainTab.PLAYER -> playerContent()
@@ -637,6 +1148,18 @@ private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String)
 fun FileBrowserApp(
     initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
     initialLaunchTarget: String? = null
+) {
+    FileBrowserAppScreen(
+        initialFileUri = initialFileUri,
+        initialLaunchTarget = initialLaunchTarget
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FileBrowserAppScreen(
+    initialFileUri: androidx.compose.runtime.MutableState<String?>?,
+    initialLaunchTarget: String?
 ) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
@@ -935,6 +1458,2939 @@ fun FileBrowserApp(
         }
     }
 
+    @Composable
+    fun MainTabsRootContent() {
+        val displayUri = currentUri ?: initialDirUri ?: rootUri!!
+        val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
+        val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
+        var showPendingList by remember { mutableStateOf(false) }
+        var showPendingDeleteConfirm by remember { mutableStateOf(false) }
+        var showPlaybackTargetDialog by remember { mutableStateOf(false) }
+        var showConfigDialog by remember { mutableStateOf(false) }
+        var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
+        var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
+        var pendingImportJson by remember { mutableStateOf<String?>(null) }
+        var pendingImportPlaylistCount by remember { mutableStateOf(0) }
+        var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
+        var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
+        var showCacheManagementDialog by remember { mutableStateOf(false) }
+        var showAboutDialog by remember { mutableStateOf(false) }
+        var showKeyManagementDialog by remember { mutableStateOf(false) }
+        LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
+        var lastBackPressTime by remember { mutableStateOf(0L) }
+        val requestExitApp: () -> Unit = {
+            val now = System.currentTimeMillis()
+            if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
+            else {
+                lastBackPressTime = now
+                Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+            }
+        }
+        var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
+        var gpgPassword by remember { mutableStateOf("") }
+        var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
+        var gpgDecryptAutoTried by remember { mutableStateOf(false) }
+        var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
+        var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
+        var showChangeRootConfirm by remember { mutableStateOf(false) }
+        var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
+        var quickObfuscatePassword by remember { mutableStateOf("") }
+        var quickObfuscateInProgress by remember { mutableStateOf(false) }
+        var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
+        var batchObfuscatePassword by remember { mutableStateOf("") }
+        var batchObfuscateInProgress by remember { mutableStateOf(false) }
+        var passProtectTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var passProtectInProgress by remember { mutableStateOf(false) }
+        var passViewTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var passViewPassword by remember { mutableStateOf("") }
+        var passViewInProgress by remember { mutableStateOf(false) }
+        var passViewTriedCache by remember { mutableStateOf(false) }
+        var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
+        var currentDirPath by remember { mutableStateOf("") }
+        LaunchedEffect(displayUri, rootUri) {
+            currentDirPath = withContext(Dispatchers.IO) {
+                pathFromRoot(context, rootUri, displayUri)
+            }
+        }
+        var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
+        LaunchedEffect(rootUri) {
+            cachedTrashUri = rootUri?.let { r ->
+                withContext(Dispatchers.IO) {
+                    val root = Uri.parse(normalizeContentUriString(r))
+                    getTrashUriIfExists(context, root, root)
+                }
+            }
+        }
+        var dirCache by remember { mutableStateOf<Map<String, CachedDir>>(emptyMap()) }
+        LaunchedEffect(rootUri) {
+            dirCache = emptyMap()
+        }
+        val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
+        var ftpPort by remember { mutableStateOf(2121) }
+        var ftpPassword by remember { mutableStateOf<String?>(null) }
+        var ftpTimeoutMinutes by remember { mutableStateOf(0) }
+        var filterVisible by remember { mutableStateOf(true) }
+        var showGitConfigDialog by remember { mutableStateOf(false) }
+        var showPubkeyShareScreen by remember { mutableStateOf(false) }
+        var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        val shareGitLogs = remember { mutableStateListOf<String>() }
+        var shareGitInProgress by remember { mutableStateOf(false) }
+        var shareGitDone by remember { mutableStateOf(false) }
+        var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var sevenZCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var zipUnzipPassword by remember { mutableStateOf("") }
+        var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var zipCompressPassword by remember { mutableStateOf("") }
+        var sevenZCompressPassword by remember { mutableStateOf("") }
+        var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var mdZipPassword by remember { mutableStateOf("") }
+        var mdZipInProgress by remember { mutableStateOf(false) }
+        var htmlZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var htmlZipPassword by remember { mutableStateOf("") }
+        var htmlZipInProgress by remember { mutableStateOf(false) }
+        var htmlZipLog by remember { mutableStateOf("") }
+        var htmlZipLoadError by remember { mutableStateOf<String?>(null) }
+        var llmZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var llmZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var llmZipPassword by remember { mutableStateOf("") }
+        var llmZipInProgress by remember { mutableStateOf(false) }
+        var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var epubPassword by remember { mutableStateOf("") }
+        var epubInProgress by remember { mutableStateOf(false) }
+        var epubLog by remember { mutableStateOf("") }
+        var epubLoadError by remember { mutableStateOf<String?>(null) }
+        var txtTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var txtInProgress by remember { mutableStateOf(false) }
+        var txtLoadError by remember { mutableStateOf<String?>(null) }
+        var llmTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var llmInProgress by remember { mutableStateOf(false) }
+        var llmLoadError by remember { mutableStateOf<String?>(null) }
+        var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var picZipPassword by remember { mutableStateOf("") }
+        var picZipInProgress by remember { mutableStateOf(false) }
+        var showPendingCompressToZip by remember { mutableStateOf(false) }
+        var showPendingCompressTo7z by remember { mutableStateOf(false) }
+        var pendingCompressZipName by remember { mutableStateOf("") }
+        var pendingCompressPassword by remember { mutableStateOf("") }
+        var pendingCompress7zName by remember { mutableStateOf("") }
+        var pendingCompress7zPassword by remember { mutableStateOf("") }
+        var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
+        var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+        LaunchedEffect(Unit) {
+            PlaybackService.playbackState.collect { playbackState = it }
+        }
+        LaunchedEffect(prefs) {
+            prefs.playlists.collect { playlists = it }
+        }
+        LaunchedEffect(zipUnzipTarget) {
+            zipUnzipEncrypted = null
+            zipUnzipPassword = ""
+            val target = zipUnzipTarget ?: return@LaunchedEffect
+            if (target.name.endsWith(".rar", ignoreCase = true)) {
+                val rarV5 = withContext(Dispatchers.IO) { isRarV5Archive(context, target.uri) }
+                if (rarV5) {
+                    Toast.makeText(context, "暂不支持 RAR5 解压，请转为 ZIP 或 RAR4", Toast.LENGTH_LONG).show()
+                    zipUnzipTarget = null
+                    return@LaunchedEffect
+                }
+            }
+            zipUnzipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+        }
+        LaunchedEffect(mdZipTarget) {
+            mdZipEncrypted = null
+            mdZipPassword = ""
+            mdZipInProgress = false
+            val target = mdZipTarget ?: return@LaunchedEffect
+            // 先检查是否有有效缓存（非加密时）
+            val cacheDir = getMdZipCacheDir(context, target.uri)
+            val cacheTs = getMdZipCacheTimestamp(cacheDir)
+            if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                val contentDir = java.io.File(cacheDir, "content")
+                val hasContent = contentDir.exists() &&
+                    (contentDir.listFiles()?.isNotEmpty() == true)
+                if (hasContent) {
+                    val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
+                    val cachedTarget = findMdZipCacheTarget(cacheDir, isRstZip)
+                    mdZipTarget = null
+                    mdZipViewState = MdZipViewState(
+                        targetFile = cachedTarget,
+                        contentDir = contentDir,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false
+                    )
+                    return@LaunchedEffect
+                }
+                // 缓存内容为空，废弃并重新解压
+                cacheDir.deleteRecursively()
+            }
+            mdZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+            // 非加密的直接解压
+            if (mdZipEncrypted == false) {
+                mdZipInProgress = true
+                val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null, target.name) }
+                mdZipInProgress = false
+                mdZipTarget = null
+                if (result != null) {
+                    mdZipViewState = MdZipViewState(
+                        targetFile = result.targetFile,  // 可能为 null
+                        contentDir = result.contentDir,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false
+                    )
+                } else {
+                    Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        LaunchedEffect(htmlZipTarget) {
+            htmlZipEncrypted = null
+            htmlZipPassword = ""
+            htmlZipInProgress = false
+            htmlZipLog = "准备加载: ${htmlZipTarget?.name ?: ""}\n"
+            htmlZipLoadError = null
+            val target = htmlZipTarget ?: return@LaunchedEffect
+            val cacheDir = getHtmlZipCacheDir(context, target.uri)
+            val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
+            if (cacheTs > 0 && !isHtmlZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                val contentDir = java.io.File(cacheDir, "content")
+                if (contentDir.exists() && contentDir.listFiles()?.isNotEmpty() == true) {
+                    val cachedIndex = findHtmlZipIndexFile(contentDir)
+                    htmlZipTarget = null
+                    htmlZipViewState = HtmlZipViewState(
+                        indexFile = cachedIndex,
+                        contentDir = contentDir,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false
+                    )
+                    return@LaunchedEffect
+                }
+                cacheDir.deleteRecursively()
+            }
+            htmlZipLog += "检查是否加密...\n"
+            htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+            htmlZipLog += "加密状态: $htmlZipEncrypted\n"
+            if (htmlZipEncrypted == false) {
+                htmlZipInProgress = true
+                val result = withContext(Dispatchers.IO) {
+                    extractHtmlZipToCacheWithProgress(context, target.uri, null, target.name) { log ->
+                        htmlZipLog += "$log\n"
+                    }
+                }
+                htmlZipInProgress = false
+                htmlZipTarget = null
+                when (result) {
+                    is HtmlZipParseResult.Success -> {
+                        htmlZipViewState = HtmlZipViewState(
+                            indexFile = result.result.indexFile,
+                            contentDir = result.result.contentDir,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false
+                        )
+                    }
+                    is HtmlZipParseResult.Error -> {
+                        val detail = result.detail?.let { "\n$it" } ?: ""
+                        htmlZipLog += "\n错误: ${result.message}$detail\n"
+                        htmlZipLoadError = "${result.message}$detail"
+                    }
+                }
+            } else if (htmlZipEncrypted == true) {
+                htmlZipLog += "文件已加密，需要密码\n"
+            }
+        }
+        LaunchedEffect(llmZipTarget) {
+            llmZipEncrypted = null
+            llmZipPassword = ""
+            llmZipInProgress = false
+            val target = llmZipTarget ?: return@LaunchedEffect
+            val cacheDir = getEpubCacheDir(context, target.uri)
+            val cacheTs = getEpubCacheTimestamp(cacheDir)
+            if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                val cached = loadEpubFromCache(cacheDir)
+                if (cached != null) {
+                    llmZipTarget = null
+                    epubViewState = EpubViewState(
+                        extractResult = cached,
+                        zipFileName = target.name,
+                        epubUri = target.uri,
+                        isEncrypted = false
+                    )
+                    return@LaunchedEffect
+                }
+                cacheDir.deleteRecursively()
+            }
+            llmZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+            if (llmZipEncrypted == false) {
+                llmZipInProgress = true
+                val result = withContext(Dispatchers.IO) {
+                    extractLlmZipToCache(context, target.uri, null, target.name)
+                }
+                llmZipInProgress = false
+                llmZipTarget = null
+                if (result != null) {
+                    epubViewState = EpubViewState(
+                        extractResult = result,
+                        zipFileName = target.name,
+                        epubUri = target.uri,
+                        isEncrypted = false
+                    )
+                } else {
+                    Toast.makeText(context, "未找到可读的 .txt/.llm 文件或解压失败", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+        LaunchedEffect(epubTarget) {
+            val target = epubTarget ?: return@LaunchedEffect
+            epubEncrypted = null
+            epubPassword = ""
+            epubInProgress = true
+            epubLog = "准备加载: ${target.name}\n"
+            epubLoadError = null
+            try {
+                var cachedResult: EpubExtractResult? = null
+                var encrypted: Boolean? = null
+                withContext(Dispatchers.IO) {
+                    epubLog += "检查缓存...\n"
+                    val cacheDir = getEpubCacheDir(context, target.uri)
+                    val cacheTs = getEpubCacheTimestamp(cacheDir)
+                    if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                        cachedResult = loadEpubFromCache(cacheDir)
+                        if (cachedResult != null) {
+                            epubLog += "使用缓存\n"
+                            return@withContext
+                        }
+                        cacheDir.deleteRecursively()
+                    }
+                    epubLog += "检查是否加密...\n"
+                    encrypted = isArchiveEncrypted(context, target.uri, target.name)
+                }
+                val cached = cachedResult
+                if (cached != null) {
+                    epubViewState = EpubViewState(
+                        extractResult = cached,
+                        zipFileName = target.name,
+                        epubUri = target.uri,
+                        isEncrypted = false
+                    )
+                    epubTarget = null
+                    epubInProgress = false
+                    return@LaunchedEffect
+                }
+                epubEncrypted = encrypted
+                if (encrypted == false) {
+                    val result = withContext(Dispatchers.IO) {
+                        extractEpubToCache(context, target.uri, null, target.name) { log ->
+                            epubLog += "$log\n"
+                        }
+                    }
+                    when (result) {
+                        is EpubParseResult.Success -> {
+                            epubViewState = EpubViewState(
+                                extractResult = result.result,
+                                zipFileName = target.name,
+                                epubUri = target.uri,
+                                isEncrypted = false
+                            )
+                            epubTarget = null
+                            epubInProgress = false
+                        }
+                        is EpubParseResult.Error -> {
+                            val detail = result.detail?.let { "\n$it" } ?: ""
+                            epubLog += "\n错误: ${result.message}$detail\n"
+                            epubLoadError = "${result.message}$detail"
+                            epubInProgress = false
+                            // 保留 epubTarget 以便显示错误对话框
+                        }
+                    }
+                } else {
+                    epubLog += "文件已加密，需要密码\n"
+                    epubInProgress = false
+                }
+            } catch (e: Exception) {
+                epubLog += "\n异常: ${e.javaClass.simpleName}: ${e.message}\n"
+                epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
+                epubInProgress = false
+            }
+        }
+        // 处理 TXT 文件，转换为 EPUB 格式查看
+        LaunchedEffect(txtTarget) {
+            val target = txtTarget ?: return@LaunchedEffect
+            txtInProgress = true
+            txtLoadError = null
+            try {
+                val cacheDir = getEpubCacheDir(context, target.uri)
+                val cacheTs = getEpubCacheTimestamp(cacheDir)
+
+                var result: EpubExtractResult? = null
+
+                // 检查是否有有效缓存
+                if (cacheTs > 0 && cacheTs >= target.lastModified) {
+                    result = loadEpubFromCache(cacheDir)
+                    // 如果缓存加载失败，清除旧缓存
+                    if (result == null) {
+                        Log.w("FileBrowserApp", "TXT cache load failed, clearing old cache")
+                        cacheDir.deleteRecursively()
+                    }
+                }
+
+                // 如果没有有效缓存，重新生成
+                if (result == null) {
+                    // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
+                    result = prepareTxtAsEpub(context, target.uri, target.name)
+                }
+
+                if (result != null) {
+                    epubViewState = EpubViewState(
+                        extractResult = result,
+                        zipFileName = target.name,
+                        epubUri = target.uri,
+                        isEncrypted = false
+                    )
+                    txtTarget = null
+                } else {
+                    txtLoadError = "无法解析 TXT 文件"
+                }
+            } catch (e: Exception) {
+                Log.e("FileBrowserApp", "TXT processing failed", e)
+                txtLoadError = "${e.javaClass.simpleName}: ${e.message}"
+            }
+            txtInProgress = false
+        }
+        // 处理 LLM 对话文件，转换为 EPUB 格式查看
+        LaunchedEffect(llmTarget) {
+            val target = llmTarget ?: return@LaunchedEffect
+            llmInProgress = true
+            llmLoadError = null
+            try {
+                val cacheDir = getEpubCacheDir(context, target.uri)
+                val cacheTs = getEpubCacheTimestamp(cacheDir)
+
+                var result: EpubExtractResult? = null
+
+                // 检查是否有有效缓存
+                if (cacheTs > 0 && cacheTs >= target.lastModified) {
+                    result = loadEpubFromCache(cacheDir)
+                    // 如果缓存加载失败，清除旧缓存
+                    if (result == null) {
+                        Log.w("FileBrowserApp", "LLM cache load failed, clearing old cache")
+                        cacheDir.deleteRecursively()
+                    }
+                }
+
+                // 如果没有有效缓存，重新生成
+                if (result == null) {
+                    // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
+                    result = prepareLlmAsEpub(context, target.uri, target.name)
+                }
+
+                val finalResult = result
+                if (finalResult != null) {
+                    epubViewState = EpubViewState(
+                        extractResult = finalResult,
+                        zipFileName = target.name,
+                        epubUri = target.uri,
+                        isEncrypted = false
+                    )
+                    llmTarget = null
+                } else {
+                    llmLoadError = "无法解析 LLM 对话文件"
+                }
+            } catch (e: Exception) {
+                Log.e("FileBrowserApp", "LLM processing failed", e)
+                llmLoadError = "${e.javaClass.simpleName}: ${e.message}"
+            }
+            llmInProgress = false
+        }
+        LaunchedEffect(picZipTarget) {
+            picZipEncrypted = null
+            picZipPassword = ""
+            picZipInProgress = false
+            val target = picZipTarget ?: return@LaunchedEffect
+            val cacheDir = getPicZipCacheDir(context, target.uri)
+            val cacheTs = getPicZipCacheTimestamp(cacheDir)
+            if (cacheTs > 0 && !isPicZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                val contentDir = java.io.File(cacheDir, "content")
+                val listFile = java.io.File(cacheDir, ".image_list")
+                if (contentDir.exists() && listFile.exists()) {
+                    val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                    val lastIndexFile = java.io.File(cacheDir, ".last_index")
+                    val initialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, paths.size - 1) ?: 0
+                    picZipTarget = null
+                    picZipViewState = PicZipViewState(
+                        contentDir = contentDir,
+                        imagePaths = paths,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false,
+                        password = null,
+                        initialIndex = initialIndex
+                    )
+                    return@LaunchedEffect
+                }
+                cacheDir.deleteRecursively()
+            }
+            picZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+            if (picZipEncrypted == false) {
+                picZipInProgress = true
+                val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
+                picZipInProgress = false
+                picZipTarget = null
+                if (result != null) {
+                    picZipViewState = PicZipViewState(
+                        contentDir = result.contentDir,
+                        imagePaths = result.imagePaths,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false,
+                        password = null,
+                        initialIndex = 0
+                    )
+                } else {
+                    Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        LaunchedEffect(prefs) {
+            prefs.ftpPort.collect { ftpPort = it }
+        }
+        LaunchedEffect(prefs) {
+            prefs.ftpPassword.collect { ftpPassword = it }
+        }
+        LaunchedEffect(prefs) {
+            prefs.ftpTimeoutMinutes.collect { ftpTimeoutMinutes = it }
+        }
+        LaunchedEffect(prefs) {
+            prefs.filterVisible.collect { filterVisible = it }
+        }
+        LaunchedEffect(activeMainTab) {
+            if (activeMainTab != MainTab.FTP) {
+                ftpManager.stop()
+            }
+        }
+        BackHandler {
+            when {
+                progressOp != null -> { } // 不响应返回，防止误触
+                batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
+                quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
+                passProtectTarget != null -> { passProtectTarget = null }
+                passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
+                passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
+                passEditState != null -> passEditState = null
+                showChangeRootConfirm -> showChangeRootConfirm = false
+                gpgState != null -> {
+                    gpgState = null
+                    gpgPassword = ""
+                    gpgDecryptMode = null
+                    gpgDecryptAutoTried = false
+                    gpgEncryptSelectedKeyId = null
+                }
+                showKeyManagementDialog -> showKeyManagementDialog = false
+                showConfigDialog -> showConfigDialog = false
+                showCacheManagementDialog -> showCacheManagementDialog = false
+                showGitConfigDialog -> showGitConfigDialog = false
+                showAboutDialog -> showAboutDialog = false
+                showPendingDeleteConfirm -> showPendingDeleteConfirm = false
+                showPendingList -> showPendingList = false
+                activeMainTab != MainTab.DIRECTORY -> requestExitApp()
+                zipUnzipTarget != null -> zipUnzipTarget = null
+                mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
+                htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
+                llmZipTarget != null -> { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
+                epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
+                picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
+                pdfViewState != null -> pdfViewState = null
+                zipCompressTarget != null -> zipCompressTarget = null
+                sevenZCompressTarget != null -> sevenZCompressTarget = null
+                showPendingCompressToZip -> showPendingCompressToZip = false
+                showPendingCompressTo7z -> showPendingCompressTo7z = false
+                fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
+                else -> {
+                    requestExitApp()
+                }
+            }
+        }
+        var hideDotFiles by remember { mutableStateOf(false) }
+        var startupDecryptKey by remember { mutableStateOf(false) }
+        LaunchedEffect(prefs) {
+            prefs.hideDotFiles.collect { hideDotFiles = it }
+        }
+        LaunchedEffect(prefs) {
+            prefs.startupDecryptKey.collect { startupDecryptKey = it }
+        }
+        val copyMoveLog: ((String) -> Unit)? = null
+        suspend fun runWithProgress(
+            label: String,
+            total: Int? = null,
+            block: suspend ((Int) -> Unit) -> Unit
+        ) {
+            runWithUiProgress(
+                setProgressState = { progressOp = it },
+                label = label,
+                total = total,
+                block = block
+            )
+        }
+
+        fun clearPendingConfigImportState() {
+            pendingImportJson = null
+            pendingImportPlaylistCount = 0
+            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+            showImportKeyConfirmDialog = false
+            showImportPlaylistConfirmDialog = false
+        }
+
+        fun clearPendingPlaybackTargetState() {
+            pendingPlaybackAudioList = emptyList()
+            showPlaybackTargetDialog = false
+        }
+
+        suspend fun createNewPlaybackPlaylist(audioList: List<DocumentFileModel>) {
+            val playlist = createNewPlaybackPlaylistAndStart(context, prefs, audioList) ?: return
+            recordRecentOpen(
+                type = RECENT_TYPE_PLAYLIST,
+                key = playlist.id,
+                title = playlist.name,
+                playlistId = playlist.id
+            )
+            pendingList.clear()
+            switchMainTab(MainTab.PLAYER)
+            showPendingList = false
+            clearPendingPlaybackTargetState()
+            Toast.makeText(context, "已创建播放列表并加入 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
+        }
+
+        suspend fun appendToPlaybackPlaylist(target: Playlist, audioList: List<DocumentFileModel>) {
+            val msg = appendToPlaybackPlaylistAndStart(context, prefs, target, audioList)
+            if (msg == null) {
+                Toast.makeText(context, "加入播放列表失败", Toast.LENGTH_SHORT).show()
+                return
+            }
+            recordRecentOpen(
+                type = RECENT_TYPE_PLAYLIST,
+                key = target.id,
+                title = target.name,
+                playlistId = target.id
+            )
+            pendingList.clear()
+            switchMainTab(MainTab.PLAYER)
+            showPendingList = false
+            clearPendingPlaybackTargetState()
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+
+        suspend fun exportConfigToRoot(): Boolean {
+            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return false
+            val targetUri = Uri.parse(targetRoot)
+            val jsonBytes = exportConfig(context, prefs).toByteArray(Charsets.UTF_8)
+            val existing = findChildByName(context, targetUri, CONFIG_EXPORT_FILE_NAME)
+            if (existing != null && !context.contentResolver.deleteDocument(existing)) return false
+            return createFileWithBytes(
+                context,
+                targetUri,
+                targetUri,
+                CONFIG_EXPORT_FILE_NAME,
+                "application/json",
+                jsonBytes
+            )
+        }
+
+        suspend fun performConfigImport(jsonString: String, importKeys: Boolean) {
+            val ok = importConfig(
+                context,
+                prefs,
+                jsonString,
+                importKeys = importKeys,
+                playlistImportMode = pendingImportPlaylistMode
+            )
+            refreshTrigger++
+            val msg = when {
+                !ok -> "导入失败：无法解析 JSON"
+                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
+                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
+                pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
+                pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
+                importKeys -> "配置已导入（含密钥）"
+                else -> "配置已导入"
+            }
+            clearPendingConfigImportState()
+            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+
+        fun continueConfigImportAfterPlaylistChoice() {
+            val jsonString = pendingImportJson ?: return
+            if (configJsonContainsKeys(jsonString)) {
+                showImportKeyConfirmDialog = true
+            } else {
+                scope.launch { performConfigImport(jsonString, importKeys = true) }
+            }
+        }
+
+        fun startConfigImport(jsonString: String) {
+            if (jsonString.isBlank()) {
+                Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
+                return
+            }
+            pendingImportJson = jsonString
+            pendingImportPlaylistCount = configJsonPlaylistCount(jsonString)
+            scope.launch {
+                val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
+                if (pendingImportPlaylistCount > 0 && hasExistingPlaylists) {
+                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                    showImportPlaylistConfirmDialog = true
+                } else {
+                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                    continueConfigImportAfterPlaylistChoice()
+                }
+            }
+        }
+
+        val doCopyHere: () -> Unit = {
+            doCopyPendingToCurrentDir(
+                context = context,
+                scope = scope,
+                displayUri = displayUri,
+                pendingList = pendingList.toList(),
+                rootUri = rootUri,
+                copyMoveLog = copyMoveLog,
+                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                onSuccessAll = {
+                    pendingList.clear()
+                    showPendingList = false
+                },
+                onRefreshDone = { refreshTrigger++ }
+            )
+        }
+        val doMoveHere: () -> Unit = {
+            doMovePendingToCurrentDir(
+                context = context,
+                scope = scope,
+                displayUri = displayUri,
+                pendingList = pendingList.toList(),
+                rootUri = rootUri,
+                copyMoveLog = copyMoveLog,
+                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                onSuccessAll = {
+                    pendingList.clear()
+                    showPendingList = false
+                },
+                onRefreshDone = { refreshTrigger++ }
+            )
+        }
+
+        val ftpRootUri = rootUri
+        Column(Modifier.fillMaxSize()) {
+            if (gpgPubEncryptInProgress || saveInProgress) {
+                LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+            }
+            progressOp?.let { OperationProgressDialog(it) }
+            Box(Modifier.weight(1f)) {
+                val playlistNoteById = playlists.associate { it.id to it.note }
+                MainTabContentHost(
+                    activeMainTab = activeMainTab,
+                    recentOpenItems = recentOpenItems,
+                    playlistNoteById = playlistNoteById,
+                    onOpenRecentItem = { item ->
+                        openRecentItemByType(
+                            context = context,
+                            item = item,
+                            recordRecentOpen = { type, key, title, uri, playlistId ->
+                                recordRecentOpen(
+                                    type = type,
+                                    key = key,
+                                    title = title,
+                                    uri = uri,
+                                    playlistId = playlistId
+                                )
+                            },
+                            switchMainTab = { switchMainTab(it) },
+                            onMdZipTarget = { mdZipTarget = it },
+                            onHtmlZipTarget = { htmlZipTarget = it },
+                            onPicZipTarget = { picZipTarget = it },
+                            onLlmZipTarget = { llmZipTarget = it },
+                            onTxtTarget = { txtTarget = it },
+                            onLlmTarget = { llmTarget = it },
+                            onEpubTarget = { epubTarget = it }
+                        )
+                    },
+                    onDeleteRecentItem = { item ->
+                        scope.launch {
+                            prefs.removeRecentOpenItem(item.type, item.key)
+                        }
+                    },
+                    onClearRecentItems = {
+                        scope.launch {
+                            prefs.clearRecentOpenItems()
+                        }
+                    },
+                    directoryContent = {
+                        FileBrowserScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            currentUri = displayUri,
+                            refreshTrigger = refreshTrigger,
+                            dirCache = dirCache,
+                            onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
+                            pendingList = pendingList,
+                            rootUri = rootUri,
+                            listState = fileListLazyState,
+                            onNavigate = { uri ->
+                                fileBrowserBackStack.add(displayUri)
+                                currentUri = normalizeContentUriString(uri)
+                            },
+                            onBack = {
+                                if (fileBrowserBackStack.isNotEmpty()) {
+                                    currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
+                                }
+                            },
+                            canGoBack = fileBrowserBackStack.isNotEmpty(),
+                            onEmptyTrash = rootUri?.let { r ->
+                                {
+                                    scope.launch {
+                                        val root = Uri.parse(normalizeContentUriString(r))
+                                        runWithProgress("清空回收站", null) { _ ->
+                                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                            if (ok) {
+                                                Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                                refreshTrigger++
+                                            } else {
+                                                Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            onRestoreFromTrash = rootUri?.let { r ->
+                                { model ->
+                                    scope.launch {
+                                        val root = Uri.parse(normalizeContentUriString(r))
+                                        runWithProgress("恢复", null) { _ ->
+                                            val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
+                                            if (ok) {
+                                                Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                                refreshTrigger++
+                                            } else {
+                                                Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            filterVisible = filterVisible,
+                            hideDotFiles = hideDotFiles,
+                            isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
+                            preferredExternalPackages = preferredExternalPackages,
+                            onOpenFile = { uri, name, isEncrypted ->
+                                viewingFile = Triple(uri, name, false)
+                            },
+                            onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
+                                val opened = launchExternalOpen(context, uri, packageName)
+                                if (opened) {
+                                    recordRecentOpen(
+                                        type = RECENT_TYPE_EXTERNAL_OPEN,
+                                        key = uri,
+                                        title = name,
+                                        uri = uri
+                                    )
+                                    if (rememberChoice) {
+                                        val extension = fileExtensionKey(name)
+                                        if (extension != null && !packageName.isNullOrBlank()) {
+                                            scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                        }
+                                    }
+                                } else {
+                                    val extension = fileExtensionKey(name)
+                                    if (!packageName.isNullOrBlank() && extension != null) {
+                                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                        Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                                opened
+                            },
+                            onClearExternalOpenPreference = { name ->
+                                val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
+                                scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                            },
+                            onOpenMarkdownView = { uri, name, encrypted ->
+                                markdownViewFile = Triple(uri, name, encrypted)
+                            },
+                            onAddToPendingList = { pendingList.add(it) },
+                            onRemoveFromPendingList = { pendingList.remove(it) },
+                            onShowPendingList = { showPendingList = it },
+                            onRefresh = { refreshTrigger++ },
+                            onOpenConfig = { showConfigDialog = true },
+                            onOpenAbout = { showAboutDialog = true },
+                            onCreateQuickNote = {
+                                switchMainTab(MainTab.QUICK_NOTE)
+                                requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) })
+                            },
+                            onRequestGpgDecrypt = { fileModel, dirUri ->
+                                gpgPassword = ""
+                                gpgDecryptMode = null
+                                gpgDecryptAutoTried = false
+                                gpgEncryptSelectedKeyId = null
+                                gpgState = GpgOpState.Decrypt(fileModel, dirUri)
+                            },
+                            onRequestGpgEncrypt = { fileModel, dirUri ->
+                                gpgPassword = ""
+                                gpgDecryptMode = null
+                                gpgDecryptAutoTried = false
+                                gpgEncryptSelectedKeyId = null
+                                gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                            },
+                            onRequestQuickObfuscate = { model ->
+                                quickObfuscateOp = model to true
+                                quickObfuscatePassword = ""
+                            },
+                            onRequestQuickDeobfuscate = { model ->
+                                quickObfuscateOp = model to false
+                                quickObfuscatePassword = ""
+                            },
+                            onConfirmDelete = { model, deletePermanently ->
+                                scope.launch {
+                                    val label = if (deletePermanently) "删除" else "移到回收站"
+                                    runWithProgress(label, null) { _ ->
+                                        val ok = withContext(Dispatchers.IO) {
+                                            if (deletePermanently) {
+                                                context.contentResolver.deleteDocument(model.uri)
+                                            } else {
+                                                val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
+                                                moveToTrash(context, model.uri, root, root)
+                                            }
+                                        }
+                                        if (ok) {
+                                            Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                        }
+                                        refreshTrigger++
+                                    }
+                                }
+                            },
+                            onShareFileToGit = { model ->
+                                shareFileToGitTarget = model
+                            },
+                            onUnzipRequest = { zipUnzipTarget = it },
+                            onRequestMdZipView = { mdZipTarget = it },
+                            onRequestHtmlZipView = { htmlZipTarget = it },
+                            onRequestLlmZipView = { llmZipTarget = it },
+                            onRequestEpubView = { epubTarget = it },
+                            onRequestTxtView = { txtTarget = it },
+                            onRequestLlmView = { llmTarget = it },
+                            onRequestPicZipView = { picZipTarget = it },
+                            onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
+                            onCompressToZipRequest = { zipCompressTarget = it },
+                            onCompressTo7zRequest = { sevenZCompressTarget = it },
+                            onRequestPassProtect = { model -> passProtectTarget = model },
+                            onRequestPassView = { model ->
+                                passViewTarget = model
+                                passViewPassword = ""
+                                passViewTriedCache = false
+                            },
+                            onRequestPassEdit = { model, dirUri ->
+                                passEditRequest = Pair(model, dirUri)
+                                passEditTriedCache = false
+                            },
+                            onRequestImportConfig = { model ->
+                                scope.launch {
+                                    val jsonString = withContext(Dispatchers.IO) {
+                                        try {
+                                            context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
+                                        } catch (_: Exception) {
+                                            ""
+                                        }
+                                    }
+                                    startConfigImport(jsonString)
+                                }
+                            },
+                            onRequestImportStarDict = { model ->
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        importStarDict(context, model.uri, model.name)
+                                    }
+                                    result.onSuccess {
+                                        Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
+                                    }.onFailure {
+                                        Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                                    }
+                                }
+                            },
+                            playbackState = playbackState,
+                            onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                        )
+                    },
+                    ftpContent = {
+                        FtpTabContent(
+                            rootUri = ftpRootUri,
+                            displayUri = displayUri,
+                            ftpManager = ftpManager,
+                            ftpPort = ftpPort,
+                            ftpPassword = ftpPassword,
+                            ftpTimeoutMinutes = ftpTimeoutMinutes,
+                            onRequestExitApp = { requestExitApp() }
+                        )
+                    },
+                    gitShareContent = {
+                        GitShareTabContent(
+                            prefs = prefs,
+                            rootUri = rootUri,
+                            onRequestExitApp = { requestExitApp() }
+                        )
+                    },
+                    playerContent = {
+                        PlayerTabContent(
+                            context = context,
+                            prefs = prefs,
+                            playbackState = playbackState,
+                            onRequestExitApp = { requestExitApp() }
+                        )
+                    },
+                    quickNoteContent = {
+                        QuickNoteTabContent(
+                            quickNoteData = quickNoteData,
+                            quickNoteStartWithAddDialog = quickNoteStartWithAddDialog,
+                            quickNoteInProgress = quickNoteInProgress,
+                            onEntriesChanged = { quickNoteEntriesSnapshot = it }
+                        )
+                    },
+                    dictionaryContent = {
+                        DictionaryTabContent(onRequestExitApp = { requestExitApp() })
+                    }
+                )
+            }
+
+            ScrollableMainTabBar(
+                activeMainTab = activeMainTab,
+                onSwitchMainTab = { switchMainTab(it) }
+            )
+        }
+        if (showPendingList) {
+            PendingListScreen(
+                pendingList = pendingList,
+                currentDirPath = currentDirPath,
+                onRemove = { pendingList.remove(it) },
+                onCopyHere = doCopyHere,
+                onMoveHere = doMoveHere,
+                onRequestDelete = { showPendingDeleteConfirm = true },
+                onRequestBatchObfuscate = {
+                    val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
+                    if (list.isEmpty()) Toast.makeText(context, "没有可混淆的文件（请勿选已 .qx 或文件夹）", Toast.LENGTH_SHORT).show()
+                    else batchObfuscateOp = list to true
+                },
+                onRequestBatchDeobfuscate = {
+                    val list = pendingList.filter { !it.isDirectory && isQuickObfuscatedFileName(it.name) }
+                    if (list.isEmpty()) Toast.makeText(context, "没有可去混淆的文件（请只选 .qx 文件）", Toast.LENGTH_SHORT).show()
+                    else batchObfuscateOp = list to false
+                },
+                onRequestBatchGpgEncrypt = {
+                    if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
+                        Toast.makeText(context, "列表中存在 .gpg 文件，无法批量加密", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val list = pendingList.filter { !it.isDirectory }
+                        if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
+                        else {
+                            gpgPassword = ""
+                            gpgDecryptMode = null
+                            gpgDecryptAutoTried = false
+                            gpgEncryptSelectedKeyId = null
+                            gpgState = GpgOpState.BatchEncrypt(list, displayUri)
+                        }
+                    }
+                },
+                onRequestBatchGpgDecrypt = {
+                    if (pendingList.any { !it.name.endsWith(".gpg", ignoreCase = true) }) {
+                        Toast.makeText(context, "列表中存在非 .gpg 文件，无法批量解密", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val list = pendingList.filter { !it.isDirectory }
+                        if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
+                        else {
+                            gpgPassword = ""
+                            gpgDecryptMode = null
+                            gpgDecryptAutoTried = false
+                            gpgEncryptSelectedKeyId = null
+                            gpgState = GpgOpState.BatchDecrypt(list, displayUri)
+                        }
+                    }
+                },
+                onRequestCompressToZip = {
+                    if (pendingList.isEmpty()) {
+                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                        pendingCompressZipName = "archive_$ts.zip"
+                        pendingCompressPassword = ""
+                        showPendingCompressToZip = true
+                    }
+                },
+                onRequestCompressTo7z = {
+                    if (pendingList.isEmpty()) {
+                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                    } else {
+                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                        pendingCompress7zName = "archive_$ts.7z"
+                        pendingCompress7zPassword = ""
+                        showPendingCompressTo7z = true
+                    }
+                },
+                onClearFilteredList = { toRemove ->
+                    val snapshot = toRemove.toList()
+                    pendingList.removeAll(snapshot)
+                },
+                onAddToPlayback = { audioList ->
+                    if (audioList.isEmpty()) return@PendingListScreen
+                    pendingPlaybackAudioList = audioList
+                    if (playlists.isEmpty()) {
+                        scope.launch { createNewPlaybackPlaylist(audioList) }
+                    } else {
+                        showPlaybackTargetDialog = true
+                    }
+                },
+                onDismiss = { showPendingList = false }
+            )
+        }
+        if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
+            AlertDialog(
+                onDismissRequest = { clearPendingPlaybackTargetState() },
+                title = { Text("加入播放") },
+                text = {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            "请选择要把 ${pendingPlaybackAudioList.size} 首音频加入到哪里。",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        playlists.forEach { playlist ->
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch { appendToPlaybackPlaylist(playlist, pendingPlaybackAudioList) }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(
+                                        "${playlist.trackCount} 首",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        scope.launch { createNewPlaybackPlaylist(pendingPlaybackAudioList) }
+                    }) { Text("新建列表") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text("取消") }
+                }
+            )
+        }
+        if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
+            val toDelete = pendingList.toList()
+            var deletePermanently by remember { mutableStateOf(false) }
+            val hasRoot = rootUri != null
+            AlertDialog(
+                onDismissRequest = { showPendingDeleteConfirm = false },
+                title = { Text("确认删除") },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Text("确定要删除以下 ${toDelete.size} 项吗？", color = MaterialTheme.colorScheme.onSurface)
+                        if (hasRoot) {
+                            Spacer(Modifier.height(12.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.material3.RadioButton(
+                                    selected = !deletePermanently,
+                                    onClick = { deletePermanently = false }
+                                )
+                                Spacer(Modifier.size(8.dp))
+                                Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                androidx.compose.material3.RadioButton(
+                                    selected = deletePermanently,
+                                    onClick = { deletePermanently = true }
+                                )
+                                Spacer(Modifier.size(8.dp))
+                                Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        } else {
+                            Spacer(Modifier.height(8.dp))
+                            Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        toDelete.forEach { item ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(
+                                    if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    contentDescription = null,
+                                    Modifier.size(20.dp),
+                                    tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.size(8.dp))
+                                Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val label = if (deletePermanently) "删除" else "移到回收站"
+                                val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                runWithProgress(label, toDelete.size) { setProgress ->
+                                    withContext(Dispatchers.IO) {
+                                        toDelete.forEachIndexed { index, model ->
+                                            if (deletePermanently) {
+                                                context.contentResolver.deleteDocument(model.uri)
+                                            } else {
+                                                if (root != null) moveToTrash(context, model.uri, root, root)
+                                            }
+                                            withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                        }
+                                    }
+                                }
+                                toDelete.forEach { pendingList.remove(it) }
+                                refreshTrigger++
+                                showPendingDeleteConfirm = false
+                                showPendingList = false
+                                Toast.makeText(context, if (deletePermanently) "已删除 ${toDelete.size} 项" else "已移到回收站 ${toDelete.size} 项", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "确定删除") }
+                },
+                dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
+            )
+        }
+        if (showAboutDialog) {
+            AboutDialog(onDismiss = { showAboutDialog = false })
+        }
+        if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
+            AlertDialog(
+                onDismissRequest = { clearPendingConfigImportState() },
+                title = { Text("导入播放列表") },
+                text = {
+                    Text(
+                        "导入配置包含 ${pendingImportPlaylistCount} 个播放列表。当前已有播放列表，导入时要覆盖当前列表，还是追加到当前列表？",
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showImportPlaylistConfirmDialog = false
+                        pendingImportPlaylistMode = ConfigPlaylistImportMode.APPEND
+                        continueConfigImportAfterPlaylistChoice()
+                    }) { Text("追加") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            showImportPlaylistConfirmDialog = false
+                            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                            continueConfigImportAfterPlaylistChoice()
+                        }) { Text("覆盖") }
+                        TextButton(onClick = { clearPendingConfigImportState() }) { Text("取消") }
+                    }
+                }
+            )
+        }
+        if (showImportKeyConfirmDialog && pendingImportJson != null) {
+            val jsonToImport = pendingImportJson!!
+            AlertDialog(
+                onDismissRequest = {
+                    clearPendingConfigImportState()
+                },
+                title = { Text("导入配置") },
+                text = {
+                    Text(
+                        "导入的配置包含公钥/私钥，会覆盖本机现有密钥。请选择：",
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showImportKeyConfirmDialog = false
+                            scope.launch {
+                                performConfigImport(jsonToImport, importKeys = true)
+                            }
+                        }
+                    ) { Text("全部替换") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = {
+                            showImportKeyConfirmDialog = false
+                            scope.launch {
+                                performConfigImport(jsonToImport, importKeys = false)
+                            }
+                        }
+                    ) { Text("跳过密钥（保留本机密钥）") }
+                }
+            )
+        }
+        if (showCacheManagementDialog) {
+            CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
+        }
+        if (showConfigDialog) {
+            ConfigDialog(
+                onDismiss = { showConfigDialog = false },
+                filterVisible = filterVisible,
+                onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
+                hideDotFiles = hideDotFiles,
+                onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
+                startupDecryptKey = startupDecryptKey,
+                onStartupDecryptKeyChange = { enabled ->
+                    scope.launch { prefs.setStartupDecryptKey(enabled) }
+                    if (!enabled) SecretKeyPasswordCache.clear()
+                },
+                viewerPreviewBytes = viewerPreviewBytes,
+                onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
+                ftpPassword = ftpPassword ?: "",
+                onFtpPasswordChange = { s ->
+                    ftpPassword = s.ifBlank { null }
+                    scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
+                },
+                ftpTimeoutMinutes = ftpTimeoutMinutes,
+                onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
+                onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
+                onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
+                onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
+                onExportConfig = {
+                    scope.launch {
+                        val ok = exportConfigToRoot()
+                        Toast.makeText(context, if (ok) "配置已导出到根目录" else "导出失败", Toast.LENGTH_SHORT).show()
+                        if (ok) refreshTrigger++
+                    }
+                },
+                onChangeRoot = {
+                    val r = rootUri
+                    if (r == null) {
+                        treeLauncher.launch(null)
+                        return@ConfigDialog
+                    }
+                    scope.launch {
+                        val count = withContext(Dispatchers.IO) {
+                            cachedTrashUri?.let { trash ->
+                                val doc = if (trash.toString().contains("/tree/")) {
+                                    DocumentFile.fromTreeUri(context, trash)
+                                } else {
+                                    DocumentFile.fromSingleUri(context, trash)
+                                }
+                                doc?.listFilesSafe()?.size ?: 0
+                            } ?: 0
+                        }
+                        withContext(Dispatchers.Main.immediate) {
+                            if (count > 0) showChangeRootConfirm = true
+                            else treeLauncher.launch(null)
+                        }
+                    }
+                }
+            )
+        }
+        if (showGitConfigDialog) {
+            GitConfigDialog(
+                prefs = prefs,
+                rootUri = rootUri?.let { normalizeContentUriString(it) },
+                onDismiss = {
+                    showGitConfigDialog = false
+                    refreshTrigger++
+                }
+            )
+        }
+        if (showKeyManagementDialog) {
+            KeyManagementDialog(
+                context = context,
+                onDismiss = { showKeyManagementDialog = false },
+                onKeysChanged = { refreshTrigger++ },
+                onOpenPubkeyShare = {
+                    showKeyManagementDialog = false
+                    showPubkeyShareScreen = true
+                }
+            )
+        }
+        if (showPubkeyShareScreen) {
+            PubkeyShareScreen(
+                prefs = prefs,
+                rootUri = rootUri?.let { normalizeContentUriString(it) },
+                onDismiss = {
+                    showPubkeyShareScreen = false
+                    refreshTrigger++
+                }
+            )
+        }
+        // 共享文件到 Git
+        shareFileToGitTarget?.let { model ->
+            AlertDialog(
+                onDismissRequest = { shareFileToGitTarget = null },
+                title = { Text("共享到 Git") },
+                text = { Text("确定要将「${model.name}」共享到 .sysgit/share/ 吗？\n将自动同步、复制并推送。") },
+                confirmButton = {
+                    TextButton(onClick = {
+                        val target = model
+                        shareFileToGitTarget = null
+                        val r = rootUri?.let { normalizeContentUriString(it) }
+                        if (r == null) {
+                            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                            return@TextButton
+                        }
+                        shareGitLogs.clear()
+                        shareGitInProgress = true
+                        shareGitDone = false
+                        scope.launch {
+                            val repoUrl = prefs.gitRepoUrl.first() ?: ""
+                            val userName = prefs.gitUserName.first() ?: ""
+                            val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
+                            if (repoUrl.isBlank()) {
+                                shareGitLogs.add("错误: 请先配置 Git 仓库")
+                                shareGitInProgress = false
+                                shareGitDone = true
+                                return@launch
+                            }
+                            // 同步
+                            shareGitLogs.add("正在同步仓库...")
+                            val syncResult = withContext(Dispatchers.IO) {
+                                cloneToTree(context, r, repoUrl,
+                                    userName = userName.ifBlank { null },
+                                    httpsPassword = httpsPassword.ifBlank { null },
+                                    log = { msg -> shareGitLogs.add(msg) })
+                            }
+                            if (syncResult.isFailure) {
+                                shareGitLogs.add("错误: 同步失败 - ${syncResult.exceptionOrNull()?.message}")
+                                shareGitInProgress = false
+                                shareGitDone = true
+                                return@launch
+                            }
+                            // 复制到 share
+                            shareGitLogs.add("正在复制文件到 share 目录...")
+                            val copied = withContext(Dispatchers.IO) {
+                                copyFileToShare(context, r, target.uri, target.name)
+                            }
+                            if (!copied) {
+                                shareGitLogs.add("错误: 复制到 share 目录失败")
+                                shareGitInProgress = false
+                                shareGitDone = true
+                                return@launch
+                            }
+                            shareGitLogs.add("文件已复制到 .sysgit/share/")
+                            // 提交推送
+                            shareGitLogs.add("正在提交并推送...")
+                            val pushResult = withContext(Dispatchers.IO) {
+                                commitAndPush(context, r, repoUrl,
+                                    commitMessage = "共享文件: ${target.name}",
+                                    userName = userName.ifBlank { null },
+                                    httpsPassword = httpsPassword.ifBlank { null },
+                                    log = { msg -> shareGitLogs.add(msg) })
+                            }
+                            if (pushResult.isSuccess) {
+                                shareGitLogs.add("已共享并推送成功")
+                            } else {
+                                shareGitLogs.add("错误: 推送失败 - ${pushResult.exceptionOrNull()?.message}")
+                            }
+                            shareGitInProgress = false
+                            shareGitDone = true
+                        }
+                    }) { Text("共享") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { shareFileToGitTarget = null }) { Text("取消") }
+                }
+            )
+        }
+        // 共享到 Git 日志窗口
+        if (shareGitLogs.isNotEmpty() && (shareGitInProgress || shareGitDone)) {
+            AlertDialog(
+                onDismissRequest = { if (!shareGitInProgress) { shareGitDone = false; shareGitLogs.clear() } },
+                title = { Text("共享到 Git") },
+                text = {
+                    val logScrollState = rememberScrollState()
+                    LaunchedEffect(shareGitLogs.size) {
+                        logScrollState.animateScrollTo(logScrollState.maxValue)
+                    }
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 200.dp)
+                            .verticalScroll(logScrollState)
+                    ) {
+                        for (line in shareGitLogs) {
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                    MaterialTheme.colorScheme.error
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                },
+                confirmButton = {
+                    if (shareGitInProgress) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    } else {
+                        TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text("关闭") }
+                    }
+                }
+            )
+        }
+        quickObfuscateOp?.let { (model, isObfuscate) ->
+            QuickObfuscatePasswordDialog(
+                isObfuscate = isObfuscate,
+                fileName = model.name,
+                password = quickObfuscatePassword,
+                inProgress = quickObfuscateInProgress,
+                onPasswordChange = { quickObfuscatePassword = it },
+                onConfirm = { pwd ->
+                    quickObfuscateInProgress = true
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
+                            else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                        }
+                        quickObfuscateInProgress = false
+                        quickObfuscateOp = null
+                        quickObfuscatePassword = ""
+                        if (ok) {
+                            Toast.makeText(context, if (isObfuscate) "已混淆" else "已去混淆", Toast.LENGTH_SHORT).show()
+                            refreshTrigger++
+                        } else {
+                            Toast.makeText(context, if (isObfuscate) "混淆失败" else "去混淆失败", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                onDismiss = { quickObfuscateOp = null; quickObfuscatePassword = "" }
+            )
+        }
+        batchObfuscateOp?.let { (list, isObfuscate) ->
+            QuickObfuscatePasswordDialog(
+                isObfuscate = isObfuscate,
+                fileName = "共 ${list.size} 个文件",
+                password = batchObfuscatePassword,
+                inProgress = batchObfuscateInProgress,
+                onPasswordChange = { batchObfuscatePassword = it },
+                onConfirm = { pwd ->
+                    batchObfuscateInProgress = true
+                    scope.launch {
+                        runWithProgress(if (isObfuscate) "混淆" else "去混淆", list.size) { setProgress ->
+                            withContext(Dispatchers.IO) {
+                                list.forEachIndexed { index, model ->
+                                    if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
+                                    else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                }
+                            }
+                        }
+                        batchObfuscateInProgress = false
+                        batchObfuscateOp = null
+                        batchObfuscatePassword = ""
+                        Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
+                        pendingList.clear()
+                        showPendingList = false
+                        refreshTrigger++
+                    }
+                },
+                onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
+            )
+        }
+        // ---- 密码保护：加密 md/rst -> .pass ----
+        passProtectTarget?.let { model ->
+            AlertDialog(
+                onDismissRequest = { if (!passProtectInProgress) passProtectTarget = null },
+                title = { Text("密码保护") },
+                text = { Text("将 ${model.name} 用默认公钥加密为 ${model.name}.pass，原文件将被删除。") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            passProtectInProgress = true
+                            val ctx = context
+                            val dirUri = normalizeContentUriString(displayUri)
+                            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                            scope.launch {
+                                val ok = withContext(Dispatchers.IO) {
+                                    val secRings = loadSecretKeyRings(ctx)
+                                    if (secRings == null) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(ctx, "未找到默认密钥，请先生成密钥对", Toast.LENGTH_LONG).show()
+                                        }
+                                        return@withContext false
+                                    }
+                                    val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID
+                                    if (defaultKeyId == null) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(ctx, "未找到默认密钥", Toast.LENGTH_LONG).show()
+                                        }
+                                        return@withContext false
+                                    }
+                                    val pubRings = loadPublicKeyRings(ctx)
+                                    val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId)
+                                    if (pubKeyRing == null) {
+                                        withContext(Dispatchers.Main) {
+                                            Toast.makeText(ctx, "未找到默认公钥", Toast.LENGTH_LONG).show()
+                                        }
+                                        return@withContext false
+                                    }
+                                    val plain = ctx.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
+                                        ?: return@withContext false
+                                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, model.name)
+                                        ?: return@withContext false
+                                    val outName = model.name + ".pass"
+                                    val created = createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
+                                    if (created) {
+                                        ctx.contentResolver.deleteDocument(model.uri)
+                                    }
+                                    created
+                                }
+                                passProtectInProgress = false
+                                passProtectTarget = null
+                                if (ok) {
+                                    Toast.makeText(ctx, "已加密为 ${model.name}.pass", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(ctx, "密码保护失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        enabled = !passProtectInProgress
+                    ) { Text(if (passProtectInProgress) "加密中…" else "确定") }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { passProtectTarget = null },
+                        enabled = !passProtectInProgress
+                    ) { Text("取消") }
+                }
+            )
+        }
+        // ---- 密码保护：查看 .pass 文件 ----
+        passViewTarget?.let { model ->
+            val secRings = loadSecretKeyRings(context)
+            if (secRings == null) {
+                AlertDialog(
+                    onDismissRequest = { passViewTarget = null },
+                    title = { Text("查看密码") },
+                    text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                    confirmButton = {
+                        Button(onClick = { passViewTarget = null }) { Text("确定") }
+                    }
+                )
+            } else {
+                LaunchedEffect(model) {
+                    if (passViewTriedCache) return@LaunchedEffect
+                    val cached = SecretKeyPasswordCache.get() ?: run { passViewTriedCache = true; return@LaunchedEffect }
+                    passViewTriedCache = true
+                    passViewInProgress = true
+                    val decrypted = withContext(Dispatchers.IO) {
+                        val rings = loadSecretKeyRings(context) ?: return@withContext null
+                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                        }
+                    }
+                    passViewInProgress = false
+                    if (decrypted != null) {
+                        passViewTarget = null
+                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                        passContentView = PassDecryptedContent(innerName, decrypted)
+                    } else {
+                        Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                if (SecretKeyPasswordCache.get() == null || passViewTriedCache) {
+                GpgPasswordDialog(
+                    isDecrypt = true,
+                    fileName = model.name,
+                    password = passViewPassword,
+                    passwordLabel = "密钥密码",
+                    inProgress = passViewInProgress,
+                    onPasswordChange = { if (!passViewInProgress) passViewPassword = it },
+                    onConfirm = { pwd ->
+                        if (passViewInProgress) return@GpgPasswordDialog
+                        passViewInProgress = true
+                        val ctx = context
+                        scope.launch {
+                            val decrypted = withContext(Dispatchers.IO) {
+                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                    GpgHelper.decryptWithSecretKey(
+                                        input, rings, pwd.toCharArray()
+                                    ) { _ -> }
+                                }
+                            }
+                            passViewInProgress = false
+                            if (decrypted != null) {
+                                passViewTarget = null
+                                passViewPassword = ""
+                                // 根据内层扩展名确定渲染方式
+                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                                passContentView = PassDecryptedContent(innerName, decrypted)
+                            } else {
+                                Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        if (!passViewInProgress) {
+                            passViewTarget = null
+                            passViewPassword = ""
+                        }
+                    }
+                )
+                }
+            }
+        }
+        // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
+        passEditRequest?.let { (model, dirUri) ->
+            val secRings = loadSecretKeyRings(context)
+            if (secRings == null) {
+                AlertDialog(
+                    onDismissRequest = { passEditRequest = null },
+                    title = { Text("直接编辑") },
+                    text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                    confirmButton = {
+                        Button(onClick = { passEditRequest = null }) { Text("确定") }
+                    }
+                )
+            } else {
+                LaunchedEffect(model) {
+                    if (passEditTriedCache) return@LaunchedEffect
+                    val cached = SecretKeyPasswordCache.get() ?: run { passEditTriedCache = true; return@LaunchedEffect }
+                    passEditTriedCache = true
+                    passEditInProgress = true
+                    val decrypted = withContext(Dispatchers.IO) {
+                        val rings = loadSecretKeyRings(context) ?: return@withContext null
+                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                        }
+                    }
+                    passEditInProgress = false
+                    if (decrypted != null) {
+                        passEditRequest = null
+                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                        val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
+                    } else {
+                        Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                if (SecretKeyPasswordCache.get() == null || passEditTriedCache) {
+                GpgPasswordDialog(
+                    isDecrypt = true,
+                    fileName = model.name,
+                    password = passEditPassword,
+                    passwordLabel = "密钥密码",
+                    inProgress = passEditInProgress,
+                    onPasswordChange = { if (!passEditInProgress) passEditPassword = it },
+                    onConfirm = { pwd ->
+                        if (passEditInProgress) return@GpgPasswordDialog
+                        passEditInProgress = true
+                        val ctx = context
+                        scope.launch {
+                            val decrypted = withContext(Dispatchers.IO) {
+                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                    GpgHelper.decryptWithSecretKey(
+                                        input, rings, pwd.toCharArray()
+                                    ) { _ -> }
+                                }
+                            }
+                            passEditInProgress = false
+                            if (decrypted != null) {
+                                passEditRequest = null
+                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                                val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                                passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
+                            } else {
+                                Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    },
+                    onDismiss = {
+                        if (!passEditInProgress) {
+                            passEditRequest = null
+                        }
+                    }
+                )
+                }
+            }
+        }
+        if (quickNotePasswordRequired) {
+            GpgPasswordDialog(
+                isDecrypt = true,
+                fileName = QUICK_NOTE_GPG_FILE_NAME,
+                password = quickNotePassword,
+                passwordLabel = "密钥密码",
+                inProgress = quickNoteInProgress,
+                onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
+                onConfirm = { pwd ->
+                    if (!quickNoteInProgress) requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
+                },
+                onDismiss = {
+                    if (!quickNoteInProgress) {
+                        resetQuickNotePromptState()
+                        quickNoteStartWithAddDialog = false
+                    }
+                }
+            )
+        }
+        zipUnzipTarget?.let { target ->
+            val parentDirUri = Uri.parse(displayUri)
+            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val encrypted = zipUnzipEncrypted
+            AlertDialog(
+                onDismissRequest = { zipUnzipTarget = null; zipUnzipPassword = "" },
+                title = { Text("解压压缩包") },
+                text = {
+                    Column {
+                        Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
+                        if (encrypted == true) {
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = zipUnzipPassword,
+                                onValueChange = { zipUnzipPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("密码（加密压缩包）") },
+                                singleLine = true
+                            )
+                        } else if (encrypted == null) {
+                            Spacer(Modifier.height(8.dp))
+                            Text("正在检测…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            if (encrypted == true && zipUnzipPassword.isBlank()) return@Button
+                            scope.launch {
+                                progressOp = OperationProgress("解压", 0, null)
+                                delay(50)
+                                val pwd = if (encrypted == true) zipUnzipPassword.toCharArray() else null
+                                val result = withContext(Dispatchers.IO) {
+                                    unzipToParent(
+                                        context,
+                                        target.uri,
+                                        parentDirUri,
+                                        treeUri,
+                                        target.name,
+                                        pwd
+                                    ) { cur, tot ->
+                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("解压", cur, tot) }
+                                    }
+                                }
+                                // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
+                                delay(120)
+                                progressOp = null
+                                when (result) {
+                                    is UnzipResult.Success -> {
+                                        zipUnzipTarget = null
+                                        zipUnzipPassword = ""
+                                        zipUnzipEncrypted = null
+                                        Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                        refreshTrigger++
+                                    }
+                                    is UnzipResult.PasswordRequired -> {
+                                        // 需要密码但未提供，显示密码输入框让用户重试
+                                        zipUnzipEncrypted = true
+                                        Toast.makeText(context, "请输入密码", Toast.LENGTH_SHORT).show()
+                                    }
+                                    is UnzipResult.WrongPassword -> {
+                                        // 密码错误，保留对话框让用户重试
+                                        zipUnzipEncrypted = true
+                                        Toast.makeText(context, "密码错误，请重试", Toast.LENGTH_SHORT).show()
+                                    }
+                                    is UnzipResult.CorruptedFile -> {
+                                        zipUnzipTarget = null
+                                        zipUnzipPassword = ""
+                                        zipUnzipEncrypted = null
+                                        Toast.makeText(context, "解压失败：文件已损坏", Toast.LENGTH_SHORT).show()
+                                    }
+                                    is UnzipResult.UnsupportedFormat -> {
+                                        zipUnzipTarget = null
+                                        zipUnzipPassword = ""
+                                        zipUnzipEncrypted = null
+                                        Toast.makeText(context, "解压失败：不支持的压缩格式", Toast.LENGTH_SHORT).show()
+                                    }
+                                    is UnzipResult.IOError -> {
+                                        zipUnzipTarget = null
+                                        zipUnzipPassword = ""
+                                        zipUnzipEncrypted = null
+                                        val msg = result.message ?: "未知错误"
+                                        Toast.makeText(context, "解压失败：$msg", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        }
+                    ) { Text("解压") }
+                },
+                dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text("取消") } }
+            )
+        }
+        // ---- .md.zip 密码输入对话框（仅加密 zip 时弹出） ----
+        mdZipTarget?.let { target ->
+            val encrypted = mdZipEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } },
+                    title = { Text("查看压缩 Markdown") },
+                    text = {
+                        Column {
+                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = mdZipPassword,
+                                onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("ZIP 密码") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                enabled = !mdZipInProgress
+                            )
+                            if (mdZipInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (mdZipInProgress || mdZipPassword.isBlank()) return@Button
+                                mdZipInProgress = true
+                                val pwd = mdZipPassword.toCharArray()
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        extractMdZipToCache(context, target.uri, pwd, target.name)
+                                    }
+                                    mdZipInProgress = false
+                                    if (result != null) {
+                                        mdZipTarget = null
+                                        mdZipPassword = ""
+                                        mdZipViewState = MdZipViewState(
+                                            targetFile = result.targetFile,  // 可能为 null
+                                            contentDir = result.contentDir,
+                                            zipFileName = target.name,
+                                            zipUri = target.uri,
+                                            isEncrypted = true
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
+                        ) { Text("取消") }
+                    }
+                )
+            } else if (encrypted == null) {
+                // 正在检测加密状态或正在解压非加密 zip
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("查看压缩 Markdown") },
+                    text = {
+                        Column {
+                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+        }
+        // ---- .html.zip 密码输入对话框 ----
+        htmlZipTarget?.let { target ->
+            val encrypted = htmlZipEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } },
+                    title = { Text("查看压缩 HTML") },
+                    text = {
+                        Column {
+                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = htmlZipPassword,
+                                onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("ZIP 密码") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                enabled = !htmlZipInProgress
+                            )
+                            if (htmlZipInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (htmlZipInProgress || htmlZipPassword.isBlank()) return@Button
+                                htmlZipInProgress = true
+                                val pwd = htmlZipPassword.toCharArray()
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        extractHtmlZipToCache(context, target.uri, pwd, target.name)
+                                    }
+                                    htmlZipInProgress = false
+                                    if (result != null) {
+                                        htmlZipTarget = null
+                                        htmlZipPassword = ""
+                                        htmlZipViewState = HtmlZipViewState(
+                                            indexFile = result.indexFile,
+                                            contentDir = result.contentDir,
+                                            zipFileName = target.name,
+                                            zipUri = target.uri,
+                                            isEncrypted = true
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
+                        ) { Text("取消") }
+                    }
+                )
+            } else if (encrypted == null) {
+                // 加载中或显示错误
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("查看压缩 HTML") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 100.dp, max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            if (htmlZipInProgress) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                htmlZipLog,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        if (htmlZipLoadError != null) {
+                            TextButton(onClick = { htmlZipTarget = null; htmlZipLoadError = null; htmlZipLog = "" }) {
+                                Text("关闭")
+                            }
+                        }
+                    }
+                )
+            }
+        }
+        // ---- .llm.zip 密码输入对话框 ----
+        llmZipTarget?.let { target ->
+            val encrypted = llmZipEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } },
+                    title = { Text("查看压缩 LLM") },
+                    text = {
+                        Column {
+                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = llmZipPassword,
+                                onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("ZIP 密码") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                enabled = !llmZipInProgress
+                            )
+                            if (llmZipInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (llmZipInProgress || llmZipPassword.isBlank()) return@Button
+                                llmZipInProgress = true
+                                val pwd = llmZipPassword.toCharArray()
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        extractLlmZipToCache(context, target.uri, pwd, target.name)
+                                    }
+                                    llmZipInProgress = false
+                                    if (result != null) {
+                                        llmZipTarget = null
+                                        llmZipPassword = ""
+                                        epubViewState = EpubViewState(
+                                            extractResult = result,
+                                            zipFileName = target.name,
+                                            epubUri = target.uri,
+                                            isEncrypted = true
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "解压失败（请检查密码或文件内容）", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
+                        ) { Text("取消") }
+                    }
+                )
+            } else if (encrypted == null) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("查看压缩 LLM") },
+                    text = {
+                        Column {
+                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+        }
+        // ---- .epub 密码输入对话框 ----
+        epubTarget?.let { target ->
+            val encrypted = epubEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } },
+                    title = { Text("查看 EPUB 电子书") },
+                    text = {
+                        Column {
+                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = epubPassword,
+                                onValueChange = { if (!epubInProgress) epubPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("ZIP 密码") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                enabled = !epubInProgress
+                            )
+                            if (epubInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (epubInProgress || epubPassword.isBlank()) return@Button
+                                epubInProgress = true
+                                epubLog = "开始解压加密EPUB...\n"
+                                val pwd = epubPassword.toCharArray()
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        extractEpubToCache(context, target.uri, pwd, target.name) { log ->
+                                            epubLog += "$log\n"
+                                        }
+                                    }
+                                    epubInProgress = false
+                                    when (result) {
+                                        is EpubParseResult.Success -> {
+                                            epubTarget = null
+                                            epubPassword = ""
+                                            epubViewState = EpubViewState(
+                                                extractResult = result.result,
+                                                zipFileName = target.name,
+                                                epubUri = target.uri,
+                                                isEncrypted = true
+                                            )
+                                        }
+                                        is EpubParseResult.Error -> {
+                                            val detail = result.detail?.let { "\n$it" } ?: ""
+                                            epubLog += "\n错误: ${result.message}$detail\n"
+                                            epubLoadError = "${result.message}$detail"
+                                        }
+                                    }
+                                }
+                            }
+                        ) { Text("确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
+                        ) { Text("取消") }
+                    }
+                )
+            } else {
+                // encrypted == null 或 encrypted == false，都显示加载对话框
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("打开 EPUB") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 100.dp, max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            if (epubInProgress) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                epubLog,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        if (epubLoadError != null) {
+                            TextButton(onClick = { epubTarget = null; epubLoadError = null; epubLog = "" }) {
+                                Text("关闭")
+                            }
+                        }
+                    }
+                )
+            }
+        }
+        // ---- EPUB 错误对话框（独立于epubTarget） ----
+        epubLoadError?.let { error ->
+            if (epubTarget == null) {
+                AlertDialog(
+                    onDismissRequest = { epubLoadError = null; epubLog = "" },
+                    title = { Text("EPUB 解析失败") },
+                    text = {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 400.dp)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            Text(
+                                epubLog,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text("确定") }
+                    }
+                )
+            }
+        }
+        // ---- TXT 错误对话框 ----
+        txtLoadError?.let { error ->
+            AlertDialog(
+                onDismissRequest = { txtLoadError = null; txtTarget = null },
+                title = { Text("TXT 文件解析失败") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 300.dp)
+                    ) {
+                        Text(
+                            error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text("确定") }
+                }
+            )
+        }
+        // ---- LLM 错误对话框 ----
+        llmLoadError?.let { error ->
+            AlertDialog(
+                onDismissRequest = { llmLoadError = null; llmTarget = null },
+                title = { Text("LLM 对话文件解析失败") },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 300.dp)
+                    ) {
+                        Text(
+                            error,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text("确定") }
+                }
+            )
+        }
+        // ---- .pic.zip 密码输入对话框 ----
+        picZipTarget?.let { target ->
+            val encrypted = picZipEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } },
+                    title = { Text("查看图片压缩包") },
+                    text = {
+                        Column {
+                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = picZipPassword,
+                                onValueChange = { if (!picZipInProgress) picZipPassword = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("ZIP 密码") },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation(),
+                                enabled = !picZipInProgress
+                            )
+                            if (picZipInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (picZipInProgress || picZipPassword.isBlank()) return@Button
+                                picZipInProgress = true
+                                val pwd = picZipPassword.toCharArray()
+                                scope.launch {
+                                    var result: PicZipExtractResult? = null
+                                    var cachedInitialIndex = 0
+                                    withContext(Dispatchers.IO) {
+                                        val cacheDir = getPicZipCacheDir(context, target.uri)
+                                        val contentDir = java.io.File(cacheDir, "content")
+                                        val listFile = java.io.File(cacheDir, ".image_list")
+                                        if (contentDir.exists() && listFile.exists() && tryPicZipPassword(context, target.uri, pwd)) {
+                                            val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                                            val lastIndexFile = java.io.File(cacheDir, ".last_index")
+                                            cachedInitialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, (paths.size - 1).coerceAtLeast(0)) ?: 0
+                                            result = PicZipExtractResult(cacheDir, contentDir, paths, true)
+                                        }
+                                        if (result == null) {
+                                            result = extractPicZipToCache(context, target.uri, pwd, target.name)
+                                        }
+                                    }
+                                    picZipInProgress = false
+                                    val res = result
+                                    if (res != null) {
+                                        picZipTarget = null
+                                        picZipPassword = ""
+                                        picZipViewState = PicZipViewState(
+                                            contentDir = res.contentDir,
+                                            imagePaths = res.imagePaths,
+                                            zipFileName = target.name,
+                                            zipUri = target.uri,
+                                            isEncrypted = true,
+                                            password = pwd,
+                                            initialIndex = cachedInitialIndex
+                                        )
+                                    } else {
+                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            }
+                        ) { Text("确定") }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
+                        ) { Text("取消") }
+                    }
+                )
+            } else if (encrypted == null) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text("查看图片压缩包") },
+                    text = {
+                        Column {
+                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+        }
+        zipCompressTarget?.let { target ->
+            val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
+            val parentDirUri = Uri.parse(displayUri)
+            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            AlertDialog(
+                onDismissRequest = { zipCompressTarget = null; zipCompressPassword = "" },
+                title = { Text("压缩为 ZIP") },
+                text = {
+                    Column {
+                        Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = zipCompressPassword,
+                            onValueChange = { zipCompressPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("密码（留空则不加密）") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                progressOp = OperationProgress("压缩", 0, 1)
+                                delay(50)
+                                val pwd = zipCompressPassword.ifBlank { null }?.toCharArray()
+                                val ok = withContext(Dispatchers.IO) {
+                                    compressToZip(
+                                        context,
+                                        listOf(target.uri),
+                                        parentDirUri,
+                                        treeUri,
+                                        suggestedZipName,
+                                        pwd
+                                    ) { cur, tot ->
+                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                    }
+                                }
+                                delay(120)
+                                progressOp = null
+                                zipCompressTarget = null
+                                zipCompressPassword = ""
+                                if (ok) {
+                                    Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) { Text("压缩") }
+                },
+                dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
+            )
+        }
+        sevenZCompressTarget?.let { target ->
+            val suggested7zName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.7z" else "${target.name}.7z"
+            val parentDirUri = Uri.parse(displayUri)
+            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            AlertDialog(
+                onDismissRequest = { sevenZCompressTarget = null; sevenZCompressPassword = "" },
+                title = { Text("压缩为 7Z") },
+                text = {
+                    Column {
+                        Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = sevenZCompressPassword,
+                            onValueChange = { sevenZCompressPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("密码（留空则不加密）") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                progressOp = OperationProgress("压缩", 0, 1)
+                                delay(50)
+                                val pwd = sevenZCompressPassword.ifBlank { null }?.toCharArray()
+                                var timeout = false
+                                val ok = withContext(Dispatchers.IO) {
+                                    val executor = Executors.newSingleThreadExecutor()
+                                    try {
+                                        val future = executor.submit<Boolean> {
+                                            compressTo7z(
+                                                context,
+                                                listOf(target.uri),
+                                                parentDirUri,
+                                                treeUri,
+                                                suggested7zName,
+                                                pwd
+                                            ) { cur, tot ->
+                                                scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                            }
+                                        }
+                                        future.get(2, TimeUnit.MINUTES)
+                                    } catch (_: TimeoutException) {
+                                        timeout = true
+                                        false
+                                    } finally {
+                                        executor.shutdownNow()
+                                    }
+                                }
+                                delay(120)
+                                progressOp = null
+                                sevenZCompressTarget = null
+                                sevenZCompressPassword = ""
+                                if (ok) {
+                                    Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) { Text("压缩") }
+                },
+                dismissButton = { TextButton(onClick = { sevenZCompressTarget = null; sevenZCompressPassword = "" }) { Text("取消") } }
+            )
+        }
+        if (showPendingCompressToZip && pendingList.isNotEmpty()) {
+            val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+            AlertDialog(
+                onDismissRequest = { showPendingCompressToZip = false },
+                title = { Text("压缩待处理列表为 ZIP") },
+                text = {
+                    Column {
+                        Text(
+                            "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到根目录。",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = pendingCompressZipName,
+                            onValueChange = { pendingCompressZipName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("文件名") },
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = pendingCompressPassword,
+                            onValueChange = { pendingCompressPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("密码（留空则不加密）") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = pendingCompressZipName.isNotBlank(),
+                        onClick = {
+                            val zipName = pendingCompressZipName.trim().let {
+                                if (it.endsWith(".zip", ignoreCase = true)) it else "$it.zip"
+                            }
+                            val items = pendingList.toList()
+                            val pwd = pendingCompressPassword.ifBlank { null }?.toCharArray()
+                            showPendingCompressToZip = false
+                            scope.launch {
+                                progressOp = OperationProgress("压缩", 0, items.size)
+                                delay(50)
+                                val ok = withContext(Dispatchers.IO) {
+                                    compressToZip(
+                                        context,
+                                        items.map { it.uri },
+                                        rootDirUri,
+                                        rootTreeUri,
+                                        zipName,
+                                        pwd
+                                    ) { cur, tot ->
+                                        scope.launch(Dispatchers.Main.immediate) {
+                                            progressOp = OperationProgress("压缩", cur, tot)
+                                        }
+                                    }
+                                }
+                                delay(120)
+                                progressOp = null
+                                pendingCompressZipName = ""
+                                pendingCompressPassword = ""
+                                if (ok) {
+                                    pendingList.clear()
+                                    Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) { Text("压缩") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPendingCompressToZip = false }) { Text("取消") }
+                }
+            )
+        }
+        if (showPendingCompressTo7z && pendingList.isNotEmpty()) {
+            val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
+            AlertDialog(
+                onDismissRequest = { showPendingCompressTo7z = false },
+                title = { Text("压缩待处理列表为 7Z") },
+                text = {
+                    Column {
+                        Text(
+                            "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到根目录。",
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = pendingCompress7zName,
+                            onValueChange = { pendingCompress7zName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("文件名") },
+                            singleLine = true
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = pendingCompress7zPassword,
+                            onValueChange = { pendingCompress7zPassword = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("密码（留空则不加密）") },
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = pendingCompress7zName.isNotBlank(),
+                        onClick = {
+                            val sevenZName = pendingCompress7zName.trim().let {
+                                if (it.endsWith(".7z", ignoreCase = true)) it else "$it.7z"
+                            }
+                            val items = pendingList.toList()
+                            val pwd = pendingCompress7zPassword.ifBlank { null }?.toCharArray()
+                            showPendingCompressTo7z = false
+                            scope.launch {
+                                progressOp = OperationProgress("压缩", 0, items.size)
+                                delay(50)
+                                var timeout = false
+                                val ok = withContext(Dispatchers.IO) {
+                                    val executor = Executors.newSingleThreadExecutor()
+                                    try {
+                                        val future = executor.submit<Boolean> {
+                                            compressTo7z(
+                                                context,
+                                                items.map { it.uri },
+                                                rootDirUri,
+                                                rootTreeUri,
+                                                sevenZName,
+                                                pwd
+                                            ) { cur, tot ->
+                                                scope.launch(Dispatchers.Main.immediate) {
+                                                    progressOp = OperationProgress("压缩", cur, tot)
+                                                }
+                                            }
+                                        }
+                                        future.get(2, TimeUnit.MINUTES)
+                                    } catch (_: TimeoutException) {
+                                        timeout = true
+                                        false
+                                    } finally {
+                                        executor.shutdownNow()
+                                    }
+                                }
+                                delay(120)
+                                progressOp = null
+                                pendingCompress7zName = ""
+                                pendingCompress7zPassword = ""
+                                if (ok) {
+                                    pendingList.clear()
+                                    showPendingList = false
+                                    Toast.makeText(context, "压缩完成：$sevenZName", Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) { Text("压缩") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showPendingCompressTo7z = false }) { Text("取消") }
+                }
+            )
+        }
+        if (showChangeRootConfirm && rootUri != null) {
+            val r = rootUri!!
+            val root = Uri.parse(normalizeContentUriString(r))
+            AlertDialog(
+                onDismissRequest = { showChangeRootConfirm = false },
+                title = { Text("更换根目录") },
+                text = { Text("当前根目录的回收站不为空，是否清空后再更换？") },
+                confirmButton = {
+                    Button(onClick = {
+                        scope.launch {
+                            showChangeRootConfirm = false
+                            runWithProgress("清空回收站", null) { _ ->
+                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                treeLauncher.launch(null)
+                                refreshTrigger++
+                            }
+                        }
+                    }) { Text("清空后更换") }
+                },
+                dismissButton = {
+                    Row {
+                        TextButton(onClick = {
+                            showChangeRootConfirm = false
+                            treeLauncher.launch(null)
+                        }) { Text("直接更换") }
+                        TextButton(onClick = { showChangeRootConfirm = false }) { Text("取消") }
+                    }
+                }
+            )
+        }
+        var gpgInProgress by remember { mutableStateOf(false) }
+        gpgState?.let { op ->
+            val ctx = context
+            val dirUri = normalizeContentUriString(op.dirUri)
+            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+
+            fun resetGpgUiState() {
+                gpgState = null
+                gpgPassword = ""
+                gpgDecryptMode = null
+                gpgDecryptAutoTried = false
+                gpgEncryptSelectedKeyId = null
+            }
+
+            if (op.isDecrypt) {
+                LaunchedEffect(op) {
+                    gpgDecryptMode = detectGpgDecryptModeForOp(context, op)
+                    gpgDecryptAutoTried = SecretKeyPasswordCache.get() == null
+                }
+
+                if (gpgDecryptMode == GpgDecryptUiMode.SECRET_KEY && !gpgDecryptAutoTried && SecretKeyPasswordCache.get() != null) {
+                    LaunchedEffect(op, gpgDecryptMode) {
+                        gpgDecryptAutoTried = true
+                        gpgInProgress = true
+                        val autoKeyPass = SecretKeyPasswordCache.get() ?: return@LaunchedEffect
+                        val ok = when (op) {
+                            is GpgOpState.BatchDecrypt -> {
+                                var allOk = true
+                                runWithProgress("解密", op.list.size) { setProgress ->
+                                    op.list.forEachIndexed { index, fileModel ->
+                                        if (!decryptGpgFileToDir(context, fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
+                                            allOk = false
+                                        }
+                                        setProgress(index + 1)
+                                    }
+                                }
+                                allOk
+                            }
+                            is GpgOpState.Decrypt -> decryptGpgFileToDir(context, op.fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)
+                            else -> false
+                        }
+                        gpgInProgress = false
+                        if (ok) {
+                            resetGpgUiState()
+                            refreshTrigger++
+                            if (op is GpgOpState.BatchDecrypt) {
+                                pendingList.clear()
+                                showPendingList = false
+                                Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+
+                val decryptMode = gpgDecryptMode
+                if (decryptMode != null && (decryptMode != GpgDecryptUiMode.SECRET_KEY || gpgDecryptAutoTried)) {
+                    GpgPasswordDialog(
+                        isDecrypt = true,
+                        fileName = op.displayName,
+                        password = gpgPassword,
+                        passwordLabel = when (decryptMode) {
+                            GpgDecryptUiMode.SECRET_KEY -> "密钥密码"
+                            GpgDecryptUiMode.MIXED -> "密码（公钥文件会自动尝试私钥）"
+                            GpgDecryptUiMode.SYMMETRIC -> "密码"
+                        },
+                        inProgress = gpgInProgress,
+                        onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
+                        onConfirm = { pwd ->
+                            if (gpgInProgress) return@GpgPasswordDialog
+                            gpgInProgress = true
+                            scope.launch {
+                                try {
+                                    val pwdChars = pwd.toCharArray()
+                                    val ok = when (op) {
+                                        is GpgOpState.BatchDecrypt -> {
+                                            runWithProgress("解密", op.list.size) { setProgress ->
+                                                op.list.forEachIndexed { index, fileModel ->
+                                                    decryptGpgFileToDir(
+                                                        context,
+                                                        fileModel,
+                                                        dirUri,
+                                                        treeUri,
+                                                        symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
+                                                        keyPassphrase = when (decryptMode) {
+                                                            GpgDecryptUiMode.SYMMETRIC -> null
+                                                            GpgDecryptUiMode.SECRET_KEY -> pwdChars
+                                                            GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
+                                                        }
+                                                    )
+                                                    setProgress(index + 1)
+                                                }
+                                            }
+                                            true
+                                        }
+                                        is GpgOpState.Decrypt -> decryptGpgFileToDir(
+                                            context,
+                                            op.fileModel,
+                                            dirUri,
+                                            treeUri,
+                                            symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
+                                            keyPassphrase = when (decryptMode) {
+                                                GpgDecryptUiMode.SYMMETRIC -> null
+                                                GpgDecryptUiMode.SECRET_KEY -> pwdChars
+                                                GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
+                                            }
+                                        )
+                                        else -> false
+                                    }
+                                    if (ok) {
+                                        if (op is GpgOpState.BatchDecrypt) {
+                                            pendingList.clear()
+                                            showPendingList = false
+                                            Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                                        }
+                                        resetGpgUiState()
+                                        refreshTrigger++
+                                    } else {
+                                        Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
+                                    }
+                                } finally {
+                                    gpgInProgress = false
+                                }
+                            }
+                        },
+                        onDismiss = { if (!gpgInProgress) resetGpgUiState() }
+                    )
+                }
+            } else {
+                val pubRings = loadPublicKeyRings(context)
+                val keys = listEncryptionPublicKeyRings(pubRings)
+                GpgEncryptDialog(
+                    fileName = op.displayName,
+                    keys = keys,
+                    selectedKeyId = gpgEncryptSelectedKeyId,
+                    password = gpgPassword,
+                    inProgress = gpgInProgress || gpgPubEncryptInProgress,
+                    onSelectPassword = {
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = null
+                    },
+                    onSelectKey = { keyId ->
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = keyId
+                    },
+                    onPasswordChange = {
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
+                            gpgPassword = it
+                            if (it.isNotEmpty()) gpgEncryptSelectedKeyId = null
+                        }
+                    },
+                    onConfirm = { password, keyId ->
+                        if (gpgInProgress || gpgPubEncryptInProgress) return@GpgEncryptDialog
+                        if (keyId == null && password.isBlank()) return@GpgEncryptDialog
+                        gpgInProgress = keyId == null
+                        gpgPubEncryptInProgress = keyId != null
+                        scope.launch {
+                            try {
+                                val pwdChars = password.toCharArray()
+                                val ok = when (op) {
+                                    is GpgOpState.BatchEncrypt -> {
+                                        runWithProgress(if (keyId != null) "公钥加密" else "加密", op.list.size) { setProgress ->
+                                            op.list.forEachIndexed { index, fileModel ->
+                                                encryptGpgFileToDir(
+                                                    context,
+                                                    fileModel,
+                                                    dirUri,
+                                                    treeUri,
+                                                    symmetricPassword = if (keyId == null) pwdChars else null,
+                                                    publicKeyId = keyId
+                                                )
+                                                setProgress(index + 1)
+                                            }
+                                        }
+                                        true
+                                    }
+                                    is GpgOpState.Encrypt -> encryptGpgFileToDir(
+                                        context,
+                                        op.fileModel,
+                                        dirUri,
+                                        treeUri,
+                                        symmetricPassword = if (keyId == null) pwdChars else null,
+                                        publicKeyId = keyId
+                                    )
+                                    else -> false
+                                }
+                                if (ok) {
+                                    if (op is GpgOpState.BatchEncrypt) {
+                                        pendingList.clear()
+                                        showPendingList = false
+                                        Toast.makeText(ctx, if (keyId != null) "已公钥加密 ${op.list.size} 个文件" else "已加密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        Toast.makeText(ctx, if (keyId != null) "公钥加密完成" else "加密完成", Toast.LENGTH_SHORT).show()
+                                    }
+                                    resetGpgUiState()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(ctx, "加密失败", Toast.LENGTH_LONG).show()
+                                }
+                            } finally {
+                                gpgInProgress = false
+                                gpgPubEncryptInProgress = false
+                            }
+                        }
+                    },
+                    onDismiss = { if (!gpgInProgress && !gpgPubEncryptInProgress) resetGpgUiState() }
+                )
+            }
+        }
+    }
+
     when {
         showUnlockGate -> {
             BackHandler { (context as? Activity)?.finish() }
@@ -1209,3136 +4665,7 @@ fun FileBrowserApp(
                 } else null
             )
         }
-        else -> {
-            val displayUri = currentUri ?: initialDirUri ?: rootUri!!
-            val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
-            val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
-            var showPendingList by remember { mutableStateOf(false) }
-            var showPendingDeleteConfirm by remember { mutableStateOf(false) }
-            var showPlaybackTargetDialog by remember { mutableStateOf(false) }
-            var showConfigDialog by remember { mutableStateOf(false) }
-            var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
-            var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
-            var pendingImportJson by remember { mutableStateOf<String?>(null) }
-            var pendingImportPlaylistCount by remember { mutableStateOf(0) }
-            var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
-            var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
-            var showCacheManagementDialog by remember { mutableStateOf(false) }
-            var showAboutDialog by remember { mutableStateOf(false) }
-            var showKeyManagementDialog by remember { mutableStateOf(false) }
-            LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
-            var lastBackPressTime by remember { mutableStateOf(0L) }
-            val requestExitApp: () -> Unit = {
-                val now = System.currentTimeMillis()
-                if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
-                else {
-                    lastBackPressTime = now
-                    Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
-                }
-            }
-            var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
-            var gpgPassword by remember { mutableStateOf("") }
-            var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
-            var gpgDecryptAutoTried by remember { mutableStateOf(false) }
-            var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
-            var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
-            var showChangeRootConfirm by remember { mutableStateOf(false) }
-            var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
-            var quickObfuscatePassword by remember { mutableStateOf("") }
-            var quickObfuscateInProgress by remember { mutableStateOf(false) }
-            var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
-            var batchObfuscatePassword by remember { mutableStateOf("") }
-            var batchObfuscateInProgress by remember { mutableStateOf(false) }
-            var passProtectTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var passProtectInProgress by remember { mutableStateOf(false) }
-            var passViewTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var passViewPassword by remember { mutableStateOf("") }
-            var passViewInProgress by remember { mutableStateOf(false) }
-            var passViewTriedCache by remember { mutableStateOf(false) }
-            var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
-            var currentDirPath by remember { mutableStateOf("") }
-            LaunchedEffect(displayUri, rootUri) {
-                currentDirPath = withContext(Dispatchers.IO) {
-                    pathFromRoot(context, rootUri, displayUri)
-                }
-            }
-            var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
-            LaunchedEffect(rootUri) {
-                cachedTrashUri = rootUri?.let { r ->
-                    withContext(Dispatchers.IO) {
-                        val root = Uri.parse(normalizeContentUriString(r))
-                        getTrashUriIfExists(context, root, root)
-                    }
-                }
-            }
-            var dirCache by remember { mutableStateOf<Map<String, CachedDir>>(emptyMap()) }
-            LaunchedEffect(rootUri) {
-                dirCache = emptyMap()
-            }
-            val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
-            var ftpPort by remember { mutableStateOf(2121) }
-            var ftpPassword by remember { mutableStateOf<String?>(null) }
-            var ftpTimeoutMinutes by remember { mutableStateOf(0) }
-            var filterVisible by remember { mutableStateOf(true) }
-            var showGitConfigDialog by remember { mutableStateOf(false) }
-            var showPubkeyShareScreen by remember { mutableStateOf(false) }
-            var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            val shareGitLogs = remember { mutableStateListOf<String>() }
-            var shareGitInProgress by remember { mutableStateOf(false) }
-            var shareGitDone by remember { mutableStateOf(false) }
-            var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var sevenZCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var zipUnzipPassword by remember { mutableStateOf("") }
-            var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var zipCompressPassword by remember { mutableStateOf("") }
-            var sevenZCompressPassword by remember { mutableStateOf("") }
-            var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var mdZipPassword by remember { mutableStateOf("") }
-            var mdZipInProgress by remember { mutableStateOf(false) }
-            var htmlZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var htmlZipPassword by remember { mutableStateOf("") }
-            var htmlZipInProgress by remember { mutableStateOf(false) }
-            var htmlZipLog by remember { mutableStateOf("") }
-            var htmlZipLoadError by remember { mutableStateOf<String?>(null) }
-            var llmZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var llmZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var llmZipPassword by remember { mutableStateOf("") }
-            var llmZipInProgress by remember { mutableStateOf(false) }
-            var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var epubPassword by remember { mutableStateOf("") }
-            var epubInProgress by remember { mutableStateOf(false) }
-            var epubLog by remember { mutableStateOf("") }
-            var epubLoadError by remember { mutableStateOf<String?>(null) }
-            var txtTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var txtInProgress by remember { mutableStateOf(false) }
-            var txtLoadError by remember { mutableStateOf<String?>(null) }
-            var llmTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var llmInProgress by remember { mutableStateOf(false) }
-            var llmLoadError by remember { mutableStateOf<String?>(null) }
-            var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-            var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-            var picZipPassword by remember { mutableStateOf("") }
-            var picZipInProgress by remember { mutableStateOf(false) }
-            var showPendingCompressToZip by remember { mutableStateOf(false) }
-            var showPendingCompressTo7z by remember { mutableStateOf(false) }
-            var pendingCompressZipName by remember { mutableStateOf("") }
-            var pendingCompressPassword by remember { mutableStateOf("") }
-            var pendingCompress7zName by remember { mutableStateOf("") }
-            var pendingCompress7zPassword by remember { mutableStateOf("") }
-            var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
-            var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-            LaunchedEffect(Unit) {
-                PlaybackService.playbackState.collect { playbackState = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.playlists.collect { playlists = it }
-            }
-            LaunchedEffect(zipUnzipTarget) {
-                zipUnzipEncrypted = null
-                zipUnzipPassword = ""
-                val target = zipUnzipTarget ?: return@LaunchedEffect
-                if (target.name.endsWith(".rar", ignoreCase = true)) {
-                    val rarV5 = withContext(Dispatchers.IO) { isRarV5Archive(context, target.uri) }
-                    if (rarV5) {
-                        Toast.makeText(context, "暂不支持 RAR5 解压，请转为 ZIP 或 RAR4", Toast.LENGTH_LONG).show()
-                        zipUnzipTarget = null
-                        return@LaunchedEffect
-                    }
-                }
-                zipUnzipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            }
-            LaunchedEffect(mdZipTarget) {
-                mdZipEncrypted = null
-                mdZipPassword = ""
-                mdZipInProgress = false
-                val target = mdZipTarget ?: return@LaunchedEffect
-                // 先检查是否有有效缓存（非加密时）
-                val cacheDir = getMdZipCacheDir(context, target.uri)
-                val cacheTs = getMdZipCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val contentDir = java.io.File(cacheDir, "content")
-                    val hasContent = contentDir.exists() &&
-                        (contentDir.listFiles()?.isNotEmpty() == true)
-                    if (hasContent) {
-                        val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
-                        val cachedTarget = findMdZipCacheTarget(cacheDir, isRstZip)
-                        mdZipTarget = null
-                        mdZipViewState = MdZipViewState(
-                            targetFile = cachedTarget,
-                            contentDir = contentDir,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false
-                        )
-                        return@LaunchedEffect
-                    }
-                    // 缓存内容为空，废弃并重新解压
-                    cacheDir.deleteRecursively()
-                }
-                mdZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-                // 非加密的直接解压
-                if (mdZipEncrypted == false) {
-                    mdZipInProgress = true
-                    val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null, target.name) }
-                    mdZipInProgress = false
-                    mdZipTarget = null
-                    if (result != null) {
-                        mdZipViewState = MdZipViewState(
-                            targetFile = result.targetFile,  // 可能为 null
-                            contentDir = result.contentDir,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false
-                        )
-                    } else {
-                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            LaunchedEffect(htmlZipTarget) {
-                htmlZipEncrypted = null
-                htmlZipPassword = ""
-                htmlZipInProgress = false
-                htmlZipLog = "准备加载: ${htmlZipTarget?.name ?: ""}\n"
-                htmlZipLoadError = null
-                val target = htmlZipTarget ?: return@LaunchedEffect
-                val cacheDir = getHtmlZipCacheDir(context, target.uri)
-                val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isHtmlZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val contentDir = java.io.File(cacheDir, "content")
-                    if (contentDir.exists() && contentDir.listFiles()?.isNotEmpty() == true) {
-                        val cachedIndex = findHtmlZipIndexFile(contentDir)
-                        htmlZipTarget = null
-                        htmlZipViewState = HtmlZipViewState(
-                            indexFile = cachedIndex,
-                            contentDir = contentDir,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false
-                        )
-                        return@LaunchedEffect
-                    }
-                    cacheDir.deleteRecursively()
-                }
-                htmlZipLog += "检查是否加密...\n"
-                htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-                htmlZipLog += "加密状态: $htmlZipEncrypted\n"
-                if (htmlZipEncrypted == false) {
-                    htmlZipInProgress = true
-                    val result = withContext(Dispatchers.IO) {
-                        extractHtmlZipToCacheWithProgress(context, target.uri, null, target.name) { log ->
-                            htmlZipLog += "$log\n"
-                        }
-                    }
-                    htmlZipInProgress = false
-                    htmlZipTarget = null
-                    when (result) {
-                        is HtmlZipParseResult.Success -> {
-                            htmlZipViewState = HtmlZipViewState(
-                                indexFile = result.result.indexFile,
-                                contentDir = result.result.contentDir,
-                                zipFileName = target.name,
-                                zipUri = target.uri,
-                                isEncrypted = false
-                            )
-                        }
-                        is HtmlZipParseResult.Error -> {
-                            val detail = result.detail?.let { "\n$it" } ?: ""
-                            htmlZipLog += "\n错误: ${result.message}$detail\n"
-                            htmlZipLoadError = "${result.message}$detail"
-                        }
-                    }
-                } else if (htmlZipEncrypted == true) {
-                    htmlZipLog += "文件已加密，需要密码\n"
-                }
-            }
-            LaunchedEffect(llmZipTarget) {
-                llmZipEncrypted = null
-                llmZipPassword = ""
-                llmZipInProgress = false
-                val target = llmZipTarget ?: return@LaunchedEffect
-                val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val cached = loadEpubFromCache(cacheDir)
-                    if (cached != null) {
-                        llmZipTarget = null
-                        epubViewState = EpubViewState(
-                            extractResult = cached,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                        return@LaunchedEffect
-                    }
-                    cacheDir.deleteRecursively()
-                }
-                llmZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-                if (llmZipEncrypted == false) {
-                    llmZipInProgress = true
-                    val result = withContext(Dispatchers.IO) {
-                        extractLlmZipToCache(context, target.uri, null, target.name)
-                    }
-                    llmZipInProgress = false
-                    llmZipTarget = null
-                    if (result != null) {
-                        epubViewState = EpubViewState(
-                            extractResult = result,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                    } else {
-                        Toast.makeText(context, "未找到可读的 .txt/.llm 文件或解压失败", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }
-            LaunchedEffect(epubTarget) {
-                val target = epubTarget ?: return@LaunchedEffect
-                epubEncrypted = null
-                epubPassword = ""
-                epubInProgress = true
-                epubLog = "准备加载: ${target.name}\n"
-                epubLoadError = null
-                try {
-                    var cachedResult: EpubExtractResult? = null
-                    var encrypted: Boolean? = null
-                    withContext(Dispatchers.IO) {
-                        epubLog += "检查缓存...\n"
-                        val cacheDir = getEpubCacheDir(context, target.uri)
-                        val cacheTs = getEpubCacheTimestamp(cacheDir)
-                        if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                            cachedResult = loadEpubFromCache(cacheDir)
-                            if (cachedResult != null) {
-                                epubLog += "使用缓存\n"
-                                return@withContext
-                            }
-                            cacheDir.deleteRecursively()
-                        }
-                        epubLog += "检查是否加密...\n"
-                        encrypted = isArchiveEncrypted(context, target.uri, target.name)
-                    }
-                    val cached = cachedResult
-                    if (cached != null) {
-                        epubViewState = EpubViewState(
-                            extractResult = cached,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                        epubTarget = null
-                        epubInProgress = false
-                        return@LaunchedEffect
-                    }
-                    epubEncrypted = encrypted
-                    if (encrypted == false) {
-                        val result = withContext(Dispatchers.IO) {
-                            extractEpubToCache(context, target.uri, null, target.name) { log ->
-                                epubLog += "$log\n"
-                            }
-                        }
-                        when (result) {
-                            is EpubParseResult.Success -> {
-                                epubViewState = EpubViewState(
-                                    extractResult = result.result,
-                                    zipFileName = target.name,
-                                    epubUri = target.uri,
-                                    isEncrypted = false
-                                )
-                                epubTarget = null
-                                epubInProgress = false
-                            }
-                            is EpubParseResult.Error -> {
-                                val detail = result.detail?.let { "\n$it" } ?: ""
-                                epubLog += "\n错误: ${result.message}$detail\n"
-                                epubLoadError = "${result.message}$detail"
-                                epubInProgress = false
-                                // 保留 epubTarget 以便显示错误对话框
-                            }
-                        }
-                    } else {
-                        epubLog += "文件已加密，需要密码\n"
-                        epubInProgress = false
-                    }
-                } catch (e: Exception) {
-                    epubLog += "\n异常: ${e.javaClass.simpleName}: ${e.message}\n"
-                    epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
-                    epubInProgress = false
-                }
-            }
-            // 处理 TXT 文件，转换为 EPUB 格式查看
-            LaunchedEffect(txtTarget) {
-                val target = txtTarget ?: return@LaunchedEffect
-                txtInProgress = true
-                txtLoadError = null
-                try {
-                    val cacheDir = getEpubCacheDir(context, target.uri)
-                    val cacheTs = getEpubCacheTimestamp(cacheDir)
-
-                    var result: EpubExtractResult? = null
-
-                    // 检查是否有有效缓存
-                    if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                        result = loadEpubFromCache(cacheDir)
-                        // 如果缓存加载失败，清除旧缓存
-                        if (result == null) {
-                            Log.w("FileBrowserApp", "TXT cache load failed, clearing old cache")
-                            cacheDir.deleteRecursively()
-                        }
-                    }
-
-                    // 如果没有有效缓存，重新生成
-                    if (result == null) {
-                        // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
-                        result = prepareTxtAsEpub(context, target.uri, target.name)
-                    }
-
-                    if (result != null) {
-                        epubViewState = EpubViewState(
-                            extractResult = result,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                        txtTarget = null
-                    } else {
-                        txtLoadError = "无法解析 TXT 文件"
-                    }
-                } catch (e: Exception) {
-                    Log.e("FileBrowserApp", "TXT processing failed", e)
-                    txtLoadError = "${e.javaClass.simpleName}: ${e.message}"
-                }
-                txtInProgress = false
-            }
-            // 处理 LLM 对话文件，转换为 EPUB 格式查看
-            LaunchedEffect(llmTarget) {
-                val target = llmTarget ?: return@LaunchedEffect
-                llmInProgress = true
-                llmLoadError = null
-                try {
-                    val cacheDir = getEpubCacheDir(context, target.uri)
-                    val cacheTs = getEpubCacheTimestamp(cacheDir)
-
-                    var result: EpubExtractResult? = null
-
-                    // 检查是否有有效缓存
-                    if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                        result = loadEpubFromCache(cacheDir)
-                        // 如果缓存加载失败，清除旧缓存
-                        if (result == null) {
-                            Log.w("FileBrowserApp", "LLM cache load failed, clearing old cache")
-                            cacheDir.deleteRecursively()
-                        }
-                    }
-
-                    // 如果没有有效缓存，重新生成
-                    if (result == null) {
-                        // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
-                        result = prepareLlmAsEpub(context, target.uri, target.name)
-                    }
-
-                    val finalResult = result
-                    if (finalResult != null) {
-                        epubViewState = EpubViewState(
-                            extractResult = finalResult,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                        llmTarget = null
-                    } else {
-                        llmLoadError = "无法解析 LLM 对话文件"
-                    }
-                } catch (e: Exception) {
-                    Log.e("FileBrowserApp", "LLM processing failed", e)
-                    llmLoadError = "${e.javaClass.simpleName}: ${e.message}"
-                }
-                llmInProgress = false
-            }
-            LaunchedEffect(picZipTarget) {
-                picZipEncrypted = null
-                picZipPassword = ""
-                picZipInProgress = false
-                val target = picZipTarget ?: return@LaunchedEffect
-                val cacheDir = getPicZipCacheDir(context, target.uri)
-                val cacheTs = getPicZipCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isPicZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    val contentDir = java.io.File(cacheDir, "content")
-                    val listFile = java.io.File(cacheDir, ".image_list")
-                    if (contentDir.exists() && listFile.exists()) {
-                        val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
-                        val lastIndexFile = java.io.File(cacheDir, ".last_index")
-                        val initialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, paths.size - 1) ?: 0
-                        picZipTarget = null
-                        picZipViewState = PicZipViewState(
-                            contentDir = contentDir,
-                            imagePaths = paths,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false,
-                            password = null,
-                            initialIndex = initialIndex
-                        )
-                        return@LaunchedEffect
-                    }
-                    cacheDir.deleteRecursively()
-                }
-                picZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-                if (picZipEncrypted == false) {
-                    picZipInProgress = true
-                    val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
-                    picZipInProgress = false
-                    picZipTarget = null
-                    if (result != null) {
-                        picZipViewState = PicZipViewState(
-                            contentDir = result.contentDir,
-                            imagePaths = result.imagePaths,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false,
-                            password = null,
-                            initialIndex = 0
-                        )
-                    } else {
-                        Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-            LaunchedEffect(prefs) {
-                prefs.ftpPort.collect { ftpPort = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.ftpPassword.collect { ftpPassword = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.ftpTimeoutMinutes.collect { ftpTimeoutMinutes = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.filterVisible.collect { filterVisible = it }
-            }
-            LaunchedEffect(activeMainTab) {
-                if (activeMainTab != MainTab.FTP) {
-                    ftpManager.stop()
-                }
-            }
-            BackHandler {
-                when {
-                    progressOp != null -> { } // 不响应返回，防止误触
-                    batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
-                    quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
-                    passProtectTarget != null -> { passProtectTarget = null }
-                    passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
-                    passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
-                    passEditState != null -> passEditState = null
-                    showChangeRootConfirm -> showChangeRootConfirm = false
-                    gpgState != null -> {
-                        gpgState = null
-                        gpgPassword = ""
-                        gpgDecryptMode = null
-                        gpgDecryptAutoTried = false
-                        gpgEncryptSelectedKeyId = null
-                    }
-                    showKeyManagementDialog -> showKeyManagementDialog = false
-                    showConfigDialog -> showConfigDialog = false
-                    showCacheManagementDialog -> showCacheManagementDialog = false
-                    showGitConfigDialog -> showGitConfigDialog = false
-                    showAboutDialog -> showAboutDialog = false
-                    showPendingDeleteConfirm -> showPendingDeleteConfirm = false
-                    showPendingList -> showPendingList = false
-                    activeMainTab != MainTab.DIRECTORY -> requestExitApp()
-                    zipUnzipTarget != null -> zipUnzipTarget = null
-                    mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
-                    htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
-                    llmZipTarget != null -> { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
-                    epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
-                    picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
-                    pdfViewState != null -> pdfViewState = null
-                    zipCompressTarget != null -> zipCompressTarget = null
-                    sevenZCompressTarget != null -> sevenZCompressTarget = null
-                    showPendingCompressToZip -> showPendingCompressToZip = false
-                    showPendingCompressTo7z -> showPendingCompressTo7z = false
-                    fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
-                    else -> {
-                        requestExitApp()
-                    }
-                }
-            }
-            var hideDotFiles by remember { mutableStateOf(false) }
-            var startupDecryptKey by remember { mutableStateOf(false) }
-            LaunchedEffect(prefs) {
-                prefs.hideDotFiles.collect { hideDotFiles = it }
-            }
-            LaunchedEffect(prefs) {
-                prefs.startupDecryptKey.collect { startupDecryptKey = it }
-            }
-            val copyMoveLog: ((String) -> Unit)? = null
-            suspend fun runWithProgress(
-                label: String,
-                total: Int? = null,
-                block: suspend ((Int) -> Unit) -> Unit
-            ) {
-                progressOp = OperationProgress(label, 0, total)
-                delay(50)
-                try {
-                    val setProgress: (Int) -> Unit = { i -> progressOp = OperationProgress(label, i, total) }
-                    block(setProgress)
-                } finally {
-                    progressOp = null
-                }
-            }
-
-            fun clearPendingConfigImportState() {
-                pendingImportJson = null
-                pendingImportPlaylistCount = 0
-                pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                showImportKeyConfirmDialog = false
-                showImportPlaylistConfirmDialog = false
-            }
-
-            fun clearPendingPlaybackTargetState() {
-                pendingPlaybackAudioList = emptyList()
-                showPlaybackTargetDialog = false
-            }
-
-            suspend fun createNewPlaybackPlaylist(audioList: List<DocumentFileModel>) {
-                if (audioList.isEmpty()) return
-                val playlist = Playlist(
-                    id = java.util.UUID.randomUUID().toString(),
-                    name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
-                    uris = audioList.map { it.uri.toString() },
-                    names = audioList.map { it.name }
-                )
-                withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
-                recordRecentOpen(
-                    type = RECENT_TYPE_PLAYLIST,
-                    key = playlist.id,
-                    title = playlist.name,
-                    playlistId = playlist.id
-                )
-                val intent = Intent(context, PlaybackService::class.java).apply {
-                    action = ACTION_PLAY
-                    putExtra(EXTRA_PLAYLIST_ID, playlist.id)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                pendingList.clear()
-                switchMainTab(MainTab.PLAYER)
-                showPendingList = false
-                clearPendingPlaybackTargetState()
-                Toast.makeText(context, "已创建播放列表并加入 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
-            }
-
-            suspend fun appendToPlaybackPlaylist(target: Playlist, audioList: List<DocumentFileModel>) {
-                if (audioList.isEmpty()) return
-                val result = withContext(Dispatchers.IO) {
-                    prefs.appendTracksToPlaylist(
-                        target.id,
-                        audioList.map { it.uri.toString() },
-                        audioList.map { it.name }
-                    )
-                }
-                if (!result.found) {
-                    Toast.makeText(context, "加入播放列表失败", Toast.LENGTH_SHORT).show()
-                    return
-                }
-                recordRecentOpen(
-                    type = RECENT_TYPE_PLAYLIST,
-                    key = target.id,
-                    title = target.name,
-                    playlistId = target.id
-                )
-                val intent = Intent(context, PlaybackService::class.java).apply {
-                    action = ACTION_PLAY
-                    putExtra(EXTRA_PLAYLIST_ID, target.id)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                pendingList.clear()
-                switchMainTab(MainTab.PLAYER)
-                showPendingList = false
-                clearPendingPlaybackTargetState()
-                val msg = when {
-                    result.appendedCount > 0 && result.skippedCount > 0 ->
-                        "已加入 ${result.appendedCount} 首到「${target.name}」，跳过 ${result.skippedCount} 首重复项，并开始播放"
-                    result.appendedCount > 0 ->
-                        "已加入 ${result.appendedCount} 首到「${target.name}」，并开始播放"
-                    result.skippedCount > 0 ->
-                        "所选音频已存在于「${target.name}」，已直接开始播放"
-                    else ->
-                        "已开始播放「${target.name}」"
-                }
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }
-
-            suspend fun exportConfigToRoot(): Boolean {
-                val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return false
-                val targetUri = Uri.parse(targetRoot)
-                val jsonBytes = exportConfig(context, prefs).toByteArray(Charsets.UTF_8)
-                val existing = findChildByName(context, targetUri, CONFIG_EXPORT_FILE_NAME)
-                if (existing != null && !context.contentResolver.deleteDocument(existing)) return false
-                return createFileWithBytes(
-                    context,
-                    targetUri,
-                    targetUri,
-                    CONFIG_EXPORT_FILE_NAME,
-                    "application/json",
-                    jsonBytes
-                )
-            }
-
-            suspend fun performConfigImport(jsonString: String, importKeys: Boolean) {
-                val ok = importConfig(
-                    context,
-                    prefs,
-                    jsonString,
-                    importKeys = importKeys,
-                    playlistImportMode = pendingImportPlaylistMode
-                )
-                refreshTrigger++
-                val msg = when {
-                    !ok -> "导入失败：无法解析 JSON"
-                    pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
-                    pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
-                    pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
-                    pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
-                    importKeys -> "配置已导入（含密钥）"
-                    else -> "配置已导入"
-                }
-                clearPendingConfigImportState()
-                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-            }
-
-            fun continueConfigImportAfterPlaylistChoice() {
-                val jsonString = pendingImportJson ?: return
-                if (configJsonContainsKeys(jsonString)) {
-                    showImportKeyConfirmDialog = true
-                } else {
-                    scope.launch { performConfigImport(jsonString, importKeys = true) }
-                }
-            }
-
-            fun startConfigImport(jsonString: String) {
-                if (jsonString.isBlank()) {
-                    Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
-                    return
-                }
-                pendingImportJson = jsonString
-                pendingImportPlaylistCount = configJsonPlaylistCount(jsonString)
-                scope.launch {
-                    val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
-                    if (pendingImportPlaylistCount > 0 && hasExistingPlaylists) {
-                        pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                        showImportPlaylistConfirmDialog = true
-                    } else {
-                        pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                        continueConfigImportAfterPlaylistChoice()
-                    }
-                }
-            }
-
-            suspend fun detectGpgDecryptMode(op: GpgOpState): GpgDecryptUiMode = withContext(Dispatchers.IO) {
-                val files = when (op) {
-                    is GpgOpState.Decrypt -> listOf(op.fileModel)
-                    is GpgOpState.BatchDecrypt -> op.list
-                    else -> emptyList()
-                }
-                var hasSymmetric = false
-                var hasPublicKey = false
-                files.forEach { fileModel ->
-                    val kind = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-                        GpgHelper.detectEncryptedKind(input)
-                    } ?: GpgEncryptedKind.UNKNOWN
-                    when (kind) {
-                        GpgEncryptedKind.PUBLIC_KEY -> hasPublicKey = true
-                        GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> hasSymmetric = true
-                    }
-                }
-                when {
-                    hasSymmetric && hasPublicKey -> GpgDecryptUiMode.MIXED
-                    hasPublicKey -> GpgDecryptUiMode.SECRET_KEY
-                    else -> GpgDecryptUiMode.SYMMETRIC
-                }
-            }
-
-            suspend fun decryptGpgFile(
-                fileModel: DocumentFileModel,
-                targetDirUri: String,
-                treeUri: Uri?,
-                symmetricPassword: CharArray?,
-                keyPassphrase: CharArray?
-            ): Boolean = withContext(Dispatchers.IO) {
-                val encBytes = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
-                val kind = GpgHelper.detectEncryptedKind(java.io.ByteArrayInputStream(encBytes))
-                val decrypted = when (kind) {
-                    GpgEncryptedKind.PUBLIC_KEY -> {
-                        val secretRings = loadSecretKeyRings(context) ?: return@withContext false
-                        val effectiveKeyPass = keyPassphrase ?: SecretKeyPasswordCache.get() ?: CharArray(0)
-                        GpgHelper.decryptWithSecretKey(
-                            java.io.ByteArrayInputStream(encBytes),
-                            secretRings,
-                            effectiveKeyPass
-                        ) { }
-                    }
-                    GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> {
-                        val pwd = symmetricPassword ?: return@withContext false
-                        GpgHelper.decryptSymmetric(
-                            java.io.ByteArrayInputStream(encBytes),
-                            pwd
-                        ) { }
-                    }
-                } ?: return@withContext false
-                val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
-                createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", decrypted)
-            }
-
-            suspend fun encryptGpgFile(
-                fileModel: DocumentFileModel,
-                targetDirUri: String,
-                treeUri: Uri?,
-                symmetricPassword: CharArray?,
-                publicKeyId: Long?
-            ): Boolean = withContext(Dispatchers.IO) {
-                val plain = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
-                if (publicKeyId != null) {
-                    val pubRings = loadPublicKeyRings(context) ?: return@withContext false
-                    val pubKeyRing = findPublicKeyRing(pubRings, publicKeyId) ?: return@withContext false
-                    val keyDesc = listEncryptionPublicKeyRings(pubRings).find { it.first == publicKeyId }?.second.orEmpty()
-                    val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
-                    val baseName = fileModel.name.removeSuffix(".gpg")
-                    val outName = if (safeName.isNotEmpty()) "${baseName}_${safeName}.gpg" else "${baseName}.gpg"
-                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name) ?: return@withContext false
-                    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", encrypted)
-                } else {
-                    val pwd = symmetricPassword ?: return@withContext false
-                    val encrypted = GpgHelper.encryptSymmetric(plain, pwd, fileModel.name) { } ?: return@withContext false
-                    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, fileModel.name + ".gpg", "application/octet-stream", encrypted)
-                }
-            }
-
-            val doCopyHere: () -> Unit = {
-                val targetDirUri = normalizeContentUriString(displayUri)
-                copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
-                val ctx = context
-                val list = pendingList.toList()
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                scope.launch {
-                    runWithProgress("拷贝", list.size) { setProgress ->
-                        val (ok, fail) = withContext(Dispatchers.IO) {
-                            var o = 0
-                            var f = 0
-                            list.forEachIndexed { index, model ->
-                                if (copyDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
-                                else f++
-                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                            }
-                            Pair(o, f)
-                        }
-                        copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
-                        if (fail == 0 && ok > 0) {
-                            pendingList.clear()
-                            showPendingList = false
-                            Toast.makeText(ctx, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                        } else if (ok > 0) {
-                            Toast.makeText(ctx, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(ctx, "拷贝失败", Toast.LENGTH_SHORT).show()
-                        }
-                        refreshTrigger++
-                    }
-                }
-            }
-            val doMoveHere: () -> Unit = {
-                val targetDirUri = normalizeContentUriString(displayUri)
-                copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
-                val ctx = context
-                val list = pendingList.toList()
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                scope.launch {
-                    runWithProgress("移动", list.size) { setProgress ->
-                        val (ok, fail) = withContext(Dispatchers.IO) {
-                            var o = 0
-                            var f = 0
-                            list.forEachIndexed { index, model ->
-                                if (moveDocumentTo(ctx, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
-                                else f++
-                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                            }
-                            Pair(o, f)
-                        }
-                        copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
-                        if (fail == 0 && ok > 0) {
-                            pendingList.clear()
-                            showPendingList = false
-                            Toast.makeText(ctx, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
-                        } else if (ok > 0) {
-                            Toast.makeText(ctx, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(ctx, "移动失败", Toast.LENGTH_SHORT).show()
-                        }
-                        refreshTrigger++
-                    }
-                }
-            }
-
-            fun recentModel(uri: String, name: String): DocumentFileModel {
-                return DocumentFileModel(
-                    name = name,
-                    isDirectory = false,
-                    uri = Uri.parse(uri),
-                    lastModified = 0L,
-                    size = 0L
-                )
-            }
-
-            fun openRecentItem(item: RecentOpenItem) {
-                when (item.type) {
-                    RECENT_TYPE_PLAYLIST -> {
-                        val playlistId = item.playlistId
-                        if (playlistId.isNullOrBlank()) {
-                            Toast.makeText(context, "条目无效：缺少播放列表 ID", Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                        val intent = Intent(context, PlaybackService::class.java).apply {
-                            action = ACTION_PLAY
-                            putExtra(EXTRA_PLAYLIST_ID, playlistId)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                        recordRecentOpen(
-                            type = RECENT_TYPE_PLAYLIST,
-                            key = playlistId,
-                            title = item.title,
-                            playlistId = playlistId
-                        )
-                        switchMainTab(MainTab.PLAYER)
-                    }
-
-                    RECENT_TYPE_EXTERNAL_OPEN -> {
-                        val uri = item.uri
-                        if (uri.isNullOrBlank()) {
-                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                        val opened = launchExternalOpen(context, uri, null)
-                        if (!opened) {
-                            Toast.makeText(context, "外部打开失败：没有可打开的应用", Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                        recordRecentOpen(
-                            type = RECENT_TYPE_EXTERNAL_OPEN,
-                            key = item.key,
-                            title = item.title,
-                            uri = uri
-                        )
-                    }
-
-                    RECENT_TYPE_ZIP_VIEWER -> {
-                        val uri = item.uri
-                        if (uri.isNullOrBlank()) {
-                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                        val model = recentModel(uri, item.title)
-                        when {
-                            item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> mdZipTarget = model
-                            item.title.endsWith(".html.zip", ignoreCase = true) -> htmlZipTarget = model
-                            item.title.endsWith(".pic.zip", ignoreCase = true) -> picZipTarget = model
-                            else -> {
-                                Toast.makeText(context, "暂不支持从最近条目打开此 ZIP 类型", Toast.LENGTH_SHORT).show()
-                                return
-                            }
-                        }
-                    }
-
-                    RECENT_TYPE_EPUB_RENDERER -> {
-                        val uri = item.uri
-                        if (uri.isNullOrBlank()) {
-                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
-                            return
-                        }
-                        val model = recentModel(uri, item.title)
-                        when {
-                            item.title.endsWith(".llm.zip", ignoreCase = true) -> llmZipTarget = model
-                            item.title.endsWith(".txt", ignoreCase = true) -> txtTarget = model
-                            item.title.endsWith(".llm", ignoreCase = true) -> llmTarget = model
-                            else -> epubTarget = model
-                        }
-                    }
-
-                    else -> {
-                        Toast.makeText(context, "未知条目类型：${item.type}", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-
-            val ftpRootUri = rootUri
-            Column(Modifier.fillMaxSize()) {
-                if (gpgPubEncryptInProgress || saveInProgress) {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                    Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
-                }
-                progressOp?.let { OperationProgressDialog(it) }
-                Box(Modifier.weight(1f)) {
-                    MainTabContentHost(
-                        activeMainTab = activeMainTab,
-                        recentOpenItems = recentOpenItems,
-                        onOpenRecentItem = { openRecentItem(it) },
-                        directoryContent = {
-                            FileBrowserScreen(
-                                modifier = Modifier.fillMaxSize(),
-                                currentUri = displayUri,
-                                refreshTrigger = refreshTrigger,
-                                dirCache = dirCache,
-                                onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
-                                pendingList = pendingList,
-                                rootUri = rootUri,
-                                listState = fileListLazyState,
-                                onNavigate = { uri ->
-                                    fileBrowserBackStack.add(displayUri)
-                                    currentUri = normalizeContentUriString(uri)
-                                },
-                                onBack = {
-                                    if (fileBrowserBackStack.isNotEmpty()) {
-                                        currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
-                                    }
-                                },
-                                canGoBack = fileBrowserBackStack.isNotEmpty(),
-                                onEmptyTrash = rootUri?.let { r ->
-                                    {
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress("清空回收站", null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                                    refreshTrigger++
-                                                } else {
-                                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                onRestoreFromTrash = rootUri?.let { r ->
-                                    { model ->
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress("恢复", null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
-                                                    refreshTrigger++
-                                                } else {
-                                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                filterVisible = filterVisible,
-                                hideDotFiles = hideDotFiles,
-                                isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
-                                preferredExternalPackages = preferredExternalPackages,
-                                onOpenFile = { uri, name, isEncrypted ->
-                                    viewingFile = Triple(uri, name, false)
-                                },
-                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
-                                    val opened = launchExternalOpen(context, uri, packageName)
-                                    if (opened) {
-                                        recordRecentOpen(
-                                            type = RECENT_TYPE_EXTERNAL_OPEN,
-                                            key = uri,
-                                            title = name,
-                                            uri = uri
-                                        )
-                                        if (rememberChoice) {
-                                            val extension = fileExtensionKey(name)
-                                            if (extension != null && !packageName.isNullOrBlank()) {
-                                                scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
-                                            }
-                                        }
-                                    } else {
-                                        val extension = fileExtensionKey(name)
-                                        if (!packageName.isNullOrBlank() && extension != null) {
-                                            scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                            Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    opened
-                                },
-                                onClearExternalOpenPreference = { name ->
-                                    val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
-                                    scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                },
-                                onOpenMarkdownView = { uri, name, encrypted ->
-                                    markdownViewFile = Triple(uri, name, encrypted)
-                                },
-                                onAddToPendingList = { pendingList.add(it) },
-                                onRemoveFromPendingList = { pendingList.remove(it) },
-                                onShowPendingList = { showPendingList = it },
-                                onRefresh = { refreshTrigger++ },
-                                onOpenConfig = { showConfigDialog = true },
-                                onOpenAbout = { showAboutDialog = true },
-                                onCreateQuickNote = {
-                                    switchMainTab(MainTab.QUICK_NOTE)
-                                    requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) })
-                                },
-                                onRequestGpgDecrypt = { fileModel, dirUri ->
-                                    gpgPassword = ""
-                                    gpgDecryptMode = null
-                                    gpgDecryptAutoTried = false
-                                    gpgEncryptSelectedKeyId = null
-                                    gpgState = GpgOpState.Decrypt(fileModel, dirUri)
-                                },
-                                onRequestGpgEncrypt = { fileModel, dirUri ->
-                                    gpgPassword = ""
-                                    gpgDecryptMode = null
-                                    gpgDecryptAutoTried = false
-                                    gpgEncryptSelectedKeyId = null
-                                    gpgState = GpgOpState.Encrypt(fileModel, dirUri)
-                                },
-                                onRequestQuickObfuscate = { model ->
-                                    quickObfuscateOp = model to true
-                                    quickObfuscatePassword = ""
-                                },
-                                onRequestQuickDeobfuscate = { model ->
-                                    quickObfuscateOp = model to false
-                                    quickObfuscatePassword = ""
-                                },
-                                onConfirmDelete = { model, deletePermanently ->
-                                    scope.launch {
-                                        val label = if (deletePermanently) "删除" else "移到回收站"
-                                        runWithProgress(label, null) { _ ->
-                                            val ok = withContext(Dispatchers.IO) {
-                                                if (deletePermanently) {
-                                                    context.contentResolver.deleteDocument(model.uri)
-                                                } else {
-                                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
-                                                    moveToTrash(context, model.uri, root, root)
-                                                }
-                                            }
-                                            if (ok) {
-                                                Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
-                                            }
-                                            refreshTrigger++
-                                        }
-                                    }
-                                },
-                                onShareFileToGit = { model ->
-                                    shareFileToGitTarget = model
-                                },
-                                onUnzipRequest = { zipUnzipTarget = it },
-                                onRequestMdZipView = { mdZipTarget = it },
-                                onRequestHtmlZipView = { htmlZipTarget = it },
-                                onRequestLlmZipView = { llmZipTarget = it },
-                                onRequestEpubView = { epubTarget = it },
-                                onRequestTxtView = { txtTarget = it },
-                                onRequestLlmView = { llmTarget = it },
-                                onRequestPicZipView = { picZipTarget = it },
-                                onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
-                                onCompressToZipRequest = { zipCompressTarget = it },
-                                onCompressTo7zRequest = { sevenZCompressTarget = it },
-                                onRequestPassProtect = { model -> passProtectTarget = model },
-                                onRequestPassView = { model ->
-                                    passViewTarget = model
-                                    passViewPassword = ""
-                                    passViewTriedCache = false
-                                },
-                                onRequestPassEdit = { model, dirUri ->
-                                    passEditRequest = Pair(model, dirUri)
-                                    passEditTriedCache = false
-                                },
-                                onRequestImportConfig = { model ->
-                                    scope.launch {
-                                        val jsonString = withContext(Dispatchers.IO) {
-                                            try {
-                                                context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
-                                            } catch (_: Exception) {
-                                                ""
-                                            }
-                                        }
-                                        startConfigImport(jsonString)
-                                    }
-                                },
-                                onRequestImportStarDict = { model ->
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            importStarDict(context, model.uri, model.name)
-                                        }
-                                        result.onSuccess {
-                                            Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
-                                        }.onFailure {
-                                            Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                },
-                                playbackState = playbackState,
-                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
-                            )
-                        },
-                        ftpContent = {
-                            FtpTabContent(
-                                rootUri = ftpRootUri,
-                                displayUri = displayUri,
-                                ftpManager = ftpManager,
-                                ftpPort = ftpPort,
-                                ftpPassword = ftpPassword,
-                                ftpTimeoutMinutes = ftpTimeoutMinutes,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        },
-                        gitShareContent = {
-                            GitShareTabContent(
-                                prefs = prefs,
-                                rootUri = rootUri,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        },
-                        playerContent = {
-                            PlayerTabContent(
-                                context = context,
-                                prefs = prefs,
-                                playbackState = playbackState,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        },
-                        quickNoteContent = {
-                            QuickNoteTabContent(
-                                quickNoteData = quickNoteData,
-                                quickNoteStartWithAddDialog = quickNoteStartWithAddDialog,
-                                quickNoteInProgress = quickNoteInProgress,
-                                onEntriesChanged = { quickNoteEntriesSnapshot = it }
-                            )
-                        },
-                        dictionaryContent = {
-                            DictionaryTabContent(onRequestExitApp = { requestExitApp() })
-                        }
-                    )
-                }
-
-                ScrollableMainTabBar(
-                    activeMainTab = activeMainTab,
-                    onSwitchMainTab = { switchMainTab(it) }
-                )
-            }
-            if (showPendingList) {
-                PendingListScreen(
-                    pendingList = pendingList,
-                    currentDirPath = currentDirPath,
-                    onRemove = { pendingList.remove(it) },
-                    onCopyHere = doCopyHere,
-                    onMoveHere = doMoveHere,
-                    onRequestDelete = { showPendingDeleteConfirm = true },
-                    onRequestBatchObfuscate = {
-                        val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
-                        if (list.isEmpty()) Toast.makeText(context, "没有可混淆的文件（请勿选已 .qx 或文件夹）", Toast.LENGTH_SHORT).show()
-                        else batchObfuscateOp = list to true
-                    },
-                    onRequestBatchDeobfuscate = {
-                        val list = pendingList.filter { !it.isDirectory && isQuickObfuscatedFileName(it.name) }
-                        if (list.isEmpty()) Toast.makeText(context, "没有可去混淆的文件（请只选 .qx 文件）", Toast.LENGTH_SHORT).show()
-                        else batchObfuscateOp = list to false
-                    },
-                    onRequestBatchGpgEncrypt = {
-                        if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
-                            Toast.makeText(context, "列表中存在 .gpg 文件，无法批量加密", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val list = pendingList.filter { !it.isDirectory }
-                            if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
-                            else {
-                                gpgPassword = ""
-                                gpgDecryptMode = null
-                                gpgDecryptAutoTried = false
-                                gpgEncryptSelectedKeyId = null
-                                gpgState = GpgOpState.BatchEncrypt(list, displayUri)
-                            }
-                        }
-                    },
-                    onRequestBatchGpgDecrypt = {
-                        if (pendingList.any { !it.name.endsWith(".gpg", ignoreCase = true) }) {
-                            Toast.makeText(context, "列表中存在非 .gpg 文件，无法批量解密", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val list = pendingList.filter { !it.isDirectory }
-                            if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
-                            else {
-                                gpgPassword = ""
-                                gpgDecryptMode = null
-                                gpgDecryptAutoTried = false
-                                gpgEncryptSelectedKeyId = null
-                                gpgState = GpgOpState.BatchDecrypt(list, displayUri)
-                            }
-                        }
-                    },
-                    onRequestCompressToZip = {
-                        if (pendingList.isEmpty()) {
-                            Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                            pendingCompressZipName = "archive_$ts.zip"
-                            pendingCompressPassword = ""
-                            showPendingCompressToZip = true
-                        }
-                    },
-                    onRequestCompressTo7z = {
-                        if (pendingList.isEmpty()) {
-                            Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
-                        } else {
-                            val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                            pendingCompress7zName = "archive_$ts.7z"
-                            pendingCompress7zPassword = ""
-                            showPendingCompressTo7z = true
-                        }
-                    },
-                    onClearFilteredList = { toRemove ->
-                        val snapshot = toRemove.toList()
-                        pendingList.removeAll(snapshot)
-                    },
-                    onAddToPlayback = { audioList ->
-                        if (audioList.isEmpty()) return@PendingListScreen
-                        pendingPlaybackAudioList = audioList
-                        if (playlists.isEmpty()) {
-                            scope.launch { createNewPlaybackPlaylist(audioList) }
-                        } else {
-                            showPlaybackTargetDialog = true
-                        }
-                    },
-                    onDismiss = { showPendingList = false }
-                )
-            }
-            if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
-                AlertDialog(
-                    onDismissRequest = { clearPendingPlaybackTargetState() },
-                    title = { Text("加入播放") },
-                    text = {
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                "请选择要把 ${pendingPlaybackAudioList.size} 首音频加入到哪里。",
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            playlists.forEach { playlist ->
-                                OutlinedButton(
-                                    onClick = {
-                                        scope.launch { appendToPlaybackPlaylist(playlist, pendingPlaybackAudioList) }
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(Modifier.fillMaxWidth()) {
-                                        Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
-                                        Text(
-                                            "${playlist.trackCount} 首",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(onClick = {
-                            scope.launch { createNewPlaybackPlaylist(pendingPlaybackAudioList) }
-                        }) { Text("新建列表") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text("取消") }
-                    }
-                )
-            }
-            if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
-                val toDelete = pendingList.toList()
-                var deletePermanently by remember { mutableStateOf(false) }
-                val hasRoot = rootUri != null
-                AlertDialog(
-                    onDismissRequest = { showPendingDeleteConfirm = false },
-                    title = { Text("确认删除") },
-                    text = {
-                        Column(Modifier.verticalScroll(rememberScrollState())) {
-                            Text("确定要删除以下 ${toDelete.size} 项吗？", color = MaterialTheme.colorScheme.onSurface)
-                            if (hasRoot) {
-                                Spacer(Modifier.height(12.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    androidx.compose.material3.RadioButton(
-                                        selected = !deletePermanently,
-                                        onClick = { deletePermanently = false }
-                                    )
-                                    Spacer(Modifier.size(8.dp))
-                                    Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
-                                }
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    androidx.compose.material3.RadioButton(
-                                        selected = deletePermanently,
-                                        onClick = { deletePermanently = true }
-                                    )
-                                    Spacer(Modifier.size(8.dp))
-                                    Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
-                                }
-                            } else {
-                                Spacer(Modifier.height(8.dp))
-                                Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Spacer(Modifier.height(12.dp))
-                            toDelete.forEach { item ->
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
-                                        contentDescription = null,
-                                        Modifier.size(20.dp),
-                                        tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.size(8.dp))
-                                    Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    val label = if (deletePermanently) "删除" else "移到回收站"
-                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                    runWithProgress(label, toDelete.size) { setProgress ->
-                                        withContext(Dispatchers.IO) {
-                                            toDelete.forEachIndexed { index, model ->
-                                                if (deletePermanently) {
-                                                    context.contentResolver.deleteDocument(model.uri)
-                                                } else {
-                                                    if (root != null) moveToTrash(context, model.uri, root, root)
-                                                }
-                                                withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                            }
-                                        }
-                                    }
-                                    toDelete.forEach { pendingList.remove(it) }
-                                    refreshTrigger++
-                                    showPendingDeleteConfirm = false
-                                    showPendingList = false
-                                    Toast.makeText(context, if (deletePermanently) "已删除 ${toDelete.size} 项" else "已移到回收站 ${toDelete.size} 项", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                        ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "确定删除") }
-                    },
-                    dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
-                )
-            }
-            if (showAboutDialog) {
-                AboutDialog(onDismiss = { showAboutDialog = false })
-            }
-            if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
-                AlertDialog(
-                    onDismissRequest = { clearPendingConfigImportState() },
-                    title = { Text("导入播放列表") },
-                    text = {
-                        Text(
-                            "导入配置包含 ${pendingImportPlaylistCount} 个播放列表。当前已有播放列表，导入时要覆盖当前列表，还是追加到当前列表？",
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    },
-                    confirmButton = {
-                        Button(onClick = {
-                            showImportPlaylistConfirmDialog = false
-                            pendingImportPlaylistMode = ConfigPlaylistImportMode.APPEND
-                            continueConfigImportAfterPlaylistChoice()
-                        }) { Text("追加") }
-                    },
-                    dismissButton = {
-                        Row {
-                            TextButton(onClick = {
-                                showImportPlaylistConfirmDialog = false
-                                pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                                continueConfigImportAfterPlaylistChoice()
-                            }) { Text("覆盖") }
-                            TextButton(onClick = { clearPendingConfigImportState() }) { Text("取消") }
-                        }
-                    }
-                )
-            }
-            if (showImportKeyConfirmDialog && pendingImportJson != null) {
-                val jsonToImport = pendingImportJson!!
-                AlertDialog(
-                    onDismissRequest = {
-                        clearPendingConfigImportState()
-                    },
-                    title = { Text("导入配置") },
-                    text = {
-                        Text(
-                            "导入的配置包含公钥/私钥，会覆盖本机现有密钥。请选择：",
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                showImportKeyConfirmDialog = false
-                                scope.launch {
-                                    performConfigImport(jsonToImport, importKeys = true)
-                                }
-                            }
-                        ) { Text("全部替换") }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = {
-                                showImportKeyConfirmDialog = false
-                                scope.launch {
-                                    performConfigImport(jsonToImport, importKeys = false)
-                                }
-                            }
-                        ) { Text("跳过密钥（保留本机密钥）") }
-                    }
-                )
-            }
-            if (showCacheManagementDialog) {
-                CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
-            }
-            if (showConfigDialog) {
-                ConfigDialog(
-                    onDismiss = { showConfigDialog = false },
-                    filterVisible = filterVisible,
-                    onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
-                    hideDotFiles = hideDotFiles,
-                    onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
-                    startupDecryptKey = startupDecryptKey,
-                    onStartupDecryptKeyChange = { enabled ->
-                        scope.launch { prefs.setStartupDecryptKey(enabled) }
-                        if (!enabled) SecretKeyPasswordCache.clear()
-                    },
-                    viewerPreviewBytes = viewerPreviewBytes,
-                    onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
-                    ftpPassword = ftpPassword ?: "",
-                    onFtpPasswordChange = { s ->
-                        ftpPassword = s.ifBlank { null }
-                        scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
-                    },
-                    ftpTimeoutMinutes = ftpTimeoutMinutes,
-                    onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
-                    onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
-                    onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
-                    onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
-                    onExportConfig = {
-                        scope.launch {
-                            val ok = exportConfigToRoot()
-                            Toast.makeText(context, if (ok) "配置已导出到根目录" else "导出失败", Toast.LENGTH_SHORT).show()
-                            if (ok) refreshTrigger++
-                        }
-                    },
-                    onChangeRoot = {
-                        val r = rootUri
-                        if (r == null) {
-                            treeLauncher.launch(null)
-                            return@ConfigDialog
-                        }
-                        scope.launch {
-                            val count = withContext(Dispatchers.IO) {
-                                cachedTrashUri?.let { trash ->
-                                    val doc = if (trash.toString().contains("/tree/")) {
-                                        DocumentFile.fromTreeUri(context, trash)
-                                    } else {
-                                        DocumentFile.fromSingleUri(context, trash)
-                                    }
-                                    doc?.listFilesSafe()?.size ?: 0
-                                } ?: 0
-                            }
-                            withContext(Dispatchers.Main.immediate) {
-                                if (count > 0) showChangeRootConfirm = true
-                                else treeLauncher.launch(null)
-                            }
-                        }
-                    }
-                )
-            }
-            if (showGitConfigDialog) {
-                GitConfigDialog(
-                    prefs = prefs,
-                    rootUri = rootUri?.let { normalizeContentUriString(it) },
-                    onDismiss = {
-                        showGitConfigDialog = false
-                        refreshTrigger++
-                    }
-                )
-            }
-            if (showKeyManagementDialog) {
-                KeyManagementDialog(
-                    context = context,
-                    onDismiss = { showKeyManagementDialog = false },
-                    onKeysChanged = { refreshTrigger++ },
-                    onOpenPubkeyShare = {
-                        showKeyManagementDialog = false
-                        showPubkeyShareScreen = true
-                    }
-                )
-            }
-            if (showPubkeyShareScreen) {
-                PubkeyShareScreen(
-                    prefs = prefs,
-                    rootUri = rootUri?.let { normalizeContentUriString(it) },
-                    onDismiss = {
-                        showPubkeyShareScreen = false
-                        refreshTrigger++
-                    }
-                )
-            }
-            // 共享文件到 Git
-            shareFileToGitTarget?.let { model ->
-                AlertDialog(
-                    onDismissRequest = { shareFileToGitTarget = null },
-                    title = { Text("共享到 Git") },
-                    text = { Text("确定要将「${model.name}」共享到 .sysgit/share/ 吗？\n将自动同步、复制并推送。") },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            val target = model
-                            shareFileToGitTarget = null
-                            val r = rootUri?.let { normalizeContentUriString(it) }
-                            if (r == null) {
-                                Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-                                return@TextButton
-                            }
-                            shareGitLogs.clear()
-                            shareGitInProgress = true
-                            shareGitDone = false
-                            scope.launch {
-                                val repoUrl = prefs.gitRepoUrl.first() ?: ""
-                                val userName = prefs.gitUserName.first() ?: ""
-                                val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
-                                if (repoUrl.isBlank()) {
-                                    shareGitLogs.add("错误: 请先配置 Git 仓库")
-                                    shareGitInProgress = false
-                                    shareGitDone = true
-                                    return@launch
-                                }
-                                // 同步
-                                shareGitLogs.add("正在同步仓库...")
-                                val syncResult = withContext(Dispatchers.IO) {
-                                    cloneToTree(context, r, repoUrl,
-                                        userName = userName.ifBlank { null },
-                                        httpsPassword = httpsPassword.ifBlank { null },
-                                        log = { msg -> shareGitLogs.add(msg) })
-                                }
-                                if (syncResult.isFailure) {
-                                    shareGitLogs.add("错误: 同步失败 - ${syncResult.exceptionOrNull()?.message}")
-                                    shareGitInProgress = false
-                                    shareGitDone = true
-                                    return@launch
-                                }
-                                // 复制到 share
-                                shareGitLogs.add("正在复制文件到 share 目录...")
-                                val copied = withContext(Dispatchers.IO) {
-                                    copyFileToShare(context, r, target.uri, target.name)
-                                }
-                                if (!copied) {
-                                    shareGitLogs.add("错误: 复制到 share 目录失败")
-                                    shareGitInProgress = false
-                                    shareGitDone = true
-                                    return@launch
-                                }
-                                shareGitLogs.add("文件已复制到 .sysgit/share/")
-                                // 提交推送
-                                shareGitLogs.add("正在提交并推送...")
-                                val pushResult = withContext(Dispatchers.IO) {
-                                    commitAndPush(context, r, repoUrl,
-                                        commitMessage = "共享文件: ${target.name}",
-                                        userName = userName.ifBlank { null },
-                                        httpsPassword = httpsPassword.ifBlank { null },
-                                        log = { msg -> shareGitLogs.add(msg) })
-                                }
-                                if (pushResult.isSuccess) {
-                                    shareGitLogs.add("已共享并推送成功")
-                                } else {
-                                    shareGitLogs.add("错误: 推送失败 - ${pushResult.exceptionOrNull()?.message}")
-                                }
-                                shareGitInProgress = false
-                                shareGitDone = true
-                            }
-                        }) { Text("共享") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { shareFileToGitTarget = null }) { Text("取消") }
-                    }
-                )
-            }
-            // 共享到 Git 日志窗口
-            if (shareGitLogs.isNotEmpty() && (shareGitInProgress || shareGitDone)) {
-                AlertDialog(
-                    onDismissRequest = { if (!shareGitInProgress) { shareGitDone = false; shareGitLogs.clear() } },
-                    title = { Text("共享到 Git") },
-                    text = {
-                        val logScrollState = rememberScrollState()
-                        LaunchedEffect(shareGitLogs.size) {
-                            logScrollState.animateScrollTo(logScrollState.maxValue)
-                        }
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 200.dp)
-                                .verticalScroll(logScrollState)
-                        ) {
-                            for (line in shareGitLogs) {
-                                Text(
-                                    line,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (line.startsWith("错误") || line.startsWith("[调试]"))
-                                        MaterialTheme.colorScheme.error
-                                    else
-                                        MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        if (shareGitInProgress) {
-                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                        } else {
-                            TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text("关闭") }
-                        }
-                    }
-                )
-            }
-            quickObfuscateOp?.let { (model, isObfuscate) ->
-                QuickObfuscatePasswordDialog(
-                    isObfuscate = isObfuscate,
-                    fileName = model.name,
-                    password = quickObfuscatePassword,
-                    inProgress = quickObfuscateInProgress,
-                    onPasswordChange = { quickObfuscatePassword = it },
-                    onConfirm = { pwd ->
-                        quickObfuscateInProgress = true
-                        scope.launch {
-                            val ok = withContext(Dispatchers.IO) {
-                                if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
-                                else quickDeobfuscate(context, model.uri, pwd.toCharArray())
-                            }
-                            quickObfuscateInProgress = false
-                            quickObfuscateOp = null
-                            quickObfuscatePassword = ""
-                            if (ok) {
-                                Toast.makeText(context, if (isObfuscate) "已混淆" else "已去混淆", Toast.LENGTH_SHORT).show()
-                                refreshTrigger++
-                            } else {
-                                Toast.makeText(context, if (isObfuscate) "混淆失败" else "去混淆失败", Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onDismiss = { quickObfuscateOp = null; quickObfuscatePassword = "" }
-                )
-            }
-            batchObfuscateOp?.let { (list, isObfuscate) ->
-                QuickObfuscatePasswordDialog(
-                    isObfuscate = isObfuscate,
-                    fileName = "共 ${list.size} 个文件",
-                    password = batchObfuscatePassword,
-                    inProgress = batchObfuscateInProgress,
-                    onPasswordChange = { batchObfuscatePassword = it },
-                    onConfirm = { pwd ->
-                        batchObfuscateInProgress = true
-                        scope.launch {
-                            runWithProgress(if (isObfuscate) "混淆" else "去混淆", list.size) { setProgress ->
-                                withContext(Dispatchers.IO) {
-                                    list.forEachIndexed { index, model ->
-                                        if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
-                                        else quickDeobfuscate(context, model.uri, pwd.toCharArray())
-                                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                    }
-                                }
-                            }
-                            batchObfuscateInProgress = false
-                            batchObfuscateOp = null
-                            batchObfuscatePassword = ""
-                            Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
-                            pendingList.clear()
-                            showPendingList = false
-                            refreshTrigger++
-                        }
-                    },
-                    onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
-                )
-            }
-            // ---- 密码保护：加密 md/rst -> .pass ----
-            passProtectTarget?.let { model ->
-                AlertDialog(
-                    onDismissRequest = { if (!passProtectInProgress) passProtectTarget = null },
-                    title = { Text("密码保护") },
-                    text = { Text("将 ${model.name} 用默认公钥加密为 ${model.name}.pass，原文件将被删除。") },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                passProtectInProgress = true
-                                val ctx = context
-                                val dirUri = normalizeContentUriString(displayUri)
-                                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                scope.launch {
-                                    val ok = withContext(Dispatchers.IO) {
-                                        val secRings = loadSecretKeyRings(ctx)
-                                        if (secRings == null) {
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(ctx, "未找到默认密钥，请先生成密钥对", Toast.LENGTH_LONG).show()
-                                            }
-                                            return@withContext false
-                                        }
-                                        val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID
-                                        if (defaultKeyId == null) {
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(ctx, "未找到默认密钥", Toast.LENGTH_LONG).show()
-                                            }
-                                            return@withContext false
-                                        }
-                                        val pubRings = loadPublicKeyRings(ctx)
-                                        val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId)
-                                        if (pubKeyRing == null) {
-                                            withContext(Dispatchers.Main) {
-                                                Toast.makeText(ctx, "未找到默认公钥", Toast.LENGTH_LONG).show()
-                                            }
-                                            return@withContext false
-                                        }
-                                        val plain = ctx.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
-                                            ?: return@withContext false
-                                        val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, model.name)
-                                            ?: return@withContext false
-                                        val outName = model.name + ".pass"
-                                        val created = createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                        if (created) {
-                                            ctx.contentResolver.deleteDocument(model.uri)
-                                        }
-                                        created
-                                    }
-                                    passProtectInProgress = false
-                                    passProtectTarget = null
-                                    if (ok) {
-                                        Toast.makeText(ctx, "已加密为 ${model.name}.pass", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(ctx, "密码保护失败", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            },
-                            enabled = !passProtectInProgress
-                        ) { Text(if (passProtectInProgress) "加密中…" else "确定") }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { passProtectTarget = null },
-                            enabled = !passProtectInProgress
-                        ) { Text("取消") }
-                    }
-                )
-            }
-            // ---- 密码保护：查看 .pass 文件 ----
-            passViewTarget?.let { model ->
-                val secRings = loadSecretKeyRings(context)
-                if (secRings == null) {
-                    AlertDialog(
-                        onDismissRequest = { passViewTarget = null },
-                        title = { Text("查看密码") },
-                        text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
-                        confirmButton = {
-                            Button(onClick = { passViewTarget = null }) { Text("确定") }
-                        }
-                    )
-                } else {
-                    LaunchedEffect(model) {
-                        if (passViewTriedCache) return@LaunchedEffect
-                        val cached = SecretKeyPasswordCache.get() ?: run { passViewTriedCache = true; return@LaunchedEffect }
-                        passViewTriedCache = true
-                        passViewInProgress = true
-                        val decrypted = withContext(Dispatchers.IO) {
-                            val rings = loadSecretKeyRings(context) ?: return@withContext null
-                            context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                            }
-                        }
-                        passViewInProgress = false
-                        if (decrypted != null) {
-                            passViewTarget = null
-                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                            passContentView = PassDecryptedContent(innerName, decrypted)
-                        } else {
-                            Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    if (SecretKeyPasswordCache.get() == null || passViewTriedCache) {
-                    GpgPasswordDialog(
-                        isDecrypt = true,
-                        fileName = model.name,
-                        password = passViewPassword,
-                        passwordLabel = "密钥密码",
-                        inProgress = passViewInProgress,
-                        onPasswordChange = { if (!passViewInProgress) passViewPassword = it },
-                        onConfirm = { pwd ->
-                            if (passViewInProgress) return@GpgPasswordDialog
-                            passViewInProgress = true
-                            val ctx = context
-                            scope.launch {
-                                val decrypted = withContext(Dispatchers.IO) {
-                                    val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                    ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                        GpgHelper.decryptWithSecretKey(
-                                            input, rings, pwd.toCharArray()
-                                        ) { _ -> }
-                                    }
-                                }
-                                passViewInProgress = false
-                                if (decrypted != null) {
-                                    passViewTarget = null
-                                    passViewPassword = ""
-                                    // 根据内层扩展名确定渲染方式
-                                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                    passContentView = PassDecryptedContent(innerName, decrypted)
-                                } else {
-                                    Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onDismiss = {
-                            if (!passViewInProgress) {
-                                passViewTarget = null
-                                passViewPassword = ""
-                            }
-                        }
-                    )
-                    }
-                }
-            }
-            // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
-            passEditRequest?.let { (model, dirUri) ->
-                val secRings = loadSecretKeyRings(context)
-                if (secRings == null) {
-                    AlertDialog(
-                        onDismissRequest = { passEditRequest = null },
-                        title = { Text("直接编辑") },
-                        text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
-                        confirmButton = {
-                            Button(onClick = { passEditRequest = null }) { Text("确定") }
-                        }
-                    )
-                } else {
-                    LaunchedEffect(model) {
-                        if (passEditTriedCache) return@LaunchedEffect
-                        val cached = SecretKeyPasswordCache.get() ?: run { passEditTriedCache = true; return@LaunchedEffect }
-                        passEditTriedCache = true
-                        passEditInProgress = true
-                        val decrypted = withContext(Dispatchers.IO) {
-                            val rings = loadSecretKeyRings(context) ?: return@withContext null
-                            context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                            }
-                        }
-                        passEditInProgress = false
-                        if (decrypted != null) {
-                            passEditRequest = null
-                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                            val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                            passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
-                        } else {
-                            Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    if (SecretKeyPasswordCache.get() == null || passEditTriedCache) {
-                    GpgPasswordDialog(
-                        isDecrypt = true,
-                        fileName = model.name,
-                        password = passEditPassword,
-                        passwordLabel = "密钥密码",
-                        inProgress = passEditInProgress,
-                        onPasswordChange = { if (!passEditInProgress) passEditPassword = it },
-                        onConfirm = { pwd ->
-                            if (passEditInProgress) return@GpgPasswordDialog
-                            passEditInProgress = true
-                            val ctx = context
-                            scope.launch {
-                                val decrypted = withContext(Dispatchers.IO) {
-                                    val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                    ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                        GpgHelper.decryptWithSecretKey(
-                                            input, rings, pwd.toCharArray()
-                                        ) { _ -> }
-                                    }
-                                }
-                                passEditInProgress = false
-                                if (decrypted != null) {
-                                    passEditRequest = null
-                                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                    val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                    passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
-                                } else {
-                                    Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        onDismiss = {
-                            if (!passEditInProgress) {
-                                passEditRequest = null
-                            }
-                        }
-                    )
-                    }
-                }
-            }
-            if (quickNotePasswordRequired) {
-                GpgPasswordDialog(
-                    isDecrypt = true,
-                    fileName = QUICK_NOTE_GPG_FILE_NAME,
-                    password = quickNotePassword,
-                    passwordLabel = "密钥密码",
-                    inProgress = quickNoteInProgress,
-                    onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
-                    onConfirm = { pwd ->
-                        if (!quickNoteInProgress) requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
-                    },
-                    onDismiss = {
-                        if (!quickNoteInProgress) {
-                            resetQuickNotePromptState()
-                            quickNoteStartWithAddDialog = false
-                        }
-                    }
-                )
-            }
-            zipUnzipTarget?.let { target ->
-                val parentDirUri = Uri.parse(displayUri)
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                val encrypted = zipUnzipEncrypted
-                AlertDialog(
-                    onDismissRequest = { zipUnzipTarget = null; zipUnzipPassword = "" },
-                    title = { Text("解压压缩包") },
-                    text = {
-                        Column {
-                            Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
-                            if (encrypted == true) {
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = zipUnzipPassword,
-                                    onValueChange = { zipUnzipPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("密码（加密压缩包）") },
-                                    singleLine = true
-                                )
-                            } else if (encrypted == null) {
-                                Spacer(Modifier.height(8.dp))
-                                Text("正在检测…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (encrypted == true && zipUnzipPassword.isBlank()) return@Button
-                                scope.launch {
-                                    progressOp = OperationProgress("解压", 0, null)
-                                    delay(50)
-                                    val pwd = if (encrypted == true) zipUnzipPassword.toCharArray() else null
-                                    val result = withContext(Dispatchers.IO) {
-                                        unzipToParent(
-                                            context,
-                                            target.uri,
-                                            parentDirUri,
-                                            treeUri,
-                                            target.name,
-                                            pwd
-                                        ) { cur, tot ->
-                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("解压", cur, tot) }
-                                        }
-                                    }
-                                    // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
-                                    delay(120)
-                                    progressOp = null
-                                    when (result) {
-                                        is UnzipResult.Success -> {
-                                            zipUnzipTarget = null
-                                            zipUnzipPassword = ""
-                                            zipUnzipEncrypted = null
-                                            Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
-                                            refreshTrigger++
-                                        }
-                                        is UnzipResult.PasswordRequired -> {
-                                            // 需要密码但未提供，显示密码输入框让用户重试
-                                            zipUnzipEncrypted = true
-                                            Toast.makeText(context, "请输入密码", Toast.LENGTH_SHORT).show()
-                                        }
-                                        is UnzipResult.WrongPassword -> {
-                                            // 密码错误，保留对话框让用户重试
-                                            zipUnzipEncrypted = true
-                                            Toast.makeText(context, "密码错误，请重试", Toast.LENGTH_SHORT).show()
-                                        }
-                                        is UnzipResult.CorruptedFile -> {
-                                            zipUnzipTarget = null
-                                            zipUnzipPassword = ""
-                                            zipUnzipEncrypted = null
-                                            Toast.makeText(context, "解压失败：文件已损坏", Toast.LENGTH_SHORT).show()
-                                        }
-                                        is UnzipResult.UnsupportedFormat -> {
-                                            zipUnzipTarget = null
-                                            zipUnzipPassword = ""
-                                            zipUnzipEncrypted = null
-                                            Toast.makeText(context, "解压失败：不支持的压缩格式", Toast.LENGTH_SHORT).show()
-                                        }
-                                        is UnzipResult.IOError -> {
-                                            zipUnzipTarget = null
-                                            zipUnzipPassword = ""
-                                            zipUnzipEncrypted = null
-                                            val msg = result.message ?: "未知错误"
-                                            Toast.makeText(context, "解压失败：$msg", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            }
-                        ) { Text("解压") }
-                    },
-                    dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text("取消") } }
-                )
-            }
-            // ---- .md.zip 密码输入对话框（仅加密 zip 时弹出） ----
-            mdZipTarget?.let { target ->
-                val encrypted = mdZipEncrypted
-                if (encrypted == true) {
-                    AlertDialog(
-                        onDismissRequest = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } },
-                        title = { Text("查看压缩 Markdown") },
-                        text = {
-                            Column {
-                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = mdZipPassword,
-                                    onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("ZIP 密码") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !mdZipInProgress
-                                )
-                                if (mdZipInProgress) {
-                                    Spacer(Modifier.height(8.dp))
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (mdZipInProgress || mdZipPassword.isBlank()) return@Button
-                                    mdZipInProgress = true
-                                    val pwd = mdZipPassword.toCharArray()
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            extractMdZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                        mdZipInProgress = false
-                                        if (result != null) {
-                                            mdZipTarget = null
-                                            mdZipPassword = ""
-                                            mdZipViewState = MdZipViewState(
-                                                targetFile = result.targetFile,  // 可能为 null
-                                                contentDir = result.contentDir,
-                                                zipFileName = target.name,
-                                                zipUri = target.uri,
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            ) { Text("确定") }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
-                            ) { Text("取消") }
-                        }
-                    )
-                } else if (encrypted == null) {
-                    // 正在检测加密状态或正在解压非加密 zip
-                    AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("查看压缩 Markdown") },
-                        text = {
-                            Column {
-                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        },
-                        confirmButton = {}
-                    )
-                }
-            }
-            // ---- .html.zip 密码输入对话框 ----
-            htmlZipTarget?.let { target ->
-                val encrypted = htmlZipEncrypted
-                if (encrypted == true) {
-                    AlertDialog(
-                        onDismissRequest = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } },
-                        title = { Text("查看压缩 HTML") },
-                        text = {
-                            Column {
-                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = htmlZipPassword,
-                                    onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("ZIP 密码") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !htmlZipInProgress
-                                )
-                                if (htmlZipInProgress) {
-                                    Spacer(Modifier.height(8.dp))
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (htmlZipInProgress || htmlZipPassword.isBlank()) return@Button
-                                    htmlZipInProgress = true
-                                    val pwd = htmlZipPassword.toCharArray()
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            extractHtmlZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                        htmlZipInProgress = false
-                                        if (result != null) {
-                                            htmlZipTarget = null
-                                            htmlZipPassword = ""
-                                            htmlZipViewState = HtmlZipViewState(
-                                                indexFile = result.indexFile,
-                                                contentDir = result.contentDir,
-                                                zipFileName = target.name,
-                                                zipUri = target.uri,
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            ) { Text("确定") }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
-                            ) { Text("取消") }
-                        }
-                    )
-                } else if (encrypted == null) {
-                    // 加载中或显示错误
-                    AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("查看压缩 HTML") },
-                        text = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 100.dp, max = 400.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                if (htmlZipInProgress) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("加载中...", style = MaterialTheme.typography.bodyMedium)
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    htmlZipLog,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            if (htmlZipLoadError != null) {
-                                TextButton(onClick = { htmlZipTarget = null; htmlZipLoadError = null; htmlZipLog = "" }) {
-                                    Text("关闭")
-                                }
-                            }
-                        }
-                    )
-                }
-            }
-            // ---- .llm.zip 密码输入对话框 ----
-            llmZipTarget?.let { target ->
-                val encrypted = llmZipEncrypted
-                if (encrypted == true) {
-                    AlertDialog(
-                        onDismissRequest = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } },
-                        title = { Text("查看压缩 LLM") },
-                        text = {
-                            Column {
-                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = llmZipPassword,
-                                    onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("ZIP 密码") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !llmZipInProgress
-                                )
-                                if (llmZipInProgress) {
-                                    Spacer(Modifier.height(8.dp))
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (llmZipInProgress || llmZipPassword.isBlank()) return@Button
-                                    llmZipInProgress = true
-                                    val pwd = llmZipPassword.toCharArray()
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            extractLlmZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                        llmZipInProgress = false
-                                        if (result != null) {
-                                            llmZipTarget = null
-                                            llmZipPassword = ""
-                                            epubViewState = EpubViewState(
-                                                extractResult = result,
-                                                zipFileName = target.name,
-                                                epubUri = target.uri,
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            Toast.makeText(context, "解压失败（请检查密码或文件内容）", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            ) { Text("确定") }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
-                            ) { Text("取消") }
-                        }
-                    )
-                } else if (encrypted == null) {
-                    AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("查看压缩 LLM") },
-                        text = {
-                            Column {
-                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        },
-                        confirmButton = {}
-                    )
-                }
-            }
-            // ---- .epub 密码输入对话框 ----
-            epubTarget?.let { target ->
-                val encrypted = epubEncrypted
-                if (encrypted == true) {
-                    AlertDialog(
-                        onDismissRequest = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } },
-                        title = { Text("查看 EPUB 电子书") },
-                        text = {
-                            Column {
-                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = epubPassword,
-                                    onValueChange = { if (!epubInProgress) epubPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("ZIP 密码") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !epubInProgress
-                                )
-                                if (epubInProgress) {
-                                    Spacer(Modifier.height(8.dp))
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (epubInProgress || epubPassword.isBlank()) return@Button
-                                    epubInProgress = true
-                                    epubLog = "开始解压加密EPUB...\n"
-                                    val pwd = epubPassword.toCharArray()
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            extractEpubToCache(context, target.uri, pwd, target.name) { log ->
-                                                epubLog += "$log\n"
-                                            }
-                                        }
-                                        epubInProgress = false
-                                        when (result) {
-                                            is EpubParseResult.Success -> {
-                                                epubTarget = null
-                                                epubPassword = ""
-                                                epubViewState = EpubViewState(
-                                                    extractResult = result.result,
-                                                    zipFileName = target.name,
-                                                    epubUri = target.uri,
-                                                    isEncrypted = true
-                                                )
-                                            }
-                                            is EpubParseResult.Error -> {
-                                                val detail = result.detail?.let { "\n$it" } ?: ""
-                                                epubLog += "\n错误: ${result.message}$detail\n"
-                                                epubLoadError = "${result.message}$detail"
-                                            }
-                                        }
-                                    }
-                                }
-                            ) { Text("确定") }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
-                            ) { Text("取消") }
-                        }
-                    )
-                } else {
-                    // encrypted == null 或 encrypted == false，都显示加载对话框
-                    AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("打开 EPUB") },
-                        text = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 100.dp, max = 400.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                if (epubInProgress) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                        Spacer(Modifier.width(8.dp))
-                                        Text("加载中...", style = MaterialTheme.typography.bodyMedium)
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    epubLog,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            if (epubLoadError != null) {
-                                TextButton(onClick = { epubTarget = null; epubLoadError = null; epubLog = "" }) {
-                                    Text("关闭")
-                                }
-                            }
-                        }
-                    )
-                }
-            }
-            // ---- EPUB 错误对话框（独立于epubTarget） ----
-            epubLoadError?.let { error ->
-                if (epubTarget == null) {
-                    AlertDialog(
-                        onDismissRequest = { epubLoadError = null; epubLog = "" },
-                        title = { Text("EPUB 解析失败") },
-                        text = {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(max = 400.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                Text(
-                                    epubLog,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text("确定") }
-                        }
-                    )
-                }
-            }
-            // ---- TXT 错误对话框 ----
-            txtLoadError?.let { error ->
-                AlertDialog(
-                    onDismissRequest = { txtLoadError = null; txtTarget = null },
-                    title = { Text("TXT 文件解析失败") },
-                    text = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 300.dp)
-                        ) {
-                            Text(
-                                error,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text("确定") }
-                    }
-                )
-            }
-            // ---- LLM 错误对话框 ----
-            llmLoadError?.let { error ->
-                AlertDialog(
-                    onDismissRequest = { llmLoadError = null; llmTarget = null },
-                    title = { Text("LLM 对话文件解析失败") },
-                    text = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 300.dp)
-                        ) {
-                            Text(
-                                error,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text("确定") }
-                    }
-                )
-            }
-            // ---- .pic.zip 密码输入对话框 ----
-            picZipTarget?.let { target ->
-                val encrypted = picZipEncrypted
-                if (encrypted == true) {
-                    AlertDialog(
-                        onDismissRequest = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } },
-                        title = { Text("查看图片压缩包") },
-                        text = {
-                            Column {
-                                Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
-                                Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(
-                                    value = picZipPassword,
-                                    onValueChange = { if (!picZipInProgress) picZipPassword = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    label = { Text("ZIP 密码") },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    enabled = !picZipInProgress
-                                )
-                                if (picZipInProgress) {
-                                    Spacer(Modifier.height(8.dp))
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    if (picZipInProgress || picZipPassword.isBlank()) return@Button
-                                    picZipInProgress = true
-                                    val pwd = picZipPassword.toCharArray()
-                                    scope.launch {
-                                        var result: PicZipExtractResult? = null
-                                        var cachedInitialIndex = 0
-                                        withContext(Dispatchers.IO) {
-                                            val cacheDir = getPicZipCacheDir(context, target.uri)
-                                            val contentDir = java.io.File(cacheDir, "content")
-                                            val listFile = java.io.File(cacheDir, ".image_list")
-                                            if (contentDir.exists() && listFile.exists() && tryPicZipPassword(context, target.uri, pwd)) {
-                                                val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
-                                                val lastIndexFile = java.io.File(cacheDir, ".last_index")
-                                                cachedInitialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, (paths.size - 1).coerceAtLeast(0)) ?: 0
-                                                result = PicZipExtractResult(cacheDir, contentDir, paths, true)
-                                            }
-                                            if (result == null) {
-                                                result = extractPicZipToCache(context, target.uri, pwd, target.name)
-                                            }
-                                        }
-                                        picZipInProgress = false
-                                        val res = result
-                                        if (res != null) {
-                                            picZipTarget = null
-                                            picZipPassword = ""
-                                            picZipViewState = PicZipViewState(
-                                                contentDir = res.contentDir,
-                                                imagePaths = res.imagePaths,
-                                                zipFileName = target.name,
-                                                zipUri = target.uri,
-                                                isEncrypted = true,
-                                                password = pwd,
-                                                initialIndex = cachedInitialIndex
-                                            )
-                                        } else {
-                                            Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                }
-                            ) { Text("确定") }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
-                            ) { Text("取消") }
-                        }
-                    )
-                } else if (encrypted == null) {
-                    AlertDialog(
-                        onDismissRequest = {},
-                        title = { Text("查看图片压缩包") },
-                        text = {
-                            Column {
-                                Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        },
-                        confirmButton = {}
-                    )
-                }
-            }
-            zipCompressTarget?.let { target ->
-                val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
-                val parentDirUri = Uri.parse(displayUri)
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                AlertDialog(
-                    onDismissRequest = { zipCompressTarget = null; zipCompressPassword = "" },
-                    title = { Text("压缩为 ZIP") },
-                    text = {
-                        Column {
-                            Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = zipCompressPassword,
-                                onValueChange = { zipCompressPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("密码（留空则不加密）") },
-                                singleLine = true
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    progressOp = OperationProgress("压缩", 0, 1)
-                                    delay(50)
-                                    val pwd = zipCompressPassword.ifBlank { null }?.toCharArray()
-                                    val ok = withContext(Dispatchers.IO) {
-                                        compressToZip(
-                                            context,
-                                            listOf(target.uri),
-                                            parentDirUri,
-                                            treeUri,
-                                            suggestedZipName,
-                                            pwd
-                                        ) { cur, tot ->
-                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
-                                        }
-                                    }
-                                    delay(120)
-                                    progressOp = null
-                                    zipCompressTarget = null
-                                    zipCompressPassword = ""
-                                    if (ok) {
-                                        Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text("压缩") }
-                    },
-                    dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
-                )
-            }
-            sevenZCompressTarget?.let { target ->
-                val suggested7zName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.7z" else "${target.name}.7z"
-                val parentDirUri = Uri.parse(displayUri)
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                AlertDialog(
-                    onDismissRequest = { sevenZCompressTarget = null; sevenZCompressPassword = "" },
-                    title = { Text("压缩为 7Z") },
-                    text = {
-                        Column {
-                            Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = sevenZCompressPassword,
-                                onValueChange = { sevenZCompressPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("密码（留空则不加密）") },
-                                singleLine = true
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    progressOp = OperationProgress("压缩", 0, 1)
-                                    delay(50)
-                                    val pwd = sevenZCompressPassword.ifBlank { null }?.toCharArray()
-                                    var timeout = false
-                                    val ok = withContext(Dispatchers.IO) {
-                                        val executor = Executors.newSingleThreadExecutor()
-                                        try {
-                                            val future = executor.submit<Boolean> {
-                                                compressTo7z(
-                                                    context,
-                                                    listOf(target.uri),
-                                                    parentDirUri,
-                                                    treeUri,
-                                                    suggested7zName,
-                                                    pwd
-                                                ) { cur, tot ->
-                                                    scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
-                                                }
-                                            }
-                                            future.get(2, TimeUnit.MINUTES)
-                                        } catch (_: TimeoutException) {
-                                            timeout = true
-                                            false
-                                        } finally {
-                                            executor.shutdownNow()
-                                        }
-                                    }
-                                    delay(120)
-                                    progressOp = null
-                                    sevenZCompressTarget = null
-                                    sevenZCompressPassword = ""
-                                    if (ok) {
-                                        Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text("压缩") }
-                    },
-                    dismissButton = { TextButton(onClick = { sevenZCompressTarget = null; sevenZCompressPassword = "" }) { Text("取消") } }
-                )
-            }
-            if (showPendingCompressToZip && pendingList.isNotEmpty()) {
-                val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
-                AlertDialog(
-                    onDismissRequest = { showPendingCompressToZip = false },
-                    title = { Text("压缩待处理列表为 ZIP") },
-                    text = {
-                        Column {
-                            Text(
-                                "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到根目录。",
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = pendingCompressZipName,
-                                onValueChange = { pendingCompressZipName = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("文件名") },
-                                singleLine = true
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = pendingCompressPassword,
-                                onValueChange = { pendingCompressPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("密码（留空则不加密）") },
-                                singleLine = true
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            enabled = pendingCompressZipName.isNotBlank(),
-                            onClick = {
-                                val zipName = pendingCompressZipName.trim().let {
-                                    if (it.endsWith(".zip", ignoreCase = true)) it else "$it.zip"
-                                }
-                                val items = pendingList.toList()
-                                val pwd = pendingCompressPassword.ifBlank { null }?.toCharArray()
-                                showPendingCompressToZip = false
-                                scope.launch {
-                                    progressOp = OperationProgress("压缩", 0, items.size)
-                                    delay(50)
-                                    val ok = withContext(Dispatchers.IO) {
-                                        compressToZip(
-                                            context,
-                                            items.map { it.uri },
-                                            rootDirUri,
-                                            rootTreeUri,
-                                            zipName,
-                                            pwd
-                                        ) { cur, tot ->
-                                            scope.launch(Dispatchers.Main.immediate) {
-                                                progressOp = OperationProgress("压缩", cur, tot)
-                                            }
-                                        }
-                                    }
-                                    delay(120)
-                                    progressOp = null
-                                    pendingCompressZipName = ""
-                                    pendingCompressPassword = ""
-                                    if (ok) {
-                                        pendingList.clear()
-                                        Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text("压缩") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showPendingCompressToZip = false }) { Text("取消") }
-                    }
-                )
-            }
-            if (showPendingCompressTo7z && pendingList.isNotEmpty()) {
-                val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                val rootDirUri = rootTreeUri ?: Uri.parse(displayUri)
-                AlertDialog(
-                    onDismissRequest = { showPendingCompressTo7z = false },
-                    title = { Text("压缩待处理列表为 7Z") },
-                    text = {
-                        Column {
-                            Text(
-                                "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到根目录。",
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
-                                value = pendingCompress7zName,
-                                onValueChange = { pendingCompress7zName = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("文件名") },
-                                singleLine = true
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = pendingCompress7zPassword,
-                                onValueChange = { pendingCompress7zPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                label = { Text("密码（留空则不加密）") },
-                                singleLine = true
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            enabled = pendingCompress7zName.isNotBlank(),
-                            onClick = {
-                                val sevenZName = pendingCompress7zName.trim().let {
-                                    if (it.endsWith(".7z", ignoreCase = true)) it else "$it.7z"
-                                }
-                                val items = pendingList.toList()
-                                val pwd = pendingCompress7zPassword.ifBlank { null }?.toCharArray()
-                                showPendingCompressTo7z = false
-                                scope.launch {
-                                    progressOp = OperationProgress("压缩", 0, items.size)
-                                    delay(50)
-                                    var timeout = false
-                                    val ok = withContext(Dispatchers.IO) {
-                                        val executor = Executors.newSingleThreadExecutor()
-                                        try {
-                                            val future = executor.submit<Boolean> {
-                                                compressTo7z(
-                                                    context,
-                                                    items.map { it.uri },
-                                                    rootDirUri,
-                                                    rootTreeUri,
-                                                    sevenZName,
-                                                    pwd
-                                                ) { cur, tot ->
-                                                    scope.launch(Dispatchers.Main.immediate) {
-                                                        progressOp = OperationProgress("压缩", cur, tot)
-                                                    }
-                                                }
-                                            }
-                                            future.get(2, TimeUnit.MINUTES)
-                                        } catch (_: TimeoutException) {
-                                            timeout = true
-                                            false
-                                        } finally {
-                                            executor.shutdownNow()
-                                        }
-                                    }
-                                    delay(120)
-                                    progressOp = null
-                                    pendingCompress7zName = ""
-                                    pendingCompress7zPassword = ""
-                                    if (ok) {
-                                        pendingList.clear()
-                                        showPendingList = false
-                                        Toast.makeText(context, "压缩完成：$sevenZName", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text("压缩") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showPendingCompressTo7z = false }) { Text("取消") }
-                    }
-                )
-            }
-            if (showChangeRootConfirm && rootUri != null) {
-                val r = rootUri!!
-                val root = Uri.parse(normalizeContentUriString(r))
-                AlertDialog(
-                    onDismissRequest = { showChangeRootConfirm = false },
-                    title = { Text("更换根目录") },
-                    text = { Text("当前根目录的回收站不为空，是否清空后再更换？") },
-                    confirmButton = {
-                        Button(onClick = {
-                            scope.launch {
-                                showChangeRootConfirm = false
-                                runWithProgress("清空回收站", null) { _ ->
-                                    val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                    if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                    treeLauncher.launch(null)
-                                    refreshTrigger++
-                                }
-                            }
-                        }) { Text("清空后更换") }
-                    },
-                    dismissButton = {
-                        Row {
-                            TextButton(onClick = {
-                                showChangeRootConfirm = false
-                                treeLauncher.launch(null)
-                            }) { Text("直接更换") }
-                            TextButton(onClick = { showChangeRootConfirm = false }) { Text("取消") }
-                        }
-                    }
-                )
-            }
-            var gpgInProgress by remember { mutableStateOf(false) }
-            gpgState?.let { op ->
-                val ctx = context
-                val dirUri = normalizeContentUriString(op.dirUri)
-                val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-
-                fun resetGpgUiState() {
-                    gpgState = null
-                    gpgPassword = ""
-                    gpgDecryptMode = null
-                    gpgDecryptAutoTried = false
-                    gpgEncryptSelectedKeyId = null
-                }
-
-                if (op.isDecrypt) {
-                    LaunchedEffect(op) {
-                        gpgDecryptMode = detectGpgDecryptMode(op)
-                        gpgDecryptAutoTried = SecretKeyPasswordCache.get() == null
-                    }
-
-                    if (gpgDecryptMode == GpgDecryptUiMode.SECRET_KEY && !gpgDecryptAutoTried && SecretKeyPasswordCache.get() != null) {
-                        LaunchedEffect(op, gpgDecryptMode) {
-                            gpgDecryptAutoTried = true
-                            gpgInProgress = true
-                            val autoKeyPass = SecretKeyPasswordCache.get() ?: return@LaunchedEffect
-                            val ok = when (op) {
-                                is GpgOpState.BatchDecrypt -> {
-                                    var allOk = true
-                                    runWithProgress("解密", op.list.size) { setProgress ->
-                                        op.list.forEachIndexed { index, fileModel ->
-                                            if (!decryptGpgFile(fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
-                                                allOk = false
-                                            }
-                                            setProgress(index + 1)
-                                        }
-                                    }
-                                    allOk
-                                }
-                                is GpgOpState.Decrypt -> decryptGpgFile(op.fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)
-                                else -> false
-                            }
-                            gpgInProgress = false
-                            if (ok) {
-                                resetGpgUiState()
-                                refreshTrigger++
-                                if (op is GpgOpState.BatchDecrypt) {
-                                    pendingList.clear()
-                                    showPendingList = false
-                                    Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    }
-
-                    val decryptMode = gpgDecryptMode
-                    if (decryptMode != null && (decryptMode != GpgDecryptUiMode.SECRET_KEY || gpgDecryptAutoTried)) {
-                        GpgPasswordDialog(
-                            isDecrypt = true,
-                            fileName = op.displayName,
-                            password = gpgPassword,
-                            passwordLabel = when (decryptMode) {
-                                GpgDecryptUiMode.SECRET_KEY -> "密钥密码"
-                                GpgDecryptUiMode.MIXED -> "密码（公钥文件会自动尝试私钥）"
-                                GpgDecryptUiMode.SYMMETRIC -> "密码"
-                            },
-                            inProgress = gpgInProgress,
-                            onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
-                            onConfirm = { pwd ->
-                                if (gpgInProgress) return@GpgPasswordDialog
-                                gpgInProgress = true
-                                scope.launch {
-                                    try {
-                                        val pwdChars = pwd.toCharArray()
-                                        val ok = when (op) {
-                                            is GpgOpState.BatchDecrypt -> {
-                                                runWithProgress("解密", op.list.size) { setProgress ->
-                                                    op.list.forEachIndexed { index, fileModel ->
-                                                        decryptGpgFile(
-                                                            fileModel,
-                                                            dirUri,
-                                                            treeUri,
-                                                            symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
-                                                            keyPassphrase = when (decryptMode) {
-                                                                GpgDecryptUiMode.SYMMETRIC -> null
-                                                                GpgDecryptUiMode.SECRET_KEY -> pwdChars
-                                                                GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
-                                                            }
-                                                        )
-                                                        setProgress(index + 1)
-                                                    }
-                                                }
-                                                true
-                                            }
-                                            is GpgOpState.Decrypt -> decryptGpgFile(
-                                                op.fileModel,
-                                                dirUri,
-                                                treeUri,
-                                                symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
-                                                keyPassphrase = when (decryptMode) {
-                                                    GpgDecryptUiMode.SYMMETRIC -> null
-                                                    GpgDecryptUiMode.SECRET_KEY -> pwdChars
-                                                    GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
-                                                }
-                                            )
-                                            else -> false
-                                        }
-                                        if (ok) {
-                                            if (op is GpgOpState.BatchDecrypt) {
-                                                pendingList.clear()
-                                                showPendingList = false
-                                                Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
-                                            }
-                                            resetGpgUiState()
-                                            refreshTrigger++
-                                        } else {
-                                            Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
-                                        }
-                                    } finally {
-                                        gpgInProgress = false
-                                    }
-                                }
-                            },
-                            onDismiss = { if (!gpgInProgress) resetGpgUiState() }
-                        )
-                    }
-                } else {
-                    val pubRings = loadPublicKeyRings(context)
-                    val keys = listEncryptionPublicKeyRings(pubRings)
-                    GpgEncryptDialog(
-                        fileName = op.displayName,
-                        keys = keys,
-                        selectedKeyId = gpgEncryptSelectedKeyId,
-                        password = gpgPassword,
-                        inProgress = gpgInProgress || gpgPubEncryptInProgress,
-                        onSelectPassword = {
-                            if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = null
-                        },
-                        onSelectKey = { keyId ->
-                            if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = keyId
-                        },
-                        onPasswordChange = {
-                            if (!gpgInProgress && !gpgPubEncryptInProgress) {
-                                gpgPassword = it
-                                if (it.isNotEmpty()) gpgEncryptSelectedKeyId = null
-                            }
-                        },
-                        onConfirm = { password, keyId ->
-                            if (gpgInProgress || gpgPubEncryptInProgress) return@GpgEncryptDialog
-                            if (keyId == null && password.isBlank()) return@GpgEncryptDialog
-                            gpgInProgress = keyId == null
-                            gpgPubEncryptInProgress = keyId != null
-                            scope.launch {
-                                try {
-                                    val pwdChars = password.toCharArray()
-                                    val ok = when (op) {
-                                        is GpgOpState.BatchEncrypt -> {
-                                            runWithProgress(if (keyId != null) "公钥加密" else "加密", op.list.size) { setProgress ->
-                                                op.list.forEachIndexed { index, fileModel ->
-                                                    encryptGpgFile(
-                                                        fileModel,
-                                                        dirUri,
-                                                        treeUri,
-                                                        symmetricPassword = if (keyId == null) pwdChars else null,
-                                                        publicKeyId = keyId
-                                                    )
-                                                    setProgress(index + 1)
-                                                }
-                                            }
-                                            true
-                                        }
-                                        is GpgOpState.Encrypt -> encryptGpgFile(
-                                            op.fileModel,
-                                            dirUri,
-                                            treeUri,
-                                            symmetricPassword = if (keyId == null) pwdChars else null,
-                                            publicKeyId = keyId
-                                        )
-                                        else -> false
-                                    }
-                                    if (ok) {
-                                        if (op is GpgOpState.BatchEncrypt) {
-                                            pendingList.clear()
-                                            showPendingList = false
-                                            Toast.makeText(ctx, if (keyId != null) "已公钥加密 ${op.list.size} 个文件" else "已加密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(ctx, if (keyId != null) "公钥加密完成" else "加密完成", Toast.LENGTH_SHORT).show()
-                                        }
-                                        resetGpgUiState()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(ctx, "加密失败", Toast.LENGTH_LONG).show()
-                                    }
-                                } finally {
-                                    gpgInProgress = false
-                                    gpgPubEncryptInProgress = false
-                                }
-                            }
-                        },
-                        onDismiss = { if (!gpgInProgress && !gpgPubEncryptInProgress) resetGpgUiState() }
-                    )
-                }
-            }
-        }
+        else -> MainTabsRootContent()
     }
     showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
         val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@let

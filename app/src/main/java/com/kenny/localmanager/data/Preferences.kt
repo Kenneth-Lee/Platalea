@@ -280,6 +280,25 @@ class Preferences(private val context: Context) {
         }
     }
 
+    suspend fun removeRecentOpenItem(type: String, key: String) {
+        if (type.isBlank() || key.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val filtered = parseRecentOpenItems(prefs[RECENT_OPEN_ITEMS_JSON])
+                .filterNot { it.type == type && it.key == key }
+            if (filtered.isEmpty()) {
+                prefs.remove(RECENT_OPEN_ITEMS_JSON)
+            } else {
+                prefs[RECENT_OPEN_ITEMS_JSON] = recentOpenItemsToJson(filtered)
+            }
+        }
+    }
+
+    suspend fun clearRecentOpenItems() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(RECENT_OPEN_ITEMS_JSON)
+        }
+    }
+
     suspend fun setGitRepoUrl(url: String?) {
         context.dataStore.edit { prefs ->
             if (url.isNullOrBlank()) prefs.remove(GIT_REPO_URL)
