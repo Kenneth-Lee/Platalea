@@ -16,6 +16,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +30,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -71,6 +73,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -90,8 +93,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
@@ -140,6 +141,7 @@ import com.kenny.localmanager.data.configJsonPlaylistCount
 import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
+import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.DirectoryAccessException
 import com.kenny.localmanager.file.copyDocumentTo
@@ -276,10 +278,17 @@ private data class ExternalAppTarget(
     val label: String
 )
 
+private const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
+private const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
+private const val RECENT_TYPE_PLAYLIST = "playlist"
+private const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
+
 private enum class MainTab(val key: String, val label: String) {
     DIRECTORY("directory", "目录"),
+    RECENT("recent", "最近"),
     PLAYER("player", "播放器"),
     FTP("ftp", "FTP"),
+    GIT_SHARE("git_share", "共享"),
     QUICK_NOTE("quick_note", "速记"),
     DICTIONARY("dictionary", "词典");
 
@@ -292,6 +301,250 @@ private enum class MainTab(val key: String, val label: String) {
             if (target.isNullOrBlank()) return null
             return values().firstOrNull { it.key == target }
         }
+    }
+}
+
+private fun mainTabIcon(tab: MainTab): ImageVector {
+    return when (tab) {
+        MainTab.DIRECTORY -> Icons.Default.Folder
+        MainTab.RECENT -> Icons.Default.List
+        MainTab.PLAYER -> Icons.Default.QueueMusic
+        MainTab.FTP -> Icons.Default.Wifi
+        MainTab.GIT_SHARE -> Icons.Default.Share
+        MainTab.QUICK_NOTE -> Icons.Default.Edit
+        MainTab.DICTIONARY -> Icons.Default.MenuBook
+    }
+}
+
+@Composable
+private fun ScrollableMainTabBar(
+    activeMainTab: MainTab,
+    onSwitchMainTab: (MainTab) -> Unit
+) {
+    Surface(tonalElevation = 2.dp) {
+        val tabs = listOf(
+            MainTab.DIRECTORY,
+            MainTab.RECENT,
+            MainTab.PLAYER,
+            MainTab.FTP,
+            MainTab.GIT_SHARE,
+            MainTab.QUICK_NOTE,
+            MainTab.DICTIONARY
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 8.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tabs.forEach { tab ->
+                val selected = activeMainTab == tab
+                OutlinedButton(
+                    onClick = { onSwitchMainTab(tab) },
+                    modifier = Modifier.widthIn(min = 82.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
+                        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.height(2.dp))
+                        Text(tab.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun RecentTabContent(
+    items: List<RecentOpenItem>,
+    onOpenRecentItem: (RecentOpenItem) -> Unit
+) {
+    if (items.isEmpty()) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("暂无最近打开条目", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        return
+    }
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 96.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        items(items) { item ->
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onOpenRecentItem(item) },
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        item.title,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val typeLabel = when (item.type) {
+                        RECENT_TYPE_ZIP_VIEWER -> "ZIP 查看器"
+                        RECENT_TYPE_EPUB_RENDERER -> "EPUB 渲染器"
+                        RECENT_TYPE_PLAYLIST -> "播放列表"
+                        RECENT_TYPE_EXTERNAL_OPEN -> "外部打开"
+                        else -> item.type
+                    }
+                    val timeLabel = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(item.openedAt))
+                    Text(
+                        "$typeLabel · $timeLabel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FtpTabContent(
+    rootUri: String?,
+    displayUri: String,
+    ftpManager: com.kenny.localmanager.ftp.FtpServerManager,
+    ftpPort: Int,
+    ftpPassword: String?,
+    ftpTimeoutMinutes: Int,
+    onRequestExitApp: () -> Unit
+) {
+    if (rootUri != null) {
+        FtpScreen(
+            manager = ftpManager,
+            treeRootUri = rootUri,
+            currentDirUri = displayUri,
+            port = ftpPort,
+            password = ftpPassword,
+            timeoutMinutes = ftpTimeoutMinutes,
+            showBackButton = false,
+            onDismiss = { onRequestExitApp() }
+        )
+    } else {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("请先选择根目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun GitShareTabContent(
+    prefs: Preferences,
+    rootUri: String?,
+    onRequestExitApp: () -> Unit
+) {
+    FileShareScreen(
+        prefs = prefs,
+        rootUri = rootUri?.let { normalizeContentUriString(it) },
+        showBackButton = false,
+        autoRefreshOnEnter = false,
+        onDismiss = { onRequestExitApp() }
+    )
+}
+
+@Composable
+private fun PlayerTabContent(
+    context: Context,
+    prefs: Preferences,
+    playbackState: PlaybackState?,
+    onRequestExitApp: () -> Unit
+) {
+    PlaybackScreen(
+        prefs = prefs,
+        playbackState = playbackState,
+        onStopPlayback = {
+            val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        },
+        onPlayPrev = {
+            val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        },
+        onPlayNext = {
+            val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        },
+        onPlayPause = {
+            val action = if (playbackState?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
+            val intent = Intent(context, PlaybackService::class.java).setAction(action)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        },
+        onSeek = { positionMs ->
+            val intent = Intent(context, PlaybackService::class.java).apply {
+                action = ACTION_SEEK
+                putExtra(EXTRA_POSITION_MS, positionMs)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+        },
+        showBackButton = false,
+        onDismiss = { onRequestExitApp() }
+    )
+}
+
+@Composable
+private fun QuickNoteTabContent(
+    quickNoteData: QuickNoteLoadedData?,
+    quickNoteStartWithAddDialog: Boolean,
+    quickNoteInProgress: Boolean,
+    onEntriesChanged: (List<QuickNoteEntry>) -> Unit
+) {
+    val data = quickNoteData
+    if (data != null) {
+        QuickNoteScreen(
+            loadedData = data,
+            startWithAddDialog = quickNoteStartWithAddDialog,
+            inProgress = quickNoteInProgress,
+            onEntriesChanged = onEntriesChanged
+        )
+    } else {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            if (quickNoteInProgress) {
+                CircularProgressIndicator()
+            } else {
+                Text("正在打开快速笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryTabContent(onRequestExitApp: () -> Unit) {
+    DictionaryScreen(showBackButton = false, onBack = { onRequestExitApp() })
+}
+
+@Composable
+private fun MainTabContentHost(
+    activeMainTab: MainTab,
+    recentOpenItems: List<RecentOpenItem>,
+    onOpenRecentItem: (RecentOpenItem) -> Unit,
+    directoryContent: @Composable () -> Unit,
+    ftpContent: @Composable () -> Unit,
+    gitShareContent: @Composable () -> Unit,
+    playerContent: @Composable () -> Unit,
+    quickNoteContent: @Composable () -> Unit,
+    dictionaryContent: @Composable () -> Unit
+) {
+    when (activeMainTab) {
+        MainTab.DIRECTORY -> directoryContent()
+        MainTab.RECENT -> RecentTabContent(items = recentOpenItems.take(30), onOpenRecentItem = onOpenRecentItem)
+        MainTab.FTP -> ftpContent()
+        MainTab.GIT_SHARE -> gitShareContent()
+        MainTab.PLAYER -> playerContent()
+        MainTab.QUICK_NOTE -> quickNoteContent()
+        MainTab.DICTIONARY -> dictionaryContent()
     }
 }
 
@@ -421,6 +674,7 @@ fun FileBrowserApp(
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
     val scope = rememberCoroutineScope()
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
@@ -441,6 +695,9 @@ fun FileBrowserApp(
     }
     LaunchedEffect(prefs) {
         prefs.externalOpenByExtension.collect { preferredExternalPackages = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.recentOpenItems.collect { recentOpenItems = it }
     }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
@@ -475,6 +732,24 @@ fun FileBrowserApp(
         if (currentMainTab == tab) return
         currentMainTab = tab
         scope.launch { prefs.setLastMainTab(tab.key) }
+    }
+
+    fun recordRecentOpen(
+        type: String,
+        key: String,
+        title: String,
+        uri: String? = null,
+        playlistId: String? = null
+    ) {
+        scope.launch {
+            prefs.addRecentOpenItem(
+                type = type,
+                key = key,
+                title = title,
+                uri = uri,
+                playlistId = playlistId
+            )
+        }
     }
 
     fun resetQuickNotePromptState() {
@@ -773,6 +1048,14 @@ fun FileBrowserApp(
         }
         mdZipViewState != null -> {
             val state = mdZipViewState!!
+            LaunchedEffect(state.zipUri) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_ZIP_VIEWER,
+                    key = state.zipUri.toString(),
+                    title = state.zipFileName,
+                    uri = state.zipUri.toString()
+                )
+            }
             BackHandler {
                 if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
                 mdZipViewState = null
@@ -791,6 +1074,14 @@ fun FileBrowserApp(
         }
         htmlZipViewState != null -> {
             val state = htmlZipViewState!!
+            LaunchedEffect(state.zipUri) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_ZIP_VIEWER,
+                    key = state.zipUri.toString(),
+                    title = state.zipFileName,
+                    uri = state.zipUri.toString()
+                )
+            }
             BackHandler {
                 if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
                 htmlZipViewState = null
@@ -808,6 +1099,14 @@ fun FileBrowserApp(
         }
         epubViewState != null -> {
             val state = epubViewState!!
+            LaunchedEffect(state.epubUri) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_EPUB_RENDERER,
+                    key = state.epubUri.toString(),
+                    title = state.zipFileName,
+                    uri = state.epubUri.toString()
+                )
+            }
             BackHandler {
                 if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
                 epubViewState = null
@@ -825,6 +1124,14 @@ fun FileBrowserApp(
         }
         picZipViewState != null -> {
             val state = picZipViewState!!
+            LaunchedEffect(state.zipUri) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_ZIP_VIEWER,
+                    key = state.zipUri.toString(),
+                    title = state.zipFileName,
+                    uri = state.zipUri.toString()
+                )
+            }
             BackHandler { picZipViewState = null }
             PicZipViewerScreen(
                 contentDir = state.contentDir,
@@ -975,7 +1282,6 @@ fun FileBrowserApp(
             var filterVisible by remember { mutableStateOf(true) }
             var showGitConfigDialog by remember { mutableStateOf(false) }
             var showPubkeyShareScreen by remember { mutableStateOf(false) }
-            var showFileShareScreen by remember { mutableStateOf(false) }
             var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
             val shareGitLogs = remember { mutableStateListOf<String>() }
             var shareGitInProgress by remember { mutableStateOf(false) }
@@ -1422,7 +1728,6 @@ fun FileBrowserApp(
             BackHandler {
                 when {
                     progressOp != null -> { } // 不响应返回，防止误触
-                    showFileShareScreen -> showFileShareScreen = false
                     batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
                     passProtectTarget != null -> { passProtectTarget = null }
@@ -1508,6 +1813,12 @@ fun FileBrowserApp(
                     names = audioList.map { it.name }
                 )
                 withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
+                recordRecentOpen(
+                    type = RECENT_TYPE_PLAYLIST,
+                    key = playlist.id,
+                    title = playlist.name,
+                    playlistId = playlist.id
+                )
                 val intent = Intent(context, PlaybackService::class.java).apply {
                     action = ACTION_PLAY
                     putExtra(EXTRA_PLAYLIST_ID, playlist.id)
@@ -1533,6 +1844,12 @@ fun FileBrowserApp(
                     Toast.makeText(context, "加入播放列表失败", Toast.LENGTH_SHORT).show()
                     return
                 }
+                recordRecentOpen(
+                    type = RECENT_TYPE_PLAYLIST,
+                    key = target.id,
+                    title = target.name,
+                    playlistId = target.id
+                )
                 val intent = Intent(context, PlaybackService::class.java).apply {
                     action = ACTION_PLAY
                     putExtra(EXTRA_PLAYLIST_ID, target.id)
@@ -1764,6 +2081,97 @@ fun FileBrowserApp(
                     }
                 }
             }
+
+            fun recentModel(uri: String, name: String): DocumentFileModel {
+                return DocumentFileModel(
+                    name = name,
+                    isDirectory = false,
+                    uri = Uri.parse(uri),
+                    lastModified = 0L,
+                    size = 0L
+                )
+            }
+
+            fun openRecentItem(item: RecentOpenItem) {
+                when (item.type) {
+                    RECENT_TYPE_PLAYLIST -> {
+                        val playlistId = item.playlistId
+                        if (playlistId.isNullOrBlank()) {
+                            Toast.makeText(context, "条目无效：缺少播放列表 ID", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        val intent = Intent(context, PlaybackService::class.java).apply {
+                            action = ACTION_PLAY
+                            putExtra(EXTRA_PLAYLIST_ID, playlistId)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                        recordRecentOpen(
+                            type = RECENT_TYPE_PLAYLIST,
+                            key = playlistId,
+                            title = item.title,
+                            playlistId = playlistId
+                        )
+                        switchMainTab(MainTab.PLAYER)
+                    }
+
+                    RECENT_TYPE_EXTERNAL_OPEN -> {
+                        val uri = item.uri
+                        if (uri.isNullOrBlank()) {
+                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        val opened = launchExternalOpen(context, uri, null)
+                        if (!opened) {
+                            Toast.makeText(context, "外部打开失败：没有可打开的应用", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        recordRecentOpen(
+                            type = RECENT_TYPE_EXTERNAL_OPEN,
+                            key = item.key,
+                            title = item.title,
+                            uri = uri
+                        )
+                    }
+
+                    RECENT_TYPE_ZIP_VIEWER -> {
+                        val uri = item.uri
+                        if (uri.isNullOrBlank()) {
+                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        val model = recentModel(uri, item.title)
+                        when {
+                            item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> mdZipTarget = model
+                            item.title.endsWith(".html.zip", ignoreCase = true) -> htmlZipTarget = model
+                            item.title.endsWith(".pic.zip", ignoreCase = true) -> picZipTarget = model
+                            else -> {
+                                Toast.makeText(context, "暂不支持从最近条目打开此 ZIP 类型", Toast.LENGTH_SHORT).show()
+                                return
+                            }
+                        }
+                    }
+
+                    RECENT_TYPE_EPUB_RENDERER -> {
+                        val uri = item.uri
+                        if (uri.isNullOrBlank()) {
+                            Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                            return
+                        }
+                        val model = recentModel(uri, item.title)
+                        when {
+                            item.title.endsWith(".llm.zip", ignoreCase = true) -> llmZipTarget = model
+                            item.title.endsWith(".txt", ignoreCase = true) -> txtTarget = model
+                            item.title.endsWith(".llm", ignoreCase = true) -> llmTarget = model
+                            else -> epubTarget = model
+                        }
+                    }
+
+                    else -> {
+                        Toast.makeText(context, "未知条目类型：${item.type}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
             val ftpRootUri = rootUri
             Column(Modifier.fillMaxSize()) {
                 if (gpgPubEncryptInProgress || saveInProgress) {
@@ -1772,8 +2180,11 @@ fun FileBrowserApp(
                 }
                 progressOp?.let { OperationProgressDialog(it) }
                 Box(Modifier.weight(1f)) {
-                    when (activeMainTab) {
-                        MainTab.DIRECTORY -> {
+                    MainTabContentHost(
+                        activeMainTab = activeMainTab,
+                        recentOpenItems = recentOpenItems,
+                        onOpenRecentItem = { openRecentItem(it) },
+                        directoryContent = {
                             FileBrowserScreen(
                                 modifier = Modifier.fillMaxSize(),
                                 currentUri = displayUri,
@@ -1835,6 +2246,12 @@ fun FileBrowserApp(
                                 onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
                                     val opened = launchExternalOpen(context, uri, packageName)
                                     if (opened) {
+                                        recordRecentOpen(
+                                            type = RECENT_TYPE_EXTERNAL_OPEN,
+                                            key = uri,
+                                            title = name,
+                                            uri = uri
+                                        )
                                         if (rememberChoice) {
                                             val extension = fileExtensionKey(name)
                                             if (extension != null && !packageName.isNullOrBlank()) {
@@ -1912,10 +2329,6 @@ fun FileBrowserApp(
                                         }
                                     }
                                 },
-                                onOpenFileShare = {
-                                    if (rootUri != null) showFileShareScreen = true
-                                    else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-                                },
                                 onShareFileToGit = { model ->
                                     shareFileToGitTarget = model
                                 },
@@ -1967,118 +2380,51 @@ fun FileBrowserApp(
                                 playbackState = playbackState,
                                 onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
                             )
-                        }
-
-                        MainTab.FTP -> {
-                            if (ftpRootUri != null) {
-                                FtpScreen(
-                                    manager = ftpManager,
-                                    treeRootUri = ftpRootUri,
-                                    currentDirUri = displayUri,
-                                    port = ftpPort,
-                                    password = ftpPassword,
-                                    timeoutMinutes = ftpTimeoutMinutes,
-                                    showBackButton = false,
-                                    onDismiss = { requestExitApp() }
-                                )
-                            } else {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("请先选择根目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-                        }
-
-                        MainTab.PLAYER -> {
-                            PlaybackScreen(
+                        },
+                        ftpContent = {
+                            FtpTabContent(
+                                rootUri = ftpRootUri,
+                                displayUri = displayUri,
+                                ftpManager = ftpManager,
+                                ftpPort = ftpPort,
+                                ftpPassword = ftpPassword,
+                                ftpTimeoutMinutes = ftpTimeoutMinutes,
+                                onRequestExitApp = { requestExitApp() }
+                            )
+                        },
+                        gitShareContent = {
+                            GitShareTabContent(
+                                prefs = prefs,
+                                rootUri = rootUri,
+                                onRequestExitApp = { requestExitApp() }
+                            )
+                        },
+                        playerContent = {
+                            PlayerTabContent(
+                                context = context,
                                 prefs = prefs,
                                 playbackState = playbackState,
-                                onStopPlayback = {
-                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                                },
-                                onPlayPrev = {
-                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                                },
-                                onPlayNext = {
-                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                                },
-                                onPlayPause = {
-                                    val action = if (playbackState?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
-                                    val intent = Intent(context, PlaybackService::class.java).setAction(action)
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                                },
-                                onSeek = { positionMs ->
-                                    val intent = Intent(context, PlaybackService::class.java).apply {
-                                        action = ACTION_SEEK
-                                        putExtra(EXTRA_POSITION_MS, positionMs)
-                                    }
-                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                                },
-                                showBackButton = false,
-                                onDismiss = { requestExitApp() }
+                                onRequestExitApp = { requestExitApp() }
                             )
+                        },
+                        quickNoteContent = {
+                            QuickNoteTabContent(
+                                quickNoteData = quickNoteData,
+                                quickNoteStartWithAddDialog = quickNoteStartWithAddDialog,
+                                quickNoteInProgress = quickNoteInProgress,
+                                onEntriesChanged = { quickNoteEntriesSnapshot = it }
+                            )
+                        },
+                        dictionaryContent = {
+                            DictionaryTabContent(onRequestExitApp = { requestExitApp() })
                         }
-
-                        MainTab.QUICK_NOTE -> {
-                            val data = quickNoteData
-                            if (data != null) {
-                                QuickNoteScreen(
-                                    loadedData = data,
-                                    startWithAddDialog = quickNoteStartWithAddDialog,
-                                    inProgress = quickNoteInProgress,
-                                    onEntriesChanged = { quickNoteEntriesSnapshot = it }
-                                )
-                            } else {
-                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    if (quickNoteInProgress) {
-                                        CircularProgressIndicator()
-                                    } else {
-                                        Text("正在打开快速笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
-                                }
-                            }
-                        }
-
-                        MainTab.DICTIONARY -> {
-                            DictionaryScreen(showBackButton = false, onBack = { requestExitApp() })
-                        }
-                    }
+                    )
                 }
 
-                NavigationBar {
-                    NavigationBarItem(
-                        selected = activeMainTab == MainTab.DIRECTORY,
-                        onClick = { switchMainTab(MainTab.DIRECTORY) },
-                        icon = { Icon(Icons.Default.Folder, contentDescription = MainTab.DIRECTORY.label) },
-                        label = { Text(MainTab.DIRECTORY.label) }
-                    )
-                    NavigationBarItem(
-                        selected = activeMainTab == MainTab.PLAYER,
-                        onClick = { switchMainTab(MainTab.PLAYER) },
-                        icon = { Icon(Icons.Default.QueueMusic, contentDescription = MainTab.PLAYER.label) },
-                        label = { Text(MainTab.PLAYER.label) }
-                    )
-                    NavigationBarItem(
-                        selected = activeMainTab == MainTab.FTP,
-                        onClick = { switchMainTab(MainTab.FTP) },
-                        icon = { Icon(Icons.Default.Wifi, contentDescription = MainTab.FTP.label) },
-                        label = { Text(MainTab.FTP.label) }
-                    )
-                    NavigationBarItem(
-                        selected = activeMainTab == MainTab.QUICK_NOTE,
-                        onClick = { switchMainTab(MainTab.QUICK_NOTE) },
-                        icon = { Icon(Icons.Default.Edit, contentDescription = MainTab.QUICK_NOTE.label) },
-                        label = { Text(MainTab.QUICK_NOTE.label) }
-                    )
-                    NavigationBarItem(
-                        selected = activeMainTab == MainTab.DICTIONARY,
-                        onClick = { switchMainTab(MainTab.DICTIONARY) },
-                        icon = { Icon(Icons.Default.MenuBook, contentDescription = MainTab.DICTIONARY.label) },
-                        label = { Text(MainTab.DICTIONARY.label) }
-                    )
-                }
+                ScrollableMainTabBar(
+                    activeMainTab = activeMainTab,
+                    onSwitchMainTab = { switchMainTab(it) }
+                )
             }
             if (showPendingList) {
                 PendingListScreen(
@@ -2440,16 +2786,6 @@ fun FileBrowserApp(
                     rootUri = rootUri?.let { normalizeContentUriString(it) },
                     onDismiss = {
                         showPubkeyShareScreen = false
-                        refreshTrigger++
-                    }
-                )
-            }
-            if (showFileShareScreen) {
-                FileShareScreen(
-                    prefs = prefs,
-                    rootUri = rootUri?.let { normalizeContentUriString(it) },
-                    onDismiss = {
-                        showFileShareScreen = false
                         refreshTrigger++
                     }
                 )
@@ -4251,7 +4587,6 @@ internal fun FileBrowserScreen(
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
-    onOpenFileShare: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
@@ -4442,14 +4777,6 @@ internal fun FileBrowserScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("Git 文件共享") },
-                                leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenFileShare()
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text("配置") },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
@@ -5527,6 +5854,7 @@ fun PendingListScreen(
 ) {
     val context = LocalContext.current
     var showHelpDialog by remember { mutableStateOf(false) }
+    var showCopyMoveDialog by remember { mutableStateOf(false) }
     var filterText by remember { mutableStateOf("") }
     val filteredPendingItems = if (filterText.isBlank()) pendingList
     else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
@@ -5551,6 +5879,13 @@ fun PendingListScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
+        },
+        floatingActionButton = {
+            if (pendingList.isNotEmpty()) {
+                FloatingActionButton(onClick = { showCopyMoveDialog = true }) {
+                    Icon(Icons.Default.DriveFileMove, contentDescription = "拷贝或移动")
+                }
+            }
         }
     ) { padding ->
         if (pendingList.isEmpty()) {
@@ -5599,12 +5934,6 @@ fun PendingListScreen(
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = onCopyHere) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到本处")
-                    }
-                    IconButton(onClick = onMoveHere) {
-                        Icon(Icons.Default.DriveFileMove, contentDescription = "移动到本处")
-                    }
                     IconButton(onClick = onRequestDelete) {
                         Icon(
                             Icons.Default.Delete,
@@ -5770,6 +6099,64 @@ fun PendingListScreen(
             confirmButton = { TextButton(onClick = { showHelpDialog = false }) { Text("知道了") } }
         )
     }
+
+    if (showCopyMoveDialog) {
+        AlertDialog(
+            onDismissRequest = { showCopyMoveDialog = false },
+            title = { Text("确认待处理列表") },
+            text = {
+                Column {
+                    Text(
+                        "当前将处理 ${pendingList.size} 项，确认后请选择拷贝或移动到当前目录。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    val preview = pendingList.take(20)
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 220.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        preview.forEach { item ->
+                            Text(
+                                item.name,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (pendingList.size > preview.size) {
+                            Text(
+                                "... 另有 ${pendingList.size - preview.size} 项",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            showCopyMoveDialog = false
+                            onCopyHere()
+                        }
+                    ) { Text("拷贝") }
+                    TextButton(
+                        onClick = {
+                            showCopyMoveDialog = false
+                            onMoveHere()
+                        }
+                    ) { Text("移动") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showCopyMoveDialog = false }) { Text("取消") }
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -5819,7 +6206,19 @@ fun PlaybackScreen(
         selectedPlaylistId = null
     }
 
+    fun recordPlayedPlaylist(pl: Playlist) {
+        scope.launch {
+            prefs.addRecentOpenItem(
+                type = RECENT_TYPE_PLAYLIST,
+                key = pl.id,
+                title = pl.name.ifBlank { "未命名播放列表" },
+                playlistId = pl.id
+            )
+        }
+    }
+
     fun startPlaylist(pl: Playlist) {
+        recordPlayedPlaylist(pl)
         val intent = Intent(context, PlaybackService::class.java).apply {
             action = ACTION_PLAY
             putExtra(EXTRA_PLAYLIST_ID, pl.id)
@@ -5828,6 +6227,7 @@ fun PlaybackScreen(
     }
 
     fun startPlaylistFromIndex(pl: Playlist, index: Int, startPositionMs: Int = 0) {
+        recordPlayedPlaylist(pl)
         val intent = Intent(context, PlaybackService::class.java).apply {
             action = ACTION_PLAY
             putExtra(EXTRA_PLAYLIST_ID, pl.id)

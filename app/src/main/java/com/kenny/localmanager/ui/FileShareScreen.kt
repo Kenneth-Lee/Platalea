@@ -75,6 +75,8 @@ private sealed class ShareSyncState {
 fun FileShareScreen(
     prefs: Preferences,
     rootUri: String?,
+    showBackButton: Boolean = true,
+    autoRefreshOnEnter: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -88,7 +90,7 @@ fun FileShareScreen(
     val syncLogs = remember { mutableStateListOf<String>() }
 
     var sharedFiles by remember { mutableStateOf<List<SharedFileInfo>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(autoRefreshOnEnter) }
     var refreshTrigger by remember { mutableStateOf(0) }
 
     var pendingDelete by remember { mutableStateOf<SharedFileInfo?>(null) }
@@ -171,7 +173,11 @@ fun FileShareScreen(
         }
     }
 
-    LaunchedEffect(refreshTrigger) {
+    LaunchedEffect(refreshTrigger, autoRefreshOnEnter) {
+        if (!autoRefreshOnEnter && refreshTrigger == 0) {
+            loading = false
+            return@LaunchedEffect
+        }
         loading = true
         syncAndLoad()
     }
@@ -181,8 +187,10 @@ fun FileShareScreen(
             TopAppBar(
                 title = { Text("文件共享") },
                 navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    if (showBackButton) {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -264,7 +272,7 @@ fun FileShareScreen(
                 if (sharedFiles.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "暂无共享文件",
+                            if (!autoRefreshOnEnter && refreshTrigger == 0) "点击右上角刷新加载共享文件" else "暂无共享文件",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

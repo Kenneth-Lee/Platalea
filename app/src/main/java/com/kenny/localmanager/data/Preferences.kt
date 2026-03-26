@@ -35,6 +35,7 @@ private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json"
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 private val PLAYER_LIST_BOOKMARKS_JSON = stringPreferencesKey("player_list_bookmarks_json")
 private val LAST_MAIN_TAB = stringPreferencesKey("last_main_tab")
+private val RECENT_OPEN_ITEMS_JSON = stringPreferencesKey("recent_open_items_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 
@@ -58,6 +59,15 @@ data class PlayerListBookmark(
 data class PlayerResumeState(
     val trackIndex: Int,
     val positionMs: Long
+)
+
+data class RecentOpenItem(
+    val type: String,
+    val key: String,
+    val title: String,
+    val uri: String?,
+    val playlistId: String?,
+    val openedAt: Long
 )
 
 class Preferences(private val context: Context) {
@@ -128,6 +138,10 @@ class Preferences(private val context: Context) {
     /** 主界面上次停留 tab。默认目录页。 */
     val lastMainTab: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[LAST_MAIN_TAB] ?: "directory"
+    }
+
+    val recentOpenItems: Flow<List<RecentOpenItem>> = context.dataStore.data.map { prefs ->
+        parseRecentOpenItems(prefs[RECENT_OPEN_ITEMS_JSON])
     }
 
     val playerPlaylistResumeStates: Flow<Map<String, PlayerResumeState>> = context.dataStore.data.map { prefs ->
@@ -231,6 +245,38 @@ class Preferences(private val context: Context) {
     suspend fun setLastMainTab(tab: String) {
         context.dataStore.edit { prefs ->
             prefs[LAST_MAIN_TAB] = tab.ifBlank { "directory" }
+        }
+    }
+
+    suspend fun addRecentOpenItem(
+        type: String,
+        key: String,
+        title: String,
+        uri: String? = null,
+        playlistId: String? = null
+    ) {
+        if (type.isBlank() || key.isBlank() || title.isBlank()) return
+        context.dataStore.edit { prefs ->
+            val now = System.currentTimeMillis()
+            val existing = parseRecentOpenItems(prefs[RECENT_OPEN_ITEMS_JSON]).toMutableList()
+            val index = existing.indexOfFirst { it.type == type && it.key == key }
+            val updated = RecentOpenItem(
+                type = type,
+                key = key,
+                title = title,
+                uri = uri,
+                playlistId = playlistId,
+                openedAt = now
+            )
+            if (index >= 0) {
+                existing[index] = updated
+            } else {
+                existing.add(updated)
+            }
+            val trimmed = existing
+                .sortedByDescending { it.openedAt }
+                .take(30)
+            prefs[RECENT_OPEN_ITEMS_JSON] = recentOpenItemsToJson(trimmed)
         }
     }
 
@@ -642,6 +688,51 @@ class Preferences(private val context: Context) {
                     put("trackName", bm.trackName)
                     put("note", bm.note)
                     put("savedAt", bm.savedAt)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseRecentOpenItems(json: String?): List<RecentOpenItem> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val type = obj.optString("type").trim()
+                    val key = obj.optString("key").trim()
+                    val title = obj.optString("title").trim()
+                    if (type.isBlank() || key.isBlank() || title.isBlank()) continue
+                    add(
+                        RecentOpenItem(
+                            type = type,
+                            key = key,
+                            title = title,
+                            uri = obj.optString("uri").ifBlank { null },
+                            playlistId = obj.optString("playlistId").ifBlank { null },
+                            openedAt = obj.optLong("openedAt", 0L)
+                        )
+                    )
+                }
+            }.sortedByDescending { it.openedAt }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun recentOpenItemsToJson(list: List<RecentOpenItem>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { item ->
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("type", item.type)
+                    put("key", item.key)
+                    put("title", item.title)
+                    put("uri", item.uri ?: "")
+                    put("playlistId", item.playlistId ?: "")
+                    put("openedAt", item.openedAt)
                 }
             )
         }
