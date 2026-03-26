@@ -20,12 +20,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Save
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -37,7 +35,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -46,13 +43,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextDecoration
@@ -431,7 +428,7 @@ fun QuickNoteScreen(
     loadedData: QuickNoteLoadedData,
     startWithAddDialog: Boolean,
     inProgress: Boolean,
-    onBack: (List<QuickNoteEntry>) -> Unit
+    onEntriesChanged: (List<QuickNoteEntry>) -> Unit
 ) {
     val composeContext = LocalContext.current
     val clipboardManager = composeContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
@@ -447,8 +444,8 @@ fun QuickNoteScreen(
     val categoryExpandedStates = remember(loadedData.fileInfo.uri) { mutableStateMapOf<String, Boolean>() }
     val existingCategories = remember(entries) { quickNoteCategoryNames(entries) }
 
-    androidx.activity.compose.BackHandler(enabled = !inProgress) {
-        onBack(entries)
+    LaunchedEffect(entries) {
+        onEntriesChanged(entries)
     }
 
     val groupedEntries = remember(entries) {
@@ -477,11 +474,6 @@ fun QuickNoteScreen(
                             )
                         }
                     },
-                    navigationIcon = {
-                        IconButton(onClick = { onBack(entries) }, enabled = !inProgress) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
-                        }
-                    },
                     actions = {
                         IconButton(onClick = { editorState = QuickNoteEditorState() }, enabled = !inProgress) {
                             Icon(Icons.Default.Add, contentDescription = "新增记录")
@@ -496,16 +488,6 @@ fun QuickNoteScreen(
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }
             }
-        },
-        floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = {
-                    if (!inProgress) onBack(entries)
-                },
-                icon = { Icon(Icons.Default.Save, contentDescription = null) },
-                text = { Text("保存退出") },
-                modifier = Modifier.then(if (inProgress) Modifier.alpha(0.38f) else Modifier)
-            )
         }
     ) { padding ->
         if (entries.isEmpty()) {

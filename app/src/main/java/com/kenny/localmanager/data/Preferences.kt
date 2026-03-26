@@ -34,6 +34,7 @@ private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 private val PLAYER_LIST_BOOKMARKS_JSON = stringPreferencesKey("player_list_bookmarks_json")
+private val LAST_MAIN_TAB = stringPreferencesKey("last_main_tab")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 
@@ -122,6 +123,11 @@ class Preferences(private val context: Context) {
 
     val externalOpenByExtension: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
         parseExternalOpenByExtensionMap(prefs[EXTERNAL_OPEN_BY_EXTENSION_JSON])
+    }
+
+    /** 主界面上次停留 tab。默认目录页。 */
+    val lastMainTab: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[LAST_MAIN_TAB] ?: "directory"
     }
 
     val playerPlaylistResumeStates: Flow<Map<String, PlayerResumeState>> = context.dataStore.data.map { prefs ->
@@ -219,6 +225,12 @@ class Preferences(private val context: Context) {
     suspend fun setFilterVisible(visible: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[FILTER_VISIBLE] = visible
+        }
+    }
+
+    suspend fun setLastMainTab(tab: String) {
+        context.dataStore.edit { prefs ->
+            prefs[LAST_MAIN_TAB] = tab.ifBlank { "directory" }
         }
     }
 

@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.content.pm.ShortcutManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -91,6 +90,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
@@ -101,6 +102,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -118,6 +120,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -126,10 +129,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import android.provider.DocumentsContract
-import androidx.core.content.pm.ShortcutInfoCompat
-import androidx.core.content.pm.ShortcutManagerCompat
-import androidx.core.graphics.drawable.IconCompat
-import com.kenny.localmanager.MainActivity
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.PlayerListBookmark
@@ -275,6 +276,25 @@ private data class ExternalAppTarget(
     val label: String
 )
 
+private enum class MainTab(val key: String, val label: String) {
+    DIRECTORY("directory", "目录"),
+    PLAYER("player", "播放器"),
+    FTP("ftp", "FTP"),
+    QUICK_NOTE("quick_note", "速记"),
+    DICTIONARY("dictionary", "词典");
+
+    companion object {
+        fun fromKey(key: String?): MainTab {
+            return values().firstOrNull { it.key == key } ?: DIRECTORY
+        }
+
+        fun fromLaunchTarget(target: String?): MainTab? {
+            if (target.isNullOrBlank()) return null
+            return values().firstOrNull { it.key == target }
+        }
+    }
+}
+
 /** 文件列表项副标题：大小与修改时间（与排序方式对应，便于对照）。 */
 private fun fileItemSubtitle(model: DocumentFileModel): String {
     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
@@ -382,6 +402,8 @@ fun FileBrowserApp(
     var passEditTriedCache by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
     var quickNoteData by remember { mutableStateOf<QuickNoteLoadedData?>(null) }
+    var quickNoteEntriesSnapshot by remember { mutableStateOf<List<QuickNoteEntry>>(emptyList()) }
+    var quickNoteLastSavedHash by remember { mutableStateOf<Int?>(null) }
     var quickNoteStartWithAddDialog by remember { mutableStateOf(false) }
     var quickNotePassword by remember { mutableStateOf("") }
     var quickNotePasswordRequired by remember { mutableStateOf(false) }
@@ -392,7 +414,7 @@ fun FileBrowserApp(
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
-    var showDictionaryScreen by remember { mutableStateOf(false) }
+    var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
@@ -443,16 +465,22 @@ fun FileBrowserApp(
         pendingSaveFileUri = uriStr
     }
 
+    LaunchedEffect(prefs, initialLaunchTarget) {
+        val launchTab = MainTab.fromLaunchTarget(initialLaunchTarget)
+        val savedTab = MainTab.fromKey(prefs.lastMainTab.first())
+        currentMainTab = launchTab ?: savedTab
+    }
+
+    fun switchMainTab(tab: MainTab) {
+        if (currentMainTab == tab) return
+        currentMainTab = tab
+        scope.launch { prefs.setLastMainTab(tab.key) }
+    }
+
     fun resetQuickNotePromptState() {
         quickNotePassword = ""
         quickNotePasswordRequired = false
         quickNoteInProgress = false
-    }
-
-    fun closeQuickNote() {
-        quickNoteData = null
-        quickNoteStartWithAddDialog = false
-        resetQuickNotePromptState()
     }
 
     suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
@@ -492,24 +520,25 @@ fun FileBrowserApp(
         return ok
     }
 
-    fun requestCloseQuickNote(entries: List<QuickNoteEntry>) {
-        val currentData = quickNoteData ?: run {
-            closeQuickNote()
-            return
-        }
+    fun persistQuickNoteIfNeeded(reason: String) {
+        val currentData = quickNoteData ?: return
         if (quickNoteInProgress) return
+        val snapshot = quickNoteEntriesSnapshot
+        val snapshotHash = snapshot.hashCode()
+        if (quickNoteLastSavedHash == snapshotHash) return
         quickNoteInProgress = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                saveQuickNoteData(context, currentData, entries)
+                saveQuickNoteData(context, currentData, snapshot)
             }
             quickNoteInProgress = false
             result.onSuccess { saved ->
                 markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                closeQuickNote()
-                if (initialLaunchTarget == "quick_note") (context as? Activity)?.finish()
+                quickNoteData = saved
+                quickNoteEntriesSnapshot = saved.entries
+                quickNoteLastSavedHash = saved.entries.hashCode()
             }.onFailure { throwable ->
-                Toast.makeText(context, throwable.message ?: "快速笔记保存失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "快速笔记自动保存失败（$reason）：${throwable.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -528,6 +557,8 @@ fun FileBrowserApp(
             }) {
                 is QuickNoteOpenResult.Success -> {
                     quickNoteData = result.data
+                    quickNoteEntriesSnapshot = result.data.entries
+                    quickNoteLastSavedHash = result.data.entries.hashCode()
                     quickNotePasswordRequired = false
                     quickNotePassword = ""
                 }
@@ -542,12 +573,36 @@ fun FileBrowserApp(
         }
     }
 
-    var quickNoteLaunchTriggered by remember { mutableStateOf(false) }
-    LaunchedEffect(initialLaunchTarget, rootUri) {
-        if (initialLaunchTarget == "quick_note" && !quickNoteLaunchTriggered) {
-            quickNoteLaunchTriggered = true
-            if (rootUri != null) requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
-            else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_LONG).show()
+    LaunchedEffect(currentMainTab, rootUri, quickNoteData, quickNoteInProgress) {
+        if (currentMainTab == MainTab.QUICK_NOTE && rootUri != null && quickNoteData == null && !quickNoteInProgress) {
+            requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
+        }
+    }
+
+    LaunchedEffect(currentMainTab, quickNoteData, quickNoteStartWithAddDialog) {
+        if (currentMainTab == MainTab.QUICK_NOTE && quickNoteData != null && quickNoteStartWithAddDialog) {
+            quickNoteStartWithAddDialog = false
+        }
+    }
+
+    var previousMainTab by remember { mutableStateOf<MainTab?>(null) }
+    LaunchedEffect(currentMainTab) {
+        if (previousMainTab == MainTab.QUICK_NOTE && currentMainTab != MainTab.QUICK_NOTE) {
+            persistQuickNoteIfNeeded("切换标签")
+        }
+        previousMainTab = currentMainTab
+    }
+
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP && currentMainTab == MainTab.QUICK_NOTE) {
+                persistQuickNoteIfNeeded("进入后台")
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
         }
     }
 
@@ -834,19 +889,6 @@ fun FileBrowserApp(
                 onBack = { passEditState = null }
             )
         }
-        quickNoteData != null -> {
-            val data = quickNoteData!!
-            QuickNoteScreen(
-                loadedData = data,
-                startWithAddDialog = quickNoteStartWithAddDialog,
-                inProgress = quickNoteInProgress,
-                onBack = { entries -> requestCloseQuickNote(entries) }
-            )
-        }
-        showDictionaryScreen -> {
-            BackHandler { showDictionaryScreen = false }
-            DictionaryScreen(onBack = { showDictionaryScreen = false })
-        }
         viewingFile != null -> {
             val (uri, name, isEncrypted) = viewingFile!!
             BackHandler { viewingFile = null }
@@ -862,9 +904,9 @@ fun FileBrowserApp(
         }
         else -> {
             val displayUri = currentUri ?: initialDirUri ?: rootUri!!
+            val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
             val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
             var showPendingList by remember { mutableStateOf(false) }
-            var showPlaybackScreen by remember { mutableStateOf(initialLaunchTarget == "player") }
             var showPendingDeleteConfirm by remember { mutableStateOf(false) }
             var showPlaybackTargetDialog by remember { mutableStateOf(false) }
             var showConfigDialog by remember { mutableStateOf(false) }
@@ -879,6 +921,14 @@ fun FileBrowserApp(
             var showKeyManagementDialog by remember { mutableStateOf(false) }
             LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
             var lastBackPressTime by remember { mutableStateOf(0L) }
+            val requestExitApp: () -> Unit = {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
+                else {
+                    lastBackPressTime = now
+                    Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+                }
+            }
             var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
             var gpgPassword by remember { mutableStateOf("") }
             var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
@@ -923,7 +973,6 @@ fun FileBrowserApp(
             var ftpPassword by remember { mutableStateOf<String?>(null) }
             var ftpTimeoutMinutes by remember { mutableStateOf(0) }
             var filterVisible by remember { mutableStateOf(true) }
-            var showFtpScreen by remember { mutableStateOf(false) }
             var showGitConfigDialog by remember { mutableStateOf(false) }
             var showPubkeyShareScreen by remember { mutableStateOf(false) }
             var showFileShareScreen by remember { mutableStateOf(false) }
@@ -1365,10 +1414,14 @@ fun FileBrowserApp(
             LaunchedEffect(prefs) {
                 prefs.filterVisible.collect { filterVisible = it }
             }
+            LaunchedEffect(activeMainTab) {
+                if (activeMainTab != MainTab.FTP) {
+                    ftpManager.stop()
+                }
+            }
             BackHandler {
                 when {
                     progressOp != null -> { } // 不响应返回，防止误触
-                    showFtpScreen -> { ftpManager.stop(); showFtpScreen = false }
                     showFileShareScreen -> showFileShareScreen = false
                     batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
                     quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
@@ -1391,7 +1444,7 @@ fun FileBrowserApp(
                     showAboutDialog -> showAboutDialog = false
                     showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                     showPendingList -> showPendingList = false
-                    showPlaybackScreen -> if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false
+                    activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                     zipUnzipTarget != null -> zipUnzipTarget = null
                     mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
                     htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
@@ -1405,12 +1458,7 @@ fun FileBrowserApp(
                     showPendingCompressTo7z -> showPendingCompressTo7z = false
                     fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                     else -> {
-                        val now = System.currentTimeMillis()
-                        if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
-                        else {
-                            lastBackPressTime = now
-                            Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
-                        }
+                        requestExitApp()
                     }
                 }
             }
@@ -1466,7 +1514,7 @@ fun FileBrowserApp(
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                 pendingList.clear()
-                showPlaybackScreen = true
+                switchMainTab(MainTab.PLAYER)
                 showPendingList = false
                 clearPendingPlaybackTargetState()
                 Toast.makeText(context, "已创建播放列表并加入 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
@@ -1491,7 +1539,7 @@ fun FileBrowserApp(
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
                 pendingList.clear()
-                showPlaybackScreen = true
+                switchMainTab(MainTab.PLAYER)
                 showPendingList = false
                 clearPendingPlaybackTargetState()
                 val msg = when {
@@ -1717,219 +1765,320 @@ fun FileBrowserApp(
                 }
             }
             val ftpRootUri = rootUri
-            if (showFtpScreen && ftpRootUri != null) {
-                FtpScreen(
-                    manager = ftpManager,
-                    treeRootUri = ftpRootUri,
-                    currentDirUri = displayUri,
-                    port = ftpPort,
-                    password = ftpPassword,
-                    timeoutMinutes = ftpTimeoutMinutes,
-                    onDismiss = { ftpManager.stop(); showFtpScreen = false }
-                )
-            } else {
             Column(Modifier.fillMaxSize()) {
                 if (gpgPubEncryptInProgress || saveInProgress) {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                     Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
                 }
                 progressOp?.let { OperationProgressDialog(it) }
-                FileBrowserScreen(
-                    modifier = Modifier.fillMaxSize(),
-                    currentUri = displayUri,
-                    refreshTrigger = refreshTrigger,
-                    dirCache = dirCache,
-                    onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
-                    pendingList = pendingList,
-                    rootUri = rootUri,
-                    listState = fileListLazyState,
-                    onNavigate = { uri ->
-                        fileBrowserBackStack.add(displayUri)
-                        currentUri = normalizeContentUriString(uri)
-                    },
-                    onBack = {
-                        if (fileBrowserBackStack.isNotEmpty()) {
-                            currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
-                        }
-                    },
-                    canGoBack = fileBrowserBackStack.isNotEmpty(),
-                    onEmptyTrash = rootUri?.let { r ->
-                        {
-                            scope.launch {
-                                val root = Uri.parse(normalizeContentUriString(r))
-                                runWithProgress("清空回收站", null) { _ ->
-                                    val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                    if (ok) {
-                                        Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                Box(Modifier.weight(1f)) {
+                    when (activeMainTab) {
+                        MainTab.DIRECTORY -> {
+                            FileBrowserScreen(
+                                modifier = Modifier.fillMaxSize(),
+                                currentUri = displayUri,
+                                refreshTrigger = refreshTrigger,
+                                dirCache = dirCache,
+                                onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
+                                pendingList = pendingList,
+                                rootUri = rootUri,
+                                listState = fileListLazyState,
+                                onNavigate = { uri ->
+                                    fileBrowserBackStack.add(displayUri)
+                                    currentUri = normalizeContentUriString(uri)
+                                },
+                                onBack = {
+                                    if (fileBrowserBackStack.isNotEmpty()) {
+                                        currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                                     }
-                                }
-                            }
-                        }
-                    },
-                    onRestoreFromTrash = rootUri?.let { r ->
-                        { model ->
-                            scope.launch {
-                                val root = Uri.parse(normalizeContentUriString(r))
-                                runWithProgress("恢复", null) { _ ->
-                                    val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                    if (ok) {
-                                        Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                },
+                                canGoBack = fileBrowserBackStack.isNotEmpty(),
+                                onEmptyTrash = rootUri?.let { r ->
+                                    {
+                                        scope.launch {
+                                            val root = Uri.parse(normalizeContentUriString(r))
+                                            runWithProgress("清空回收站", null) { _ ->
+                                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                                if (ok) {
+                                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                                    refreshTrigger++
+                                                } else {
+                                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
                                     }
-                                }
-                            }
+                                },
+                                onRestoreFromTrash = rootUri?.let { r ->
+                                    { model ->
+                                        scope.launch {
+                                            val root = Uri.parse(normalizeContentUriString(r))
+                                            runWithProgress("恢复", null) { _ ->
+                                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
+                                                if (ok) {
+                                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                                    refreshTrigger++
+                                                } else {
+                                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                filterVisible = filterVisible,
+                                hideDotFiles = hideDotFiles,
+                                isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
+                                preferredExternalPackages = preferredExternalPackages,
+                                onOpenFile = { uri, name, isEncrypted ->
+                                    viewingFile = Triple(uri, name, false)
+                                },
+                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
+                                    val opened = launchExternalOpen(context, uri, packageName)
+                                    if (opened) {
+                                        if (rememberChoice) {
+                                            val extension = fileExtensionKey(name)
+                                            if (extension != null && !packageName.isNullOrBlank()) {
+                                                scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                            }
+                                        }
+                                    } else {
+                                        val extension = fileExtensionKey(name)
+                                        if (!packageName.isNullOrBlank() && extension != null) {
+                                            scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                            Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                    opened
+                                },
+                                onClearExternalOpenPreference = { name ->
+                                    val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
+                                    scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                },
+                                onOpenMarkdownView = { uri, name, encrypted ->
+                                    markdownViewFile = Triple(uri, name, encrypted)
+                                },
+                                onAddToPendingList = { pendingList.add(it) },
+                                onRemoveFromPendingList = { pendingList.remove(it) },
+                                onShowPendingList = { showPendingList = it },
+                                onRefresh = { refreshTrigger++ },
+                                onOpenConfig = { showConfigDialog = true },
+                                onOpenAbout = { showAboutDialog = true },
+                                onCreateQuickNote = {
+                                    switchMainTab(MainTab.QUICK_NOTE)
+                                    requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) })
+                                },
+                                onRequestGpgDecrypt = { fileModel, dirUri ->
+                                    gpgPassword = ""
+                                    gpgDecryptMode = null
+                                    gpgDecryptAutoTried = false
+                                    gpgEncryptSelectedKeyId = null
+                                    gpgState = GpgOpState.Decrypt(fileModel, dirUri)
+                                },
+                                onRequestGpgEncrypt = { fileModel, dirUri ->
+                                    gpgPassword = ""
+                                    gpgDecryptMode = null
+                                    gpgDecryptAutoTried = false
+                                    gpgEncryptSelectedKeyId = null
+                                    gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                                },
+                                onRequestQuickObfuscate = { model ->
+                                    quickObfuscateOp = model to true
+                                    quickObfuscatePassword = ""
+                                },
+                                onRequestQuickDeobfuscate = { model ->
+                                    quickObfuscateOp = model to false
+                                    quickObfuscatePassword = ""
+                                },
+                                onConfirmDelete = { model, deletePermanently ->
+                                    scope.launch {
+                                        val label = if (deletePermanently) "删除" else "移到回收站"
+                                        runWithProgress(label, null) { _ ->
+                                            val ok = withContext(Dispatchers.IO) {
+                                                if (deletePermanently) {
+                                                    context.contentResolver.deleteDocument(model.uri)
+                                                } else {
+                                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
+                                                    moveToTrash(context, model.uri, root, root)
+                                                }
+                                            }
+                                            if (ok) {
+                                                Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                            refreshTrigger++
+                                        }
+                                    }
+                                },
+                                onOpenFileShare = {
+                                    if (rootUri != null) showFileShareScreen = true
+                                    else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                                },
+                                onShareFileToGit = { model ->
+                                    shareFileToGitTarget = model
+                                },
+                                onUnzipRequest = { zipUnzipTarget = it },
+                                onRequestMdZipView = { mdZipTarget = it },
+                                onRequestHtmlZipView = { htmlZipTarget = it },
+                                onRequestLlmZipView = { llmZipTarget = it },
+                                onRequestEpubView = { epubTarget = it },
+                                onRequestTxtView = { txtTarget = it },
+                                onRequestLlmView = { llmTarget = it },
+                                onRequestPicZipView = { picZipTarget = it },
+                                onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
+                                onCompressToZipRequest = { zipCompressTarget = it },
+                                onCompressTo7zRequest = { sevenZCompressTarget = it },
+                                onRequestPassProtect = { model -> passProtectTarget = model },
+                                onRequestPassView = { model ->
+                                    passViewTarget = model
+                                    passViewPassword = ""
+                                    passViewTriedCache = false
+                                },
+                                onRequestPassEdit = { model, dirUri ->
+                                    passEditRequest = Pair(model, dirUri)
+                                    passEditTriedCache = false
+                                },
+                                onRequestImportConfig = { model ->
+                                    scope.launch {
+                                        val jsonString = withContext(Dispatchers.IO) {
+                                            try {
+                                                context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
+                                            } catch (_: Exception) {
+                                                ""
+                                            }
+                                        }
+                                        startConfigImport(jsonString)
+                                    }
+                                },
+                                onRequestImportStarDict = { model ->
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            importStarDict(context, model.uri, model.name)
+                                        }
+                                        result.onSuccess {
+                                            Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
+                                        }.onFailure {
+                                            Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                playbackState = playbackState,
+                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                            )
                         }
-                    },
-                    filterVisible = filterVisible,
-                    hideDotFiles = hideDotFiles,
-                    isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
-                    preferredExternalPackages = preferredExternalPackages,
-                    onOpenFile = { uri, name, isEncrypted ->
-                        viewingFile = Triple(uri, name, false)
-                    },
-                    onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
-                        val opened = launchExternalOpen(context, uri, packageName)
-                        if (opened) {
-                            if (rememberChoice) {
-                                val extension = fileExtensionKey(name)
-                                if (extension != null && !packageName.isNullOrBlank()) {
-                                    scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
-                                }
-                            }
-                        } else {
-                            val extension = fileExtensionKey(name)
-                            if (!packageName.isNullOrBlank() && extension != null) {
-                                scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+
+                        MainTab.FTP -> {
+                            if (ftpRootUri != null) {
+                                FtpScreen(
+                                    manager = ftpManager,
+                                    treeRootUri = ftpRootUri,
+                                    currentDirUri = displayUri,
+                                    port = ftpPort,
+                                    password = ftpPassword,
+                                    timeoutMinutes = ftpTimeoutMinutes,
+                                    showBackButton = false,
+                                    onDismiss = { requestExitApp() }
+                                )
                             } else {
-                                Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text("请先选择根目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
-                        opened
-                    },
-                    onClearExternalOpenPreference = { name ->
-                        val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
-                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                    },
-                    onOpenMarkdownView = { uri, name, encrypted ->
-                        markdownViewFile = Triple(uri, name, encrypted)
-                    },
-                    onAddToPendingList = { pendingList.add(it) },
-                    onRemoveFromPendingList = { pendingList.remove(it) },
-                    onShowPendingList = { showPendingList = it },
-                    onRefresh = { refreshTrigger++ },
-                    onOpenConfig = { showConfigDialog = true },
-                    onOpenAbout = { showAboutDialog = true },
-                    onOpenQuickNote = { requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) }) },
-                    onCreateQuickNote = { requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) }) },
-                    onOpenDictionary = { showDictionaryScreen = true },
-                    onRequestGpgDecrypt = { fileModel, dirUri ->
-                        gpgPassword = ""
-                        gpgDecryptMode = null
-                        gpgDecryptAutoTried = false
-                        gpgEncryptSelectedKeyId = null
-                        gpgState = GpgOpState.Decrypt(fileModel, dirUri)
-                    },
-                    onRequestGpgEncrypt = { fileModel, dirUri ->
-                        gpgPassword = ""
-                        gpgDecryptMode = null
-                        gpgDecryptAutoTried = false
-                        gpgEncryptSelectedKeyId = null
-                        gpgState = GpgOpState.Encrypt(fileModel, dirUri)
-                    },
-                    onRequestQuickObfuscate = { model ->
-                        quickObfuscateOp = model to true
-                        quickObfuscatePassword = ""
-                    },
-                    onRequestQuickDeobfuscate = { model ->
-                        quickObfuscateOp = model to false
-                        quickObfuscatePassword = ""
-                    },
-                    onConfirmDelete = { model, deletePermanently ->
-                        scope.launch {
-                            val label = if (deletePermanently) "删除" else "移到回收站"
-                            runWithProgress(label, null) { _ ->
-                                val ok = withContext(Dispatchers.IO) {
-                                    if (deletePermanently) {
-                                        context.contentResolver.deleteDocument(model.uri)
+
+                        MainTab.PLAYER -> {
+                            PlaybackScreen(
+                                prefs = prefs,
+                                playbackState = playbackState,
+                                onStopPlayback = {
+                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                                },
+                                onPlayPrev = {
+                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                                },
+                                onPlayNext = {
+                                    val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                                },
+                                onPlayPause = {
+                                    val action = if (playbackState?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
+                                    val intent = Intent(context, PlaybackService::class.java).setAction(action)
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                                },
+                                onSeek = { positionMs ->
+                                    val intent = Intent(context, PlaybackService::class.java).apply {
+                                        action = ACTION_SEEK
+                                        putExtra(EXTRA_POSITION_MS, positionMs)
+                                    }
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+                                },
+                                showBackButton = false,
+                                onDismiss = { requestExitApp() }
+                            )
+                        }
+
+                        MainTab.QUICK_NOTE -> {
+                            val data = quickNoteData
+                            if (data != null) {
+                                QuickNoteScreen(
+                                    loadedData = data,
+                                    startWithAddDialog = quickNoteStartWithAddDialog,
+                                    inProgress = quickNoteInProgress,
+                                    onEntriesChanged = { quickNoteEntriesSnapshot = it }
+                                )
+                            } else {
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    if (quickNoteInProgress) {
+                                        CircularProgressIndicator()
                                     } else {
-                                        val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
-                                        moveToTrash(context, model.uri, root, root)
+                                        Text("正在打开快速笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
-                                if (ok) {
-                                    Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
-                                }
-                                refreshTrigger++
                             }
                         }
-                    },
-                    onOpenFtp = {
-                        if (rootUri != null) showFtpScreen = true
-                        else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-                    },
-                    onOpenFileShare = {
-                        if (rootUri != null) showFileShareScreen = true
-                        else Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-                    },
-                    onShareFileToGit = { model ->
-                        shareFileToGitTarget = model
-                    },
-                    onUnzipRequest = { zipUnzipTarget = it },
-                    onRequestMdZipView = { mdZipTarget = it },
-                    onRequestHtmlZipView = { htmlZipTarget = it },
-                    onRequestLlmZipView = { llmZipTarget = it },
-                    onRequestEpubView = { epubTarget = it },
-                    onRequestTxtView = { txtTarget = it },
-                    onRequestLlmView = { llmTarget = it },
-                    onRequestPicZipView = { picZipTarget = it },
-                    onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
-                    onCompressToZipRequest = { zipCompressTarget = it },
-                    onCompressTo7zRequest = { sevenZCompressTarget = it },
-                    onRequestPassProtect = { model -> passProtectTarget = model },
-                    onRequestPassView = { model ->
-                        passViewTarget = model
-                        passViewPassword = ""
-                        passViewTriedCache = false
-                    },
-                    onRequestPassEdit = { model, dirUri ->
-                        passEditRequest = Pair(model, dirUri)
-                        passEditTriedCache = false
-                    },
-                    onRequestImportConfig = { model ->
-                        scope.launch {
-                            val jsonString = withContext(Dispatchers.IO) {
-                                try {
-                                    context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
-                                } catch (_: Exception) {
-                                    ""
-                                }
-                            }
-                            startConfigImport(jsonString)
+
+                        MainTab.DICTIONARY -> {
+                            DictionaryScreen(showBackButton = false, onBack = { requestExitApp() })
                         }
-                    },
-                    onRequestImportStarDict = { model ->
-                        scope.launch {
-                            val result = withContext(Dispatchers.IO) {
-                                importStarDict(context, model.uri, model.name)
-                            }
-                            result.onSuccess {
-                                Toast.makeText(context, "词典已导入：${it.name}（${it.wordCount} 词条）", Toast.LENGTH_LONG).show()
-                            }.onFailure {
-                                Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    },
-                    playbackState = playbackState,
-                    onOpenPlaybackScreen = { showPlaybackScreen = true }
-                )
+                    }
+                }
+
+                NavigationBar {
+                    NavigationBarItem(
+                        selected = activeMainTab == MainTab.DIRECTORY,
+                        onClick = { switchMainTab(MainTab.DIRECTORY) },
+                        icon = { Icon(Icons.Default.Folder, contentDescription = MainTab.DIRECTORY.label) },
+                        label = { Text(MainTab.DIRECTORY.label) }
+                    )
+                    NavigationBarItem(
+                        selected = activeMainTab == MainTab.PLAYER,
+                        onClick = { switchMainTab(MainTab.PLAYER) },
+                        icon = { Icon(Icons.Default.QueueMusic, contentDescription = MainTab.PLAYER.label) },
+                        label = { Text(MainTab.PLAYER.label) }
+                    )
+                    NavigationBarItem(
+                        selected = activeMainTab == MainTab.FTP,
+                        onClick = { switchMainTab(MainTab.FTP) },
+                        icon = { Icon(Icons.Default.Wifi, contentDescription = MainTab.FTP.label) },
+                        label = { Text(MainTab.FTP.label) }
+                    )
+                    NavigationBarItem(
+                        selected = activeMainTab == MainTab.QUICK_NOTE,
+                        onClick = { switchMainTab(MainTab.QUICK_NOTE) },
+                        icon = { Icon(Icons.Default.Edit, contentDescription = MainTab.QUICK_NOTE.label) },
+                        label = { Text(MainTab.QUICK_NOTE.label) }
+                    )
+                    NavigationBarItem(
+                        selected = activeMainTab == MainTab.DICTIONARY,
+                        onClick = { switchMainTab(MainTab.DICTIONARY) },
+                        icon = { Icon(Icons.Default.MenuBook, contentDescription = MainTab.DICTIONARY.label) },
+                        label = { Text(MainTab.DICTIONARY.label) }
+                    )
+                }
             }
             if (showPendingList) {
                 PendingListScreen(
@@ -2058,37 +2207,6 @@ fun FileBrowserApp(
                     dismissButton = {
                         TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text("取消") }
                     }
-                )
-            }
-            if (showPlaybackScreen) {
-                PlaybackScreen(
-                    prefs = prefs,
-                    playbackState = playbackState,
-                    onStopPlayback = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_STOP)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onPlayPrev = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_PREV)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onPlayNext = {
-                        val intent = Intent(context, PlaybackService::class.java).setAction(ACTION_NEXT)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onPlayPause = {
-                        val action = if (playbackState?.isPlaying == true) ACTION_PAUSE else ACTION_RESUME
-                        val intent = Intent(context, PlaybackService::class.java).setAction(action)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onSeek = { positionMs ->
-                        val intent = Intent(context, PlaybackService::class.java).apply {
-                            action = ACTION_SEEK
-                            putExtra(EXTRA_POSITION_MS, positionMs)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-                    },
-                    onDismiss = { if (initialLaunchTarget == "player") (context as? Activity)?.finish() else showPlaybackScreen = false }
                 )
             }
             if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
@@ -3884,7 +4002,6 @@ fun FileBrowserApp(
                     )
                 }
             }
-            }
         }
     }
     showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
@@ -4134,11 +4251,8 @@ internal fun FileBrowserScreen(
     onRefresh: () -> Unit,
     onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
-    onOpenFtp: () -> Unit = {},
     onOpenFileShare: () -> Unit = {},
-    onOpenQuickNote: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
-    onOpenDictionary: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
@@ -4329,43 +4443,11 @@ internal fun FileBrowserScreen(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("播放器") },
-                                leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenPlaybackScreen()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("FTP 数据交换") },
-                                leadingIcon = { Icon(Icons.Default.Wifi, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenFtp()
-                                }
-                            )
-                            DropdownMenuItem(
                                 text = { Text("Git 文件共享") },
                                 leadingIcon = { Icon(Icons.Default.Share, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     onOpenFileShare()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("快速笔记") },
-                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenQuickNote()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("词典") },
-                                leadingIcon = { Icon(Icons.Default.MenuBook, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenDictionary()
                                 }
                             )
                             DropdownMenuItem(
@@ -5700,6 +5782,7 @@ fun PlaybackScreen(
     onPlayNext: () -> Unit,
     onPlayPause: () -> Unit,
     onSeek: (positionMs: Int) -> Unit = {},
+    showBackButton: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -5760,13 +5843,17 @@ fun PlaybackScreen(
                 title = {
                     Text(selectedPlaylist?.name ?: "播放器")
                 },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (selectedPlaylist != null) selectedPlaylistId = null
-                        else onDismiss()
-                    }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                navigationIcon = if (showBackButton) {
+                    {
+                        IconButton(onClick = {
+                            if (selectedPlaylist != null) selectedPlaylistId = null
+                            else onDismiss()
+                        }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        }
                     }
+                } else {
+                    { }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -6824,80 +6911,6 @@ fun CacheManagementDialog(
 }
 
 @Composable
-private fun DesktopShortcutButtons() {
-    val context = LocalContext.current
-    Column(Modifier.fillMaxWidth()) {
-        OutlinedButton(
-            onClick = {
-                try {
-                    if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-                        Toast.makeText(context, "当前启动器不支持添加快捷方式到桌面", Toast.LENGTH_SHORT).show()
-                        return@OutlinedButton
-                    }
-                    val intent = Intent(context, MainActivity::class.java).apply {
-                        action = Intent.ACTION_MAIN
-                        addCategory(Intent.CATEGORY_LAUNCHER)
-                        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, "player")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    }
-                    val shortcut = ShortcutInfoCompat.Builder(context, "launcher_player")
-                        .setShortLabel(context.getString(R.string.launcher_player_name))
-                        .setLongLabel(context.getString(R.string.launcher_player_name))
-                        .setIcon(IconCompat.createWithResource(context, R.drawable.ic_launcher_player))
-                        .setIntent(intent)
-                        .build()
-                    if (ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)) {
-                        Toast.makeText(context, "请将「管家播放器」放到桌面", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "当前启动器可能不支持添加快捷方式", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("添加「管家播放器」到桌面") }
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = {
-                try {
-                    if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-                        Toast.makeText(context, "当前启动器不支持添加快捷方式到桌面", Toast.LENGTH_SHORT).show()
-                        return@OutlinedButton
-                    }
-                    val intent = Intent(context, MainActivity::class.java).apply {
-                        action = Intent.ACTION_MAIN
-                        addCategory(Intent.CATEGORY_LAUNCHER)
-                        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, "quick_note")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                    }
-                    val shortcut = ShortcutInfoCompat.Builder(context, "launcher_quick_note")
-                        .setShortLabel(context.getString(R.string.launcher_quick_note_name))
-                        .setLongLabel(context.getString(R.string.launcher_quick_note_name))
-                        .setIcon(IconCompat.createWithResource(context, R.drawable.ic_launcher_quick_note))
-                        .setIntent(intent)
-                        .build()
-                    if (ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)) {
-                        Toast.makeText(context, "请将「管家速记」放到桌面", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, "当前启动器可能不支持添加快捷方式", Toast.LENGTH_SHORT).show()
-                    }
-                } catch (e: Exception) {
-                    Toast.makeText(context, "添加失败: ${e.message}", Toast.LENGTH_LONG).show()
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("添加「管家速记」到桌面") }
-        Text(
-            "删除桌面上的快捷方式不会卸载应用，可随时在此重新添加。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
-    }
-}
-
-@Composable
 fun ConfigDialog(
     onDismiss: () -> Unit,
     filterVisible: Boolean,
@@ -7026,10 +7039,6 @@ fun ConfigDialog(
                 Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
-                Spacer(Modifier.height(12.dp))
-                Text("桌面入口", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                Spacer(Modifier.height(6.dp))
-                DesktopShortcutButtons()
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
                 Spacer(Modifier.height(12.dp))

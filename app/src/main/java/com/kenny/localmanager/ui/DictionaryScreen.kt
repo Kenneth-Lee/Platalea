@@ -67,6 +67,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DictionaryScreen(
+    showBackButton: Boolean = true,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -134,10 +135,14 @@ fun DictionaryScreen(
         topBar = {
             TopAppBar(
                 title = { Text("词典") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                navigationIcon = if (showBackButton) {
+                    {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
                     }
+                } else {
+                    { }
                 },
                 actions = {
                     IconButton(onClick = {

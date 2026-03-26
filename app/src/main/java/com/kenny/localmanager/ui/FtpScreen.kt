@@ -66,6 +66,7 @@ fun FtpScreen(
     port: Int,
     password: String?,
     timeoutMinutes: Int = 0,
+    showBackButton: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -155,10 +156,14 @@ fun FtpScreen(
         topBar = {
             TopAppBar(
                 title = { Text("FTP 数据交换") },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "关闭")
+                navigationIcon = if (showBackButton) {
+                    {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "关闭")
+                        }
                     }
+                } else {
+                    { }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
