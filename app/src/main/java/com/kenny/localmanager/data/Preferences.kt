@@ -38,6 +38,8 @@ private val LAST_MAIN_TAB = stringPreferencesKey("last_main_tab")
 private val RECENT_OPEN_ITEMS_JSON = stringPreferencesKey("recent_open_items_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
+private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
+private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -81,6 +83,14 @@ class Preferences(private val context: Context) {
 
     val viewerPreviewBytes: Flow<Int> = context.dataStore.data.map { prefs ->
         prefs[VIEWER_PREVIEW_BYTES] ?: 4096
+    }
+
+    val epubDictAreaExpanded: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[EPUB_DICT_AREA_EXPANDED] ?: false
+    }
+
+    val epubDictLookupWords: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        parseStringListJson(prefs[EPUB_DICT_LOOKUP_WORDS_JSON])
     }
 
     val ftpPort: Flow<Int> = context.dataStore.data.map { prefs ->
@@ -181,6 +191,23 @@ class Preferences(private val context: Context) {
     suspend fun setViewerPreviewBytes(bytes: Int) {
         context.dataStore.edit { prefs ->
             prefs[VIEWER_PREVIEW_BYTES] = bytes
+        }
+    }
+
+    suspend fun setEpubDictAreaExpanded(expanded: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[EPUB_DICT_AREA_EXPANDED] = expanded
+        }
+    }
+
+    suspend fun setEpubDictLookupWords(words: List<String>) {
+        context.dataStore.edit { prefs ->
+            val normalized = words.map { it.trim() }.filter { it.isNotBlank() }.takeLast(50)
+            if (normalized.isEmpty()) {
+                prefs.remove(EPUB_DICT_LOOKUP_WORDS_JSON)
+            } else {
+                prefs[EPUB_DICT_LOOKUP_WORDS_JSON] = stringListToJson(normalized)
+            }
         }
     }
 
@@ -755,6 +782,27 @@ class Preferences(private val context: Context) {
                 }
             )
         }
+        return arr.toString()
+    }
+
+    private fun parseStringListJson(json: String?): List<String> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val value = arr.optString(i).trim()
+                    if (value.isNotBlank()) add(value)
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun stringListToJson(list: List<String>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { arr.put(it) }
         return arr.toString()
     }
 

@@ -93,6 +93,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.listHtmlZipContentFiles
@@ -3660,6 +3661,7 @@ fun EpubViewerScreen(
 ) {
     KeepScreenOnEffect()
     val context = LocalContext.current
+    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
@@ -3679,9 +3681,11 @@ fun EpubViewerScreen(
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
     var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
     var dictLoading by remember { mutableStateOf(false) }
-    var dictAreaExpanded by remember { mutableStateOf(false) }
+    val dictAreaExpanded by prefs.epubDictAreaExpanded.collectAsState(initial = false)
+    val persistedDictLookupWords by prefs.epubDictLookupWords.collectAsState(initial = emptyList())
     // 词典查询历史记录（用于回退）
     var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
+    var dictLookupHistoryRestored by remember { mutableStateOf(false) }
 
     // 加载词典（只加载一次）
     LaunchedEffect(Unit) {
@@ -3762,18 +3766,11 @@ fun EpubViewerScreen(
         return candidates.distinct()
     }
 
-    // 词典查询函数
-    fun lookupWord(word: String) {
-        // 如果当前有查询结果，先保存到历史记录
-        val current = dictLookupResult
-        if (current != null && current.word.isNotBlank()) {
-            dictHistory = dictHistory + current
-        }
-
+    // 词典查询函数（不修改历史，用于恢复和通用复用）
+    fun resolveLookupResult(word: String): DictLookupResult {
         val loaded = dictLoaded
         if (loaded == null) {
-            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
-            return
+            return DictLookupResult(word, null, "没有可用的词典，请先导入词典")
         }
 
         // 尝试精确匹配
@@ -3793,11 +3790,31 @@ fun EpubViewerScreen(
         }
 
         if (found == null) {
-            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
-            return
+            return DictLookupResult(word, null, "词典中未找到 \"$word\"")
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
-        dictLookupResult = DictLookupResult(matchedWord, definition, null)
+        return DictLookupResult(matchedWord, definition, null)
+    }
+
+    fun persistDictLookupStack() {
+        val words = buildList {
+            dictHistory.forEach { if (it.word.isNotBlank()) add(it.word) }
+            dictLookupResult?.word?.let { if (it.isNotBlank()) add(it) }
+        }
+        scope.launch {
+            prefs.setEpubDictLookupWords(words)
+        }
+    }
+
+    // 词典查询函数
+    fun lookupWord(word: String) {
+        // 如果当前有查询结果，先保存到历史记录
+        val current = dictLookupResult
+        if (current != null && current.word.isNotBlank()) {
+            dictHistory = dictHistory + current
+        }
+        dictLookupResult = resolveLookupResult(word)
+        persistDictLookupStack()
     }
 
     // 回退到上一个查询结果
@@ -3806,7 +3823,24 @@ fun EpubViewerScreen(
             val last = dictHistory.last()
             dictHistory = dictHistory.dropLast(1)
             dictLookupResult = last
+            persistDictLookupStack()
         }
+    }
+
+    // 词典加载完成后，恢复上次查询栈（最后一个作为当前，其余用于回退）
+    LaunchedEffect(dictLoaded, persistedDictLookupWords, dictLookupHistoryRestored) {
+        if (dictLookupHistoryRestored) return@LaunchedEffect
+        if (dictLoaded == null) return@LaunchedEffect
+        if (persistedDictLookupWords.isEmpty()) {
+            dictLookupHistoryRestored = true
+            return@LaunchedEffect
+        }
+        val restored = persistedDictLookupWords.map { resolveLookupResult(it) }
+        if (restored.isNotEmpty()) {
+            dictHistory = if (restored.size > 1) restored.dropLast(1) else emptyList()
+            dictLookupResult = restored.last()
+        }
+        dictLookupHistoryRestored = true
     }
 
     // 剪贴板监听器 - 当词典区域展开时，监控剪贴板变化并自动查词
@@ -4417,7 +4451,11 @@ fun EpubViewerScreen(
                                 // 展开/收起按钮（有词典时显示）
                                 if (hasDictLoaded) {
                                     IconButton(
-                                        onClick = { dictAreaExpanded = !dictAreaExpanded },
+                                        onClick = {
+                                            scope.launch {
+                                                prefs.setEpubDictAreaExpanded(!dictAreaExpanded)
+                                            }
+                                        },
                                         modifier = Modifier.size(32.dp)
                                     ) {
                                         Icon(
