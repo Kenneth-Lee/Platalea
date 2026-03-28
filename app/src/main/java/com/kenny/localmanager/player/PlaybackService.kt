@@ -5,6 +5,9 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothA2dp
+import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothProfile
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -12,6 +15,8 @@ import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState as PlatformPlaybackState
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
@@ -69,15 +74,80 @@ class PlaybackService : Service() {
     private var currentIndex = AtomicInteger(0)
     private var progressUpdateRunnable: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var mediaSession: MediaSession? = null
+    private var bluetoothOutputConnected: Boolean = false
+    private var pausedByBluetoothDisconnect: Boolean = false
+    private var lastPauseOrigin: PauseOrigin = PauseOrigin.OTHER
 
     private val binder = LocalBinder()
+
+    private enum class PauseOrigin {
+        USER,
+        NOISY,
+        BLUETOOTH_DISCONNECT,
+        OTHER
+    }
 
     // 音频输出设备断开（如蓝牙耳机断开）的广播接收器
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                pausePlayback()
+                val mp = mediaPlayer ?: return
+                if (!mp.isPlaying) return
+                // 仅在蓝牙输出路径断开导致暂停时，才允许重连后自动续播。
+                pausedByBluetoothDisconnect = bluetoothOutputConnected
+                pausePlayback(PauseOrigin.NOISY)
             }
+        }
+    }
+
+    private val bluetoothConnectionReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
+                BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED -> {
+                    val state = intent.getIntExtra(BluetoothProfile.EXTRA_STATE, BluetoothProfile.STATE_DISCONNECTED)
+                    when (state) {
+                        BluetoothProfile.STATE_CONNECTED -> {
+                            refreshBluetoothOutputState()
+                            tryResumeAfterBluetoothReconnect()
+                        }
+                        BluetoothProfile.STATE_DISCONNECTED -> {
+                            val wasPlaying = mediaPlayer?.isPlaying == true
+                            refreshBluetoothOutputState()
+                            if (wasPlaying) {
+                                pausedByBluetoothDisconnect = true
+                                pausePlayback(PauseOrigin.BLUETOOTH_DISCONNECT)
+                            } else if (lastPauseOrigin == PauseOrigin.NOISY) {
+                                pausedByBluetoothDisconnect = true
+                            }
+                        }
+                        else -> refreshBluetoothOutputState()
+                    }
+                }
+            }
+        }
+    }
+
+    private val mediaSessionCallback = object : MediaSession.Callback() {
+        override fun onPlay() {
+            resumePlayback()
+        }
+
+        override fun onPause() {
+            pausePlayback(PauseOrigin.USER)
+        }
+
+        override fun onSkipToNext() {
+            playNext()
+        }
+
+        override fun onSkipToPrevious() {
+            playPrev()
+        }
+
+        override fun onStop() {
+            stopPlayback()
         }
     }
 
@@ -89,12 +159,23 @@ class PlaybackService : Service() {
         super.onCreate()
         prefs = Preferences(applicationContext)
         createChannel()
+        initMediaSession()
+        refreshBluetoothOutputState()
         // 注册音频输出设备断开广播
         val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(noisyReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(noisyReceiver, filter)
+        }
+        val bluetoothFilter = IntentFilter().apply {
+            addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED)
+            addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(bluetoothConnectionReceiver, bluetoothFilter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(bluetoothConnectionReceiver, bluetoothFilter)
         }
     }
 
@@ -133,7 +214,7 @@ class PlaybackService : Service() {
             ACTION_STOP -> stopPlayback()
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
-            ACTION_PAUSE -> pausePlayback()
+            ACTION_PAUSE -> pausePlayback(PauseOrigin.USER)
             ACTION_RESUME -> resumePlayback()
             ACTION_SEEK -> {
                 val posMs = intent.getIntExtra(EXTRA_POSITION_MS, 0)
@@ -171,6 +252,8 @@ class PlaybackService : Service() {
             stopSelf()
             return
         }
+        pausedByBluetoothDisconnect = false
+        lastPauseOrigin = PauseOrigin.OTHER
         // 切换列表前先保存当前列表进度，否则再切回来时无法恢复
         val oldPlaylistId = this.playlistId
         if (oldPlaylistId != null && playlistUris.isNotEmpty()) {
@@ -226,6 +309,8 @@ class PlaybackService : Service() {
             if (playlistUris.isNotEmpty()) updateState(isPlaying = false)
             return
         }
+        pausedByBluetoothDisconnect = false
+        lastPauseOrigin = PauseOrigin.OTHER
         mediaPlayer?.release()
         mediaPlayer = null
 
@@ -272,6 +357,7 @@ class PlaybackService : Service() {
     }
 
     private fun startProgressUpdates() {
+        progressUpdateRunnable?.let { handler.removeCallbacks(it) }
         progressUpdateRunnable = object : Runnable {
             override fun run() {
                 val mp = mediaPlayer ?: return
@@ -307,6 +393,11 @@ class PlaybackService : Service() {
             playlistId = playlistId,
             playlistName = playlistName
         )
+        updateMediaSessionPlaybackState(
+            isPlaying = isPlaying,
+            positionMs = positionMs,
+            durationMs = durationMs
+        )
     }
 
     private fun playNext() {
@@ -338,10 +429,15 @@ class PlaybackService : Service() {
         playTrackAtIndex(prev)
     }
 
-    private fun pausePlayback() {
+    private fun pausePlayback(origin: PauseOrigin = PauseOrigin.USER) {
         val mp = mediaPlayer ?: return
         if (mp.isPlaying) {
             mp.pause()
+            lastPauseOrigin = origin
+            if (origin == PauseOrigin.USER || origin == PauseOrigin.OTHER) {
+                pausedByBluetoothDisconnect = false
+            }
+            progressUpdateRunnable?.let { handler.removeCallbacks(it) }
             updateState(isPlaying = false)
             updateNotification()
         }
@@ -351,6 +447,8 @@ class PlaybackService : Service() {
         val mp = mediaPlayer ?: return
         if (!mp.isPlaying) {
             mp.start()
+            pausedByBluetoothDisconnect = false
+            lastPauseOrigin = PauseOrigin.OTHER
             updateState(isPlaying = true)
             startProgressUpdates()
             updateNotification()
@@ -388,9 +486,65 @@ class PlaybackService : Service() {
         dirUri = ""
         playlistId = null
         playlistName = null
+        pausedByBluetoothDisconnect = false
+        lastPauseOrigin = PauseOrigin.OTHER
         PlaybackService._playbackState.value = null
+        updateMediaSessionPlaybackState(isPlaying = false, positionMs = 0, durationMs = 0)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun initMediaSession() {
+        mediaSession = MediaSession(this, "LocalManagerPlayback").apply {
+            setCallback(mediaSessionCallback)
+            isActive = true
+        }
+    }
+
+    private fun updateMediaSessionPlaybackState(isPlaying: Boolean, positionMs: Int, durationMs: Int) {
+        val actions = PlatformPlaybackState.ACTION_PLAY or
+            PlatformPlaybackState.ACTION_PAUSE or
+            PlatformPlaybackState.ACTION_PLAY_PAUSE or
+            PlatformPlaybackState.ACTION_SKIP_TO_NEXT or
+            PlatformPlaybackState.ACTION_SKIP_TO_PREVIOUS or
+            PlatformPlaybackState.ACTION_STOP or
+            PlatformPlaybackState.ACTION_SEEK_TO
+        val clampedPosition = positionMs.coerceAtLeast(0).toLong().coerceAtMost(durationMs.coerceAtLeast(0).toLong())
+        val state = if (isPlaying) PlatformPlaybackState.STATE_PLAYING else PlatformPlaybackState.STATE_PAUSED
+        val playbackState = PlatformPlaybackState.Builder()
+            .setActions(actions)
+            .setState(state, clampedPosition, if (isPlaying) 1.0f else 0.0f)
+            .build()
+        mediaSession?.setPlaybackState(playbackState)
+    }
+
+    private fun refreshBluetoothOutputState() {
+        bluetoothOutputConnected = isBluetoothOutputConnected()
+    }
+
+    private fun isBluetoothOutputConnected(): Boolean {
+        val audioManager = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return false
+        return try {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any { device ->
+                device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    device.type == android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    device.type == android.media.AudioDeviceInfo.TYPE_BLE_HEADSET ||
+                    device.type == android.media.AudioDeviceInfo.TYPE_BLE_SPEAKER
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun tryResumeAfterBluetoothReconnect() {
+        val mp = mediaPlayer ?: return
+        if (!pausedByBluetoothDisconnect) return
+        if (!bluetoothOutputConnected) return
+        if (mp.isPlaying) {
+            pausedByBluetoothDisconnect = false
+            return
+        }
+        resumePlayback()
     }
 
     private fun buildNotification(): Notification {
@@ -441,6 +595,14 @@ class PlaybackService : Service() {
         try {
             unregisterReceiver(noisyReceiver)
         } catch (_: Exception) {}
+        try {
+            unregisterReceiver(bluetoothConnectionReceiver)
+        } catch (_: Exception) {}
+        mediaSession?.run {
+            isActive = false
+            release()
+        }
+        mediaSession = null
         mediaPlayer?.release()
         mediaPlayer = null
         PlaybackService._playbackState.value = null
