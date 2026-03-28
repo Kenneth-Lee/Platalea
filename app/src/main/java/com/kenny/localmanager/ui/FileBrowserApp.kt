@@ -5,6 +5,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -134,6 +137,7 @@ import android.widget.Toast
 import android.provider.DocumentsContract
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.PlayerListBookmark
@@ -333,9 +337,42 @@ private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
     )
 }
 
+private fun requestPinnedTabShortcut(context: Context, tab: MainTab): String? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        return "系统版本过低：仅 Android 8.0+ 支持固定桌面快捷方式"
+    }
+    val shortcutManager = context.getSystemService(ShortcutManager::class.java)
+        ?: return "无法获取 ShortcutManager，创建快捷方式失败"
+    if (!shortcutManager.isRequestPinShortcutSupported) {
+        return "当前桌面不支持固定快捷方式"
+    }
+    val (shortLabel, longLabel) = when (tab) {
+        MainTab.PLAYER -> "播放器" to "本地管家 - 播放器"
+        MainTab.QUICK_NOTE -> "速记" to "本地管家 - 速记"
+        else -> return "不支持为该页面创建桌面快捷方式：${tab.label}"
+    }
+    val launchIntent = Intent(context, MainActivity::class.java).apply {
+        action = Intent.ACTION_VIEW
+        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, tab.key)
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    }
+    val shortcut = ShortcutInfo.Builder(context, "local_manager_${tab.key}")
+        .setShortLabel(shortLabel)
+        .setLongLabel(longLabel)
+        .setIcon(Icon.createWithResource(context, R.drawable.ic_launcher))
+        .setIntent(launchIntent)
+        .build()
+    return if (shortcutManager.requestPinShortcut(shortcut, null)) {
+        null
+    } else {
+        "桌面拒绝了快捷方式请求，请确认桌面支持并重试"
+    }
+}
+
 private fun openRecentItemByType(
     context: Context,
     item: RecentOpenItem,
+    currentPlaybackState: PlaybackState?,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     switchMainTab: (MainTab) -> Unit,
     onMdZipTarget: (DocumentFileModel) -> Unit,
@@ -353,11 +390,15 @@ private fun openRecentItemByType(
                 Toast.makeText(context, "条目无效：缺少播放列表 ID", Toast.LENGTH_SHORT).show()
                 return
             }
-            val intent = Intent(context, PlaybackService::class.java).apply {
-                action = ACTION_PLAY
-                putExtra(EXTRA_PLAYLIST_ID, playlistId)
+            val alreadyPlayingSamePlaylist =
+                currentPlaybackState?.playlistId == playlistId && currentPlaybackState.isPlaying
+            if (!alreadyPlayingSamePlaylist) {
+                val intent = Intent(context, PlaybackService::class.java).apply {
+                    action = ACTION_PLAY
+                    putExtra(EXTRA_PLAYLIST_ID, playlistId)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
             recordRecentOpen(
                 RECENT_TYPE_PLAYLIST,
                 playlistId,
@@ -1079,6 +1120,53 @@ private fun formatPlaybackTime(ms: Int): String {
     }
 }
 
+@Composable
+private fun PlaybackBottomControlBar(
+    isPlaying: Boolean,
+    enabled: Boolean,
+    onPrev: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit
+) {
+    Surface(tonalElevation = 3.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedButton(
+                onClick = onPrev,
+                enabled = enabled,
+                modifier = Modifier.height(52.dp)
+            ) {
+                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首")
+            }
+            Button(
+                onClick = onPlayPause,
+                enabled = enabled,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(56.dp)
+            ) {
+                Icon(
+                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+            OutlinedButton(
+                onClick = onNext,
+                enabled = enabled,
+                modifier = Modifier.height(52.dp)
+            ) {
+                Icon(Icons.Default.SkipNext, contentDescription = "下一首")
+            }
+        }
+    }
+}
+
 /** 规范化 content URI 字符串，修正 authority 中可能被错误成空格的句点（如 android .externalstorage -> android.externalstorage） */
 private fun normalizeContentUriString(s: String): String {
     if (!s.startsWith("content://")) return s
@@ -1228,6 +1316,8 @@ private fun FileBrowserAppScreen(
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
     val scope = rememberCoroutineScope()
+    val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
+    val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
@@ -1517,11 +1607,15 @@ private fun FileBrowserAppScreen(
         LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
         var lastBackPressTime by remember { mutableStateOf(0L) }
         val requestExitApp: () -> Unit = {
-            val now = System.currentTimeMillis()
-            if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
-            else {
-                lastBackPressTime = now
-                Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+            if (bypassExitDoubleConfirm) {
+                (context as? Activity)?.finish()
+            } else {
+                val now = System.currentTimeMillis()
+                if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
+                else {
+                    lastBackPressTime = now
+                    Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+                }
             }
         }
         var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
@@ -2242,6 +2336,7 @@ private fun FileBrowserAppScreen(
                         openRecentItemByType(
                             context = context,
                             item = item,
+                            currentPlaybackState = playbackState,
                             recordRecentOpen = { type, key, title, uri, playlistId ->
                                 recordRecentOpen(
                                     type = type,
@@ -2832,6 +2927,24 @@ private fun FileBrowserAppScreen(
                 },
                 onChangeRoot = {
                     showRootSwitchDialog = true
+                },
+                onCreateShortcuts = {
+                    val playerErr = requestPinnedTabShortcut(context, MainTab.PLAYER)
+                    val quickNoteErr = requestPinnedTabShortcut(context, MainTab.QUICK_NOTE)
+                    when {
+                        playerErr == null && quickNoteErr == null -> {
+                            Toast.makeText(context, "已请求创建“播放器/速记”两个桌面快捷方式", Toast.LENGTH_SHORT).show()
+                        }
+                        playerErr != null && quickNoteErr != null -> {
+                            Toast.makeText(context, "创建快捷方式失败：播放器($playerErr)；速记($quickNoteErr)", Toast.LENGTH_LONG).show()
+                        }
+                        playerErr != null -> {
+                            Toast.makeText(context, "播放器快捷方式创建失败：$playerErr；速记已请求创建", Toast.LENGTH_LONG).show()
+                        }
+                        else -> {
+                            Toast.makeText(context, "速记快捷方式创建失败：$quickNoteErr；播放器已请求创建", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             )
         }
@@ -6737,6 +6850,14 @@ fun PlaybackScreen(
     ) { padding ->
         if (selectedPlaylist != null) {
             val pl = selectedPlaylist
+            val isSelectedPlaylistPlaying = playbackState?.playlistId == pl.id
+            val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
+            LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex) {
+                val state = playbackState ?: return@LaunchedEffect
+                if (state.playlistId != pl.id) return@LaunchedEffect
+                val target = state.trackIndex.coerceIn(0, maxOf(0, pl.uris.lastIndex))
+                selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
+            }
             val playlistBookmarks = playerBookmarks
                 .filter { it.playlistId == pl.id }
                 .sortedByDescending { it.savedAt }
@@ -6746,6 +6867,70 @@ fun PlaybackScreen(
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
+                    if (isSelectedPlaylistPlaying && playbackState != null) {
+                        val state = playbackState
+                        var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
+                        var seekDragging by remember { mutableStateOf(false) }
+                        LaunchedEffect(state.positionMs, state.durationMs) {
+                            if (!seekDragging) {
+                                seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
+                            }
+                        }
+                        Card(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text(
+                                    "当前播放（本列表）",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Text(
+                                    "${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (state.durationMs > 0) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Slider(
+                                        value = seekSliderPosition,
+                                        onValueChange = {
+                                            seekDragging = true
+                                            seekSliderPosition = it
+                                        },
+                                        onValueChangeFinished = {
+                                            onSeek(seekSliderPosition.toInt().coerceIn(0, state.durationMs))
+                                            seekDragging = false
+                                        },
+                                        valueRange = 0f..maxOf(1f, state.durationMs.toFloat()),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = SliderDefaults.colors(
+                                            thumbColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            activeTrackColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            inactiveTrackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.3f)
+                                        )
+                                    )
+                                }
+                                Row(Modifier.fillMaxWidth()) {
+                                    Text(
+                                        formatPlaybackTime(state.positionMs),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                    Spacer(Modifier.weight(1f))
+                                    Text(
+                                        if (state.durationMs > 0) formatPlaybackTime(state.durationMs) else "--:--",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                        }
+                    }
                     Card(
                         Modifier
                             .fillMaxWidth()
@@ -6845,7 +7030,8 @@ fun PlaybackScreen(
                         Icon(Icons.Filled.Edit, contentDescription = "编辑备注", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     LazyColumn(
-                        Modifier.fillMaxSize(),
+                        modifier = Modifier.weight(1f),
+                        state = selectedPlaylistTrackListState,
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp)
                     ) {
@@ -6932,10 +7118,18 @@ fun PlaybackScreen(
                         }
                     }
                 }
+                    PlaybackBottomControlBar(
+                        isPlaying = playbackState?.isPlaying == true,
+                        enabled = isSelectedPlaylistPlaying,
+                        onPrev = onPlayPrev,
+                        onPlayPause = onPlayPause,
+                        onNext = onPlayNext
+                    )
                 }
             }
         } else {
         Column(Modifier.fillMaxSize().padding(padding)) {
+            val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
             if (playbackState != null) {
                 val state = playbackState
                 val stateBookmarkCount = playerBookmarks.count { it.playlistId != null && it.playlistId == state.playlistId }
@@ -6997,23 +7191,6 @@ fun PlaybackScreen(
                             )
                         }
                         Row(
-                            Modifier.fillMaxWidth().padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            IconButton(onClick = onPlayPrev) {
-                                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首")
-                            }
-                            IconButton(onClick = onPlayPause) {
-                                Icon(
-                                    if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                    contentDescription = if (state.isPlaying) "暂停" else "播放"
-                                )
-                            }
-                            IconButton(onClick = onPlayNext) {
-                                Icon(Icons.Default.SkipNext, contentDescription = "下一首")
-                            }
-                        }
-                        Row(
                             Modifier.fillMaxWidth().padding(top = 4.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
@@ -7051,7 +7228,6 @@ fun PlaybackScreen(
                     }
                 }
             } else {
-                val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
                 Card(
                     Modifier
                         .fillMaxWidth()
@@ -7064,20 +7240,18 @@ fun PlaybackScreen(
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(8.dp))
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            IconButton(onClick = {}) {
-                                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
-                            }
-                            IconButton(onClick = { restorePlaylist?.let { startPlaylist(it) } }) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = "播放", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (restorePlaylist != null) 1f else 0.5f))
-                            }
-                            IconButton(onClick = {}) {
-                                Icon(Icons.Default.SkipNext, contentDescription = "下一首", tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f))
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            if (restorePlaylist != null) "可从上次播放列表继续：${restorePlaylist.name}" else "请先选择一个播放列表开始播放",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (restorePlaylist != null) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(onClick = { startPlaylist(restorePlaylist) }) {
+                                Text("继续上次播放")
                             }
                         }
                     }
@@ -7184,6 +7358,20 @@ fun PlaybackScreen(
                     }
                 }
             }
+            PlaybackBottomControlBar(
+                isPlaying = playbackState?.isPlaying == true,
+                enabled = playbackState != null || restorePlaylist != null,
+                onPrev = {
+                    if (playbackState != null) onPlayPrev()
+                },
+                onPlayPause = {
+                    if (playbackState != null) onPlayPause()
+                    else restorePlaylist?.let { startPlaylist(it) }
+                },
+                onNext = {
+                    if (playbackState != null) onPlayNext()
+                }
+            )
         }
         }
         playlistNoteEditTarget?.let { target ->
@@ -7808,7 +7996,8 @@ fun ConfigDialog(
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
     onExportConfig: () -> Unit,
-    onChangeRoot: () -> Unit
+    onChangeRoot: () -> Unit,
+    onCreateShortcuts: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
@@ -7920,6 +8109,10 @@ fun ConfigDialog(
                 Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(onClick = onCreateShortcuts, modifier = Modifier.fillMaxWidth()) {
+                    Text("创建桌面快捷方式：播放器 + 速记")
+                }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { onDismiss(); onChangeRoot() },
