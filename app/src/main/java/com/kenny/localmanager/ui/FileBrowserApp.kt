@@ -139,6 +139,8 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
+import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
+import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
@@ -258,6 +260,7 @@ import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import com.kenny.localmanager.dict.importStarDict
 import com.kenny.localmanager.dict.isStarDictImportCandidate
+import com.kenny.localmanager.requestPinnedTabShortcut
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
@@ -335,38 +338,6 @@ private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
         lastModified = 0L,
         size = 0L
     )
-}
-
-private fun requestPinnedTabShortcut(context: Context, tab: MainTab): String? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-        return "系统版本过低：仅 Android 8.0+ 支持固定桌面快捷方式"
-    }
-    val shortcutManager = context.getSystemService(ShortcutManager::class.java)
-        ?: return "无法获取 ShortcutManager，创建快捷方式失败"
-    if (!shortcutManager.isRequestPinShortcutSupported) {
-        return "当前桌面不支持固定快捷方式"
-    }
-    val (shortLabel, longLabel) = when (tab) {
-        MainTab.PLAYER -> "播放器" to "本地管家 - 播放器"
-        MainTab.QUICK_NOTE -> "速记" to "本地管家 - 速记"
-        else -> return "不支持为该页面创建桌面快捷方式：${tab.label}"
-    }
-    val launchIntent = Intent(context, MainActivity::class.java).apply {
-        action = Intent.ACTION_VIEW
-        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, tab.key)
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-    }
-    val shortcut = ShortcutInfo.Builder(context, "local_manager_${tab.key}")
-        .setShortLabel(shortLabel)
-        .setLongLabel(longLabel)
-        .setIcon(Icon.createWithResource(context, R.drawable.ic_launcher))
-        .setIntent(launchIntent)
-        .build()
-    return if (shortcutManager.requestPinShortcut(shortcut, null)) {
-        null
-    } else {
-        "桌面拒绝了快捷方式请求，请确认桌面支持并重试"
-    }
 }
 
 private fun openRecentItemByType(
@@ -2928,22 +2899,20 @@ private fun FileBrowserAppScreen(
                 onChangeRoot = {
                     showRootSwitchDialog = true
                 },
-                onCreateShortcuts = {
-                    val playerErr = requestPinnedTabShortcut(context, MainTab.PLAYER)
-                    val quickNoteErr = requestPinnedTabShortcut(context, MainTab.QUICK_NOTE)
-                    when {
-                        playerErr == null && quickNoteErr == null -> {
-                            Toast.makeText(context, "已请求创建“播放器/速记”两个桌面快捷方式", Toast.LENGTH_SHORT).show()
-                        }
-                        playerErr != null && quickNoteErr != null -> {
-                            Toast.makeText(context, "创建快捷方式失败：播放器($playerErr)；速记($quickNoteErr)", Toast.LENGTH_LONG).show()
-                        }
-                        playerErr != null -> {
-                            Toast.makeText(context, "播放器快捷方式创建失败：$playerErr；速记已请求创建", Toast.LENGTH_LONG).show()
-                        }
-                        else -> {
-                            Toast.makeText(context, "速记快捷方式创建失败：$quickNoteErr；播放器已请求创建", Toast.LENGTH_LONG).show()
-                        }
+                onCreatePlayerShortcut = {
+                    val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
+                    if (playerErr == null) {
+                        Toast.makeText(context, "已请求创建播放器快捷方式", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "播放器快捷方式创建失败：$playerErr", Toast.LENGTH_LONG).show()
+                    }
+                },
+                onCreateQuickNoteShortcut = {
+                    val quickNoteErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_QUICK_NOTE)
+                    if (quickNoteErr == null) {
+                        Toast.makeText(context, "已请求创建速记快捷方式", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "速记快捷方式创建失败：$quickNoteErr", Toast.LENGTH_LONG).show()
                     }
                 }
             )
@@ -7997,7 +7966,8 @@ fun ConfigDialog(
     onOpenCacheManagement: () -> Unit,
     onExportConfig: () -> Unit,
     onChangeRoot: () -> Unit,
-    onCreateShortcuts: () -> Unit
+    onCreatePlayerShortcut: () -> Unit,
+    onCreateQuickNoteShortcut: () -> Unit
 ) {
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
@@ -8110,8 +8080,22 @@ fun ConfigDialog(
                 Spacer(Modifier.height(12.dp))
                 Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
                 Spacer(Modifier.height(12.dp))
-                OutlinedButton(onClick = onCreateShortcuts, modifier = Modifier.fillMaxWidth()) {
-                    Text("创建桌面快捷方式：播放器 + 速记")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onCreatePlayerShortcut,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("创建播放器快捷方式")
+                    }
+                    OutlinedButton(
+                        onClick = onCreateQuickNoteShortcut,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("创建速记快捷方式")
+                    }
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
