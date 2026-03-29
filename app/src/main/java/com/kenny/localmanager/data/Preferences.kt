@@ -40,6 +40,8 @@ private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
 private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
+private val EPUB_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("epub_zoom_percent_by_uri_json")
+private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
 
@@ -93,6 +95,10 @@ class Preferences(private val context: Context) {
 
     val epubDictLookupWords: Flow<List<String>> = context.dataStore.data.map { prefs ->
         parseStringListJson(prefs[EPUB_DICT_LOOKUP_WORDS_JSON])
+    }
+
+    val dictQueryHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        parseStringListJson(prefs[DICT_QUERY_HISTORY_JSON])
     }
 
     val quickNoteLastCategory: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -239,6 +245,61 @@ class Preferences(private val context: Context) {
             } else {
                 prefs[EPUB_DICT_LOOKUP_WORDS_JSON] = stringListToJson(normalized)
             }
+        }
+    }
+
+    suspend fun recordDictQuery(query: String) {
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val history = buildList {
+                add(normalizedQuery)
+                addAll(parseStringListJson(prefs[DICT_QUERY_HISTORY_JSON]))
+            }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .take(10)
+            prefs[DICT_QUERY_HISTORY_JSON] = stringListToJson(history)
+        }
+    }
+
+    suspend fun clearDictQueryHistory() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(DICT_QUERY_HISTORY_JSON)
+        }
+    }
+
+    suspend fun getEpubZoomPercentForUri(uri: String): Int? {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return null
+        val json = context.dataStore.data.first()[EPUB_ZOOM_PERCENT_BY_URI_JSON] ?: return null
+        return try {
+            val obj = org.json.JSONObject(json)
+            val value = obj.optInt(normalizedUri, -1)
+            if (value in 50..200) value else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun setEpubZoomPercentForUri(uri: String, percent: Int) {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return
+        val clamped = percent.coerceIn(50, 200)
+        context.dataStore.edit { prefs ->
+            val obj = try {
+                org.json.JSONObject(prefs[EPUB_ZOOM_PERCENT_BY_URI_JSON] ?: "{}")
+            } catch (_: Exception) {
+                org.json.JSONObject()
+            }
+            obj.put(normalizedUri, clamped)
+            // 控制体积：仅保留最近写入的 200 个条目（超出时删除先迭代到的旧键）。
+            while (obj.length() > 200) {
+                val key = obj.keys().asSequence().firstOrNull() ?: break
+                obj.remove(key)
+            }
+            prefs[EPUB_ZOOM_PERCENT_BY_URI_JSON] = obj.toString()
         }
     }
 

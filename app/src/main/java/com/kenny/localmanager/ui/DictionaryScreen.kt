@@ -41,6 +41,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.dict.StarDictLoaded
 import com.kenny.localmanager.dict.StarDictSummary
 import com.kenny.localmanager.dict.StarDictWord
@@ -71,7 +73,9 @@ fun DictionaryScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val prefs = remember(context) { Preferences(context) }
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+    val queryHistory by prefs.dictQueryHistory.collectAsState(initial = emptyList())
 
     var dictionaries by remember { mutableStateOf<List<StarDictSummary>>(emptyList()) }
     var selectedDictId by remember { mutableStateOf<String?>(null) }
@@ -119,9 +123,19 @@ fun DictionaryScreen(
 
     fun doSearch() {
         val dict = loadedDict ?: return
-        val (hits, err) = searchStarDictWords(dict, query)
+        val normalizedQuery = query.trim()
+        if (normalizedQuery.isEmpty()) {
+            results = emptyList()
+            searchError = "查询内容不能为空"
+            return
+        }
+        query = normalizedQuery
+        val (hits, err) = searchStarDictWords(dict, normalizedQuery)
         results = hits
         searchError = err
+        scope.launch(Dispatchers.IO) {
+            prefs.recordDictQuery(normalizedQuery)
+        }
     }
 
     Scaffold(
@@ -175,6 +189,60 @@ fun DictionaryScreen(
                 )
                 Button(onClick = { doSearch() }, enabled = loadedDict != null) {
                     Text("查询")
+                }
+            }
+
+            if (queryHistory.isNotEmpty()) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "最近查询（最多10条）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        TextButton(onClick = {
+                            scope.launch(Dispatchers.IO) {
+                                prefs.clearDictQueryHistory()
+                            }
+                        }) {
+                            Text("清空历史")
+                        }
+                    }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 140.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        queryHistory.forEach { historyItem ->
+                            Surface(
+                                tonalElevation = 1.dp,
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable(enabled = loadedDict != null) {
+                                        query = historyItem
+                                        doSearch()
+                                    }
+                            ) {
+                                Text(
+                                    text = historyItem,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
                 }
             }
 

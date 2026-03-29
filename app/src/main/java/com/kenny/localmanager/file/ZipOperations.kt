@@ -156,7 +156,12 @@ fun unzipToParent(
         setProgress(0, total)
         val extractDir = File(cacheDir, "extract").apply { mkdirs() }
         try {
-            zip.extractAll(extractDir.path)
+            var current = 0
+            zip.fileHeaders.orEmpty().forEach { header ->
+                zip.extractFile(header, extractDir.path)
+                current++
+                setProgress(current, total)
+            }
         } catch (e: net.lingala.zip4j.exception.ZipException) {
             val msg = e.message.orEmpty().lowercase()
             return when {
@@ -166,14 +171,12 @@ fun unzipToParent(
                 else -> UnzipResult.IOError(e.message)
             }
         }
-        var current = 0
         // 解压到目标目录时，只复制 zip 顶层内容，不要多出一层 extract 目录。
-        // 进度按顶层条目数更新，不传 onEach 避免递归时重复计数导致 current > total。
+        // 进度在逐条目解压时已更新到 total，这里只执行复制。
         extractDir.listFiles()?.orEmpty()?.forEach { child ->
             copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
-            current++
-            setProgress(current, total)
         }
+        setProgress(total, total)
         return UnzipResult.Success
     } catch (e: Exception) {
         Log.e(TAG, "unzipToParent failed", e)

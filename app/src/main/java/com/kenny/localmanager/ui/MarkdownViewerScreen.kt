@@ -3665,6 +3665,7 @@ fun EpubViewerScreen(
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
+    var scalePercentLoaded by remember { mutableStateOf(false) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var showToc by remember { mutableStateOf(false) }
     var showBookmarks by remember { mutableStateOf(false) }
@@ -3879,6 +3880,23 @@ fun EpubViewerScreen(
     val contentDir = extractResult.contentDir
     val opfDir = extractResult.opfDir
 
+    LaunchedEffect(epubUri) {
+        val restored = withContext(Dispatchers.IO) {
+            prefs.getEpubZoomPercentForUri(epubUri.toString())
+        }
+        if (restored != null) {
+            scalePercent = restored
+        }
+        scalePercentLoaded = true
+    }
+
+    LaunchedEffect(scalePercentLoaded, scalePercent, epubUri) {
+        if (!scalePercentLoaded) return@LaunchedEffect
+        withContext(Dispatchers.IO) {
+            prefs.setEpubZoomPercentForUri(epubUri.toString(), scalePercent)
+        }
+    }
+
     logDebug?.invoke("[EPUB] 打开 $zipFileName")
     logDebug?.invoke("[EPUB] 章节数=${chapters.size}")
     logDebug?.invoke("[EPUB] contentDir=${contentDir.absolutePath}")
@@ -3944,6 +3962,7 @@ fun EpubViewerScreen(
     val currentChapterRestoredMarker = remember(restoredProgressMarker, currentChapterIndex) {
         restoredProgressMarker?.takeIf { it.chapterIndex == currentChapterIndex }
     }
+    val latestScalePercent by rememberUpdatedState(scalePercent)
     val latestChapterIndex by rememberUpdatedState(currentChapterIndex)
     val latestScrollRatio by rememberUpdatedState(currentScrollRatio)
     val latestIsRestoringProgress by rememberUpdatedState(isRestoringProgress)
@@ -3986,6 +4005,22 @@ fun EpubViewerScreen(
         currentScrollRatio = bookmark.scrollRatio
         pendingProgrammaticScrollRatio = bookmark.scrollRatio
         showBookmarks = false
+    }
+
+    fun goToPreviousChapter() {
+        if (currentChapterIndex > 0) {
+            currentChapterIndex--
+            currentScrollRatio = 0f
+            pendingProgrammaticScrollRatio = 0f
+        }
+    }
+
+    fun goToNextChapter() {
+        if (currentChapterIndex < chapters.size - 1) {
+            currentChapterIndex++
+            currentScrollRatio = 0f
+            pendingProgrammaticScrollRatio = 0f
+        }
     }
 
     // 添加收藏
@@ -4347,14 +4382,22 @@ fun EpubViewerScreen(
                     // 缩小
                     IconButton(onClick = {
                         scalePercent = maxOf(50, scalePercent - 25)
-                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                        val appliedScalePercent = scalePercent
+                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
+                        scope.launch(Dispatchers.IO) {
+                            prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                        }
                     }) {
                         Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
                     }
                     // 放大
                     IconButton(onClick = {
                         scalePercent = minOf(200, scalePercent + 25)
-                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
+                        val appliedScalePercent = scalePercent
+                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
+                        scope.launch(Dispatchers.IO) {
+                            prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                        }
                     }) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "放大")
                     }
@@ -4395,10 +4438,7 @@ fun EpubViewerScreen(
                                     .width(60.dp)
                                     .fillMaxHeight()
                                     .clickable(enabled = currentChapterIndex > 0) {
-                                        if (currentChapterIndex > 0) {
-                                            currentChapterIndex--
-                                            currentScrollRatio = 0f
-                                        }
+                                        goToPreviousChapter()
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -4557,10 +4597,7 @@ fun EpubViewerScreen(
                                     .width(60.dp)
                                     .fillMaxHeight()
                                     .clickable(enabled = currentChapterIndex < chapters.size - 1) {
-                                        if (currentChapterIndex < chapters.size - 1) {
-                                            currentChapterIndex++
-                                            currentScrollRatio = 0f
-                                        }
+                                        goToNextChapter()
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
@@ -4647,6 +4684,8 @@ fun EpubViewerScreen(
                                     installRegexFindBridge(view)
                                     // 页面加载完成后恢复滚动位置
                                     (view as? GestureWebView)?.restoreScrollPosition()
+                                    // 页面完成后再应用最新缩放，避免旧闭包值覆盖。
+                                    view.evaluateJavascript("document.body.style.zoom = ${latestScalePercent / 100.0}", null)
                                 }
                                 webViewRef.value = this
                             }
@@ -4943,6 +4982,53 @@ private class GestureWebView(
     private var isRestoringScroll = false
 
     private var lastReportedRatio: Float = -1f
+
+    private fun navigateBySingleTap(x: Float): Boolean {
+        val viewWidth = width.toFloat().coerceAtLeast(1f)
+        val edgeWidth = viewWidth * 0.3f
+        return when {
+            x < edgeWidth && currentChapterIndex > 0 -> {
+                onChapterChange(currentChapterIndex - 1)
+                true
+            }
+            x > viewWidth - edgeWidth && currentChapterIndex < totalChapters - 1 -> {
+                onChapterChange(currentChapterIndex + 1)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun navigateByDoubleTap(x: Float): Boolean {
+        val viewWidth = width.toFloat().coerceAtLeast(1f)
+        val edgeWidth = viewWidth * 0.3f
+        return when {
+            x < edgeWidth && currentChapterIndex < totalChapters - 1 -> {
+                onChapterChange(currentChapterIndex + 1)
+                true
+            }
+            x > viewWidth - edgeWidth && currentChapterIndex > 0 -> {
+                onChapterChange(currentChapterIndex - 1)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+        override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+            return navigateBySingleTap(e.x)
+        }
+
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            return navigateByDoubleTap(e.x)
+        }
+    })
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        tapDetector.onTouchEvent(event)
+        return super.onTouchEvent(event)
+    }
 
     override fun onScrollChanged(l: Int, t: Int, oldl: Int, oldt: Int) {
         super.onScrollChanged(l, t, oldl, oldt)
