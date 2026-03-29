@@ -14,6 +14,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioManager
+import android.media.MediaMetadata
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState as PlatformPlaybackState
@@ -398,6 +399,12 @@ class PlaybackService : Service() {
             positionMs = positionMs,
             durationMs = durationMs
         )
+        updateMediaSessionMetadata(
+            trackName = trackName,
+            trackIndex = trackIndex,
+            totalTracks = playlistUris.size,
+            durationMs = durationMs
+        )
     }
 
     private fun playNext() {
@@ -490,15 +497,40 @@ class PlaybackService : Service() {
         lastPauseOrigin = PauseOrigin.OTHER
         PlaybackService._playbackState.value = null
         updateMediaSessionPlaybackState(isPlaying = false, positionMs = 0, durationMs = 0)
+        mediaSession?.setMetadata(null)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     private fun initMediaSession() {
         mediaSession = MediaSession(this, "LocalManagerPlayback").apply {
+            setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
             setCallback(mediaSessionCallback)
             isActive = true
         }
+    }
+
+    private fun updateMediaSessionMetadata(
+        trackName: String,
+        trackIndex: Int,
+        totalTracks: Int,
+        durationMs: Int
+    ) {
+        val safeTrackName = trackName.ifBlank { getString(R.string.playback_notification_title) }
+        val safeTrackNumber = (trackIndex + 1).coerceAtLeast(1).toLong()
+        val safeTotal = totalTracks.coerceAtLeast(0).toLong()
+        val safeDuration = durationMs.coerceAtLeast(0).toLong()
+        val albumName = playlistName?.ifBlank { null } ?: getString(R.string.app_name)
+        val metadata = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, safeTrackName)
+            .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, safeTrackName)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, albumName)
+            .putString(MediaMetadata.METADATA_KEY_ALBUM, albumName)
+            .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, safeTrackNumber)
+            .putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, safeTotal)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, safeDuration)
+            .build()
+        mediaSession?.setMetadata(metadata)
     }
 
     private fun updateMediaSessionPlaybackState(isPlaying: Boolean, positionMs: Int, durationMs: Int) {
