@@ -17,7 +17,7 @@
 这个软件完全没有广告，我做出来就是为了解决自己的问题，开放出来也顺便解决你的问
 题，没指望用它赚钱，但我不为任何数据破坏负责，请你自担风险。
 
-最新一个发布版本在这里：[LocalManager-V0.11](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.11/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.12](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.12/app-release.apk)
 
 ## 设计思路
 
@@ -394,7 +394,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.9 支持目录书签（双击目录标题），优化rst的渲染效果
 * V0.10 支持星际译王格式的词典，支持7z和rar（仅rar4解压）格式。修复epub阅读不方便的问题，同时允许阅读txt和epub，内置英语词典。修复一组小bug。
 * V0.11 改进使用界面，每个功能独占一个tab，增加历史记录tab，支持最多三个字典。
-* V0.12 优化播放器界面，以及和蓝牙耳机的互动，记住epub浏览器的缩放，恢复播放器和快速笔记的桌面入口。
+* V0.12 优化播放器界面，以及和蓝牙耳机的互动，记住epub浏览器的缩放，恢复播放器和快速笔记的桌面入口，支持安全键盘。
 * V0.13 开发中……
 
 ### 已知问题
