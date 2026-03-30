@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -3443,12 +3444,11 @@ private fun FileBrowserAppScreen(
                         Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
                         if (encrypted == true) {
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = zipUnzipPassword,
                                 onValueChange = { zipUnzipPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("密码（加密压缩包）") },
-                                singleLine = true
+                                modifier = Modifier.fillMaxWidth()
                             )
                         } else if (encrypted == null) {
                             Spacer(Modifier.height(8.dp))
@@ -3535,13 +3535,11 @@ private fun FileBrowserAppScreen(
                         Column {
                             Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = mdZipPassword,
                                 onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("ZIP 密码") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
                                 enabled = !mdZipInProgress
                             )
                             if (mdZipInProgress) {
@@ -3611,13 +3609,11 @@ private fun FileBrowserAppScreen(
                         Column {
                             Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = htmlZipPassword,
                                 onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("ZIP 密码") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
                                 enabled = !htmlZipInProgress
                             )
                             if (htmlZipInProgress) {
@@ -3708,13 +3704,11 @@ private fun FileBrowserAppScreen(
                         Column {
                             Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = llmZipPassword,
                                 onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("ZIP 密码") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
                                 enabled = !llmZipInProgress
                             )
                             if (llmZipInProgress) {
@@ -3782,13 +3776,11 @@ private fun FileBrowserAppScreen(
                         Column {
                             Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = epubPassword,
                                 onValueChange = { if (!epubInProgress) epubPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("ZIP 密码") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
                                 enabled = !epubInProgress
                             )
                             if (epubInProgress) {
@@ -3958,13 +3950,11 @@ private fun FileBrowserAppScreen(
                         Column {
                             Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = picZipPassword,
                                 onValueChange = { if (!picZipInProgress) picZipPassword = it },
-                                modifier = Modifier.fillMaxWidth(),
                                 label = { Text("ZIP 密码") },
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth(),
                                 enabled = !picZipInProgress
                             )
                             if (picZipInProgress) {
@@ -4062,12 +4052,11 @@ private fun FileBrowserAppScreen(
                     Column {
                         Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
+                        ReliablePasswordInputField(
                             value = zipCompressPassword,
                             onValueChange = { zipCompressPassword = it },
-                            modifier = Modifier.fillMaxWidth(),
                             label = { Text("密码（留空则不加密）") },
-                            singleLine = true
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 },
@@ -4118,12 +4107,11 @@ private fun FileBrowserAppScreen(
                     Column {
                         Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
+                        ReliablePasswordInputField(
                             value = sevenZCompressPassword,
                             onValueChange = { sevenZCompressPassword = it },
-                            modifier = Modifier.fillMaxWidth(),
                             label = { Text("密码（留空则不加密）") },
-                            singleLine = true
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 },
@@ -4611,12 +4599,10 @@ private fun FileBrowserAppScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    OutlinedTextField(
+                    ReliablePasswordInputField(
                         value = unlockPwd,
                         onValueChange = { unlockPwd = it; unlockError = null },
                         label = { Text("私钥密码") },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !unlockInProgress
                     )
@@ -6213,13 +6199,11 @@ internal fun FileBrowserScreen(
                                     }
                                 } else {
                                     Column(Modifier.fillMaxWidth()) {
-                                        OutlinedTextField(
+                                        ReliablePasswordInputField(
                                             value = zipDetailPassword,
                                             onValueChange = { zipDetailPassword = it },
                                             label = { Text("密码") },
-                                            singleLine = true,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            visualTransformation = PasswordVisualTransformation()
+                                            modifier = Modifier.fillMaxWidth()
                                         )
                                         Spacer(Modifier.height(8.dp))
                                         Row(horizontalArrangement = Arrangement.End) {
@@ -7480,12 +7464,11 @@ fun QuickObfuscatePasswordDialog(
                 )
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
+                ReliablePasswordInputField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    modifier = Modifier.fillMaxWidth(),
                     label = { Text("密码") },
-                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = !inProgress
                 )
                 if (inProgress) {
@@ -7501,6 +7484,220 @@ fun QuickObfuscatePasswordDialog(
                 }
             }
         }
+    }
+}
+
+private fun readClipboardPassword(context: Context): String? {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
+    val clip = clipboard.primaryClip ?: return null
+    if (clip.itemCount <= 0) return null
+    val text = clip.getItemAt(0).coerceToText(context)?.toString() ?: return null
+    return text.ifBlank { null }
+}
+
+private enum class PasswordKeyCategory { DIGIT, UPPER, LOWER, SYMBOL }
+
+private val digitKeys = "1234567890".toList()
+private val upperKeys = ('A'..'Z').toList()
+private val lowerKeys = ('a'..'z').toList()
+private val symbolKeys = listOf(
+    '~', '!', '@', '#', '$', '%', '^', '&', '*',
+    '(', ')', '_', '+', '-', '=', '[', ']', '{', '}',
+    '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?', '`', '\\'
+)
+
+private fun categoryPages(category: PasswordKeyCategory): List<List<Char>> {
+    val keys = when (category) {
+        PasswordKeyCategory.DIGIT -> digitKeys
+        PasswordKeyCategory.UPPER -> upperKeys
+        PasswordKeyCategory.LOWER -> lowerKeys
+        PasswordKeyCategory.SYMBOL -> symbolKeys
+    }
+    return keys.chunked(30)
+}
+
+@Composable
+private fun PasswordGridPage(
+    keys: List<Char>,
+    enabled: Boolean,
+    onPress: (Char) -> Unit
+) {
+    val rows = keys.chunked(5)
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        rows.forEach { rowKeys ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                rowKeys.forEach { key ->
+                    OutlinedButton(
+                        onClick = { onPress(key) },
+                        enabled = enabled,
+                        modifier = Modifier
+                            .padding(horizontal = 2.dp)
+                            .width(54.dp)
+                            .height(34.dp),
+                        contentPadding = PaddingValues(0.dp)
+                    ) {
+                        Text(key.toString(), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReliablePasswordInputField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: @Composable (() -> Unit),
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    supportingText: @Composable (() -> Unit)? = null
+) {
+    val context = LocalContext.current
+    var category by remember { mutableStateOf(PasswordKeyCategory.DIGIT) }
+    var pageIndex by remember { mutableIntStateOf(0) }
+    val pages = remember(category) { categoryPages(category) }
+    if (pageIndex > pages.lastIndex) pageIndex = 0
+    val pageKeys = pages.getOrElse(pageIndex) { emptyList() }
+    val maskedValue = when {
+        value.isEmpty() -> ""
+        value.length <= 36 -> "*".repeat(value.length)
+        else -> "${"*".repeat(36)}…(${value.length})"
+    }
+
+    Column(modifier = modifier) {
+        Box(modifier = Modifier.padding(bottom = 6.dp)) {
+            label()
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = if (maskedValue.isEmpty()) "(空)" else maskedValue,
+                color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        supportingText?.invoke()
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            OutlinedButton(
+                onClick = { category = PasswordKeyCategory.DIGIT; pageIndex = 0 },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("数字", style = MaterialTheme.typography.labelSmall) }
+            OutlinedButton(
+                onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("大写", style = MaterialTheme.typography.labelSmall) }
+            OutlinedButton(
+                onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("小写", style = MaterialTheme.typography.labelSmall) }
+            OutlinedButton(
+                onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("符号", style = MaterialTheme.typography.labelSmall) }
+        }
+
+        if (pages.size > 1) {
+            Spacer(Modifier.height(4.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                pages.indices.forEach { idx ->
+                    OutlinedButton(
+                        onClick = { pageIndex = idx },
+                        enabled = enabled,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = if (idx == pageIndex) "子类${idx + 1}*" else "子类${idx + 1}",
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        PasswordGridPage(
+            keys = pageKeys,
+            enabled = enabled,
+            onPress = { ch -> onValueChange(value + ch) }
+        )
+
+        Spacer(Modifier.height(6.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            OutlinedButton(
+                onClick = { onValueChange(value + " ") },
+                enabled = enabled,
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("空格", style = MaterialTheme.typography.labelSmall) }
+            OutlinedButton(
+                onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
+                enabled = enabled && value.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("退格", style = MaterialTheme.typography.labelSmall) }
+            OutlinedButton(
+                onClick = { onValueChange("") },
+                enabled = enabled && value.isNotEmpty(),
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+            ) { Text("清空", style = MaterialTheme.typography.labelSmall) }
+        }
+
+        Spacer(Modifier.height(4.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val pasted = readClipboardPassword(context)
+                    if (pasted == null) {
+                        Toast.makeText(context, "剪贴板为空，未粘贴", Toast.LENGTH_SHORT).show()
+                    } else {
+                        onValueChange(pasted)
+                        Toast.makeText(context, "已从剪贴板粘贴密码", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                enabled = enabled,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+            )
+            {
+                Text("从剪贴板粘贴", style = MaterialTheme.typography.labelSmall)
+            }
+        }
+        Text(
+            text = "此处禁用系统输入法，仅支持面板点按与剪贴板粘贴。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp)
+        )
     }
 }
 
@@ -7529,12 +7726,11 @@ fun GpgPasswordDialog(
                 )
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
+                ReliablePasswordInputField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    modifier = Modifier.fillMaxWidth(),
                     label = { Text(passwordLabel) },
-                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = !inProgress
                 )
                 if (inProgress) {
@@ -7602,12 +7798,11 @@ fun GpgEncryptDialog(
                     )
                     Text("使用密码对称加密", style = MaterialTheme.typography.bodyMedium)
                 }
-                OutlinedTextField(
+                ReliablePasswordInputField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    modifier = Modifier.fillMaxWidth(),
                     label = { Text("密码") },
-                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = !inProgress
                 )
                 if (keys.isNotEmpty()) {
@@ -8039,15 +8234,14 @@ fun ConfigDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
-                    OutlinedTextField(
+                    ReliablePasswordInputField(
                         value = localFtpPassword,
                         onValueChange = { s ->
                             localFtpPassword = s
                             onFtpPasswordChange(s)
                         },
                         modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        label = { Text("FTP 密码") },
                         supportingText = {
                             Text("留空则无需密码", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
