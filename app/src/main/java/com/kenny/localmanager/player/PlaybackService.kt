@@ -13,7 +13,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.AudioFocusRequest
 import android.media.MediaMetadata
 import android.media.MediaPlayer
 import android.media.session.MediaSession
@@ -22,6 +24,7 @@ import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
@@ -39,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 private const val CHANNEL_ID = "playback_channel"
 private const val NOTIFICATION_ID = 9001
+private const val TAG = "PlaybackService"
 
 const val ACTION_PLAY = "com.kenny.localmanager.player.PLAY"
 const val ACTION_STOP = "com.kenny.localmanager.player.STOP"
@@ -76,9 +80,19 @@ class PlaybackService : Service() {
     private var progressUpdateRunnable: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
     private var mediaSession: MediaSession? = null
+    private var audioManager: AudioManager? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
     private var bluetoothOutputConnected: Boolean = false
     private var pausedByBluetoothDisconnect: Boolean = false
+    private var resumeWhenAudioFocusGained: Boolean = false
+    private var isPlayerPrepared: Boolean = false
     private var lastPauseOrigin: PauseOrigin = PauseOrigin.OTHER
+    private val playbackAudioAttributes: AudioAttributes by lazy {
+        AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_MEDIA)
+            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+            .build()
+    }
 
     private val binder = LocalBinder()
 
@@ -86,7 +100,30 @@ class PlaybackService : Service() {
         USER,
         NOISY,
         BLUETOOTH_DISCONNECT,
+        AUDIO_FOCUS,
         OTHER
+    }
+
+    private val audioFocusChangeListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+        when (focusChange) {
+            AudioManager.AUDIOFOCUS_GAIN -> {
+                if (resumeWhenAudioFocusGained || lastPauseOrigin == PauseOrigin.AUDIO_FOCUS) {
+                    resumeWhenAudioFocusGained = false
+                    resumePlayback(skipAudioFocusRequest = true, origin = PauseOrigin.AUDIO_FOCUS)
+                }
+            }
+
+            AudioManager.AUDIOFOCUS_LOSS,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
+            AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
+                if (mediaPlayer?.isPlaying == true) {
+                    resumeWhenAudioFocusGained = true
+                    pausePlayback(PauseOrigin.AUDIO_FOCUS)
+                } else if (lastPauseOrigin == PauseOrigin.AUDIO_FOCUS) {
+                    resumeWhenAudioFocusGained = true
+                }
+            }
+        }
     }
 
     // 音频输出设备断开（如蓝牙耳机断开）的广播接收器
@@ -159,6 +196,7 @@ class PlaybackService : Service() {
     override fun onCreate() {
         super.onCreate()
         prefs = Preferences(applicationContext)
+        audioManager = getSystemService(AUDIO_SERVICE) as? AudioManager
         createChannel()
         initMediaSession()
         refreshBluetoothOutputState()
@@ -240,6 +278,30 @@ class PlaybackService : Service() {
         }
     }
 
+    private fun currentPlaybackPositionMsSafe(): Int {
+        val mp = mediaPlayer ?: return 0
+        return try {
+            mp.currentPosition
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Failed to read current playback position safely", e)
+            0
+        }
+    }
+
+    private fun persistPlaybackState(positionMsOverride: Long? = null) {
+        val currentPlaylistId = playlistId
+        val currentDirUri = dirUri
+        val idx = currentIndex.get()
+        val pos = positionMsOverride ?: currentPlaybackPositionMsSafe().toLong()
+        scope.launch(Dispatchers.IO) {
+            if (currentPlaylistId != null) {
+                prefs.setPlayerLastStateForPlaylist(currentPlaylistId, idx, pos)
+            } else {
+                prefs.setPlayerLastState(currentDirUri, idx, pos)
+            }
+        }
+    }
+
     private fun startPlayback(
         uris: List<String>,
         names: List<String>,
@@ -260,7 +322,7 @@ class PlaybackService : Service() {
         if (oldPlaylistId != null && playlistUris.isNotEmpty()) {
             val idx = currentIndex.get()
             if (idx in playlistUris.indices) {
-                val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
+                val pos = currentPlaybackPositionMsSafe().toLong()
                 scope.launch(Dispatchers.IO) {
                     prefs.setPlayerLastStateForPlaylist(oldPlaylistId, idx, pos)
                 }
@@ -289,6 +351,16 @@ class PlaybackService : Service() {
                     if (resume != null && resume.first in uris.indices) {
                         startIndex = resume.first
                         startPositionMs = resume.second.toInt().coerceAtLeast(0)
+                    } else {
+                        startIndex = 0
+                        startPositionMs = 0
+                        Log.i(
+                            TAG,
+                            "No valid resume state for playlist=$playlistId, fallback to track 0 from beginning"
+                        )
+                        withContext(Dispatchers.IO) {
+                            prefs.setPlayerLastStateForPlaylist(playlistId, 0, 0L)
+                        }
                     }
                 }
             } else if (dir.isNotEmpty()) {
@@ -311,28 +383,46 @@ class PlaybackService : Service() {
             return
         }
         pausedByBluetoothDisconnect = false
+        resumeWhenAudioFocusGained = false
         lastPauseOrigin = PauseOrigin.OTHER
         mediaPlayer?.release()
         mediaPlayer = null
+        isPlayerPrepared = false
 
         val uri = Uri.parse(playlistUris[index])
         val name = playlistNames.getOrElse(index) { uri.lastPathSegment ?: "?" }
 
         try {
             val mp = MediaPlayer().apply {
+                setAudioAttributes(playbackAudioAttributes)
                 setDataSource(applicationContext, uri)
                 setOnPreparedListener {
+                    isPlayerPrepared = true
                     if (seekToMs > 0) it.seekTo(seekToMs.coerceAtMost(it.duration))
+                    if (!requestAudioFocusForPlayback()) {
+                        updateState(
+                            trackIndex = index,
+                            trackName = name,
+                            positionMs = it.currentPosition,
+                            durationMs = it.duration,
+                            isPlaying = false
+                        )
+                        updateNotification()
+                        return@setOnPreparedListener
+                    }
                     it.start()
                     updateState(isPlaying = true)
                     updateNotification()
                     startProgressUpdates()
                 }
                 setOnCompletionListener {
-                    handler.removeCallbacks(progressUpdateRunnable ?: return@setOnCompletionListener)
+                    progressUpdateRunnable?.let(handler::removeCallbacks)
                     playNext()
                 }
-                setOnErrorListener { _, _, _ -> true }
+                setOnErrorListener { _, what, extra ->
+                    Log.e(TAG, "MediaPlayer error, what=$what, extra=$extra, track=$name, uri=$uri")
+                    true
+                }
                 prepareAsync()
             }
             mediaPlayer = mp
@@ -346,6 +436,7 @@ class PlaybackService : Service() {
             )
             updateNotification()
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to start track index=$index, track=$name, uri=$uri", e)
             updateState(
                 trackIndex = index,
                 trackName = name,
@@ -408,7 +499,7 @@ class PlaybackService : Service() {
     }
 
     private fun playNext() {
-        handler.removeCallbacks(progressUpdateRunnable ?: return)
+        progressUpdateRunnable?.let(handler::removeCallbacks)
         savePosition()
         val next = currentIndex.get() + 1
         if (next >= playlistUris.size) {
@@ -419,7 +510,7 @@ class PlaybackService : Service() {
     }
 
     private fun playPrev() {
-        handler.removeCallbacks(progressUpdateRunnable ?: return)
+        progressUpdateRunnable?.let(handler::removeCallbacks)
         savePosition()
         val mp = mediaPlayer
         if (mp != null && mp.currentPosition > 3000) {
@@ -441,21 +532,35 @@ class PlaybackService : Service() {
         if (mp.isPlaying) {
             mp.pause()
             lastPauseOrigin = origin
+            if (origin != PauseOrigin.AUDIO_FOCUS) {
+                resumeWhenAudioFocusGained = false
+            }
             if (origin == PauseOrigin.USER || origin == PauseOrigin.OTHER) {
                 pausedByBluetoothDisconnect = false
             }
-            progressUpdateRunnable?.let { handler.removeCallbacks(it) }
+            progressUpdateRunnable?.let(handler::removeCallbacks)
             updateState(isPlaying = false)
             updateNotification()
+            if (origin == PauseOrigin.USER) {
+                abandonAudioFocus()
+            }
         }
     }
 
-    private fun resumePlayback() {
+    private fun resumePlayback(skipAudioFocusRequest: Boolean = false, origin: PauseOrigin = PauseOrigin.OTHER) {
         val mp = mediaPlayer ?: return
+        if (!skipAudioFocusRequest && !requestAudioFocusForPlayback()) {
+            return
+        }
+        if (!isPlayerPrepared) {
+            resumeWhenAudioFocusGained = true
+            return
+        }
         if (!mp.isPlaying) {
             mp.start()
             pausedByBluetoothDisconnect = false
-            lastPauseOrigin = PauseOrigin.OTHER
+            resumeWhenAudioFocusGained = false
+            lastPauseOrigin = origin
             updateState(isPlaying = true)
             startProgressUpdates()
             updateNotification()
@@ -463,29 +568,13 @@ class PlaybackService : Service() {
     }
 
     private fun savePosition() {
-        scope.launch(Dispatchers.IO) {
-            val idx = currentIndex.get()
-            val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
-            if (playlistId != null) {
-                prefs.setPlayerLastStateForPlaylist(playlistId!!, idx, pos)
-            } else {
-                prefs.setPlayerLastState(dirUri, idx, pos)
-            }
-        }
+        persistPlaybackState()
     }
 
     private fun stopPlayback() {
-        handler.removeCallbacks(progressUpdateRunnable ?: return)
-        savePosition()
-        scope.launch(Dispatchers.IO) {
-            val idx = currentIndex.get()
-            val pos = (mediaPlayer?.currentPosition ?: 0).toLong()
-            if (playlistId != null) {
-                prefs.setPlayerLastStateForPlaylist(playlistId!!, idx, pos)
-            } else {
-                prefs.setPlayerLastState(dirUri, idx, pos)
-            }
-        }
+        progressUpdateRunnable?.let(handler::removeCallbacks)
+        val lastPositionMs = currentPlaybackPositionMsSafe().toLong()
+        persistPlaybackState(positionMsOverride = lastPositionMs)
         mediaPlayer?.release()
         mediaPlayer = null
         playlistUris = emptyList()
@@ -494,12 +583,66 @@ class PlaybackService : Service() {
         playlistId = null
         playlistName = null
         pausedByBluetoothDisconnect = false
+        resumeWhenAudioFocusGained = false
+        isPlayerPrepared = false
         lastPauseOrigin = PauseOrigin.OTHER
         PlaybackService._playbackState.value = null
         updateMediaSessionPlaybackState(isPlaying = false, positionMs = 0, durationMs = 0)
         mediaSession?.setMetadata(null)
+        abandonAudioFocus()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+    }
+
+    private fun requestAudioFocusForPlayback(): Boolean {
+        val manager = audioManager ?: run {
+            Log.e(TAG, "AudioManager unavailable when requesting audio focus")
+            return false
+        }
+        val result = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val request = audioFocusRequest ?: AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(playbackAudioAttributes)
+                .setOnAudioFocusChangeListener(audioFocusChangeListener)
+                .setAcceptsDelayedFocusGain(true)
+                .build()
+                .also { audioFocusRequest = it }
+            manager.requestAudioFocus(request)
+        } else {
+            @Suppress("DEPRECATION")
+            manager.requestAudioFocus(
+                audioFocusChangeListener,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN
+            )
+        }
+        return when (result) {
+            AudioManager.AUDIOFOCUS_REQUEST_GRANTED -> {
+                resumeWhenAudioFocusGained = false
+                true
+            }
+
+            AudioManager.AUDIOFOCUS_REQUEST_DELAYED -> {
+                resumeWhenAudioFocusGained = true
+                Log.i(TAG, "Audio focus request delayed, waiting for focus gain before playback resumes")
+                false
+            }
+
+            else -> {
+                resumeWhenAudioFocusGained = false
+                Log.w(TAG, "Audio focus request failed with result=$result")
+                false
+            }
+        }
+    }
+
+    private fun abandonAudioFocus() {
+        val manager = audioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { manager.abandonAudioFocusRequest(it) }
+        } else {
+            @Suppress("DEPRECATION")
+            manager.abandonAudioFocus(audioFocusChangeListener)
+        }
     }
 
     private fun initMediaSession() {
@@ -576,7 +719,7 @@ class PlaybackService : Service() {
             pausedByBluetoothDisconnect = false
             return
         }
-        resumePlayback()
+        resumePlayback(origin = PauseOrigin.BLUETOOTH_DISCONNECT)
     }
 
     private fun buildNotification(): Notification {
@@ -623,7 +766,7 @@ class PlaybackService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(progressUpdateRunnable ?: return)
+        progressUpdateRunnable?.let(handler::removeCallbacks)
         try {
             unregisterReceiver(noisyReceiver)
         } catch (_: Exception) {}
@@ -635,8 +778,11 @@ class PlaybackService : Service() {
             release()
         }
         mediaSession = null
+        abandonAudioFocus()
         mediaPlayer?.release()
         mediaPlayer = null
+        isPlayerPrepared = false
+        resumeWhenAudioFocusGained = false
         PlaybackService._playbackState.value = null
         super.onDestroy()
     }
