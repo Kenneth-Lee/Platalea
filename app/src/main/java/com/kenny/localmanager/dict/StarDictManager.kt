@@ -3,6 +3,7 @@ package com.kenny.localmanager.dict
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.listFilesSafe
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.FileHeader
@@ -130,10 +131,10 @@ fun loadImportedStarDict(context: Context, id: String): StarDictLoaded? {
     )
 }
 
-fun searchStarDictWords(loaded: StarDictLoaded, pattern: String, maxResults: Int = 500): Pair<List<StarDictWord>, String?> {
+fun searchStarDictWords(context: Context, loaded: StarDictLoaded, pattern: String, maxResults: Int = 500): Pair<List<StarDictWord>, String?> {
     if (pattern.isBlank()) return Pair(emptyList(), null)
     return try {
-        val regex = buildRegex(pattern)
+        val regex = buildRegex(context, pattern)
         val results = mutableListOf<StarDictWord>()
         for (item in loaded.words) {
             if (regex.containsMatchIn(item.word)) {
@@ -143,7 +144,7 @@ fun searchStarDictWords(loaded: StarDictLoaded, pattern: String, maxResults: Int
         }
         Pair(results, null)
     } catch (e: Exception) {
-        Pair(emptyList(), e.message ?: "无效正则")
+        Pair(emptyList(), e.message ?: context.getString(R.string.dict_invalid_regex))
     }
 }
 
@@ -160,27 +161,27 @@ fun lookupExactWord(loaded: StarDictLoaded, word: String): StarDictWord? {
 
 fun readStarDictExplanation(context: Context, dictId: String, loaded: StarDictLoaded, word: StarDictWord): String {
     val dictFile = File(File(getBaseDir(context), dictId), DICT_FILE_NAME)
-    if (!dictFile.exists()) return "词典数据文件不存在: ${dictFile.absolutePath}"
-    if (word.size <= 0) return "词条大小无效: ${word.size}"
-    if (word.offset < 0) return "词条偏移无效: ${word.offset}"
+    if (!dictFile.exists()) return context.getString(R.string.dict_data_file_missing, dictFile.absolutePath)
+    if (word.size <= 0) return context.getString(R.string.dict_invalid_entry_size, word.size)
+    if (word.offset < 0) return context.getString(R.string.dict_invalid_entry_offset, word.offset)
 
     val bytes = try {
         RandomAccessFile(dictFile, "r").use { raf ->
             raf.seek(word.offset)
             val size = word.size.coerceAtLeast(0)
             if (word.offset + size > raf.length()) {
-                return "词条数据超出文件范围: offset=${word.offset}, size=${word.size}, fileSize=${raf.length()}"
+                return context.getString(R.string.dict_entry_out_of_range, word.offset, word.size, raf.length())
             }
             val buffer = ByteArray(size)
             raf.readFully(buffer)
             buffer
         }
     } catch (e: Exception) {
-        return "读取释义失败: ${e.javaClass.simpleName}: ${e.message}"
+        return context.getString(R.string.dict_read_definition_failed, e.javaClass.simpleName, e.message ?: "")
     }
 
     val decoded = decodeDefinition(bytes, loaded.charsetName)
-    return if (decoded.isBlank()) "(无释义内容)" else decoded
+    return if (decoded.isBlank()) context.getString(R.string.dict_empty_definition) else decoded
 }
 
 fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result<StarDictImportResult> {
@@ -193,7 +194,7 @@ fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result
             } else if (isIfoName(sourceName)) {
                 importFromIfo(context, sourceUri, workDir)
             } else {
-                throw IllegalArgumentException("仅支持 .zip 或 .ifo 导入")
+                throw IllegalArgumentException(context.getString(R.string.dict_import_support_only))
             }
 
             val dictId = buildDictId(imported.bookName)
@@ -202,8 +203,8 @@ fun importStarDict(context: Context, sourceUri: Uri, sourceName: String): Result
             targetDir.mkdirs()
 
             val idxBytes = readIdxBytes(imported.idxFile)
-            val entries = parseIdxEntries(idxBytes, imported.charsetName)
-            if (entries.isEmpty()) throw IllegalStateException("词典索引为空")
+            val entries = parseIdxEntries(context, idxBytes, imported.charsetName)
+            if (entries.isEmpty()) throw IllegalStateException(context.getString(R.string.dict_empty_index))
 
             writeDictBin(imported.dictFile, File(targetDir, DICT_FILE_NAME))
             writeIndex(entries, File(targetDir, INDEX_FILE_NAME))
@@ -254,15 +255,15 @@ private fun importFromZip(context: Context, sourceUri: Uri, workDir: File): Impo
     val zipFile = File(workDir, "source.zip")
     context.contentResolver.openInputStream(sourceUri)?.use { input ->
         zipFile.outputStream().use { output -> input.copyTo(output) }
-    } ?: throw IllegalStateException("无法读取压缩包")
+    } ?: throw IllegalStateException(context.getString(R.string.dict_zip_unreadable))
 
     val zip = ZipFile(zipFile)
     val headers = zip.fileHeaders.orEmpty()
-    val ifoHeader = findHeader(headers, ".ifo") ?: throw IllegalStateException("压缩包中未找到 .ifo")
+    val ifoHeader = findHeader(headers, ".ifo") ?: throw IllegalStateException(context.getString(R.string.dict_zip_missing_ifo))
     val idxHeader = findHeader(headers, ".idx") ?: findHeader(headers, ".idx.gz")
     val dictHeader = findHeader(headers, ".dict") ?: findHeader(headers, ".dict.dz")
     if (idxHeader == null || dictHeader == null) {
-        throw IllegalStateException("压缩包缺少 .idx/.dict 词典文件")
+        throw IllegalStateException(context.getString(R.string.dict_zip_missing_files))
     }
 
     val extractDir = File(workDir, "zip_extract").apply { mkdirs() }
@@ -288,21 +289,21 @@ private fun extractHeaderWithOriginalExt(zip: ZipFile, header: FileHeader, extra
 }
 
 private fun importFromIfo(context: Context, sourceUri: Uri, workDir: File): ImportSource {
-    val ifoDoc = DocumentFile.fromSingleUri(context, sourceUri) ?: throw IllegalStateException("无法读取 .ifo 文件")
-    val ifoName = ifoDoc.name ?: throw IllegalStateException("无法获取 .ifo 文件名")
+    val ifoDoc = DocumentFile.fromSingleUri(context, sourceUri) ?: throw IllegalStateException(context.getString(R.string.dict_ifo_unreadable))
+    val ifoName = ifoDoc.name ?: throw IllegalStateException(context.getString(R.string.dict_ifo_name_unavailable))
     val baseName = stripExt(ifoName)
-    val parent = ifoDoc.parentFile ?: throw IllegalStateException("无法定位 .ifo 所在目录")
+    val parent = ifoDoc.parentFile ?: throw IllegalStateException(context.getString(R.string.dict_ifo_parent_unavailable))
     val siblings = parent.listFilesSafe().toList()
 
     val idxDoc = siblings.firstOrNull {
         val n = it.name.orEmpty()
         n.equals("$baseName.idx", ignoreCase = true) || n.equals("$baseName.idx.gz", ignoreCase = true)
-    } ?: throw IllegalStateException("同目录未找到 $baseName.idx")
+    } ?: throw IllegalStateException(context.getString(R.string.dict_idx_not_found, baseName))
 
     val dictDoc = siblings.firstOrNull {
         val n = it.name.orEmpty()
         n.equals("$baseName.dict", ignoreCase = true) || n.equals("$baseName.dict.dz", ignoreCase = true)
-    } ?: throw IllegalStateException("同目录未找到 $baseName.dict")
+    } ?: throw IllegalStateException(context.getString(R.string.dict_dict_not_found, baseName))
 
     // 保留原始扩展名
     val ifoFile = copyDocToFileWithOriginalExt(context, ifoDoc.uri, workDir, "source")
@@ -317,14 +318,14 @@ private fun importFromIfo(context: Context, sourceUri: Uri, workDir: File): Impo
 }
 
 private fun copyDocToFileWithOriginalExt(context: Context, sourceUri: Uri, workDir: File, baseName: String): File {
-    val doc = DocumentFile.fromSingleUri(context, sourceUri) ?: throw IllegalStateException("无法读取文件")
-    val name = doc.name ?: throw IllegalStateException("无法获取文件名")
+    val doc = DocumentFile.fromSingleUri(context, sourceUri) ?: throw IllegalStateException(context.getString(R.string.dict_file_unreadable))
+    val name = doc.name ?: throw IllegalStateException(context.getString(R.string.dict_filename_unavailable))
     val ext = if (name.contains('.')) name.substringAfterLast('.') else ""
     val targetName = if (ext.isNotEmpty()) "$baseName.$ext" else baseName
     val target = File(workDir, targetName)
     context.contentResolver.openInputStream(sourceUri)?.use { input ->
         target.outputStream().use { output -> input.copyTo(output) }
-    } ?: throw IllegalStateException("无法读取源文件")
+    } ?: throw IllegalStateException(context.getString(R.string.dict_source_unreadable))
     return target
 }
 
@@ -349,7 +350,7 @@ private fun readIdxBytes(idxFile: File): ByteArray {
     }
 }
 
-private fun parseIdxEntries(data: ByteArray, charsetName: String?): List<StarDictWord> {
+private fun parseIdxEntries(context: Context, data: ByteArray, charsetName: String?): List<StarDictWord> {
     val charset = resolveCharset(charsetName) ?: Charsets.UTF_8
     val result = ArrayList<StarDictWord>()
     var index = 0
@@ -358,7 +359,7 @@ private fun parseIdxEntries(data: ByteArray, charsetName: String?): List<StarDic
         if (zero < 0) break
         if (zero + 8 >= data.size) break
         val wordBytes = data.copyOfRange(index, zero)
-        val word = wordBytes.toString(charset).trim().ifBlank { "(空词条)" }
+        val word = wordBytes.toString(charset).trim().ifBlank { context.getString(R.string.dict_empty_word) }
         val offset = readUint32(data, zero + 1)
         val size = readUint32(data, zero + 5).toInt()
         result.add(StarDictWord(word = word, offset = offset, size = size))
@@ -407,7 +408,7 @@ private fun writeIndex(entries: List<StarDictWord>, target: File) {
     }
 }
 
-private fun buildRegex(pattern: String): Regex {
+private fun buildRegex(context: Context, pattern: String): Regex {
     val slashForm = Regex("^/((?:\\\\.|[^/])*)/([a-zA-Z]*)$").matchEntire(pattern)
     if (slashForm != null) {
         val source = slashForm.groupValues[1]
@@ -419,7 +420,7 @@ private fun buildRegex(pattern: String): Regex {
                     'm' -> add(RegexOption.MULTILINE)
                     's' -> add(RegexOption.DOT_MATCHES_ALL)
                     'u', 'g' -> Unit
-                    else -> throw IllegalArgumentException("不支持的正则标志: $flag")
+                    else -> throw IllegalArgumentException(context.getString(R.string.dict_unsupported_regex_flag, flag.toString()))
                 }
             }
         }

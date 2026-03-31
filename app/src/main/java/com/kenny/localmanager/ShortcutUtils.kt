@@ -19,10 +19,16 @@ private data class ShortcutMeta(
     val longLabel: String
 )
 
-private fun shortcutMetaForTab(tabKey: String): ShortcutMeta? {
+private fun shortcutMetaForTab(context: Context, tabKey: String): ShortcutMeta? {
     return when (tabKey) {
-        SHORTCUT_TAB_PLAYER -> ShortcutMeta("播放器", "本地管家 - 播放器")
-        SHORTCUT_TAB_QUICK_NOTE -> ShortcutMeta("速记", "本地管家 - 速记")
+        SHORTCUT_TAB_PLAYER -> ShortcutMeta(
+            context.getString(R.string.shortcut_player_short_label),
+            context.getString(R.string.shortcut_player_long_label)
+        )
+        SHORTCUT_TAB_QUICK_NOTE -> ShortcutMeta(
+            context.getString(R.string.shortcut_quick_note_short_label),
+            context.getString(R.string.shortcut_quick_note_long_label)
+        )
         else -> null
     }
 }
@@ -33,15 +39,15 @@ fun requestPinnedTabShortcut(
     callbackIntent: PendingIntent? = null
 ): String? {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-        return "系统版本过低：仅 Android 8.0+ 支持固定桌面快捷方式"
+        return context.getString(R.string.shortcut_error_old_system)
     }
     val shortcutManager = context.getSystemService(ShortcutManager::class.java)
-        ?: return "无法获取 ShortcutManager，创建快捷方式失败"
+        ?: return context.getString(R.string.shortcut_error_manager_unavailable)
     if (!shortcutManager.isRequestPinShortcutSupported) {
-        return "当前桌面不支持固定快捷方式"
+        return context.getString(R.string.shortcut_error_unsupported_launcher)
     }
-    val meta = shortcutMetaForTab(tabKey)
-        ?: return "不支持为该页面创建桌面快捷方式：$tabKey"
+    val meta = shortcutMetaForTab(context, tabKey)
+        ?: return context.getString(R.string.shortcut_error_unsupported_tab, tabKey)
 
     val launchIntent = Intent(context, MainActivity::class.java).apply {
         action = Intent.ACTION_VIEW
@@ -59,7 +65,7 @@ fun requestPinnedTabShortcut(
     return if (shortcutManager.requestPinShortcut(shortcut, callbackIntent?.intentSender)) {
         null
     } else {
-        "桌面拒绝了快捷方式请求，请确认桌面支持并重试"
+        context.getString(R.string.shortcut_error_request_rejected)
     }
 }
 

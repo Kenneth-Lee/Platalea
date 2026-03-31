@@ -6,6 +6,7 @@ import android.os.Build
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.listFilesSafe
 import org.apache.ftpserver.FtpServer
 import org.apache.ftpserver.FtpServerFactory
@@ -45,11 +46,11 @@ class FtpServerManager(private val context: Context) {
         val treeUri = Uri.parse(treeRootUri)
         val ctx = context.applicationContext
         val root = DocumentFile.fromTreeUri(ctx, treeUri) ?: run {
-            addLog("启动失败: 根目录不可用（请使用文档树根）")
+            addLog(ctx.getString(R.string.ftp_start_failed_root_unavailable))
             return false
         }
         if (!root.exists() || !root.isDirectory) {
-            addLog("启动失败: 根目录无效")
+            addLog(ctx.getString(R.string.ftp_start_failed_invalid_root))
             return false
         }
         val (initialWorkingDoc, initialWorkingPath) = resolveInitialWorkingDir(ctx, root, treeUri, currentDirUri)
@@ -73,11 +74,11 @@ class FtpServerManager(private val context: Context) {
             val ftpServer = factory.createServer()
             ftpServer.start()
             server = ftpServer
-            addLog("FTP 服务器已启动 端口=$port 监听 0.0.0.0")
+            addLog(ctx.getString(R.string.ftp_started, port))
             true
         } catch (e: Throwable) {
             Log.e("FtpServer", "start failed", e)
-            addLog("启动失败: ${e.message ?: e.javaClass.simpleName}")
+            addLog(ctx.getString(R.string.ftp_start_failed_reason, e.message ?: e.javaClass.simpleName))
             false
         }
     }
@@ -115,7 +116,7 @@ class FtpServerManager(private val context: Context) {
             val workingPath = "/" + pathNames.drop(1).joinToString("/")
             Pair(current, workingPath)
         } catch (e: Exception) {
-            addLog("初始工作目录使用根目录（解析异常: ${e.message ?: e.javaClass.simpleName}）")
+            addLog(context.getString(R.string.ftp_initial_dir_fallback, e.message ?: e.javaClass.simpleName))
             Pair(null, "/")
         }
     }
@@ -157,22 +158,24 @@ class FtpServerManager(private val context: Context) {
             val cmd = request?.command?.uppercase()
             val arg = request?.argument ?: ""
             val ok = (reply?.code ?: 0) in 200..399
+            val codeText = reply?.code?.toString().orEmpty()
+            val messageText = reply?.message?.take(100).orEmpty()
             when (cmd) {
-                "RETR" -> addLog(if (ok) "get $arg" else "get $arg 失败 (${reply?.code ?: ""})")
-                "STOR", "APPE" -> addLog(if (ok) "put $arg" else "put $arg 失败 (${reply?.code ?: ""})")
-                "LIST", "NLST" -> addLog(if (ok) "list 完成" else "list 失败 (${reply?.code ?: ""} ${reply?.message?.take(100) ?: ""})")
+                "RETR" -> addLog(if (ok) context.getString(R.string.ftp_transfer_get_ok, arg) else context.getString(R.string.ftp_transfer_get_failed, arg, codeText))
+                "STOR", "APPE" -> addLog(if (ok) context.getString(R.string.ftp_transfer_put_ok, arg) else context.getString(R.string.ftp_transfer_put_failed, arg, codeText))
+                "LIST", "NLST" -> addLog(if (ok) context.getString(R.string.ftp_transfer_list_ok) else context.getString(R.string.ftp_transfer_list_failed, codeText, messageText))
             }
             return FtpletResult.DEFAULT
         }
         override fun onConnect(session: FtpSession?): FtpletResult {
-            val addr = session?.clientAddress?.toString() ?: "未知"
-            addLog("收到连接: $addr")
+            val addr = session?.clientAddress?.toString() ?: context.getString(R.string.ftp_unknown)
+            addLog(context.getString(R.string.ftp_connection_received, addr))
             connectionCount.incrementAndGet()
             return FtpletResult.DEFAULT
         }
         override fun onDisconnect(session: FtpSession?): FtpletResult {
             connectionCount.decrementAndGet()
-            addLog("连接已关闭")
+            addLog(context.getString(R.string.ftp_connection_closed))
             return FtpletResult.DEFAULT
         }
     }
@@ -196,7 +199,7 @@ class FtpServerManager(private val context: Context) {
             server?.stop()
         } catch (_: Exception) {}
         server = null
-        addLog("FTP 服务器已停止")
+        addLog(context.getString(R.string.ftp_stopped_log))
     }
 
     fun isRunning(): Boolean = server != null

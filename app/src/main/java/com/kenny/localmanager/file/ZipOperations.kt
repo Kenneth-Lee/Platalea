@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.github.junrar.Archive
 import com.github.junrar.rarfile.FileHeader
 import org.apache.commons.compress.PasswordRequiredException
@@ -17,6 +18,7 @@ import net.lingala.zip4j.model.enums.CompressionLevel
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.charset.Charset
+import java.util.Locale
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
@@ -139,7 +141,7 @@ fun unzipToParent(
     try {
         cr.openInputStream(zipUri)?.use { input ->
             zipFile.outputStream().use { output -> input.copyTo(output) }
-        } ?: return UnzipResult.IOError("无法读取文件")
+        } ?: return UnzipResult.IOError(context.getString(R.string.zip_read_file_failed))
         if (isRarName(archiveName) || hasRarSignature(zipFile)) {
             return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
         }
@@ -961,7 +963,7 @@ private fun generateIndexContent(
 ): String {
     val sb = StringBuilder()
     if (isRstZip) {
-        sb.appendLine("目录")
+        sb.appendLine(if (Locale.getDefault().language.startsWith("zh")) "目录" else "Contents")
         sb.appendLine("====")
         sb.appendLine()
         for ((rel, _) in files) {
@@ -969,7 +971,7 @@ private fun generateIndexContent(
             sb.appendLine("- `$label <$rel>`_")
         }
     } else {
-        sb.appendLine("# 目录")
+        sb.appendLine(if (Locale.getDefault().language.startsWith("zh")) "# 目录" else "# Contents")
         sb.appendLine()
         for ((rel, _) in files) {
             val label = rel.substringBeforeLast('.').replace("/", " / ")
@@ -1147,12 +1149,15 @@ fun extractHtmlZipToCacheWithProgress(
     val tmpZip = File(cacheDir, "__archive.zip")
 
     try {
-        onLog("开始读取文件: $zipFileName")
+        onLog(context.getString(R.string.zip_log_start_read_file, zipFileName))
 
         // 复制文件到临时位置
         val inputStream = context.contentResolver.openInputStream(zipUri)
         if (inputStream == null) {
-            return HtmlZipParseResult.Error("无法打开文件", "ContentResolver.openInputStream 返回 null，URI: $zipUri")
+            return HtmlZipParseResult.Error(
+                context.getString(R.string.zip_error_open_file),
+                context.getString(R.string.zip_error_input_stream_null, zipUri.toString())
+            )
         }
 
         inputStream.use { input ->
@@ -1165,55 +1170,64 @@ fun extractHtmlZipToCacheWithProgress(
                     output.write(buffer, 0, read)
                     total += read
                     if (total % (1024 * 1024) < 8192) {  // 每MB更新一次
-                        onLog("已复制 ${total / 1024 / 1024} MB...")
+                        onLog(context.getString(R.string.zip_log_copied_mb, total / 1024 / 1024))
                     }
                 }
             }
         }
 
         if (!tmpZip.exists() || tmpZip.length() == 0L) {
-            return HtmlZipParseResult.Error("文件复制失败", "临时文件为空或不存在，路径: ${tmpZip.path}")
+            return HtmlZipParseResult.Error(
+                context.getString(R.string.zip_error_copy_failed),
+                context.getString(R.string.zip_error_temp_missing, tmpZip.path)
+            )
         }
-        onLog("文件读取完成 (${tmpZip.length() / 1024 / 1024} MB)")
+        onLog(context.getString(R.string.zip_log_file_read_complete, tmpZip.length() / 1024 / 1024))
 
-        onLog("检查压缩包...")
+        onLog(context.getString(R.string.zip_log_check_archive))
         val zip = ZipFile(tmpZip)
         val encrypted = zip.isEncrypted
-        onLog("压缩包检查完成，加密: $encrypted")
+        onLog(context.getString(R.string.zip_log_check_archive_done, encrypted.toString()))
 
         if (encrypted) {
             if (password == null || password.isEmpty()) {
-                return HtmlZipParseResult.Error("需要密码", "HTML.zip 文件已加密，请输入密码")
+                return HtmlZipParseResult.Error(
+                    context.getString(R.string.zip_error_password_required_title),
+                    context.getString(R.string.zip_error_html_password_required)
+                )
             }
             zip.setPassword(password)
         }
 
-        onLog("解压文件...")
+        onLog(context.getString(R.string.zip_log_extracting))
         val contentDir = File(cacheDir, "content").apply { mkdirs() }
         try {
             zip.extractAll(contentDir.path)
         } catch (e: net.lingala.zip4j.exception.ZipException) {
-            val msg = e.message ?: "未知ZipException"
-            return HtmlZipParseResult.Error("解压失败", "ZipException: $msg")
+            val msg = e.message ?: context.getString(R.string.zip_unknown_zip_exception)
+            return HtmlZipParseResult.Error(
+                context.getString(R.string.zip_error_extract_failed),
+                context.getString(R.string.zip_error_zip_exception, msg)
+            )
         }
         tmpZip.delete()
-        onLog("解压完成")
+        onLog(context.getString(R.string.zip_log_extract_complete))
 
-        onLog("查找入口文件...")
+        onLog(context.getString(R.string.zip_log_find_entry))
         val indexFile = findHtmlZipIndexFile(contentDir)
         if (indexFile == null) {
             val files = contentDir.listFiles()?.take(20)?.map { it.name } ?: emptyList()
             return HtmlZipParseResult.Error(
-                "未找到入口文件",
-                "在解压目录中未找到 index.html 或 README.html\n目录文件列表: ${files.joinToString(", ")}"
+                context.getString(R.string.zip_error_entry_not_found),
+                context.getString(R.string.zip_error_html_entry_missing, files.joinToString(", "))
             )
         }
-        onLog("入口文件: ${indexFile.name}")
+        onLog(context.getString(R.string.zip_log_entry_file, indexFile.name))
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
 
-        onLog("完成！")
+        onLog(context.getString(R.string.zip_log_done))
         return HtmlZipParseResult.Success(HtmlZipExtractResult(cacheDir, contentDir, indexFile, encrypted))
 
     } catch (e: Exception) {
@@ -1459,7 +1473,7 @@ private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<E
     val content = opfFile.readText()
 
     // 解析 metadata
-    var title = "未知书名"
+    var title = if (Locale.getDefault().language.startsWith("zh")) "未知书名" else "Unknown Title"
     var author: String? = null
     var language: String? = null
 
@@ -1504,6 +1518,7 @@ private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<E
 
 /** 尝试从 NCX 或 NAV 文件获取章节标题。 */
 private fun parseEpubNavigation(
+    context: Context,
     contentDir: File,
     opfDir: File,
     chapters: List<EpubChapter>,
@@ -1513,11 +1528,11 @@ private fun parseEpubNavigation(
     val ncxFile = opfDir.listFiles()?.find { it.name.endsWith(".ncx", ignoreCase = true) }
     if (ncxFile != null && ncxFile.exists()) {
         try {
-            onLog("读取 NCX 文件...")
+            onLog(context.getString(R.string.zip_log_read_ncx))
             val ncxContent = ncxFile.readText()
 
             // 使用更高效的正则：分别匹配 text 和 src
-            onLog("解析导航点...")
+            onLog(context.getString(R.string.zip_log_parse_navpoints))
             val navMap = mutableMapOf<String, String>()
 
             // 先找到所有 navPoint 块
@@ -1534,10 +1549,10 @@ private fun parseEpubNavigation(
                 navMap[src] = title
                 count++
                 if (count % 100 == 0) {
-                    onLog("已解析 $count 个导航点...")
+                    onLog(context.getString(R.string.zip_log_navpoints_parsed_progress, count))
                 }
             }
-            onLog("共解析 $count 个导航点")
+            onLog(context.getString(R.string.zip_log_navpoints_parsed_total, count))
 
             // 更新章节标题
             return chapters.map { chapter ->
@@ -1546,7 +1561,7 @@ private fun parseEpubNavigation(
                 chapter.copy(title = title)
             }
         } catch (e: Exception) {
-            onLog("NCX解析异常: ${e.message}")
+            onLog(context.getString(R.string.zip_log_ncx_parse_error, e.message ?: ""))
         }
     }
 
@@ -1576,10 +1591,13 @@ fun extractEpubToCache(
     cacheDir.mkdirs()
     val tmpZip = File(cacheDir, "__archive.zip")
     try {
-        onLog("开始读取文件...")
+        onLog(context.getString(R.string.zip_log_start_read_generic))
         val inputStream = context.contentResolver.openInputStream(epubUri)
         if (inputStream == null) {
-            return EpubParseResult.Error("无法打开文件", "ContentResolver.openInputStream 返回 null")
+            return EpubParseResult.Error(
+                context.getString(R.string.zip_error_open_file),
+                context.getString(R.string.zip_error_input_stream_null_simple)
+            )
         }
         inputStream.use { input ->
             tmpZip.outputStream().use { output ->
@@ -1591,96 +1609,105 @@ fun extractEpubToCache(
                     output.write(buffer, 0, read)
                     total += read
                     if (total % (1024 * 1024) < 8192) {  // 每MB更新一次
-                        onLog("已复制 ${total / 1024 / 1024} MB...")
+                        onLog(context.getString(R.string.zip_log_copied_mb, total / 1024 / 1024))
                     }
                 }
             }
         }
 
         if (!tmpZip.exists() || tmpZip.length() == 0L) {
-            return EpubParseResult.Error("文件复制失败", "临时文件为空或不存在")
+            return EpubParseResult.Error(
+                context.getString(R.string.zip_error_copy_failed),
+                context.getString(R.string.zip_error_temp_missing_simple)
+            )
         }
-        onLog("文件读取完成 (${tmpZip.length() / 1024 / 1024} MB)")
+        onLog(context.getString(R.string.zip_log_file_read_complete, tmpZip.length() / 1024 / 1024))
 
-        onLog("检查压缩包...")
+        onLog(context.getString(R.string.zip_log_check_archive))
         val zip = ZipFile(tmpZip)
         val encrypted = zip.isEncrypted
         if (encrypted) {
             if (password == null || password.isEmpty()) {
-                return EpubParseResult.Error("需要密码", "EPUB 文件已加密")
+                return EpubParseResult.Error(
+                    context.getString(R.string.zip_error_password_required_title),
+                    context.getString(R.string.zip_error_epub_password_required)
+                )
             }
             zip.setPassword(password)
         }
-        onLog("压缩包检查完成，加密: $encrypted")
+        onLog(context.getString(R.string.zip_log_check_archive_done, encrypted.toString()))
 
-        onLog("解压文件...")
+        onLog(context.getString(R.string.zip_log_extracting))
         val contentDir = File(cacheDir, "content").apply { mkdirs() }
         try {
             zip.extractAll(contentDir.path)
         } catch (e: net.lingala.zip4j.exception.ZipException) {
-            val msg = e.message ?: "未知ZipException"
-            return EpubParseResult.Error("解压失败", "ZipException: $msg")
+            val msg = e.message ?: context.getString(R.string.zip_unknown_zip_exception)
+            return EpubParseResult.Error(
+                context.getString(R.string.zip_error_extract_failed),
+                context.getString(R.string.zip_error_zip_exception, msg)
+            )
         }
         tmpZip.delete()
-        onLog("解压完成")
+        onLog(context.getString(R.string.zip_log_extract_complete))
 
-        onLog("解析 container.xml...")
+        onLog(context.getString(R.string.zip_log_parse_container))
         val opfRelativePath = parseEpubContainer(contentDir)
         if (opfRelativePath == null) {
             val metaInfExists = File(contentDir, "META-INF").exists()
             val containerExists = File(contentDir, "META-INF/container.xml").exists()
-            val rootFiles = contentDir.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: "(空)"
+            val rootFiles = contentDir.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: context.getString(R.string.zip_empty_placeholder)
             return EpubParseResult.Error(
-                "无法找到 container.xml",
-                "META-INF目录=${metaInfExists}, container.xml=${containerExists}\n根目录文件: $rootFiles"
+                context.getString(R.string.zip_error_container_missing),
+                context.getString(R.string.zip_error_container_missing_detail, metaInfExists.toString(), containerExists.toString(), rootFiles)
             )
         }
-        onLog("OPF路径: $opfRelativePath")
+        onLog(context.getString(R.string.zip_log_opf_path, opfRelativePath))
 
         val opfFile = File(contentDir, opfRelativePath)
         if (!opfFile.exists()) {
-            val opfDirFiles = opfFile.parentFile?.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: "(空)"
+            val opfDirFiles = opfFile.parentFile?.listFiles()?.take(20)?.joinToString(", ") { it.name } ?: context.getString(R.string.zip_empty_placeholder)
             return EpubParseResult.Error(
-                "OPF文件不存在",
-                "预期路径: $opfRelativePath\nOPF目录文件: $opfDirFiles"
+                context.getString(R.string.zip_error_opf_missing),
+                context.getString(R.string.zip_error_opf_missing_detail, opfRelativePath, opfDirFiles)
             )
         }
-        onLog("找到OPF文件")
+        onLog(context.getString(R.string.zip_log_opf_found))
 
         val opfDir = opfFile.parentFile ?: contentDir
 
-        onLog("解析 OPF...")
+        onLog(context.getString(R.string.zip_log_parse_opf))
         val parseResult = parseEpubOpf(opfFile, opfDir)
         if (parseResult == null) {
-            return EpubParseResult.Error("OPF解析失败", "文件: ${opfFile.absolutePath}")
+            return EpubParseResult.Error(context.getString(R.string.zip_error_opf_parse_failed), context.getString(R.string.zip_error_file_path, opfFile.absolutePath))
         }
         val (bookInfo, rawChapters) = parseResult
-        onLog("书名: ${bookInfo.title}, 作者: ${bookInfo.author}, 原始章节数: ${rawChapters.size}")
+        onLog(context.getString(R.string.zip_log_book_info, bookInfo.title, bookInfo.author ?: "", rawChapters.size))
 
-        onLog("解析导航信息...")
-        val chapters = parseEpubNavigation(contentDir, opfDir, rawChapters) { log ->
+        onLog(context.getString(R.string.zip_log_parse_navigation))
+        val chapters = parseEpubNavigation(context, contentDir, opfDir, rawChapters) { log ->
             onLog(log)
         }
-        onLog("最终章节数: ${chapters.size}")
+        onLog(context.getString(R.string.zip_log_final_chapter_count, chapters.size))
 
         if (chapters.isEmpty()) {
             val spineSample = opfFile.readText().let { text ->
                 val spineMatch = Regex("<spine[^>]*>(.*?)</spine>", RegexOption.DOT_MATCHES_ALL).find(text)
-                spineMatch?.groupValues?.get(1)?.take(500) ?: "(未找到spine)"
+                spineMatch?.groupValues?.get(1)?.take(500) ?: context.getString(R.string.zip_spine_not_found)
             }
-            return EpubParseResult.Error("未找到章节", "OPF spine 内容: $spineSample")
+            return EpubParseResult.Error(context.getString(R.string.zip_error_chapter_missing), context.getString(R.string.zip_error_spine_content, spineSample))
         }
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
 
-        onLog("加载完成!")
+        onLog(context.getString(R.string.zip_log_load_complete))
         return EpubParseResult.Success(EpubExtractResult(cacheDir, contentDir, opfDir, bookInfo, chapters, encrypted))
     } catch (e: Exception) {
         Log.e(TAG, "extractEpubToCache failed", e)
         cacheDir.deleteRecursively()
         return EpubParseResult.Error(
-            "解析异常: ${e.javaClass.simpleName}",
+            context.getString(R.string.zip_error_parse_exception, e.javaClass.simpleName),
             e.message
         )
     } finally {
@@ -1689,7 +1716,7 @@ fun extractEpubToCache(
 }
 
 /** 从已有缓存加载 EPUB 信息（不解压）。 */
-fun loadEpubFromCache(cacheDir: File): EpubExtractResult? {
+fun loadEpubFromCache(context: Context, cacheDir: File): EpubExtractResult? {
     if (!cacheDir.exists()) return null
     val contentDir = File(cacheDir, "content")
     if (!contentDir.exists()) return null
@@ -1703,7 +1730,7 @@ fun loadEpubFromCache(cacheDir: File): EpubExtractResult? {
 
     val parseResult = parseEpubOpf(opfFile, opfDir) ?: return null
     val (bookInfo, rawChapters) = parseResult
-    var chapters = parseEpubNavigation(contentDir, opfDir, rawChapters)
+    var chapters = parseEpubNavigation(context, contentDir, opfDir, rawChapters)
     val titleMap = loadChapterTitles(cacheDir)
     chapters = applySavedChapterTitles(chapters, titleMap)
     if (titleMap.isEmpty() && File(cacheDir, ".llm_source").exists()) {

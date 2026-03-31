@@ -298,14 +298,14 @@ private typealias RunProgressBlock = suspend (
     block: suspend ((Int) -> Unit) -> Unit
 ) -> Unit
 
-private enum class MainTab(val key: String, val label: String) {
-    DIRECTORY("directory", "目录"),
-    RECENT("recent", "最近"),
-    PLAYER("player", "播放器"),
-    FTP("ftp", "FTP"),
-    GIT_SHARE("git_share", "共享"),
-    QUICK_NOTE("quick_note", "速记"),
-    DICTIONARY("dictionary", "词典");
+private enum class MainTab(val key: String, val labelRes: Int) {
+    DIRECTORY("directory", R.string.main_tab_directory),
+    RECENT("recent", R.string.main_tab_recent),
+    PLAYER("player", R.string.main_tab_player),
+    FTP("ftp", R.string.main_tab_ftp),
+    GIT_SHARE("git_share", R.string.main_tab_git_share),
+    QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
+    DICTIONARY("dictionary", R.string.main_tab_dictionary);
 
     companion object {
         fun fromKey(key: String?): MainTab {
@@ -359,7 +359,7 @@ private fun openRecentItemByType(
         RECENT_TYPE_PLAYLIST -> {
             val playlistId = item.playlistId
             if (playlistId.isNullOrBlank()) {
-                Toast.makeText(context, "条目无效：缺少播放列表 ID", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_playlist_id), Toast.LENGTH_SHORT).show()
                 return
             }
             val alreadyPlayingSamePlaylist =
@@ -384,12 +384,12 @@ private fun openRecentItemByType(
         RECENT_TYPE_EXTERNAL_OPEN -> {
             val uri = item.uri
             if (uri.isNullOrBlank()) {
-                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
                 return
             }
             val opened = launchExternalOpen(context, uri, null)
             if (!opened) {
-                Toast.makeText(context, "外部打开失败：没有可打开的应用", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.recent_external_open_failed), Toast.LENGTH_SHORT).show()
                 return
             }
             recordRecentOpen(
@@ -404,7 +404,7 @@ private fun openRecentItemByType(
         RECENT_TYPE_ZIP_VIEWER -> {
             val uri = item.uri
             if (uri.isNullOrBlank()) {
-                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
                 return
             }
             val model = buildRecentModel(uri, item.title)
@@ -413,7 +413,7 @@ private fun openRecentItemByType(
                 item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
                 item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
                 else -> {
-                    Toast.makeText(context, "暂不支持从最近条目打开此 ZIP 类型", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
                     return
                 }
             }
@@ -422,7 +422,7 @@ private fun openRecentItemByType(
         RECENT_TYPE_EPUB_RENDERER -> {
             val uri = item.uri
             if (uri.isNullOrBlank()) {
-                Toast.makeText(context, "条目无效：缺少文件 URI", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
                 return
             }
             val model = buildRecentModel(uri, item.title)
@@ -435,7 +435,7 @@ private fun openRecentItemByType(
         }
 
         else -> {
-            Toast.makeText(context, "未知条目类型：${item.type}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.recent_unknown_type, item.type), Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -544,7 +544,10 @@ private suspend fun createNewPlaybackPlaylistAndStart(
     if (audioList.isEmpty()) return null
     val playlist = Playlist(
         id = java.util.UUID.randomUUID().toString(),
-        name = "播放列表 " + java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date()),
+        name = context.getString(
+            R.string.player_playlist_default_name,
+            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        ),
         uris = audioList.map { it.uri.toString() },
         names = audioList.map { it.name }
     )
@@ -579,13 +582,13 @@ private suspend fun appendToPlaybackPlaylistAndStart(
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     return when {
         result.appendedCount > 0 && result.skippedCount > 0 ->
-            "已加入 ${result.appendedCount} 首到「${target.name}」，跳过 ${result.skippedCount} 首重复项，并开始播放"
+            context.getString(R.string.player_append_started_with_skips, result.appendedCount, target.name, result.skippedCount)
         result.appendedCount > 0 ->
-            "已加入 ${result.appendedCount} 首到「${target.name}」，并开始播放"
+            context.getString(R.string.player_append_started, result.appendedCount, target.name)
         result.skippedCount > 0 ->
-            "所选音频已存在于「${target.name}」，已直接开始播放"
+            context.getString(R.string.player_already_exists_started, target.name)
         else ->
-            "已开始播放「${target.name}」"
+            context.getString(R.string.player_started_playlist, target.name)
     }
 }
 
@@ -675,6 +678,7 @@ private fun ScrollableMainTabBar(
     activeMainTab: MainTab,
     onSwitchMainTab: (MainTab) -> Unit
 ) {
+    val context = LocalContext.current
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
         MainTab.QUICK_NOTE,
@@ -719,6 +723,7 @@ private fun ScrollableMainTabBar(
         ) {
             fixedTabs.forEach { tab ->
                 val selected = activeMainTab == tab
+                val label = context.getString(tab.labelRes)
                 OutlinedButton(
                     onClick = { onSwitchMainTab(tab) },
                     modifier = Modifier.weight(1f),
@@ -730,10 +735,10 @@ private fun ScrollableMainTabBar(
                     )
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(16.dp))
+                        Icon(mainTabIcon(tab), contentDescription = label, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            tab.label,
+                            label,
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -744,6 +749,7 @@ private fun ScrollableMainTabBar(
 
             dynamicTabs.forEach { tab ->
                 val selected = activeMainTab == tab
+                val label = context.getString(tab.labelRes)
                 OutlinedButton(
                     onClick = { onSwitchMainTab(tab) },
                     modifier = Modifier.weight(1f),
@@ -755,10 +761,10 @@ private fun ScrollableMainTabBar(
                     )
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(mainTabIcon(tab), contentDescription = tab.label, modifier = Modifier.size(16.dp))
+                        Icon(mainTabIcon(tab), contentDescription = label, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            tab.label,
+                            label,
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -780,10 +786,10 @@ private fun ScrollableMainTabBar(
                     )
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.MoreVert, contentDescription = "更多", modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.main_tab_more), modifier = Modifier.size(16.dp))
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            "更多",
+                            context.getString(R.string.main_tab_more),
                             style = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -795,8 +801,9 @@ private fun ScrollableMainTabBar(
                     onDismissRequest = { overflowExpanded = false }
                 ) {
                     overflowTabs.forEach { tab ->
+                        val label = context.getString(tab.labelRes)
                         DropdownMenuItem(
-                            text = { Text(tab.label) },
+                            text = { Text(label) },
                             leadingIcon = {
                                 Icon(
                                     mainTabIcon(tab),
@@ -825,12 +832,13 @@ private fun RecentTabContent(
     onDeleteRecentItem: (RecentOpenItem) -> Unit,
     onClearRecentItems: () -> Unit
 ) {
+    val context = LocalContext.current
     fun recentTypeLabel(item: RecentOpenItem): String {
         return when (item.type) {
-            RECENT_TYPE_ZIP_VIEWER -> "ZIP 查看器"
-            RECENT_TYPE_EPUB_RENDERER -> "EPUB 渲染器"
-            RECENT_TYPE_PLAYLIST -> "播放列表"
-            RECENT_TYPE_EXTERNAL_OPEN -> "外部打开"
+            RECENT_TYPE_ZIP_VIEWER -> context.getString(R.string.recent_type_zip_viewer)
+            RECENT_TYPE_EPUB_RENDERER -> context.getString(R.string.recent_type_epub_renderer)
+            RECENT_TYPE_PLAYLIST -> context.getString(R.string.recent_type_playlist)
+            RECENT_TYPE_EXTERNAL_OPEN -> context.getString(R.string.recent_type_external_open)
             else -> item.type
         }
     }
@@ -849,7 +857,7 @@ private fun RecentTabContent(
 
     if (items.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("暂无最近打开条目", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(context.getString(R.string.recent_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         return
     }
@@ -863,7 +871,7 @@ private fun RecentTabContent(
             horizontalArrangement = Arrangement.End
         ) {
             TextButton(onClick = onClearRecentItems) {
-                Text("清空最近")
+                Text(context.getString(R.string.recent_clear))
             }
         }
         LazyColumn(
@@ -908,7 +916,7 @@ private fun RecentTabContent(
                                 val note = item.playlistId?.let { playlistNoteById[it] }?.trim().orEmpty()
                                 if (note.isNotEmpty()) {
                                     Text(
-                                        "备注: $note",
+                                        context.getString(R.string.recent_note_prefix, note),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
@@ -918,7 +926,7 @@ private fun RecentTabContent(
                             }
                         }
                         IconButton(onClick = { onDeleteRecentItem(item) }) {
-                            Icon(Icons.Default.Delete, contentDescription = "删除最近条目")
+                            Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.recent_delete_item))
                         }
                     }
                 }
@@ -1100,6 +1108,7 @@ private fun PlaybackBottomControlBar(
     onPlayPause: () -> Unit,
     onNext: () -> Unit
 ) {
+    val context = LocalContext.current
     Surface(tonalElevation = 3.dp) {
         Row(
             modifier = Modifier
@@ -1113,7 +1122,7 @@ private fun PlaybackBottomControlBar(
                 enabled = enabled,
                 modifier = Modifier.height(52.dp)
             ) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = "上一首")
+                Icon(Icons.Default.SkipPrevious, contentDescription = context.getString(R.string.player_prev_desc))
             }
             Button(
                 onClick = onPlayPause,
@@ -1124,7 +1133,7 @@ private fun PlaybackBottomControlBar(
             ) {
                 Icon(
                     if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) "暂停" else "播放",
+                    contentDescription = if (isPlaying) context.getString(R.string.player_pause_desc) else context.getString(R.string.player_play_desc),
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -1133,7 +1142,7 @@ private fun PlaybackBottomControlBar(
                 enabled = enabled,
                 modifier = Modifier.height(52.dp)
             ) {
-                Icon(Icons.Default.SkipNext, contentDescription = "下一首")
+                Icon(Icons.Default.SkipNext, contentDescription = context.getString(R.string.player_next_desc))
             }
         }
     }
@@ -1819,7 +1828,7 @@ private fun FileBrowserAppScreen(
             val cacheDir = getEpubCacheDir(context, target.uri)
             val cacheTs = getEpubCacheTimestamp(cacheDir)
             if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val cached = loadEpubFromCache(cacheDir)
+                val cached = loadEpubFromCache(context, cacheDir)
                 if (cached != null) {
                     llmZipTarget = null
                     epubViewState = EpubViewState(
@@ -1867,7 +1876,7 @@ private fun FileBrowserAppScreen(
                     val cacheDir = getEpubCacheDir(context, target.uri)
                     val cacheTs = getEpubCacheTimestamp(cacheDir)
                     if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                        cachedResult = loadEpubFromCache(cacheDir)
+                        cachedResult = loadEpubFromCache(context, cacheDir)
                         if (cachedResult != null) {
                             epubLog += "使用缓存\n"
                             return@withContext
@@ -1938,7 +1947,7 @@ private fun FileBrowserAppScreen(
 
                 // 检查是否有有效缓存
                 if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                    result = loadEpubFromCache(cacheDir)
+                    result = loadEpubFromCache(context, cacheDir)
                     // 如果缓存加载失败，清除旧缓存
                     if (result == null) {
                         Log.w("FileBrowserApp", "TXT cache load failed, clearing old cache")
@@ -1982,7 +1991,7 @@ private fun FileBrowserAppScreen(
 
                 // 检查是否有有效缓存
                 if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                    result = loadEpubFromCache(cacheDir)
+                    result = loadEpubFromCache(context, cacheDir)
                     // 如果缓存加载失败，清除旧缓存
                     if (result == null) {
                         Log.w("FileBrowserApp", "LLM cache load failed, clearing old cache")
@@ -2676,7 +2685,7 @@ private fun FileBrowserAppScreen(
         if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
             AlertDialog(
                 onDismissRequest = { clearPendingPlaybackTargetState() },
-                title = { Text("加入播放") },
+                title = { Text(context.getString(R.string.player_add_to_playback_title)) },
                 text = {
                     Column(
                         Modifier
@@ -2684,7 +2693,7 @@ private fun FileBrowserAppScreen(
                             .verticalScroll(rememberScrollState())
                     ) {
                         Text(
-                            "请选择要把 ${pendingPlaybackAudioList.size} 首音频加入到哪里。",
+                            context.getString(R.string.player_add_to_playback_prompt, pendingPlaybackAudioList.size),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
@@ -2698,7 +2707,7 @@ private fun FileBrowserAppScreen(
                                 Column(Modifier.fillMaxWidth()) {
                                     Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
                                     Text(
-                                        "${playlist.trackCount} 首",
+                                        context.getString(R.string.player_track_count, playlist.trackCount),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -2711,10 +2720,10 @@ private fun FileBrowserAppScreen(
                 confirmButton = {
                     Button(onClick = {
                         scope.launch { createNewPlaybackPlaylist(pendingPlaybackAudioList) }
-                    }) { Text("新建列表") }
+                    }) { Text(context.getString(R.string.player_new_list)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text("取消") }
+                    TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
         }
@@ -2893,7 +2902,7 @@ private fun FileBrowserAppScreen(
                 onExportConfig = {
                     scope.launch {
                         val ok = exportConfigToRoot()
-                        Toast.makeText(context, if (ok) "配置已导出到根目录" else "导出失败", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, if (ok) context.getString(R.string.config_export_success) else context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
                         if (ok) refreshTrigger++
                     }
                 },
@@ -2903,17 +2912,17 @@ private fun FileBrowserAppScreen(
                 onCreatePlayerShortcut = {
                     val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
                     if (playerErr == null) {
-                        Toast.makeText(context, "已请求创建播放器快捷方式", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_requested), Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, "播放器快捷方式创建失败：$playerErr", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_failed, playerErr), Toast.LENGTH_LONG).show()
                     }
                 },
                 onCreateQuickNoteShortcut = {
                     val quickNoteErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_QUICK_NOTE)
                     if (quickNoteErr == null) {
-                        Toast.makeText(context, "已请求创建速记快捷方式", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_requested), Toast.LENGTH_SHORT).show()
                     } else {
-                        Toast.makeText(context, "速记快捷方式创建失败：$quickNoteErr", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_failed, quickNoteErr), Toast.LENGTH_LONG).show()
                     }
                 }
             )
@@ -2921,12 +2930,12 @@ private fun FileBrowserAppScreen(
         if (showRootSwitchDialog) {
             AlertDialog(
                 onDismissRequest = { showRootSwitchDialog = false },
-                title = { Text("更换根目录") },
+                title = { Text(context.getString(R.string.root_switch_title)) },
                 text = {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("可直接切换到最近使用的目录（不会清空当前回收站）：")
+                        Text(context.getString(R.string.root_switch_hint))
                         if (recentRootUris.isEmpty()) {
-                            Text("暂无历史目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(context.getString(R.string.root_switch_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         } else {
                             recentRootUris.forEach { recentUri ->
                                 val displayName = humanReadableRootUri(recentUri)
@@ -5219,7 +5228,7 @@ internal fun FileBrowserScreen(
                         val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
                             ?: DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
                         Text(
-                            doc?.name ?: "根目录",
+                            doc?.name ?: context.getString(R.string.directory_root_name),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -5227,13 +5236,13 @@ internal fun FileBrowserScreen(
                     navigationIcon = {
                         if (canGoBack) {
                             IconButton(onClick = onBack) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                                Icon(Icons.Default.ArrowBack, contentDescription = context.getString(R.string.common_back))
                             }
                         }
                     },
                     actions = {
                         IconButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                            Icon(Icons.Default.Refresh, contentDescription = context.getString(R.string.common_refresh))
                         }
                         Box {
                             IconButton(onClick = { showSortMenu = true }) {
@@ -5262,25 +5271,25 @@ internal fun FileBrowserScreen(
                             }
                         }
                         IconButton(onClick = { showOverflowMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "菜单")
+                            Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.main_menu))
                         }
                         DropdownMenu(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("把当前过滤结果全部加入待处理列表") },
+                                text = { Text(context.getString(R.string.main_menu_add_filtered_to_pending)) },
                                 leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
                                     toAdd.forEach { onAddToPendingList(it) }
-                                    Toast.makeText(context, "已加入 ${toAdd.size} 项到待处理列表", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
                                 }
                             )
                             onEmptyTrash?.let { empty ->
                                 DropdownMenuItem(
-                                    text = { Text("清空回收站") },
+                                    text = { Text(context.getString(R.string.main_menu_empty_trash)) },
                                     leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
                                     onClick = {
                                         showOverflowMenu = false
@@ -5289,7 +5298,7 @@ internal fun FileBrowserScreen(
                                 )
                             }
                             DropdownMenuItem(
-                                text = { Text("配置") },
+                                text = { Text(context.getString(R.string.main_menu_config)) },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
@@ -5297,7 +5306,7 @@ internal fun FileBrowserScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("关于") },
+                                text = { Text(context.getString(R.string.main_menu_about)) },
                                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
@@ -5323,12 +5332,12 @@ internal fun FileBrowserScreen(
                             onValueChange = { filterText = it },
                             modifier = Modifier.weight(1f),
                             singleLine = true,
-                            placeholder = { Text("正则过滤文件名，留空显示全部") },
+                            placeholder = { Text(context.getString(R.string.directory_filter_placeholder)) },
                             label = null
                         )
                         if (filterText.isNotEmpty()) {
                             IconButton(onClick = { filterText = "" }) {
-                                Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                                Icon(Icons.Default.RemoveCircle, contentDescription = context.getString(R.string.directory_filter_clear), Modifier.size(20.dp))
                             }
                         }
                     }
@@ -5344,7 +5353,7 @@ internal fun FileBrowserScreen(
                         Icon(Icons.Default.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            "正在播放: ${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
+                            context.getString(R.string.directory_now_playing, state.trackName, state.trackIndex + 1, state.totalTracks),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -5366,21 +5375,21 @@ internal fun FileBrowserScreen(
                             containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onSecondary
                         ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到当前目录")
+                            Icon(Icons.Default.ContentCopy, contentDescription = context.getString(R.string.fab_copy_to_current))
                         }
                         FloatingActionButton(
                             onClick = { showQuickMoveConfirm = true },
                             containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onSecondary
                         ) {
-                            Icon(Icons.Default.DriveFileMove, contentDescription = "移动到当前目录")
+                            Icon(Icons.Default.DriveFileMove, contentDescription = context.getString(R.string.fab_move_to_current))
                         }
                         FloatingActionButton(
                             onClick = { onShowPendingList(true) },
                             containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onTertiary
                         ) {
-                            Icon(Icons.Default.List, contentDescription = "待处理列表")
+                            Icon(Icons.Default.List, contentDescription = context.getString(R.string.fab_pending_list))
                         }
                     }
                     FloatingActionButton(
@@ -5388,7 +5397,7 @@ internal fun FileBrowserScreen(
                         containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = "新建")
+                        Icon(Icons.Default.Add, contentDescription = context.getString(R.string.fab_new))
                     }
                 }
             }
@@ -5511,7 +5520,7 @@ internal fun FileBrowserScreen(
                                 showExternalOpenDialog(menuTarget)
                                 contextMenuTarget = null
                             }
-                        ) { Text("用其他应用打开", color = MaterialTheme.colorScheme.onSurface) }
+                        ) { Text(context.getString(R.string.context_open_with_other_app), color = MaterialTheme.colorScheme.onSurface) }
                         TextButton(
                             onClick = {
                                 showContextMenu = false
@@ -5519,7 +5528,7 @@ internal fun FileBrowserScreen(
                                 onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
                                 contextMenuTarget = null
                             }
-                        ) { Text("用内置查看器打开", color = MaterialTheme.colorScheme.onSurface) }
+                        ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
                         if (menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
@@ -5527,7 +5536,7 @@ internal fun FileBrowserScreen(
                                     onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("渲染 (Markdown/RST)", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_render_markdown), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".zip", ignoreCase = true)) {
                             if (isCompressedMarkdown(menuTarget.name)) {
@@ -5537,7 +5546,7 @@ internal fun FileBrowserScreen(
                                         onRequestMdZipView(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("查看压缩 Markdown", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_view_zip_markdown), color = MaterialTheme.colorScheme.onSurface) }
                             }
                             if (isCompressedHtml(menuTarget.name)) {
                                 TextButton(
@@ -5546,7 +5555,7 @@ internal fun FileBrowserScreen(
                                         onRequestHtmlZipView(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("查看压缩 HTML", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_view_zip_html), color = MaterialTheme.colorScheme.onSurface) }
                             }
                             if (isCompressedLlmZip(menuTarget.name)) {
                                 TextButton(
@@ -5555,7 +5564,7 @@ internal fun FileBrowserScreen(
                                         onRequestLlmZipView(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("查看压缩 LLM", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_view_zip_llm), color = MaterialTheme.colorScheme.onSurface) }
                             }
                             if (isPicZip(menuTarget.name)) {
                                 TextButton(
@@ -5564,7 +5573,7 @@ internal fun FileBrowserScreen(
                                         onRequestPicZipView(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_view_images), color = MaterialTheme.colorScheme.onSurface) }
                             }
                         }
                         if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
@@ -5574,7 +5583,7 @@ internal fun FileBrowserScreen(
                                     onRequestGpgEncrypt(menuTarget, currentUri)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("GnuPG 加密", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_gpg_encrypt), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)
                             || menuTarget.name.endsWith(".txt", ignoreCase = true))
@@ -5585,7 +5594,7 @@ internal fun FileBrowserScreen(
                                     onRequestPassProtect(menuTarget)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("密码保护", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_pass_protect), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".pass", ignoreCase = true)) {
                             TextButton(
@@ -5594,14 +5603,14 @@ internal fun FileBrowserScreen(
                                     onRequestPassView(menuTarget)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("查看密码", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_view_password), color = MaterialTheme.colorScheme.onSurface) }
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
                                     onRequestPassEdit(menuTarget, currentUri)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("直接编辑", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_edit_directly), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".json", ignoreCase = true) && onRequestImportConfig != null) {
                             TextButton(
@@ -5610,7 +5619,7 @@ internal fun FileBrowserScreen(
                                     onRequestImportConfig(menuTarget)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("导入配置", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_import_config), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (isStarDictImportCandidate(menuTarget.name) && onRequestImportStarDict != null) {
                             TextButton(
@@ -5619,7 +5628,7 @@ internal fun FileBrowserScreen(
                                     onRequestImportStarDict(menuTarget)
                                     contextMenuTarget = null
                                 }
-                            ) { Text("导入星际词典", color = MaterialTheme.colorScheme.onSurface) }
+                            ) { Text(context.getString(R.string.context_import_stardict), color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
@@ -5629,7 +5638,7 @@ internal fun FileBrowserScreen(
                                 onRestoreFromTrash(menuTarget)
                                 contextMenuTarget = null
                             }
-                        ) { Text("恢复", color = MaterialTheme.colorScheme.primary) }
+                        ) { Text(context.getString(R.string.context_restore), color = MaterialTheme.colorScheme.primary) }
                     }
                     if (!menuTarget.isDirectory) {
                         if (isQuickObfuscatedFileName(menuTarget.name)) {
@@ -5640,7 +5649,7 @@ internal fun FileBrowserScreen(
                                         fn(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("快速去混淆", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_quick_deobfuscate), color = MaterialTheme.colorScheme.onSurface) }
                             }
                         } else {
                             onRequestQuickObfuscate?.let { fn ->
@@ -5650,7 +5659,7 @@ internal fun FileBrowserScreen(
                                         fn(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text("快速混淆", color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_quick_obfuscate), color = MaterialTheme.colorScheme.onSurface) }
                             }
                         }
                     }
@@ -5660,14 +5669,14 @@ internal fun FileBrowserScreen(
                             onCompressToZipRequest(menuTarget)
                             contextMenuTarget = null
                         }
-                    ) { Text("压缩为 ZIP", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_compress_zip), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
                             onCompressTo7zRequest(menuTarget)
                             contextMenuTarget = null
                         }
-                    ) { Text("压缩为 7Z", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_compress_7z), color = MaterialTheme.colorScheme.onSurface) }
                     if (!menuTarget.isDirectory && onShareFileToGit != null) {
                         TextButton(
                             onClick = {
@@ -5675,7 +5684,7 @@ internal fun FileBrowserScreen(
                                 onShareFileToGit.invoke(menuTarget)
                                 contextMenuTarget = null
                             }
-                        ) { Text("共享到 Git", color = MaterialTheme.colorScheme.onSurface) }
+                        ) { Text(context.getString(R.string.context_share_to_git), color = MaterialTheme.colorScheme.onSurface) }
                     }
                     TextButton(
                         onClick = {
@@ -5686,7 +5695,7 @@ internal fun FileBrowserScreen(
                         }
                     ) {
                         Text(
-                            if (pendingList.any { it.uri == menuTarget.uri }) "从待处理列表移除" else "加入待处理列表",
+                            if (pendingList.any { it.uri == menuTarget.uri }) context.getString(R.string.context_remove_from_pending) else context.getString(R.string.context_add_to_pending),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
@@ -5696,7 +5705,7 @@ internal fun FileBrowserScreen(
                             showFileDetail = menuTarget
                             contextMenuTarget = null
                         }
-                    ) { Text("详细信息", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_details), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -5727,7 +5736,7 @@ internal fun FileBrowserScreen(
                         .heightIn(max = 480.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    Text("选择打开应用", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(context.getString(R.string.context_choose_open_app), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(8.dp))
                     Text(
                         target.name,
@@ -5763,7 +5772,7 @@ internal fun FileBrowserScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = { externalOpenTarget = null; externalOpenOptions = emptyList() }) {
-                            Text("取消")
+                            Text(context.getString(R.string.common_cancel))
                         }
                     }
                 }
@@ -5779,7 +5788,7 @@ internal fun FileBrowserScreen(
                 tonalElevation = 6.dp
             ) {
                 Column(Modifier.padding(24.dp)) {
-                    Text("新建", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(context.getString(R.string.new_menu_title), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(16.dp))
                     TextButton(
                         onClick = {
@@ -5787,21 +5796,21 @@ internal fun FileBrowserScreen(
                             newFileName = ""
                             showCreateFileDialog = true
                         }
-                    ) { Text("新建文件", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.new_menu_file), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showFabMenu = false
                             newDirName = ""
                             showCreateDirDialog = true
                         }
-                    ) { Text("新建文件夹", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.new_menu_folder), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showFabMenu = false
                             onCreateQuickNote()
                         }
-                    ) { Text("快速笔记", color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(onClick = { showFabMenu = false }) { Text("取消", color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.new_menu_quick_note), color = MaterialTheme.colorScheme.onSurface) }
+                    TextButton(onClick = { showFabMenu = false }) { Text(context.getString(R.string.common_cancel), color = MaterialTheme.colorScheme.onSurface) }
                 }
             }
         }
@@ -5815,17 +5824,17 @@ internal fun FileBrowserScreen(
         }
         AlertDialog(
             onDismissRequest = { showCreateFileDialog = false },
-            title = { Text("新建文件") },
+            title = { Text(context.getString(R.string.create_file_title)) },
             text = {
                 OutlinedTextField(
                     value = newFileName,
                     onValueChange = { newFileName = it },
-                    label = { Text("文件名") },
+                    label = { Text(context.getString(R.string.create_file_name)) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(createFileFocus),
-                    placeholder = { Text("例如：newfile.txt") }
+                    placeholder = { Text(context.getString(R.string.create_file_placeholder)) }
                 )
             },
             confirmButton = {
@@ -5840,16 +5849,16 @@ internal fun FileBrowserScreen(
                                 DocumentFile.fromSingleUri(context, uri)
                             }
                             when {
-                                dir == null || !dir.isDirectory -> Toast.makeText(context, "无法访问目录", Toast.LENGTH_SHORT).show()
-                                dir.createFile("application/octet-stream", name) == null -> Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                                dir == null || !dir.isDirectory -> Toast.makeText(context, context.getString(R.string.create_access_failed), Toast.LENGTH_SHORT).show()
+                                dir.createFile("application/octet-stream", name) == null -> Toast.makeText(context, context.getString(R.string.create_failed), Toast.LENGTH_SHORT).show()
                                 else -> { showCreateFileDialog = false; onRefresh() }
                             }
                         }
                     }
-                ) { Text("创建") }
+                ) { Text(context.getString(R.string.common_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateFileDialog = false }) { Text("取消") }
+                TextButton(onClick = { showCreateFileDialog = false }) { Text(context.getString(R.string.common_cancel)) }
             }
         )
     }
@@ -5862,17 +5871,17 @@ internal fun FileBrowserScreen(
         }
         AlertDialog(
             onDismissRequest = { showCreateDirDialog = false },
-            title = { Text("新建文件夹") },
+            title = { Text(context.getString(R.string.create_folder_title)) },
             text = {
                 OutlinedTextField(
                     value = newDirName,
                     onValueChange = { newDirName = it },
-                    label = { Text("文件夹名") },
+                    label = { Text(context.getString(R.string.create_folder_name)) },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .focusRequester(createDirFocus),
-                    placeholder = { Text("例如：新文件夹") }
+                    placeholder = { Text(context.getString(R.string.create_folder_placeholder)) }
                 )
             },
             confirmButton = {
@@ -5887,16 +5896,16 @@ internal fun FileBrowserScreen(
                                 DocumentFile.fromSingleUri(context, uri)
                             }
                             when {
-                                dir == null || !dir.isDirectory -> Toast.makeText(context, "无法访问目录", Toast.LENGTH_SHORT).show()
-                                dir.createDirectory(name) == null -> Toast.makeText(context, "创建失败", Toast.LENGTH_SHORT).show()
+                                dir == null || !dir.isDirectory -> Toast.makeText(context, context.getString(R.string.create_access_failed), Toast.LENGTH_SHORT).show()
+                                dir.createDirectory(name) == null -> Toast.makeText(context, context.getString(R.string.create_failed), Toast.LENGTH_SHORT).show()
                                 else -> { showCreateDirDialog = false; onRefresh() }
                             }
                         }
                     }
-                ) { Text("创建") }
+                ) { Text(context.getString(R.string.common_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateDirDialog = false }) { Text("取消") }
+                TextButton(onClick = { showCreateDirDialog = false }) { Text(context.getString(R.string.common_cancel)) }
             }
         )
     }
@@ -6750,7 +6759,7 @@ fun PlaybackScreen(
             prefs.addRecentOpenItem(
                 type = RECENT_TYPE_PLAYLIST,
                 key = pl.id,
-                title = pl.name.ifBlank { "未命名播放列表" },
+                title = pl.name.ifBlank { context.getString(R.string.player_unnamed_playlist) },
                 playlistId = pl.id
             )
         }
@@ -6780,7 +6789,7 @@ fun PlaybackScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(selectedPlaylist?.name ?: "播放器")
+                    Text(selectedPlaylist?.name ?: context.getString(R.string.player_screen_title))
                 },
                 navigationIcon = if (showBackButton) {
                     {
@@ -6788,7 +6797,7 @@ fun PlaybackScreen(
                             if (selectedPlaylist != null) selectedPlaylistId = null
                             else onDismiss()
                         }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.Default.ArrowBack, contentDescription = context.getString(R.string.common_back))
                         }
                     }
                 } else {
@@ -6816,7 +6825,7 @@ fun PlaybackScreen(
                 .sortedByDescending { it.savedAt }
             if (pl.uris.isEmpty()) {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text("列表已空", style = MaterialTheme.typography.bodyLarge)
+                    Text(context.getString(R.string.player_list_empty), style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 Column(Modifier.fillMaxSize().padding(padding)) {
@@ -6837,7 +6846,7 @@ fun PlaybackScreen(
                         ) {
                             Column(Modifier.padding(12.dp)) {
                                 Text(
-                                    "当前播放（本列表）",
+                                    context.getString(R.string.player_current_playlist),
                                     style = MaterialTheme.typography.titleSmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer
                                 )
@@ -6892,13 +6901,13 @@ fun PlaybackScreen(
                     ) {
                         Column(Modifier.padding(10.dp)) {
                             Text(
-                                "书签 (${playlistBookmarks.size})",
+                                context.getString(R.string.player_bookmarks_count, playlistBookmarks.size),
                                 style = MaterialTheme.typography.titleSmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                             )
                             if (playlistBookmarks.isEmpty()) {
                                 Text(
-                                    "该播放列表暂无书签",
+                                    context.getString(R.string.player_no_bookmarks),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSecondaryContainer
                                 )
@@ -6910,7 +6919,7 @@ fun PlaybackScreen(
                                     ) {
                                         Column(Modifier.weight(1f)) {
                                             Text(
-                                                "第 ${bm.trackIndex + 1} 首 ${formatPlaybackTime(bm.positionMs.toInt())}",
+                                                context.getString(R.string.player_bookmark_position, bm.trackIndex + 1, formatPlaybackTime(bm.positionMs.toInt())),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSecondaryContainer
                                             )
@@ -6938,7 +6947,7 @@ fun PlaybackScreen(
                                                 editingBookmarkNote = bm.note
                                             }
                                         ) {
-                                            Icon(Icons.Filled.Edit, contentDescription = "编辑书签备注")
+                                            Icon(Icons.Filled.Edit, contentDescription = context.getString(R.string.player_edit_bookmark_note))
                                         }
                                         IconButton(
                                             onClick = {
@@ -6947,7 +6956,7 @@ fun PlaybackScreen(
                                                 }
                                             }
                                         ) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除书签")
+                                            Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.player_delete_bookmark))
                                         }
                                         TextButton(
                                             onClick = {
@@ -6955,7 +6964,7 @@ fun PlaybackScreen(
                                             },
                                             enabled = bm.trackIndex in pl.uris.indices
                                         ) {
-                                            Text("跳转")
+                                            Text(context.getString(R.string.player_jump))
                                         }
                                     }
                                 }
@@ -6977,10 +6986,10 @@ fun PlaybackScreen(
                             if (pl.note.isNotBlank()) {
                                 Text(pl.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
                             } else {
-                                Text("点击添加备注", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(context.getString(R.string.player_add_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
-                        Icon(Icons.Filled.Edit, contentDescription = "编辑备注", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Filled.Edit, contentDescription = context.getString(R.string.player_edit_note), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     LazyColumn(
                         modifier = Modifier.weight(1f),
@@ -7013,13 +7022,13 @@ fun PlaybackScreen(
                             )
                             if (isCurrentTrack) {
                                 Text(
-                                    "正在播放",
+                                    context.getString(R.string.player_now_playing_badge),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(horizontal = 4.dp)
                                 )
                                 IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = "从此处播放", Modifier.size(24.dp))
+                                    Icon(Icons.Default.PlayArrow, contentDescription = context.getString(R.string.player_play_from_here), Modifier.size(24.dp))
                                 }
                             } else {
                                 Spacer(Modifier.size(48.dp))
@@ -7036,7 +7045,7 @@ fun PlaybackScreen(
                                 },
                                 enabled = i > 0
                             ) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "上移", Modifier.size(20.dp))
+                                Icon(Icons.Default.ArrowUpward, contentDescription = context.getString(R.string.player_move_up), Modifier.size(20.dp))
                             }
                             IconButton(
                                 onClick = {
@@ -7050,7 +7059,7 @@ fun PlaybackScreen(
                                 },
                                 enabled = i < pl.uris.size - 1
                             ) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = "下移", Modifier.size(20.dp))
+                                Icon(Icons.Default.ArrowDownward, contentDescription = context.getString(R.string.player_move_down), Modifier.size(20.dp))
                             }
                             IconButton(
                                 onClick = {
@@ -7066,7 +7075,7 @@ fun PlaybackScreen(
                                     }
                                 }
                             ) {
-                                Icon(Icons.Default.Delete, contentDescription = "删除", Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
+                                Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.common_delete), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -7099,7 +7108,7 @@ fun PlaybackScreen(
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(
-                            state.playlistName ?: "当前播放",
+                            state.playlistName ?: context.getString(R.string.player_current_playback),
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -7150,7 +7159,7 @@ fun PlaybackScreen(
                             OutlinedButton(
                                 onClick = {
                                     if (state.playlistId == null) {
-                                        Toast.makeText(context, "仅播放列表支持书签", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.player_bookmark_playlist_only), Toast.LENGTH_SHORT).show()
                                         return@OutlinedButton
                                     }
                                     bookmarkPendingPlaylistId = state.playlistId
@@ -7162,20 +7171,20 @@ fun PlaybackScreen(
                                     showAddBookmarkDialog = true
                                 }
                             ) {
-                                Text("保存书签")
+                                Text(context.getString(R.string.player_save_bookmark))
                             }
                             Button(
                                 onClick = {
                                     val pid = state.playlistId
                                     if (pid == null) {
-                                        Toast.makeText(context, "当前不是播放列表", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.player_not_playlist), Toast.LENGTH_SHORT).show()
                                     } else {
                                         selectedPlaylistId = pid
                                     }
                                 },
                                 enabled = state.playlistId != null
                             ) {
-                                Text("查看书签($stateBookmarkCount)")
+                                Text(context.getString(R.string.player_view_bookmarks, stateBookmarkCount))
                             }
                         }
                     }
@@ -7189,13 +7198,13 @@ fun PlaybackScreen(
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(
-                            "未在播放",
+                            context.getString(R.string.player_not_playing),
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (restorePlaylist != null) "可从上次播放列表继续：${restorePlaylist.name}" else "请先选择一个播放列表开始播放",
+                            if (restorePlaylist != null) context.getString(R.string.player_resume_hint, restorePlaylist.name) else context.getString(R.string.player_select_playlist_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -7204,14 +7213,14 @@ fun PlaybackScreen(
                         if (restorePlaylist != null) {
                             Spacer(Modifier.height(8.dp))
                             OutlinedButton(onClick = { startPlaylist(restorePlaylist) }) {
-                                Text("继续上次播放")
+                                Text(context.getString(R.string.player_resume_last))
                             }
                         }
                     }
                 }
             }
             Text(
-                "播放列表",
+                context.getString(R.string.player_playlist_section),
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
             )
@@ -7220,7 +7229,7 @@ fun PlaybackScreen(
                     Modifier.fillMaxSize().weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("暂无播放列表。在待处理列表中勾选 MP3/OGG 后点击「加入播放」。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(context.getString(R.string.player_no_playlists_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             } else {
                 LazyColumn(
@@ -8164,6 +8173,7 @@ fun ConfigDialog(
     onCreatePlayerShortcut: () -> Unit,
     onCreateQuickNoteShortcut: () -> Unit
 ) {
+    val context = LocalContext.current
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
     var localFtpTimeoutMinutes by remember { mutableStateOf(ftpTimeoutMinutes.toString()) }
@@ -8178,13 +8188,13 @@ fun ConfigDialog(
                     .padding(24.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text("配置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(context.getString(R.string.config_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("显示过滤条件", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Text(context.getString(R.string.config_show_filter), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = filterVisible, onCheckedChange = onFilterVisibleChange)
                 }
                 Spacer(Modifier.height(12.dp))
@@ -8192,7 +8202,7 @@ fun ConfigDialog(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("不显示 . 开头的文件", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Text(context.getString(R.string.config_hide_dot_files), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     Switch(checked = hideDotFiles, onCheckedChange = onHideDotFilesChange)
                 }
                 Spacer(Modifier.height(12.dp))
@@ -8201,8 +8211,8 @@ fun ConfigDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("启动解密密钥", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text("开启后启动需输入私钥密码解锁；解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(context.getString(R.string.config_startup_decrypt_key), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                        Text(context.getString(R.string.config_startup_decrypt_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = startupDecryptKey, onCheckedChange = onStartupDecryptKeyChange)
                 }
@@ -8211,7 +8221,7 @@ fun ConfigDialog(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("内部查看器预览长度（字节）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Text(context.getString(R.string.config_viewer_preview_bytes), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     OutlinedTextField(
                         value = localViewerPreviewBytes,
                         onValueChange = { s ->
@@ -8223,7 +8233,7 @@ fun ConfigDialog(
                     )
                 }
                 Text(
-                    "范围：$MIN_PREVIEW_BYTES～${MAX_PREVIEW_BYTES / (1024 * 1024)}M",
+                    context.getString(R.string.config_viewer_preview_range, MIN_PREVIEW_BYTES, MAX_PREVIEW_BYTES / (1024 * 1024)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
@@ -8233,7 +8243,7 @@ fun ConfigDialog(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("FTP 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
+                    Text(context.getString(R.string.config_ftp_password), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
                     ReliablePasswordInputField(
                         value = localFtpPassword,
                         onValueChange = { s ->
@@ -8241,9 +8251,9 @@ fun ConfigDialog(
                             onFtpPasswordChange(s)
                         },
                         modifier = Modifier.weight(1f),
-                        label = { Text("FTP 密码") },
+                        label = { Text(context.getString(R.string.config_ftp_password)) },
                         supportingText = {
-                            Text("留空则无需密码", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                            Text(context.getString(R.string.config_ftp_password_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
                     )
                 }
@@ -8252,7 +8262,7 @@ fun ConfigDialog(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("FTP 倒计时（分钟）", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                    Text(context.getString(R.string.config_ftp_timeout_minutes), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
                     OutlinedTextField(
                         value = localFtpTimeoutMinutes,
                         onValueChange = { s ->
@@ -8261,18 +8271,18 @@ fun ConfigDialog(
                         },
                         modifier = Modifier.width(100.dp),
                         singleLine = true,
-                        placeholder = { Text("0=不退出", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        placeholder = { Text(context.getString(R.string.config_ftp_timeout_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
-                Text("0 表示不自动退出", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                Text(context.getString(R.string.config_ftp_timeout_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text("Git 配置") }
+                Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_git)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text("gpg钥匙管理") }
+                Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_gpg_keys)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text("缓存管理") }
+                Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_cache)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text("导出配置") }
+                Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_export)) }
                 Spacer(Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -8282,22 +8292,22 @@ fun ConfigDialog(
                         onClick = onCreatePlayerShortcut,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("创建播放器快捷方式")
+                        Text(context.getString(R.string.config_create_player_shortcut))
                     }
                     OutlinedButton(
                         onClick = onCreateQuickNoteShortcut,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Text("创建速记快捷方式")
+                        Text(context.getString(R.string.config_create_quick_note_shortcut))
                     }
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = { onDismiss(); onChangeRoot() },
                     modifier = Modifier.fillMaxWidth()
-                ) { Text("更换根目录") }
+                ) { Text(context.getString(R.string.config_change_root)) }
                 Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onDismiss) { Text(context.getString(R.string.common_close)) }
             }
         }
     }

@@ -50,8 +50,10 @@ import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.R
 import com.kenny.localmanager.ftp.FtpServerManager
 import com.kenny.localmanager.util.getLocalIpAddress
 import kotlinx.coroutines.Dispatchers
@@ -121,7 +123,7 @@ fun FtpScreen(
             if (!ok) logLines = manager.getLogLines()
         } catch (e: Throwable) {
             Log.e("FtpScreen", "LaunchedEffect init failed", e)
-            logLines = listOf("启动异常: ${e.message}")
+            logLines = listOf(context.getString(R.string.ftp_start_exception, e.message ?: e.javaClass.simpleName))
         }
     }
 
@@ -155,11 +157,11 @@ fun FtpScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("FTP 数据交换") },
+                title = { Text(stringResource(R.string.ftp_title)) },
                 navigationIcon = if (showBackButton) {
                     {
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "关闭")
+                            Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.common_close))
                         }
                     }
                 } else {
@@ -178,7 +180,7 @@ fun FtpScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            val ip = localIp ?: "获取中…"
+            val ip = localIp ?: stringResource(R.string.ftp_ip_fetching)
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -191,11 +193,11 @@ fun FtpScreen(
                 ) {
                     Icon(Icons.Default.Wifi, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
                     Column(Modifier.weight(1f)) {
-                        Text("服务器地址", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        Text(stringResource(R.string.ftp_server_address), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         Text(ip, style = MaterialTheme.typography.titleMedium, fontFamily = FontFamily.Monospace, color = MaterialTheme.colorScheme.onPrimaryContainer)
                     }
                     Text(
-                        if (isRunning) "运行中" else "已停止",
+                        if (isRunning) stringResource(R.string.ftp_running) else stringResource(R.string.ftp_stopped),
                         style = MaterialTheme.typography.labelLarge,
                         color = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                     )
@@ -203,7 +205,7 @@ fun FtpScreen(
             }
             remainingMinutes?.let { mins ->
                 Text(
-                    "剩余 $mins 分钟后自动关闭",
+                    stringResource(R.string.ftp_auto_close, mins),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 8.dp)
@@ -217,13 +219,13 @@ fun FtpScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(Icons.Default.Lock, contentDescription = null, Modifier.height(18.dp), tint = MaterialTheme.colorScheme.primary)
-                Text("屏幕常亮已开启，离开本页将停止服务器", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.ftp_keep_screen_on), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(12.dp))
-            Text("连接说明", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+            Text(stringResource(R.string.ftp_connection_help), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
             Spacer(Modifier.height(8.dp))
             Text(
-                "用户名 lm，密码在配置中设置（未设置则无密码）。在电脑或手机文件管理器中输入：",
+                stringResource(R.string.ftp_credentials_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -234,12 +236,12 @@ fun FtpScreen(
                 color = MaterialTheme.colorScheme.primary
             )
             Text(
-                "或使用 lftp、FileZilla、curl 等：",
+                stringResource(R.string.ftp_client_examples),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "lftp -u lm, -e \"put 本地文件\" ftp://$ip:$port",
+                stringResource(R.string.ftp_example_command, ip, port),
                 style = MaterialTheme.typography.bodySmall,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -250,7 +252,7 @@ fun FtpScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("端口：$port", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.ftp_port, port), style = MaterialTheme.typography.bodyMedium)
             }
             Spacer(Modifier.height(12.dp))
             Row(
@@ -258,17 +260,17 @@ fun FtpScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("工作日志", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.ftp_work_log), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 IconButton(
                     onClick = {
                         val text = logLines.joinToString("\n")
                         if (text.isNotEmpty()) {
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                            cm?.setPrimaryClip(ClipData.newPlainText("FTP工作日志", text))
+                            cm?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.ftp_log_clip_label), text))
                         }
                     }
                 ) {
-                    Icon(Icons.Default.ContentCopy, contentDescription = "复制日志")
+                    Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.ftp_copy_log))
                 }
             }
             Spacer(Modifier.height(4.dp))

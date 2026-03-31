@@ -1,5 +1,6 @@
 package com.kenny.localmanager.gpg
 
+import com.kenny.localmanager.R
 import org.bouncycastle.bcpg.ArmoredOutputStream
 import org.bouncycastle.openpgp.PGPPublicKeyRing
 import org.bouncycastle.openpgp.PGPSecretKeyRing
@@ -22,7 +23,7 @@ fun getGpgKeyDir(context: android.content.Context): File {
  * @return Pair(成功, 失败时的错误信息)
  */
 fun generateDefaultKey(context: android.content.Context, identity: String, passphrase: CharArray): Pair<Boolean, String?> {
-    if (identity.isBlank()) return Pair(false, "用户标识不能为空")
+    if (identity.isBlank()) return Pair(false, context.getString(R.string.gpg_identity_required))
     return try {
         val keyDir = getGpgKeyDir(context)
         val pwd = if (passphrase.isEmpty()) Passphrase.emptyPassphrase() else Passphrase.fromPassword(String(passphrase))
@@ -34,7 +35,7 @@ fun generateDefaultKey(context: android.content.Context, identity: String, passp
         val publicKeyList = secretKeys.publicKeys.asSequence().toMutableList()
         val publicKeys = PGPPublicKeyRing(publicKeyList)
         val (merged, err) = mergePublicKeyRing(context, publicKeys)
-        if (!merged && err != "公钥已存在") return Pair(false, "保存公钥失败: $err")
+        if (!merged && err != context.getString(R.string.gpg_public_key_exists)) return Pair(false, context.getString(R.string.gpg_save_public_key_failed, err.orEmpty()))
         pwd.clear()
         Pair(true, null)
     } catch (e: Exception) {

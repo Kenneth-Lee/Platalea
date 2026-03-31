@@ -1,6 +1,7 @@
 package com.kenny.localmanager.file
 
 import android.content.Context
+import com.kenny.localmanager.R
 import java.io.File
 
 private val BROWSABLE_CACHE_DIRS = listOf(
@@ -58,8 +59,8 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
     val managedBrowsableDirs = BROWSABLE_CACHE_DIRS.toSet()
 
     result += CacheEntry(
-        "普通浏览缓存",
-        "所有非加密的需展开后浏览的缓存，含 .md.zip/.rst.zip/.html.zip/.pic.zip 与 .epub/.txt/.llm/.llm.zip。",
+        context.getString(R.string.cache_browsable_name),
+        context.getString(R.string.cache_browsable_desc),
         nonEncryptedBrowsable.sumOf(::dirSize)
     ) { ctx ->
         BROWSABLE_CACHE_DIRS.forEach { dirName ->
@@ -70,8 +71,8 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
     }
 
     result += CacheEntry(
-        "加密图片缓存",
-        "仅加密 .pic.zip 允许保留退出后的缓存；可能包含敏感图片明文。",
+        context.getString(R.string.cache_encrypted_pic_name),
+        context.getString(R.string.cache_encrypted_pic_desc),
         encryptedPic.sumOf(::dirSize)
     ) { ctx ->
         File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { child ->
@@ -92,8 +93,8 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
         }
     }
     result += CacheEntry(
-        "其他临时缓存",
-        "未纳入前两类的其他缓存或异常残留。",
+        context.getString(R.string.cache_other_name),
+        context.getString(R.string.cache_other_desc),
         otherSize
     ) { ctx ->
         ctx.cacheDir.listFiles()?.forEach { f ->

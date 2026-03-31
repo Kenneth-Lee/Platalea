@@ -3,6 +3,7 @@ package com.kenny.localmanager.ftp
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.listFilesSafe
 import org.apache.ftpserver.ftplet.FtpFile
 import java.io.InputStream
@@ -99,7 +100,7 @@ class DocumentFileFtpFile(
                     .sortedBy { it.name.lowercase() }
             )
         } catch (e: Exception) {
-            onLog("错误: 列出目录失败 ${e.message ?: e.javaClass.simpleName}")
+            onLog(context.getString(R.string.ftp_error_list_dir_failed, e.message ?: e.javaClass.simpleName))
             null
         }
     }

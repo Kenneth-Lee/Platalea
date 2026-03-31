@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.copyLocalDirToTree
 import com.kenny.localmanager.file.copyTreeDirToLocal
 import com.kenny.localmanager.file.deleteTreeChildDirIfExists
@@ -48,14 +49,14 @@ fun cloneToTree(
     log: ((String) -> Unit)? = null
 ): Result<String> {
     if (treeRootUri.isBlank() || repoUrl.isBlank()) {
-        return Result.failure(IllegalArgumentException("需要填写仓库地址，并已选择根目录"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_error_missing_repo_and_root)))
     }
     if (!isValidHttpsRepoUrl(repoUrl)) {
-        return Result.failure(IllegalArgumentException("请填写有效的 HTTPS 仓库地址，例如 https://gitcode.com/用户/仓库.git"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_error_invalid_https_url)))
     }
     val uri = Uri.parse(treeRootUri)
     if (!treeRootUri.contains("/tree/")) {
-        return Result.failure(IllegalArgumentException("根目录须为文档树根（含 /tree/）"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_error_invalid_root)))
     }
     val appDir = context.cacheDir
     val urlHash = MessageDigest.getInstance("SHA-256").digest(repoUrl.trim().toByteArray())
@@ -66,7 +67,7 @@ fun cloneToTree(
     try {
         val alreadyCloned = repoDir.isDirectory && File(repoDir, ".git").exists()
         if (alreadyCloned) {
-            log?.invoke("正在拉取更新: $repoUrl")
+            log?.invoke(context.getString(R.string.git_log_pulling, repoUrl))
             Git.open(repoDir).use { git ->
                 // 先还原工作区，防止之前残留的未提交删除影响 pull
                 git.checkout().setAllPaths(true).call()
@@ -75,7 +76,7 @@ fun cloneToTree(
                     .call()
             }
         } else {
-            log?.invoke("正在克隆: $repoUrl")
+            log?.invoke(context.getString(R.string.git_log_cloning, repoUrl))
             if (repoDir.exists()) repoDir.deleteRecursively()
             Git.cloneRepository()
                 .setURI(repoUrl.trim())
@@ -92,13 +93,13 @@ fun cloneToTree(
                 cfg.save()
             }
         }
-        log?.invoke("正在写入 .sysgit ...")
+        log?.invoke(context.getString(R.string.git_log_writing_sysgit))
         deleteTreeChildDirIfExists(context, uri, SYSGIT_DIR)
         val ok = copyLocalDirToTree(context, uri, repoDir, SYSGIT_DIR, log)
         return if (ok) {
-            Result.success(if (alreadyCloned) "已拉取并更新到 $SYSGIT_DIR" else "已下载到根目录下的 $SYSGIT_DIR")
+            Result.success(if (alreadyCloned) context.getString(R.string.git_success_updated, SYSGIT_DIR) else context.getString(R.string.git_success_downloaded, SYSGIT_DIR))
         } else {
-            Result.failure(RuntimeException("同步成功，但写入 .sysgit 失败"))
+            Result.failure(RuntimeException(context.getString(R.string.git_error_write_sysgit_failed)))
         }
     } catch (e: Throwable) {
         val detail = buildString {
@@ -114,8 +115,8 @@ fun cloneToTree(
         }
         Log.e(TAG, "clone/pull failed: $detail", e)
         val errMsg = e.message ?: e.cause?.message ?: detail
-        log?.invoke("错误: $errMsg")
-        log?.invoke("[调试] 异常链: $detail")
+        log?.invoke(context.getString(R.string.git_log_error, errMsg))
+        log?.invoke(context.getString(R.string.git_log_debug_chain, detail))
         return Result.failure(e)
     }
 }
@@ -165,17 +166,17 @@ fun syncFromTreeToLocal(
     val repoDir = getLocalGitCacheDir(context, repoUrl)
     if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
         Log.d(TAG, "syncFromTreeToLocal: local repo not found at ${repoDir.absolutePath}")
-        log?.invoke("本地仓库不存在，请先同步")
+        log?.invoke(context.getString(R.string.git_error_local_repo_missing))
         return false
     }
     val treeUri = Uri.parse(treeRootUri)
     val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return false
     val sysgitDoc = rootDoc.listFilesSafe().find { it.name == SYSGIT_DIR && it.isDirectory } ?: run {
         Log.d(TAG, "syncFromTreeToLocal: .sysgit not found in tree")
-        log?.invoke(".sysgit 目录不存在")
+        log?.invoke(context.getString(R.string.git_error_sysgit_missing))
         return false
     }
-    log?.invoke("正在从 .sysgit 同步到本地缓存...")
+    log?.invoke(context.getString(R.string.git_log_syncing_from_sysgit))
     Log.d(TAG, "syncFromTreeToLocal: copying from tree to ${repoDir.absolutePath}")
     val result = copyTreeDirToLocal(context, sysgitDoc, repoDir, log)
     Log.d(TAG, "syncFromTreeToLocal: result=$result")
@@ -197,16 +198,16 @@ fun commitAndPush(
 ): Result<String> {
     Log.d(TAG, "commitAndPush: starting with message=$commitMessage")
     if (treeRootUri.isBlank() || repoUrl.isBlank()) {
-        return Result.failure(IllegalArgumentException("需要填写仓库地址，并已选择根目录"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_error_missing_repo_and_root)))
     }
     val repoDir = getLocalGitCacheDir(context, repoUrl)
     if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
-        return Result.failure(IllegalStateException("本地仓库不存在，请先同步"))
+        return Result.failure(IllegalStateException(context.getString(R.string.git_error_local_repo_missing)))
     }
 
     // 从文档树同步回本地
     if (!syncFromTreeToLocal(context, treeRootUri, repoUrl, log)) {
-        return Result.failure(RuntimeException("从文档树同步到本地失败"))
+        return Result.failure(RuntimeException(context.getString(R.string.git_error_sync_to_local_failed)))
     }
 
     val creds = UsernamePasswordCredentialsProvider(userName ?: "", httpsPassword ?: "")
@@ -216,7 +217,7 @@ fun commitAndPush(
             val status = git.status().call()
             Log.d(TAG, "commitAndPush: status before add - added=${status.added}, changed=${status.changed}, removed=${status.removed}, missing=${status.missing}, untracked=${status.untracked}")
 
-            log?.invoke("正在添加变更...")
+            log?.invoke(context.getString(R.string.git_log_adding_changes))
             // 添加新文件和修改的文件
             git.add().addFilepattern(".").call()
             // 暂存已删除的文件
@@ -226,25 +227,25 @@ fun commitAndPush(
             val statusAfter = git.status().call()
             Log.d(TAG, "commitAndPush: status after add - added=${statusAfter.added}, changed=${statusAfter.changed}, removed=${statusAfter.removed}")
 
-            log?.invoke("正在提交...")
+            log?.invoke(context.getString(R.string.git_log_committing))
             git.commit()
                 .setMessage(commitMessage)
                 .setAllowEmpty(false)
                 .call()
             Log.d(TAG, "commitAndPush: commit done")
 
-            log?.invoke("正在推送...")
+            log?.invoke(context.getString(R.string.git_log_pushing))
             git.push()
                 .setCredentialsProvider(creds)
                 .call()
             Log.d(TAG, "commitAndPush: push done")
         }
-        log?.invoke("推送成功")
-        return Result.success("已提交并推送")
+        log?.invoke(context.getString(R.string.git_log_push_success))
+        return Result.success(context.getString(R.string.git_success_commit_push))
     } catch (e: Throwable) {
         val errMsg = e.message ?: e.cause?.message ?: e.javaClass.simpleName
         Log.e(TAG, "commit/push failed: $errMsg", e)
-        log?.invoke("错误: $errMsg")
+        log?.invoke(context.getString(R.string.git_log_error, errMsg))
         return Result.failure(e)
     }
 }
@@ -328,7 +329,7 @@ fun deduplicateRemotePubkeys(context: Context, treeRootUri: String, log: ((Strin
     val keyIdToFiles = mutableMapOf<Long, MutableList<DocumentFile>>()
     val allFiles = pubkeyDir.listFilesSafe().filter { it.isFile }
     Log.d(TAG, "deduplicateRemotePubkeys: found ${allFiles.size} files in pubkey dir")
-    log?.invoke("pubkey 目录共 ${allFiles.size} 个文件")
+    log?.invoke(context.getString(R.string.git_log_pubkey_file_count, allFiles.size))
 
     allFiles.forEach { file ->
         try {

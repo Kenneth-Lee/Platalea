@@ -3,6 +3,7 @@ package com.kenny.localmanager.epub
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.kenny.localmanager.R
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -74,7 +75,7 @@ class EpubBookmarkManager(
             Math.abs(it.scrollRatio - bookmark.scrollRatio) < 0.05f
         }
         if (exists) {
-            Log.w(TAG, "收藏已存在")
+            Log.w(TAG, context.getString(R.string.epub_bookmark_exists))
             return false
         }
         current.add(0, bookmark) // 新收藏放在最前面
@@ -139,9 +140,9 @@ class EpubBookmarkManager(
             val progressFile = getProgressFileForUri(progress.epubUri)
             progressFile.parentFile?.mkdirs()
             progressFile.writeText(json.toString())
-            Log.d(TAG, "保存阅读进度: ${progress.epubFileName} 章节${progress.chapterIndex}, 比例${progress.scrollRatio}, URI hash=${progress.epubUri.hashCode().toUInt().toString(16)}, 文件=${progressFile.absolutePath}")
+            Log.d(TAG, context.getString(R.string.epub_log_save_progress, progress.epubFileName, progress.chapterIndex, progress.scrollRatio.toString(), progress.epubUri.hashCode().toUInt().toString(16), progressFile.absolutePath))
         } catch (e: Exception) {
-            Log.e(TAG, "保存阅读进度失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_save_progress_failed), e)
         }
     }
 
@@ -149,7 +150,7 @@ class EpubBookmarkManager(
     fun loadProgress(epubUri: String): EpubReadingProgress? {
         return try {
             val file = getProgressFileForUri(epubUri)
-            Log.d(TAG, "加载阅读进度: URI hash=${epubUri.hashCode().toUInt().toString(16)}, 文件=${file.absolutePath}, 存在=${file.exists()}")
+            Log.d(TAG, context.getString(R.string.epub_log_load_progress, epubUri.hashCode().toUInt().toString(16), file.absolutePath, file.exists().toString()))
             if (!file.exists()) return null
             val json = JSONObject(file.readText())
             val progress = EpubReadingProgress(
@@ -161,10 +162,10 @@ class EpubBookmarkManager(
                 scrollRatio = json.optDouble("scrollRatio", 0.0).toFloat(),
                 lastReadTime = json.optLong("lastReadTime", System.currentTimeMillis())
             )
-            Log.d(TAG, "加载阅读进度成功: ${progress.epubFileName} 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
+            Log.d(TAG, context.getString(R.string.epub_log_load_progress_success, progress.epubFileName, progress.chapterIndex, progress.scrollRatio.toString()))
             progress
         } catch (e: Exception) {
-            Log.e(TAG, "加载阅读进度失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_load_progress_failed), e)
             null
         }
     }
@@ -175,7 +176,7 @@ class EpubBookmarkManager(
             val file = getProgressFileForUri(epubUri)
             if (file.exists()) file.delete()
         } catch (e: Exception) {
-            Log.e(TAG, "清除阅读进度失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_clear_progress_failed), e)
         }
     }
 
@@ -206,7 +207,7 @@ class EpubBookmarkManager(
                 }
                 if (removed > 0) {
                     persistentBookmarksFile.writeText(filtered.toString())
-                    Log.w(TAG, "已清除持久区中遗留的加密文件收藏: uri=$uri, count=$removed")
+                    Log.w(TAG, context.getString(R.string.epub_log_cleared_legacy_bookmarks, uri, removed))
                 }
             }
             val persistentProgressFile = File(
@@ -215,10 +216,10 @@ class EpubBookmarkManager(
             )
             if (persistentProgressFile.exists()) {
                 persistentProgressFile.delete()
-                Log.w(TAG, "已清除持久区中遗留的加密文件进度: uri=$uri")
+                Log.w(TAG, context.getString(R.string.epub_log_cleared_legacy_progress, uri))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "清理持久区遗留加密阅读数据失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_clear_legacy_failed), e)
         }
     }
 
@@ -246,9 +247,9 @@ class EpubBookmarkManager(
                 ))
             }
             _bookmarks.value = list
-            Log.d(TAG, "加载收藏夹: ${list.size}条")
+            Log.d(TAG, context.getString(R.string.epub_log_loaded_bookmarks, list.size))
         } catch (e: Exception) {
-            Log.e(TAG, "加载收藏夹失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_load_bookmarks_failed), e)
             _bookmarks.value = emptyList()
         }
     }
@@ -272,9 +273,9 @@ class EpubBookmarkManager(
                 })
             }
             bookmarksFile.writeText(json.toString())
-            Log.d(TAG, "保存收藏夹: ${_bookmarks.value.size}条")
+            Log.d(TAG, context.getString(R.string.epub_log_saved_bookmarks, _bookmarks.value.size))
         } catch (e: Exception) {
-            Log.e(TAG, "保存收藏夹失败", e)
+            Log.e(TAG, context.getString(R.string.epub_log_save_bookmarks_failed), e)
         }
     }
 }

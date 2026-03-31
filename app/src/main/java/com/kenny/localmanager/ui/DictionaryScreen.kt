@@ -50,8 +50,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.dict.StarDictLoaded
 import com.kenny.localmanager.dict.StarDictSummary
@@ -126,11 +128,11 @@ fun DictionaryScreen(
         val normalizedQuery = query.trim()
         if (normalizedQuery.isEmpty()) {
             results = emptyList()
-            searchError = "查询内容不能为空"
+            searchError = context.getString(R.string.dict_empty_query)
             return
         }
         query = normalizedQuery
-        val (hits, err) = searchStarDictWords(dict, normalizedQuery)
+        val (hits, err) = searchStarDictWords(context, dict, normalizedQuery)
         results = hits
         searchError = err
         scope.launch(Dispatchers.IO) {
@@ -141,11 +143,11 @@ fun DictionaryScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("词典") },
+                title = { Text(stringResource(R.string.dict_title)) },
                 navigationIcon = if (showBackButton) {
                     {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     }
                 } else {
@@ -153,10 +155,10 @@ fun DictionaryScreen(
                 },
                 actions = {
                     IconButton(onClick = { scope.launch { reloadDictList() } }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.common_refresh))
                     }
                     IconButton(onClick = { showManageDialog = true }, enabled = dictionaries.isNotEmpty()) {
-                        Icon(Icons.Default.MenuBook, contentDescription = "管理词典")
+                        Icon(Icons.Default.MenuBook, contentDescription = stringResource(R.string.dict_manage))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -182,13 +184,13 @@ fun DictionaryScreen(
                     value = query,
                     onValueChange = { query = it },
                     modifier = Modifier.weight(1f),
-                    label = { Text("正则表达式") },
-                    placeholder = { Text("例如 /^(ab|ac)/i 或 (?i)^test") },
+                    label = { Text(stringResource(R.string.dict_regex_label)) },
+                    placeholder = { Text(stringResource(R.string.dict_regex_placeholder)) },
                     singleLine = true,
                     enabled = loadedDict != null
                 )
                 Button(onClick = { doSearch() }, enabled = loadedDict != null) {
-                    Text("查询")
+                    Text(stringResource(R.string.dict_search))
                 }
             }
 
@@ -203,7 +205,7 @@ fun DictionaryScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            "最近查询（最多10条）",
+                            stringResource(R.string.dict_recent_queries),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -212,7 +214,7 @@ fun DictionaryScreen(
                                 prefs.clearDictQueryHistory()
                             }
                         }) {
-                            Text("清空历史")
+                            Text(stringResource(R.string.dict_clear_history))
                         }
                     }
                     Column(
@@ -252,7 +254,7 @@ fun DictionaryScreen(
                     results = emptyList()
                     searchError = null
                 }) {
-                    Text("清空结果")
+                    Text(stringResource(R.string.dict_clear_results))
                 }
             }
 
@@ -265,7 +267,7 @@ fun DictionaryScreen(
                 loadedDict == null -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            "没有可用词典。请先在文件列表里导入 StarDict（支持 .zip 或 .ifo）。",
+                            stringResource(R.string.dict_no_dictionary),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -277,13 +279,13 @@ fun DictionaryScreen(
                 }
                 results.isEmpty() && query.isNotBlank() -> {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("未找到匹配词条", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.dict_no_match), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 else -> {
                     Column(modifier = Modifier.fillMaxSize()) {
                         Text(
-                            if (results.isEmpty()) "输入正则后点击“查询”" else "匹配到 ${results.size} 个词条（最多展示 500）",
+                            if (results.isEmpty()) stringResource(R.string.dict_search_hint) else stringResource(R.string.dict_match_count, results.size),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -307,7 +309,7 @@ fun DictionaryScreen(
                                                 val dict = loadedDict
                                                 val id = selectedDictId
                                                 if (dict == null || id == null) {
-                                                    definitionText = "词典未加载"
+                                                    definitionText = context.getString(R.string.dict_not_loaded)
                                                 } else {
                                                     definitionText = withContext(Dispatchers.IO) {
                                                         readStarDictExplanation(context, id, dict, word)
@@ -342,7 +344,7 @@ fun DictionaryScreen(
     if (showManageDialog) {
         AlertDialog(
             onDismissRequest = { showManageDialog = false },
-            title = { Text("已导入词典") },
+            title = { Text(stringResource(R.string.dict_imported_title)) },
             text = {
                 Column(
                     modifier = Modifier
@@ -352,7 +354,7 @@ fun DictionaryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     if (dictionaries.isEmpty()) {
-                        Text("暂无已导入词典", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.dict_none_imported), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     } else {
                         dictionaries.forEach { dict ->
                             val isSelected = dict.id == selectedDictId
@@ -376,21 +378,21 @@ fun DictionaryScreen(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        "词条 ${dict.wordCount}",
+                                        stringResource(R.string.dict_word_count, dict.wordCount),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                                 if (isSelected) {
                                     Text(
-                                        "当前",
+                                        stringResource(R.string.common_current),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.primary,
                                         modifier = Modifier.padding(end = 8.dp)
                                     )
                                 }
                                 IconButton(onClick = { pendingDeleteSummary = dict }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "删除词典", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.dict_delete), tint = MaterialTheme.colorScheme.error)
                                 }
                             }
                         }
@@ -398,7 +400,7 @@ fun DictionaryScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showManageDialog = false }) { Text("关闭") }
+                TextButton(onClick = { showManageDialog = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -417,7 +419,7 @@ fun DictionaryScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("加载释义中…")
+                        Text(stringResource(R.string.dict_loading_definition))
                     }
                 } else {
                     Column(
@@ -435,7 +437,7 @@ fun DictionaryScreen(
                     definitionWord = null
                     definitionText = ""
                     definitionLoading = false
-                }) { Text("关闭") }
+                }) { Text(stringResource(R.string.common_close)) }
             },
             dismissButton = {
                 TextButton(
@@ -447,10 +449,10 @@ fun DictionaryScreen(
                                 append(definitionText)
                             }
                         }
-                        clipboardManager?.setPrimaryClip(ClipData.newPlainText("词典释义", content))
+                        clipboardManager?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.dict_definition_clip_label), content))
                     },
                     enabled = !definitionLoading && definitionText.isNotBlank()
-                ) { Text("复制内容") }
+                ) { Text(stringResource(R.string.common_copy_content)) }
             }
         )
     }
@@ -458,8 +460,8 @@ fun DictionaryScreen(
     pendingDeleteSummary?.let { summary ->
         AlertDialog(
             onDismissRequest = { pendingDeleteSummary = null },
-            title = { Text("删除词典") },
-            text = { Text("确定删除已导入词典「${summary.name}」吗？") },
+            title = { Text(stringResource(R.string.dict_delete)) },
+            text = { Text(stringResource(R.string.dict_delete_confirm, summary.name)) },
             confirmButton = {
                 TextButton(onClick = {
                     pendingDeleteSummary = null
@@ -470,11 +472,11 @@ fun DictionaryScreen(
                         reloadDictList()
                     }
                 }) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.dict_delete), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteSummary = null }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteSummary = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }

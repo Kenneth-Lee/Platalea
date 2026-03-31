@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -73,17 +74,17 @@ fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileMod
                     )
                 )
             }
-        } ?: throw DirectoryAccessException("ContentResolver.query 返回 null，可能是 URI 无效或无权限")
+        } ?: throw DirectoryAccessException(context.getString(R.string.file_query_null))
     } catch (e: SecurityException) {
-        throw DirectoryAccessException("权限不足：${e.message}", e)
+        throw DirectoryAccessException(context.getString(R.string.file_error_permission_denied, e.message ?: ""), e)
     } catch (e: IllegalArgumentException) {
-        throw DirectoryAccessException("URI 参数无效：${e.message}", e)
+        throw DirectoryAccessException(context.getString(R.string.file_error_invalid_uri, e.message ?: ""), e)
     } catch (e: IllegalStateException) {
-        throw DirectoryAccessException("目录状态异常：${e.message}", e)
+        throw DirectoryAccessException(context.getString(R.string.file_error_directory_state, e.message ?: ""), e)
     } catch (e: DirectoryAccessException) {
         throw e
     } catch (e: Exception) {
-        throw DirectoryAccessException("访问目录失败：${e.javaClass.simpleName}: ${e.message}", e)
+        throw DirectoryAccessException(context.getString(R.string.file_error_access_failed, e.javaClass.simpleName, e.message ?: ""), e)
     }
     return result
 }
@@ -228,15 +229,15 @@ fun moveToTrash(
 ): Boolean {
     val cr = context.contentResolver
     val trashUri = getOrCreateTrashUri(context, rootUri, treeUri) ?: run {
-        log?.invoke("  moveToTrash: 无法创建回收站目录")
+        log?.invoke(context.getString(R.string.file_log_trash_create_failed))
         return false
     }
     val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
     if (source.name == TRASH_DIR_NAME) {
-        log?.invoke("  moveToTrash: 不能将回收站移入自身")
+        log?.invoke(context.getString(R.string.file_log_trash_move_self))
         return false
     }
-    val name = source.name ?: "unknown"
+    val name = source.name ?: context.getString(R.string.file_unknown_name)
     val baseName = name.substringBeforeLast(".")
     val ext = if (name.contains(".")) ".${name.substringAfterLast(".")}" else ""
     var destName = name
@@ -248,7 +249,7 @@ fun moveToTrash(
             val newDirUri = try {
                 DocumentsContract.createDocument(cr, trashUri, DocumentsContract.Document.MIME_TYPE_DIR, destName)
             } catch (_: Exception) {
-                log?.invoke("  moveToTrash: 无法创建目录 $destName")
+                log?.invoke(context.getString(R.string.file_log_create_dir_failed, destName))
                 return false
             } ?: return false
             var children = source.listFilesSafe().toList()
@@ -280,7 +281,7 @@ fun moveToTrash(
             children.forEach { child ->
                 if (copyDocumentTo(context, child.uri, newDirUri, treeUri, log) == null) {
                     allOk = false
-                    log?.invoke("  moveToTrash: 子项拷贝失败 ${child.name}")
+                    log?.invoke(context.getString(R.string.file_log_child_copy_failed, child.name ?: context.getString(R.string.file_unnamed)))
                 }
             }
             if (allOk) {
@@ -288,7 +289,7 @@ fun moveToTrash(
                     DocumentsContract.deleteDocument(cr, sourceUri)
                     true
                 } catch (_: Exception) {
-                    log?.invoke("  moveToTrash: 拷贝成功但删除源目录失败")
+                    log?.invoke(context.getString(R.string.file_log_delete_source_dir_failed))
                     false
                 }
             } else false
@@ -302,7 +303,7 @@ fun moveToTrash(
                     true
                 } catch (_: Exception) {
                     try { DocumentsContract.deleteDocument(cr, created) } catch (_: Exception) { }
-                    log?.invoke("  moveToTrash: 拷贝成功但删除源失败，已回滚")
+                    log?.invoke(context.getString(R.string.file_log_delete_source_failed_rollback))
                     false
                 }
             } else false
@@ -583,12 +584,12 @@ private fun createFileUnder(
     val newFileUri = try {
         DocumentsContract.createDocument(cr, parentDocUri, mime, name)
     } catch (e: Exception) {
-        log?.invoke("  createDocument 异常: ${e.message}")
+        log?.invoke(context.getString(R.string.file_create_document_exception, e.message ?: ""))
         null
     } ?: return null
     val input = cr.openInputStreamSafe(sourceUri)
     if (input == null) {
-        log?.invoke("  无法打开源文件(空): $name")
+        log?.invoke(context.getString(R.string.file_open_source_failed, name))
         try { DocumentsContract.deleteDocument(cr, newFileUri) } catch (_: Exception) { }
         return null
     }
@@ -600,7 +601,7 @@ private fun createFileUnder(
         }
     }
     if (!written) {
-        log?.invoke("  无法写入目标: $name")
+        log?.invoke(context.getString(R.string.file_write_target_failed, name))
         try { DocumentsContract.deleteDocument(cr, newFileUri) } catch (_: Exception) { }
         return null
     }
@@ -630,7 +631,7 @@ fun copyDocumentTo(
     }
     for (parentDocUri in parentCandidates) {
         if (source.isDirectory) {
-            log?.invoke("  [拷贝目录] $name 尝试 parent=$parentDocUri")
+            log?.invoke(context.getString(R.string.file_log_copy_dir_try, name, parentDocUri.toString()))
             val newDirUri = try {
                 DocumentsContract.createDocument(
                     cr,
@@ -639,7 +640,7 @@ fun copyDocumentTo(
                     name
                 )
             } catch (e: Exception) {
-                log?.invoke("  $name 建目录异常: ${e.message}")
+                log?.invoke(context.getString(R.string.file_log_mkdir_exception, name, e.message ?: ""))
                 null
             }
             if (newDirUri != null) {
@@ -678,28 +679,28 @@ fun copyDocumentTo(
                             }
                         } catch (_: Exception) { }
                         if (list.isNotEmpty()) {
-                            log?.invoke("  [拷贝目录] $name 通过树查询子项数=${list.size}")
+                            log?.invoke(context.getString(R.string.file_log_copy_dir_children_tree, name, list.size))
                             list.forEach { (childUri, cName, mimeType) ->
-                                log?.invoke("    子项: $cName isDir=${mimeType == DocumentsContract.Document.MIME_TYPE_DIR}")
+                                log?.invoke(context.getString(R.string.file_log_copy_dir_child, cName, (mimeType == DocumentsContract.Document.MIME_TYPE_DIR).toString()))
                                 if (mimeType == DocumentsContract.Document.MIME_TYPE_DIR) {
                                     val res = copyDocumentTo(context, childUri, newDirUri, treeUri, log)
-                                    if (res == null) log?.invoke("    子项失败: $cName")
+                                    if (res == null) log?.invoke(context.getString(R.string.file_log_copy_dir_child_failed, cName))
                                 } else {
-                                    val created = createFileUnder(context, newDirUri, mimeType, cName.ifEmpty { "<无名>" }, childUri, log)
-                                    if (created == null) log?.invoke("    子项失败: $cName")
+                                    val created = createFileUnder(context, newDirUri, mimeType, cName.ifEmpty { context.getString(R.string.file_unnamed) }, childUri, log)
+                                    if (created == null) log?.invoke(context.getString(R.string.file_log_copy_dir_child_failed, cName))
                                 }
                             }
                             return newDirUri
                         }
                     }
-                    log?.invoke("  [拷贝目录] $name 子项数=0 (listFiles 空且树查询无结果)")
+                    log?.invoke(context.getString(R.string.file_log_copy_dir_empty, name))
                 } else {
-                    log?.invoke("  [拷贝目录] $name 已建目录，子项数=${children.size}")
+                    log?.invoke(context.getString(R.string.file_log_copy_dir_created, name, children.size))
                     children.forEach { child ->
-                        val cName = child.name ?: "<无名>"
-                        log?.invoke("    子项: $cName isDir=${child.isDirectory}")
+                        val cName = child.name ?: context.getString(R.string.file_unnamed)
+                        log?.invoke(context.getString(R.string.file_log_copy_dir_child, cName, child.isDirectory.toString()))
                         val res = copyDocumentTo(context, child.uri, newDirUri, treeUri, log)
-                        if (res == null) log?.invoke("    子项失败: $cName")
+                        if (res == null) log?.invoke(context.getString(R.string.file_log_copy_dir_child_failed, cName))
                     }
                 }
                 return newDirUri
@@ -708,12 +709,12 @@ fun copyDocumentTo(
             val mime = cr.getTypeSafe(sourceUri) ?: "application/octet-stream"
             val newFileUri = createFileUnder(context, parentDocUri, mime, name, sourceUri, log)
             if (newFileUri != null) {
-                log?.invoke("  $name -> 成功 parent=$parentDocUri")
+                log?.invoke(context.getString(R.string.file_log_copy_success, name, parentDocUri.toString()))
                 return newFileUri
             }
         }
     }
-    log?.invoke("  $name -> 失败")
+    log?.invoke(context.getString(R.string.file_log_copy_failed, name))
     return null
 }
 
@@ -734,22 +735,22 @@ fun moveDocumentTo(
     // 目录：系统 moveDocument 可能不迁移子节点导致内容丢失，统一用拷贝后删除
     if (source.isDirectory) {
         val dirName = source.name ?: sourceUri.lastPathSegment ?: "?"
-        log?.invoke("[移动-目录] $dirName 开始递归拷贝 -> $targetParentUri")
+        log?.invoke(context.getString(R.string.file_log_move_dir_start, dirName, targetParentUri.toString()))
         val copied = copyDocumentTo(context, sourceUri, targetParentUri, treeUri, log)
         if (copied == null) {
-            log?.invoke("[移动-目录] $dirName 拷贝失败，不删除源")
+            log?.invoke(context.getString(R.string.file_log_move_dir_copy_failed, dirName))
             return false
         }
-        log?.invoke("[移动-目录] $dirName 拷贝完成，正在删除源...")
+        log?.invoke(context.getString(R.string.file_log_move_dir_delete_source, dirName))
         var deleted = false
         try {
             DocumentsContract.deleteDocument(cr, sourceUri)
             deleted = true
         } catch (e: Exception) {
-            log?.invoke("  删除源目录异常: ${e.message}")
+            log?.invoke(context.getString(R.string.file_log_delete_source_dir_exception, e.message ?: ""))
         }
-        if (deleted) log?.invoke("[移动-目录] $dirName 完成(已删除源)")
-        else log?.invoke("[移动-目录] $dirName 拷贝成功但删除源失败")
+        if (deleted) log?.invoke(context.getString(R.string.file_log_move_dir_done, dirName))
+        else log?.invoke(context.getString(R.string.file_log_move_dir_delete_failed, dirName))
         return deleted
     }
     val sourceParent = source.parentFile?.uri
@@ -763,11 +764,11 @@ fun moveDocumentTo(
             try {
                 val moved = DocumentsContract.moveDocument(cr, sourceUri, sourceParent, targetDocUri)
                 if (moved != null) {
-                    log?.invoke("  moveDocument 成功 target=$targetDocUri")
+                    log?.invoke(context.getString(R.string.file_log_move_success, targetDocUri.toString()))
                     return true
                 }
             } catch (e: Exception) {
-                log?.invoke("  moveDocument 异常: ${e.message}")
+                log?.invoke(context.getString(R.string.file_log_move_exception, e.message ?: ""))
             }
         }
     }
@@ -802,7 +803,7 @@ fun copyLocalDirToTree(
     val destUri = try {
         DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, destDirName)
     } catch (e: Exception) {
-        log?.invoke("创建目录 $destDirName 失败: ${e.message}")
+        log?.invoke(context.getString(R.string.file_log_create_dir_failed_detail, destDirName, e.message ?: ""))
         return false
     } ?: return false
     return copyLocalDirRecursive(context, destUri, sourceDir, log)
@@ -839,7 +840,7 @@ private fun copyLocalDirRecursive(context: Context, parentDocUri: Uri, sourceDir
             }
         } catch (e: Exception) {
             Log.e(TAG, "copyLocalDirRecursive: exception copying $name: ${e.message}")
-            log?.invoke("复制 $name 失败: ${e.message}")
+            log?.invoke(context.getString(R.string.file_log_copy_name_failed, name, e.message ?: ""))
             return false
         }
     }
@@ -883,7 +884,7 @@ fun copyTreeDirToLocal(
                 }
             }
         } catch (e: Exception) {
-            log?.invoke("复制 $name 失败: ${e.message}")
+            log?.invoke(context.getString(R.string.file_log_copy_name_failed, name, e.message ?: ""))
             return false
         }
     }

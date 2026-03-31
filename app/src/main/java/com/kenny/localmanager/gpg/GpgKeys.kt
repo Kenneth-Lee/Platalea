@@ -1,5 +1,6 @@
 package com.kenny.localmanager.gpg
 
+import com.kenny.localmanager.R
 import org.bouncycastle.bcpg.ArmoredOutputStream
 import org.bouncycastle.openpgp.PGPPublicKey
 import org.bouncycastle.openpgp.PGPPublicKeyRing
@@ -181,7 +182,7 @@ fun deleteAllPublicKeys(context: android.content.Context): Boolean {
 
 /** 从公钥环中移除指定 keyId 的 ring，保存回文件。返回 Pair(成功, 错误信息)。 */
 fun deletePublicKeyById(context: android.content.Context, keyId: Long): Pair<Boolean, String?> {
-    val rings = loadPublicKeyRings(context) ?: return Pair(false, "无公钥")
+    val rings = loadPublicKeyRings(context) ?: return Pair(false, context.getString(R.string.gpg_no_public_keys))
     val remaining = mutableListOf<PGPPublicKeyRing>()
     rings.keyRings.forEach { ring ->
         if (ring.publicKey?.keyID != keyId) {
@@ -189,7 +190,7 @@ fun deletePublicKeyById(context: android.content.Context, keyId: Long): Pair<Boo
         }
     }
     if (remaining.isEmpty()) {
-        return if (deleteAllPublicKeys(context)) Pair(true, null) else Pair(false, "删除失败")
+        return if (deleteAllPublicKeys(context)) Pair(true, null) else Pair(false, context.getString(R.string.common_delete_failed))
     }
     return try {
         val outFile = File(getGpgKeyDir(context), "pubring.gpg")
@@ -226,7 +227,7 @@ fun mergePublicKeyRing(context: android.content.Context, newRing: PGPPublicKeyRi
         } else {
             val list = mutableListOf<PGPPublicKeyRing>()
             existing.keyRings.forEach { list.add(it) }
-            if (list.any { it.publicKey?.keyID == newRing.publicKey?.keyID }) return Pair(false, "公钥已存在")
+            if (list.any { it.publicKey?.keyID == newRing.publicKey?.keyID }) return Pair(false, context.getString(R.string.gpg_public_key_exists))
             list.add(newRing)
             list
         }
