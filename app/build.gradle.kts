@@ -9,7 +9,7 @@ android {
     namespace = "com.kenny.localmanager"
     compileSdk = 34
     defaultConfig {
-        applicationId = "com.kenny.localmanager"
+        applicationId = "personal.kenny.platalea"
         minSdk = 24
         targetSdk = 34
         versionCode = 12
