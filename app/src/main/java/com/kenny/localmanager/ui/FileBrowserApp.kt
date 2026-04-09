@@ -305,6 +305,7 @@ private enum class MainTab(val key: String, val labelRes: Int) {
     FTP("ftp", R.string.main_tab_ftp),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
     QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
+    QUICK_CRYPTO("quick_crypto", R.string.main_tab_quick_crypto),
     DICTIONARY("dictionary", R.string.main_tab_dictionary);
 
     companion object {
@@ -327,6 +328,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.FTP -> Icons.Default.Wifi
         MainTab.GIT_SHARE -> Icons.Default.Share
         MainTab.QUICK_NOTE -> Icons.Default.Edit
+        MainTab.QUICK_CRYPTO -> Icons.Default.Lock
         MainTab.DICTIONARY -> Icons.Default.MenuBook
     }
 }
@@ -682,6 +684,7 @@ private fun ScrollableMainTabBar(
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
         MainTab.QUICK_NOTE,
+        MainTab.QUICK_CRYPTO,
         MainTab.PLAYER,
         MainTab.DICTIONARY,
         MainTab.FTP,
@@ -1051,6 +1054,11 @@ private fun DictionaryTabContent(onRequestExitApp: () -> Unit) {
 }
 
 @Composable
+private fun QuickCryptoTabContent() {
+    QuickCryptoScreen()
+}
+
+@Composable
 private fun MainTabContentHost(
     activeMainTab: MainTab,
     recentOpenItems: List<RecentOpenItem>,
@@ -1063,6 +1071,7 @@ private fun MainTabContentHost(
     gitShareContent: @Composable () -> Unit,
     playerContent: @Composable () -> Unit,
     quickNoteContent: @Composable () -> Unit,
+    quickCryptoContent: @Composable () -> Unit,
     dictionaryContent: @Composable () -> Unit
 ) {
     when (activeMainTab) {
@@ -1078,6 +1087,7 @@ private fun MainTabContentHost(
         MainTab.GIT_SHARE -> gitShareContent()
         MainTab.PLAYER -> playerContent()
         MainTab.QUICK_NOTE -> quickNoteContent()
+        MainTab.QUICK_CRYPTO -> quickCryptoContent()
         MainTab.DICTIONARY -> dictionaryContent()
     }
 }
@@ -1421,12 +1431,21 @@ private fun FileBrowserAppScreen(
         return ok
     }
 
-    fun persistQuickNoteIfNeeded(reason: String) {
-        val currentData = quickNoteData ?: return
-        if (quickNoteInProgress) return
+    fun persistQuickNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
+        val currentData = quickNoteData ?: run {
+            onFinished?.invoke(true)
+            return
+        }
+        if (quickNoteInProgress) {
+            onFinished?.invoke(false)
+            return
+        }
         val snapshot = quickNoteEntriesSnapshot
         val snapshotHash = snapshot.hashCode()
-        if (quickNoteLastSavedHash == snapshotHash) return
+        if (quickNoteLastSavedHash == snapshotHash) {
+            onFinished?.invoke(true)
+            return
+        }
         quickNoteInProgress = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -1438,8 +1457,10 @@ private fun FileBrowserAppScreen(
                 quickNoteData = saved
                 quickNoteEntriesSnapshot = saved.entries
                 quickNoteLastSavedHash = saved.entries.hashCode()
+                onFinished?.invoke(true)
             }.onFailure { throwable ->
                 Toast.makeText(context, "快速笔记自动保存失败（$reason）：${throwable.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                onFinished?.invoke(false)
             }
         }
     }
@@ -1587,12 +1608,28 @@ private fun FileBrowserAppScreen(
         var showKeyManagementDialog by remember { mutableStateOf(false) }
         LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
         var lastBackPressTime by remember { mutableStateOf(0L) }
-        val requestExitApp: () -> Unit = {
+        fun finishCurrentActivity() {
+            (context as? Activity)?.finish()
+        }
+
+        fun requestExitApp() {
+            if (activeMainTab == MainTab.QUICK_NOTE) {
+                if (quickNoteInProgress) {
+                    Toast.makeText(context, "快速笔记仍在处理中，请稍后再试", Toast.LENGTH_SHORT).show()
+                    return
+                }
+                persistQuickNoteIfNeeded("退出应用") { saved ->
+                    if (saved) {
+                        finishCurrentActivity()
+                    }
+                }
+                return
+            }
             if (bypassExitDoubleConfirm) {
-                (context as? Activity)?.finish()
+                finishCurrentActivity()
             } else {
                 val now = System.currentTimeMillis()
-                if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
+                if (now - lastBackPressTime < 2000) finishCurrentActivity()
                 else {
                     lastBackPressTime = now
                     Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
@@ -2585,6 +2622,9 @@ private fun FileBrowserAppScreen(
                             quickNoteInProgress = quickNoteInProgress,
                             onEntriesChanged = { quickNoteEntriesSnapshot = it }
                         )
+                    },
+                    quickCryptoContent = {
+                        QuickCryptoTabContent()
                     },
                     dictionaryContent = {
                         DictionaryTabContent(onRequestExitApp = { requestExitApp() })

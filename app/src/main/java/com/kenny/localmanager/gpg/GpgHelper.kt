@@ -245,4 +245,20 @@ object GpgHelper {
         }
     }
 
+    fun encryptWithPublicKeyBinary(plain: ByteArray, publicKeyRing: PGPPublicKeyRing, literalFileName: String): ByteArray? {
+        return try {
+            val encOpts = EncryptionOptions.get().addRecipient(publicKeyRing)
+            val producerOpts = ProducerOptions.encrypt(encOpts)
+                .setFileName(literalFileName)
+            val out = ByteArrayOutputStream()
+            PGPainless.encryptAndOrSign()
+                .onOutputStream(out)
+                .withOptions(producerOpts)
+                .use { encStream -> encStream.write(plain) }
+            out.toByteArray()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
 }
