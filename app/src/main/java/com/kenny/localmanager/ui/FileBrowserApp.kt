@@ -303,6 +303,7 @@ private enum class MainTab(val key: String, val labelRes: Int) {
     RECENT("recent", R.string.main_tab_recent),
     PLAYER("player", R.string.main_tab_player),
     FTP("ftp", R.string.main_tab_ftp),
+    CONFIG("config", R.string.main_tab_config),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
     QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
     QUICK_CRYPTO("quick_crypto", R.string.main_tab_quick_crypto),
@@ -326,6 +327,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.RECENT -> Icons.Default.List
         MainTab.PLAYER -> Icons.Default.QueueMusic
         MainTab.FTP -> Icons.Default.Wifi
+        MainTab.CONFIG -> Icons.Default.Settings
         MainTab.GIT_SHARE -> Icons.Default.Share
         MainTab.QUICK_NOTE -> Icons.Default.Edit
         MainTab.QUICK_CRYPTO -> Icons.Default.Lock
@@ -519,7 +521,7 @@ private fun doMovePendingToCurrentDir(
             }
             onRefreshDone()
         }
-    }
+            }
 }
 
 private suspend fun runWithUiProgress(
@@ -576,7 +578,6 @@ private suspend fun appendToPlaybackPlaylistAndStart(
             audioList.map { it.name }
         )
     }
-    if (!result.found) return null
     val intent = Intent(context, PlaybackService::class.java).apply {
         action = ACTION_PLAY
         putExtra(EXTRA_PLAYLIST_ID, target.id)
@@ -683,6 +684,7 @@ private fun ScrollableMainTabBar(
     val context = LocalContext.current
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
+        MainTab.CONFIG,
         MainTab.QUICK_NOTE,
         MainTab.QUICK_CRYPTO,
         MainTab.PLAYER,
@@ -1059,6 +1061,53 @@ private fun QuickCryptoTabContent() {
 }
 
 @Composable
+private fun ConfigTabContent(
+    filterVisible: Boolean,
+    onFilterVisibleChange: (Boolean) -> Unit,
+    hideDotFiles: Boolean,
+    onHideDotFilesChange: (Boolean) -> Unit,
+    startupDecryptKey: Boolean,
+    onStartupDecryptKeyChange: (Boolean) -> Unit,
+    viewerPreviewBytes: Int,
+    onViewerPreviewBytesChange: (Int) -> Unit,
+    ftpPassword: String,
+    onFtpPasswordChange: (String) -> Unit,
+    ftpTimeoutMinutes: Int,
+    onFtpTimeoutMinutesChange: (Int) -> Unit,
+    onOpenGitConfig: () -> Unit,
+    onManageKeys: () -> Unit,
+    onOpenCacheManagement: () -> Unit,
+    onExportConfig: () -> Unit,
+    onChangeRoot: () -> Unit,
+    onCreatePlayerShortcut: () -> Unit,
+    onCreateQuickNoteShortcut: () -> Unit
+) {
+    ConfigPanel(
+        filterVisible = filterVisible,
+        onFilterVisibleChange = onFilterVisibleChange,
+        hideDotFiles = hideDotFiles,
+        onHideDotFilesChange = onHideDotFilesChange,
+        startupDecryptKey = startupDecryptKey,
+        onStartupDecryptKeyChange = onStartupDecryptKeyChange,
+        viewerPreviewBytes = viewerPreviewBytes,
+        onViewerPreviewBytesChange = onViewerPreviewBytesChange,
+        ftpPassword = ftpPassword,
+        onFtpPasswordChange = onFtpPasswordChange,
+        ftpTimeoutMinutes = ftpTimeoutMinutes,
+        onFtpTimeoutMinutesChange = onFtpTimeoutMinutesChange,
+        onOpenGitConfig = onOpenGitConfig,
+        onManageKeys = onManageKeys,
+        onOpenCacheManagement = onOpenCacheManagement,
+        onExportConfig = onExportConfig,
+        onChangeRoot = onChangeRoot,
+        onCreatePlayerShortcut = onCreatePlayerShortcut,
+        onCreateQuickNoteShortcut = onCreateQuickNoteShortcut,
+        showCloseButton = false,
+        onClose = null
+    )
+}
+
+@Composable
 private fun MainTabContentHost(
     activeMainTab: MainTab,
     recentOpenItems: List<RecentOpenItem>,
@@ -1068,6 +1117,7 @@ private fun MainTabContentHost(
     onClearRecentItems: () -> Unit,
     directoryContent: @Composable () -> Unit,
     ftpContent: @Composable () -> Unit,
+    configContent: @Composable () -> Unit,
     gitShareContent: @Composable () -> Unit,
     playerContent: @Composable () -> Unit,
     quickNoteContent: @Composable () -> Unit,
@@ -1084,6 +1134,7 @@ private fun MainTabContentHost(
             onClearRecentItems = onClearRecentItems
         )
         MainTab.FTP -> ftpContent()
+        MainTab.CONFIG -> configContent()
         MainTab.GIT_SHARE -> gitShareContent()
         MainTab.PLAYER -> playerContent()
         MainTab.QUICK_NOTE -> quickNoteContent()
@@ -1596,7 +1647,6 @@ private fun FileBrowserAppScreen(
         var showPendingList by remember { mutableStateOf(false) }
         var showPendingDeleteConfirm by remember { mutableStateOf(false) }
         var showPlaybackTargetDialog by remember { mutableStateOf(false) }
-        var showConfigDialog by remember { mutableStateOf(false) }
         var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
         var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
         var pendingImportJson by remember { mutableStateOf<String?>(null) }
@@ -2145,7 +2195,6 @@ private fun FileBrowserAppScreen(
                     gpgEncryptSelectedKeyId = null
                 }
                 showKeyManagementDialog -> showKeyManagementDialog = false
-                showConfigDialog -> showConfigDialog = false
                 showCacheManagementDialog -> showCacheManagementDialog = false
                 showGitConfigDialog -> showGitConfigDialog = false
                 showAboutDialog -> showAboutDialog = false
@@ -2482,7 +2531,6 @@ private fun FileBrowserAppScreen(
                             onMovePendingToCurrentDir = doMoveHere,
                             onShowPendingList = { showPendingList = it },
                             onRefresh = { refreshTrigger++ },
-                            onOpenConfig = { showConfigDialog = true },
                             onOpenAbout = { showAboutDialog = true },
                             onCreateQuickNote = {
                                 switchMainTab(MainTab.QUICK_NOTE)
@@ -2597,6 +2645,55 @@ private fun FileBrowserAppScreen(
                             ftpPassword = ftpPassword,
                             ftpTimeoutMinutes = ftpTimeoutMinutes,
                             onRequestExitApp = { requestExitApp() }
+                        )
+                    },
+                    configContent = {
+                        ConfigTabContent(
+                            filterVisible = filterVisible,
+                            onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
+                            hideDotFiles = hideDotFiles,
+                            onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
+                            startupDecryptKey = startupDecryptKey,
+                            onStartupDecryptKeyChange = { enabled ->
+                                scope.launch { prefs.setStartupDecryptKey(enabled) }
+                                if (!enabled) SecretKeyPasswordCache.clear()
+                            },
+                            viewerPreviewBytes = viewerPreviewBytes,
+                            onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
+                            ftpPassword = ftpPassword ?: "",
+                            onFtpPasswordChange = { s ->
+                                ftpPassword = s.ifBlank { null }
+                                scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
+                            },
+                            ftpTimeoutMinutes = ftpTimeoutMinutes,
+                            onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
+                            onOpenGitConfig = { showGitConfigDialog = true },
+                            onManageKeys = { showKeyManagementDialog = true },
+                            onOpenCacheManagement = { showCacheManagementDialog = true },
+                            onExportConfig = {
+                                scope.launch {
+                                    val ok = exportConfigToRoot()
+                                    Toast.makeText(context, if (ok) context.getString(R.string.config_export_success) else context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
+                                    if (ok) refreshTrigger++
+                                }
+                            },
+                            onChangeRoot = { showRootSwitchDialog = true },
+                            onCreatePlayerShortcut = {
+                                val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
+                                if (playerErr == null) {
+                                    Toast.makeText(context, context.getString(R.string.config_player_shortcut_requested), Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, context.getString(R.string.config_player_shortcut_failed, playerErr), Toast.LENGTH_LONG).show()
+                                }
+                            },
+                            onCreateQuickNoteShortcut = {
+                                val quickNoteErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_QUICK_NOTE)
+                                if (quickNoteErr == null) {
+                                    Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_requested), Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_failed, quickNoteErr), Toast.LENGTH_LONG).show()
+                                }
+                            }
                         )
                     },
                     gitShareContent = {
@@ -2914,58 +3011,6 @@ private fun FileBrowserAppScreen(
         }
         if (showCacheManagementDialog) {
             CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
-        }
-        if (showConfigDialog) {
-            ConfigDialog(
-                onDismiss = { showConfigDialog = false },
-                filterVisible = filterVisible,
-                onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
-                hideDotFiles = hideDotFiles,
-                onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
-                startupDecryptKey = startupDecryptKey,
-                onStartupDecryptKeyChange = { enabled ->
-                    scope.launch { prefs.setStartupDecryptKey(enabled) }
-                    if (!enabled) SecretKeyPasswordCache.clear()
-                },
-                viewerPreviewBytes = viewerPreviewBytes,
-                onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
-                ftpPassword = ftpPassword ?: "",
-                onFtpPasswordChange = { s ->
-                    ftpPassword = s.ifBlank { null }
-                    scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
-                },
-                ftpTimeoutMinutes = ftpTimeoutMinutes,
-                onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
-                onOpenGitConfig = { showConfigDialog = false; showGitConfigDialog = true },
-                onManageKeys = { showConfigDialog = false; showKeyManagementDialog = true },
-                onOpenCacheManagement = { showConfigDialog = false; showCacheManagementDialog = true },
-                onExportConfig = {
-                    scope.launch {
-                        val ok = exportConfigToRoot()
-                        Toast.makeText(context, if (ok) context.getString(R.string.config_export_success) else context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
-                        if (ok) refreshTrigger++
-                    }
-                },
-                onChangeRoot = {
-                    showRootSwitchDialog = true
-                },
-                onCreatePlayerShortcut = {
-                    val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
-                    if (playerErr == null) {
-                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_requested), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_failed, playerErr), Toast.LENGTH_LONG).show()
-                    }
-                },
-                onCreateQuickNoteShortcut = {
-                    val quickNoteErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_QUICK_NOTE)
-                    if (quickNoteErr == null) {
-                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_requested), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_failed, quickNoteErr), Toast.LENGTH_LONG).show()
-                    }
-                }
-            )
         }
         if (showRootSwitchDialog) {
             AlertDialog(
@@ -5143,7 +5188,6 @@ internal fun FileBrowserScreen(
     onMovePendingToCurrentDir: () -> Unit = {},
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
-    onOpenConfig: () -> Unit,
     onOpenAbout: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
@@ -5337,14 +5381,6 @@ internal fun FileBrowserScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.main_menu_config)) },
-                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenConfig()
-                                }
-                            )
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.main_menu_about)) },
                                 leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
@@ -8191,8 +8227,7 @@ fun CacheManagementDialog(
 }
 
 @Composable
-fun ConfigDialog(
-    onDismiss: () -> Unit,
+private fun ConfigPanel(
     filterVisible: Boolean,
     onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
@@ -8211,25 +8246,22 @@ fun ConfigDialog(
     onExportConfig: () -> Unit,
     onChangeRoot: () -> Unit,
     onCreatePlayerShortcut: () -> Unit,
-    onCreateQuickNoteShortcut: () -> Unit
+    onCreateQuickNoteShortcut: () -> Unit,
+    showCloseButton: Boolean,
+    onClose: (() -> Unit)?
 ) {
     val context = LocalContext.current
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
     var localFtpTimeoutMinutes by remember { mutableStateOf(ftpTimeoutMinutes.toString()) }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                Modifier
-                    .padding(24.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(context.getString(R.string.config_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(16.dp))
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState())
+    ) {
+        Text(context.getString(R.string.config_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(16.dp))
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -8284,7 +8316,7 @@ fun ConfigDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(context.getString(R.string.config_ftp_password), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
-                    ReliablePasswordInputField(
+                    OutlinedTextField(
                         value = localFtpPassword,
                         onValueChange = { s ->
                             localFtpPassword = s
@@ -8292,6 +8324,8 @@ fun ConfigDialog(
                         },
                         modifier = Modifier.weight(1f),
                         label = { Text(context.getString(R.string.config_ftp_password)) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
                         supportingText = {
                             Text(context.getString(R.string.config_ftp_password_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                         }
@@ -8343,12 +8377,68 @@ fun ConfigDialog(
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
-                    onClick = { onDismiss(); onChangeRoot() },
+                    onClick = onChangeRoot,
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(context.getString(R.string.config_change_root)) }
-                Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onDismiss) { Text(context.getString(R.string.common_close)) }
-            }
+        Spacer(Modifier.height(24.dp))
+        if (showCloseButton && onClose != null) {
+            TextButton(onClick = onClose) { Text(context.getString(R.string.common_close)) }
+        }
+    }
+}
+
+@Composable
+fun ConfigDialog(
+    onDismiss: () -> Unit,
+    filterVisible: Boolean,
+    onFilterVisibleChange: (Boolean) -> Unit,
+    hideDotFiles: Boolean,
+    onHideDotFilesChange: (Boolean) -> Unit,
+    startupDecryptKey: Boolean,
+    onStartupDecryptKeyChange: (Boolean) -> Unit,
+    viewerPreviewBytes: Int,
+    onViewerPreviewBytesChange: (Int) -> Unit,
+    ftpPassword: String,
+    onFtpPasswordChange: (String) -> Unit,
+    ftpTimeoutMinutes: Int,
+    onFtpTimeoutMinutesChange: (Int) -> Unit,
+    onOpenGitConfig: () -> Unit,
+    onManageKeys: () -> Unit,
+    onOpenCacheManagement: () -> Unit,
+    onExportConfig: () -> Unit,
+    onChangeRoot: () -> Unit,
+    onCreatePlayerShortcut: () -> Unit,
+    onCreateQuickNoteShortcut: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            ConfigPanel(
+                filterVisible = filterVisible,
+                onFilterVisibleChange = onFilterVisibleChange,
+                hideDotFiles = hideDotFiles,
+                onHideDotFilesChange = onHideDotFilesChange,
+                startupDecryptKey = startupDecryptKey,
+                onStartupDecryptKeyChange = onStartupDecryptKeyChange,
+                viewerPreviewBytes = viewerPreviewBytes,
+                onViewerPreviewBytesChange = onViewerPreviewBytesChange,
+                ftpPassword = ftpPassword,
+                onFtpPasswordChange = onFtpPasswordChange,
+                ftpTimeoutMinutes = ftpTimeoutMinutes,
+                onFtpTimeoutMinutesChange = onFtpTimeoutMinutesChange,
+                onOpenGitConfig = onOpenGitConfig,
+                onManageKeys = onManageKeys,
+                onOpenCacheManagement = onOpenCacheManagement,
+                onExportConfig = onExportConfig,
+                onChangeRoot = onChangeRoot,
+                onCreatePlayerShortcut = onCreatePlayerShortcut,
+                onCreateQuickNoteShortcut = onCreateQuickNoteShortcut,
+                showCloseButton = true,
+                onClose = onDismiss
+            )
         }
     }
 }
@@ -8617,12 +8707,11 @@ fun GenerateKeyDialog(
                     enabled = !generatingInProgress
                 )
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                ReliablePasswordInputField(
                     value = passphrase,
                     onValueChange = { if (!generatingInProgress) passphrase = it },
                     modifier = Modifier.fillMaxWidth(),
                     label = { Text("密钥保护密码（可留空表示无密码）") },
-                    singleLine = true,
                     enabled = !generatingInProgress
                 )
                 if (hasExistingKeys) {

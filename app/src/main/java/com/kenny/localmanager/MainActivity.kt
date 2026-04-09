@@ -26,6 +26,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        syncPinnedTabShortcuts(this)
         enableEdgeToEdge()
         intent?.data?.let { uri ->
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

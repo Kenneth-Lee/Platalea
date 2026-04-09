@@ -18,6 +18,7 @@
     <string name="main_tab_recent">Recent</string>
     <string name="main_tab_player">Player</string>
     <string name="main_tab_ftp">FTP</string>
+    <string name="main_tab_config">Config</string>
     <string name="main_tab_git_share">Share</string>
     <string name="main_tab_quick_note">Notes</string>
     <string name="main_tab_quick_crypto">Quick Crypto</string>

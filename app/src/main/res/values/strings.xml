@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">platalea</string>
+    <string name="app_name">Platalea</string>
     <string name="common_back">返回</string>
     <string name="common_refresh">刷新</string>
     <string name="common_close">关闭</string>
@@ -18,6 +18,7 @@
     <string name="main_tab_recent">最近</string>
     <string name="main_tab_player">播放器</string>
     <string name="main_tab_ftp">FTP</string>
+    <string name="main_tab_config">配置</string>
     <string name="main_tab_git_share">共享</string>
     <string name="main_tab_quick_note">速记</string>
     <string name="main_tab_quick_crypto">快密</string>
@@ -164,9 +165,9 @@
     <string name="launcher_player_name">管家播放器</string>
     <string name="launcher_quick_note_name">管家速记</string>
     <string name="shortcut_player_short_label">播放器</string>
-    <string name="shortcut_player_long_label">platalea - 播放器</string>
+    <string name="shortcut_player_long_label">Platalea - 播放器</string>
     <string name="shortcut_quick_note_short_label">速记</string>
-    <string name="shortcut_quick_note_long_label">platalea - 速记</string>
+    <string name="shortcut_quick_note_long_label">Platalea - 速记</string>
     <string name="shortcut_error_old_system">系统版本过低：仅 Android 8.0+ 支持固定桌面快捷方式</string>
     <string name="shortcut_error_manager_unavailable">无法获取 ShortcutManager，创建快捷方式失败</string>
     <string name="shortcut_error_unsupported_launcher">当前桌面不支持固定快捷方式</string>

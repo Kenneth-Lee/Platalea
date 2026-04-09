@@ -1,6 +1,7 @@
 package com.kenny.localmanager
 
 import android.app.PendingIntent
+import android.graphics.BitmapFactory
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ShortcutInfo
@@ -16,20 +17,58 @@ const val EXTRA_SHORTCUT_NEXT_TAB = "extra_shortcut_next_tab"
 
 private data class ShortcutMeta(
     val shortLabel: String,
-    val longLabel: String
+    val longLabel: String,
+    val iconResId: Int
 )
+
+private fun createShortcutIcon(context: Context, iconResId: Int): Icon {
+    val bitmap = BitmapFactory.decodeResource(context.resources, iconResId)
+    return Icon.createWithBitmap(bitmap)
+}
 
 private fun shortcutMetaForTab(context: Context, tabKey: String): ShortcutMeta? {
     return when (tabKey) {
         SHORTCUT_TAB_PLAYER -> ShortcutMeta(
             context.getString(R.string.shortcut_player_short_label),
-            context.getString(R.string.shortcut_player_long_label)
+            context.getString(R.string.shortcut_player_long_label),
+            R.drawable.ic_launcher_player
         )
         SHORTCUT_TAB_QUICK_NOTE -> ShortcutMeta(
             context.getString(R.string.shortcut_quick_note_short_label),
-            context.getString(R.string.shortcut_quick_note_long_label)
+            context.getString(R.string.shortcut_quick_note_long_label),
+            R.drawable.ic_launcher_quick_note
         )
         else -> null
+    }
+}
+
+private fun buildShortcutInfo(context: Context, tabKey: String, meta: ShortcutMeta): ShortcutInfo {
+    val launchIntent = Intent(context, MainActivity::class.java).apply {
+        action = Intent.ACTION_VIEW
+        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, tabKey)
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    }
+
+    return ShortcutInfo.Builder(context, "$SHORTCUT_ID_PREFIX$tabKey")
+        .setShortLabel(meta.shortLabel)
+        .setLongLabel(meta.longLabel)
+        .setIcon(createShortcutIcon(context, meta.iconResId))
+        .setIntent(launchIntent)
+        .build()
+}
+
+fun syncPinnedTabShortcuts(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+        return
+    }
+    val shortcutManager = context.getSystemService(ShortcutManager::class.java) ?: return
+    val shortcutsToUpdate = shortcutManager.pinnedShortcuts.mapNotNull { pinnedShortcut ->
+        val tabKey = pinnedShortcut.id.removePrefix(SHORTCUT_ID_PREFIX)
+        val meta = shortcutMetaForTab(context, tabKey) ?: return@mapNotNull null
+        buildShortcutInfo(context, tabKey, meta)
+    }
+    if (shortcutsToUpdate.isNotEmpty()) {
+        shortcutManager.updateShortcuts(shortcutsToUpdate)
     }
 }
 
@@ -48,19 +87,12 @@ fun requestPinnedTabShortcut(
     }
     val meta = shortcutMetaForTab(context, tabKey)
         ?: return context.getString(R.string.shortcut_error_unsupported_tab, tabKey)
+    val shortcut = buildShortcutInfo(context, tabKey, meta)
 
-    val launchIntent = Intent(context, MainActivity::class.java).apply {
-        action = Intent.ACTION_VIEW
-        putExtra(MainActivity.LAUNCH_TARGET_EXTRA, tabKey)
-        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+    if (shortcutManager.pinnedShortcuts.any { it.id == shortcut.id }) {
+        shortcutManager.updateShortcuts(listOf(shortcut))
+        return null
     }
-
-    val shortcut = ShortcutInfo.Builder(context, "$SHORTCUT_ID_PREFIX$tabKey")
-        .setShortLabel(meta.shortLabel)
-        .setLongLabel(meta.longLabel)
-        .setIcon(Icon.createWithResource(context, R.drawable.ic_launcher))
-        .setIntent(launchIntent)
-        .build()
 
     return if (shortcutManager.requestPinShortcut(shortcut, callbackIntent?.intentSender)) {
         null
