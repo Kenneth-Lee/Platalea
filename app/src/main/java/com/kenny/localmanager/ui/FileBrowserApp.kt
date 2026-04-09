@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
@@ -343,6 +345,67 @@ private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
         lastModified = 0L,
         size = 0L
     )
+}
+
+private fun AudioDeviceInfo.isPrivatePlaybackCandidate(): Boolean {
+    return when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_BLE_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_HEARING_AID -> true
+        else -> false
+    }
+}
+
+private fun AudioDeviceInfo.debugLabel(): String {
+    val typeName = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BLUETOOTH_A2DP"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BLUETOOTH_SCO"
+        AudioDeviceInfo.TYPE_BLE_BROADCAST -> "BLE_BROADCAST"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "BLE_HEADSET"
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "BLE_SPEAKER"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "BUILTIN_EARPIECE"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "BUILTIN_SPEAKER"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "BUILTIN_SPEAKER_SAFE"
+        AudioDeviceInfo.TYPE_DOCK -> "DOCK"
+        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
+        AudioDeviceInfo.TYPE_HDMI_ARC -> "HDMI_ARC"
+        AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI_EARC"
+        AudioDeviceInfo.TYPE_HEARING_AID -> "HEARING_AID"
+        AudioDeviceInfo.TYPE_LINE_ANALOG -> "LINE_ANALOG"
+        AudioDeviceInfo.TYPE_LINE_DIGITAL -> "LINE_DIGITAL"
+        AudioDeviceInfo.TYPE_AUX_LINE -> "AUX_LINE"
+        AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB_ACCESSORY"
+        AudioDeviceInfo.TYPE_USB_DEVICE -> "USB_DEVICE"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB_HEADSET"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "WIRED_HEADPHONES"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "WIRED_HEADSET"
+        else -> "TYPE_$type"
+    }
+    return "$typeName(id=$id,name=${getProductName()})"
+}
+
+private fun Context.hasPrivatePlaybackOutput(): Boolean {
+    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+    return try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            val privateOutputs = outputs.filter { it.isPrivatePlaybackCandidate() }
+            Log.i(
+                "FileBrowserApp",
+                "Shortcut autoplay route check: private=${privateOutputs.map { it.debugLabel() }}, all=${outputs.map { it.debugLabel() }}"
+            )
+            privateOutputs.isNotEmpty()
+        } else {
+            @Suppress("DEPRECATION")
+            (audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn || audioManager.isWiredHeadsetOn)
+        }
+    } catch (_: Exception) {
+        false
+    }
 }
 
 private fun openRecentItemByType(
@@ -1360,6 +1423,9 @@ private fun FileBrowserAppScreen(
     val scope = rememberCoroutineScope()
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
+    var playerShortcutAutoplayPending by remember(initialLaunchTarget) {
+        mutableStateOf(launchShortcutTarget == MainTab.PLAYER)
+    }
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
@@ -1782,11 +1848,63 @@ private fun FileBrowserAppScreen(
         var pendingCompress7zPassword by remember { mutableStateOf("") }
         var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
         var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
+        var playlistsLoaded by remember { mutableStateOf(false) }
+        var playerLastPlaylistId by remember { mutableStateOf<String?>(null) }
         LaunchedEffect(Unit) {
             PlaybackService.playbackState.collect { playbackState = it }
         }
         LaunchedEffect(prefs) {
-            prefs.playlists.collect { playlists = it }
+            prefs.playlists.collect {
+                playlists = it
+                playlistsLoaded = true
+            }
+        }
+        LaunchedEffect(prefs) {
+            prefs.playerLastPlaylistId.collect { playerLastPlaylistId = it }
+        }
+        LaunchedEffect(
+            playerShortcutAutoplayPending,
+            currentMainTab,
+            playbackState?.playlistId,
+            playbackState?.isPlaying,
+            playerLastPlaylistId,
+            playlistsLoaded,
+            playlists
+        ) {
+            if (!playerShortcutAutoplayPending) return@LaunchedEffect
+            if (currentMainTab != MainTab.PLAYER) return@LaunchedEffect
+            if (!context.hasPrivatePlaybackOutput()) {
+                playerShortcutAutoplayPending = false
+                return@LaunchedEffect
+            }
+            if (playbackState?.isPlaying == true) {
+                playerShortcutAutoplayPending = false
+                return@LaunchedEffect
+            }
+
+            val resumeIntent = when {
+                playbackState != null -> Intent(context, PlaybackService::class.java).setAction(ACTION_RESUME)
+                playerLastPlaylistId.isNullOrBlank() -> {
+                    playerShortcutAutoplayPending = false
+                    return@LaunchedEffect
+                }
+                !playlistsLoaded -> return@LaunchedEffect
+                playlists.none { it.id == playerLastPlaylistId } -> {
+                    playerShortcutAutoplayPending = false
+                    return@LaunchedEffect
+                }
+                else -> Intent(context, PlaybackService::class.java).apply {
+                    action = ACTION_PLAY
+                    putExtra(EXTRA_PLAYLIST_ID, playerLastPlaylistId)
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(resumeIntent)
+            } else {
+                context.startService(resumeIntent)
+            }
+            playerShortcutAutoplayPending = false
         }
         LaunchedEffect(zipUnzipTarget) {
             zipUnzipEncrypted = null
