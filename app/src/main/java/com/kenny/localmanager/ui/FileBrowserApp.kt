@@ -186,6 +186,7 @@ import com.kenny.localmanager.file.extractMdZipToCache
 import com.kenny.localmanager.file.getMdZipCacheDir
 import com.kenny.localmanager.file.getMdZipCacheTimestamp
 import com.kenny.localmanager.file.findMdZipCacheTarget
+import com.kenny.localmanager.file.MdZipExtractResult
 import com.kenny.localmanager.file.isMdZipCacheEncrypted
 import com.kenny.localmanager.file.cleanMdZipCache
 import com.kenny.localmanager.file.cleanHtmlZipCache
@@ -193,6 +194,7 @@ import com.kenny.localmanager.file.getHtmlZipCacheDir
 import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
 import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
+import com.kenny.localmanager.file.HtmlZipExtractResult
 import com.kenny.localmanager.file.extractHtmlZipToCache
 import com.kenny.localmanager.file.extractHtmlZipToCacheWithProgress
 import com.kenny.localmanager.file.HtmlZipParseResult
@@ -212,6 +214,7 @@ import com.kenny.localmanager.file.PicZipExtractResult
 import com.kenny.localmanager.file.extractPicZipToCache
 import com.kenny.localmanager.file.getPicZipCacheDir
 import com.kenny.localmanager.file.tryPicZipPassword
+import com.kenny.localmanager.file.tryArchivePassword
 import com.kenny.localmanager.file.getPicZipCacheTimestamp
 import com.kenny.localmanager.file.isPicZipCacheEncrypted
 import com.kenny.localmanager.file.cleanPicZipCache
@@ -1411,6 +1414,7 @@ private fun FileBrowserAppScreen(
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
+    var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
     var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
@@ -3768,7 +3772,27 @@ private fun FileBrowserAppScreen(
                                 val pwd = mdZipPassword.toCharArray()
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
-                                        extractMdZipToCache(context, target.uri, pwd, target.name)
+                                        val cacheDir = getMdZipCacheDir(context, target.uri)
+                                        val cacheTs = getMdZipCacheTimestamp(cacheDir)
+                                        val contentDir = java.io.File(cacheDir, "content")
+                                        val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
+                                        if (
+                                            cacheTs > 0 &&
+                                            isMdZipCacheEncrypted(cacheDir) &&
+                                            cacheTs >= target.lastModified &&
+                                            contentDir.exists() &&
+                                            contentDir.listFiles()?.isNotEmpty() == true &&
+                                            tryArchivePassword(context, target.uri, pwd)
+                                        ) {
+                                            MdZipExtractResult(
+                                                cacheDir = cacheDir,
+                                                contentDir = contentDir,
+                                                targetFile = findMdZipCacheTarget(cacheDir, isRstZip),
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            extractMdZipToCache(context, target.uri, pwd, target.name)
+                                        }
                                     }
                                     mdZipInProgress = false
                                     if (result != null) {
@@ -3842,7 +3866,26 @@ private fun FileBrowserAppScreen(
                                 val pwd = htmlZipPassword.toCharArray()
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
-                                        extractHtmlZipToCache(context, target.uri, pwd, target.name)
+                                        val cacheDir = getHtmlZipCacheDir(context, target.uri)
+                                        val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
+                                        val contentDir = java.io.File(cacheDir, "content")
+                                        if (
+                                            cacheTs > 0 &&
+                                            isHtmlZipCacheEncrypted(cacheDir) &&
+                                            cacheTs >= target.lastModified &&
+                                            contentDir.exists() &&
+                                            contentDir.listFiles()?.isNotEmpty() == true &&
+                                            tryArchivePassword(context, target.uri, pwd)
+                                        ) {
+                                            HtmlZipExtractResult(
+                                                cacheDir = cacheDir,
+                                                contentDir = contentDir,
+                                                indexFile = findHtmlZipIndexFile(contentDir),
+                                                isEncrypted = true
+                                            )
+                                        } else {
+                                            extractHtmlZipToCache(context, target.uri, pwd, target.name)
+                                        }
                                     }
                                     htmlZipInProgress = false
                                     if (result != null) {
@@ -3937,7 +3980,18 @@ private fun FileBrowserAppScreen(
                                 val pwd = llmZipPassword.toCharArray()
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
-                                        extractLlmZipToCache(context, target.uri, pwd, target.name)
+                                        val cacheDir = getEpubCacheDir(context, target.uri)
+                                        val cacheTs = getEpubCacheTimestamp(cacheDir)
+                                        if (
+                                            cacheTs > 0 &&
+                                            isEpubCacheEncrypted(cacheDir) &&
+                                            cacheTs >= target.lastModified &&
+                                            tryArchivePassword(context, target.uri, pwd)
+                                        ) {
+                                            loadEpubFromCache(context, cacheDir)
+                                        } else {
+                                            extractLlmZipToCache(context, target.uri, pwd, target.name)
+                                        }
                                     }
                                     llmZipInProgress = false
                                     if (result != null) {
@@ -4010,8 +4064,22 @@ private fun FileBrowserAppScreen(
                                 val pwd = epubPassword.toCharArray()
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
-                                        extractEpubToCache(context, target.uri, pwd, target.name) { log ->
-                                            epubLog += "$log\n"
+                                        val cacheDir = getEpubCacheDir(context, target.uri)
+                                        val cacheTs = getEpubCacheTimestamp(cacheDir)
+                                        if (
+                                            cacheTs > 0 &&
+                                            isEpubCacheEncrypted(cacheDir) &&
+                                            cacheTs >= target.lastModified &&
+                                            tryArchivePassword(context, target.uri, pwd)
+                                        ) {
+                                            loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
+                                                ?: extractEpubToCache(context, target.uri, pwd, target.name) { log ->
+                                                    epubLog += "$log\n"
+                                                }
+                                        } else {
+                                            extractEpubToCache(context, target.uri, pwd, target.name) { log ->
+                                                epubLog += "$log\n"
+                                            }
                                         }
                                     }
                                     epubInProgress = false
@@ -4785,6 +4853,25 @@ private fun FileBrowserAppScreen(
         }
     }
 
+    encryptedCacheExitDialog?.let { dialog ->
+        AlertDialog(
+            onDismissRequest = { encryptedCacheExitDialog = null },
+            title = { Text(dialog.title) },
+            text = {
+                Text(
+                    "是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可复用已有缓存并保留阅读进度。",
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
+            confirmButton = {
+                Button(onClick = dialog.onDelete) { Text("删除缓存并退出") }
+            },
+            dismissButton = {
+                TextButton(onClick = dialog.onKeep) { Text("保留缓存并退出") }
+            }
+        )
+    }
+
     when {
         showUnlockGate -> {
             BackHandler { (context as? Activity)?.finish() }
@@ -4905,8 +4992,22 @@ private fun FileBrowserAppScreen(
                 )
             }
             BackHandler {
-                if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
-                mdZipViewState = null
+                if (state.isEncrypted) {
+                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                        title = "退出加密压缩 Markdown",
+                        onDelete = {
+                            cleanMdZipCache(context, state.zipUri)
+                            mdZipViewState = null
+                            encryptedCacheExitDialog = null
+                        },
+                        onKeep = {
+                            mdZipViewState = null
+                            encryptedCacheExitDialog = null
+                        }
+                    )
+                } else {
+                    mdZipViewState = null
+                }
             }
             MdZipViewerScreen(
                 initialTargetFile = state.targetFile,
@@ -4914,8 +5015,22 @@ private fun FileBrowserAppScreen(
                 zipFileName = state.zipFileName,
                 sessionCache = markdownViewerSessionCache,
                 onBack = {
-                    if (state.isEncrypted) cleanMdZipCache(context, state.zipUri)
-                    mdZipViewState = null
+                    if (state.isEncrypted) {
+                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                            title = "退出加密压缩 Markdown",
+                            onDelete = {
+                                cleanMdZipCache(context, state.zipUri)
+                                mdZipViewState = null
+                                encryptedCacheExitDialog = null
+                            },
+                            onKeep = {
+                                mdZipViewState = null
+                                encryptedCacheExitDialog = null
+                            }
+                        )
+                    } else {
+                        mdZipViewState = null
+                    }
                 },
                 logDebug = null
             )
@@ -4931,16 +5046,44 @@ private fun FileBrowserAppScreen(
                 )
             }
             BackHandler {
-                if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
-                htmlZipViewState = null
+                if (state.isEncrypted) {
+                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                        title = "退出加密压缩 HTML",
+                        onDelete = {
+                            cleanHtmlZipCache(context, state.zipUri)
+                            htmlZipViewState = null
+                            encryptedCacheExitDialog = null
+                        },
+                        onKeep = {
+                            htmlZipViewState = null
+                            encryptedCacheExitDialog = null
+                        }
+                    )
+                } else {
+                    htmlZipViewState = null
+                }
             }
             HtmlZipViewerScreen(
                 initialIndexFile = state.indexFile,
                 contentDir = state.contentDir,
                 zipFileName = state.zipFileName,
                 onBack = {
-                    if (state.isEncrypted) cleanHtmlZipCache(context, state.zipUri)
-                    htmlZipViewState = null
+                    if (state.isEncrypted) {
+                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                            title = "退出加密压缩 HTML",
+                            onDelete = {
+                                cleanHtmlZipCache(context, state.zipUri)
+                                htmlZipViewState = null
+                                encryptedCacheExitDialog = null
+                            },
+                            onKeep = {
+                                htmlZipViewState = null
+                                encryptedCacheExitDialog = null
+                            }
+                        )
+                    } else {
+                        htmlZipViewState = null
+                    }
                 },
                 logDebug = null
             )
@@ -4956,16 +5099,44 @@ private fun FileBrowserAppScreen(
                 )
             }
             BackHandler {
-                if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
-                epubViewState = null
+                if (state.isEncrypted) {
+                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                        title = "退出加密书籍",
+                        onDelete = {
+                            cleanEpubCache(context, state.epubUri)
+                            epubViewState = null
+                            encryptedCacheExitDialog = null
+                        },
+                        onKeep = {
+                            epubViewState = null
+                            encryptedCacheExitDialog = null
+                        }
+                    )
+                } else {
+                    epubViewState = null
+                }
             }
             EpubViewerScreen(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,
                 onBack = {
-                    if (state.isEncrypted) cleanEpubCache(context, state.epubUri)
-                    epubViewState = null
+                    if (state.isEncrypted) {
+                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                            title = "退出加密书籍",
+                            onDelete = {
+                                cleanEpubCache(context, state.epubUri)
+                                epubViewState = null
+                                encryptedCacheExitDialog = null
+                            },
+                            onKeep = {
+                                epubViewState = null
+                                encryptedCacheExitDialog = null
+                            }
+                        )
+                    } else {
+                        epubViewState = null
+                    }
                 },
                 logDebug = null
             )
@@ -5207,6 +5378,12 @@ private data class PicZipViewState(
     val isEncrypted: Boolean,
     val password: CharArray? = null,
     val initialIndex: Int = 0
+)
+
+private data class EncryptedCacheExitDialogState(
+    val title: String,
+    val onDelete: () -> Unit,
+    val onKeep: () -> Unit
 )
 
 /** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */

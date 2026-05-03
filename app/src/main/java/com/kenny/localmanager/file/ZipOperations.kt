@@ -1378,22 +1378,33 @@ fun tryPicZipPassword(context: Context, zipUri: Uri, password: CharArray?): Bool
     return tryZipPassword(tmpZip, password)
 }
 
+fun tryArchivePassword(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    cachedArchive: File? = null
+): Boolean {
+    if (password == null || password.isEmpty()) return false
+    val archive = cachedArchive?.takeIf { it.exists() }
+    if (archive != null) return tryZipPassword(archive, password)
+
+    val fallback = File(context.cacheDir, "zip_verify_${System.currentTimeMillis()}.zip")
+    return try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            fallback.outputStream().use { output -> input.copyTo(output) }
+        } ?: false
+        tryZipPassword(fallback, password)
+    } finally {
+        fallback.delete()
+    }
+}
+
 private fun tryZipPassword(zipFile: java.io.File, password: CharArray): Boolean {
     return try {
         val zip = ZipFile(zipFile)
         if (!zip.isEncrypted) return true
         zip.setPassword(password)
-        val imagePaths = zip.fileHeaders.asSequence()
-            .filter { !it.isDirectory }
-            .map { it.fileName }
-            .filter { path ->
-                val ext = path.substringAfterLast('.', "").lowercase()
-                ext in PIC_IMAGE_EXTENSIONS
-            }
-            .sorted()
-            .toList()
-        val first = imagePaths.firstOrNull() ?: return false
-        val header = zip.getFileHeader(first) ?: return false
+        val header = zip.fileHeaders.firstOrNull { !it.isDirectory } ?: return false
         zip.getInputStream(header).use { it.read() }
         true
     } catch (_: Exception) {

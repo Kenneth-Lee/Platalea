@@ -393,8 +393,8 @@
     <string name="file_log_copy_name_failed">Failed to copy %1$s: %2$s</string>
     <string name="cache_browsable_name">Browsable Cache</string>
     <string name="cache_browsable_desc">All non-encrypted extracted browsing caches, including .md.zip/.rst.zip/.html.zip/.pic.zip and .epub/.txt/.llm/.llm.zip.</string>
-    <string name="cache_encrypted_pic_name">Encrypted Image Cache</string>
-    <string name="cache_encrypted_pic_desc">Only encrypted .pic.zip caches are allowed to remain after exit; they may contain sensitive plaintext images.</string>
+    <string name="cache_encrypted_pic_name">Encrypted Browsing Cache</string>
+    <string name="cache_encrypted_pic_desc">All encrypted browsing caches that may be kept after exit, including .md.zip/.rst.zip/.html.zip/.pic.zip/.epub/.llm.zip; they may contain sensitive plaintext content.</string>
     <string name="cache_other_name">Other Temporary Cache</string>
     <string name="cache_other_desc">Other cache files or abnormal leftovers not included in the first two categories.</string>
     <string name="ftp_error_list_dir_failed">Error: failed to list directory %1$s</string>

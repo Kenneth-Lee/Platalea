@@ -10,7 +10,6 @@ private val BROWSABLE_CACHE_DIRS = listOf(
     "epub_cache",
     "pic_zip_cache"
 )
-private const val PIC_ZIP_CACHE_DIR = "pic_zip_cache"
 
 /** 缓存项：显示名、当前大小、清空时的回调。 */
 data class CacheEntry(
@@ -37,8 +36,9 @@ private fun collectBrowsableCacheChildren(context: Context): List<File> {
     }
 }
 
-private fun isEncryptedPicCacheChild(file: File): Boolean {
-    return file.parentFile?.name == PIC_ZIP_CACHE_DIR && file.isDirectory && isEncryptedSubdir(file)
+private fun isEncryptedBrowsableCacheChild(file: File): Boolean {
+    val parentName = file.parentFile?.name ?: return false
+    return parentName in BROWSABLE_CACHE_DIRS && file.isDirectory && isEncryptedSubdir(file)
 }
 
 private fun isNonEncryptedBrowsableCacheChild(file: File): Boolean {
@@ -48,14 +48,14 @@ private fun isNonEncryptedBrowsableCacheChild(file: File): Boolean {
     return true
 }
 
-/** 返回缓存分类。仅保留三类：非加密展开浏览缓存、加密图片缓存、其他缓存。需在 IO 线程调用。 */
+/** 返回缓存分类。仅保留三类：非加密展开浏览缓存、加密浏览缓存、其他缓存。需在 IO 线程调用。 */
 fun getCacheEntries(context: Context): List<CacheEntry> {
     val cacheDir = context.cacheDir
     val rootEntries = cacheDir.listFiles().orEmpty()
     val result = mutableListOf<CacheEntry>()
     val browsableChildren = collectBrowsableCacheChildren(context)
     val nonEncryptedBrowsable = browsableChildren.filter(::isNonEncryptedBrowsableCacheChild)
-    val encryptedPic = browsableChildren.filter(::isEncryptedPicCacheChild)
+    val encryptedBrowsable = browsableChildren.filter(::isEncryptedBrowsableCacheChild)
     val managedBrowsableDirs = BROWSABLE_CACHE_DIRS.toSet()
 
     result += CacheEntry(
@@ -73,10 +73,12 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
     result += CacheEntry(
         context.getString(R.string.cache_encrypted_pic_name),
         context.getString(R.string.cache_encrypted_pic_desc),
-        encryptedPic.sumOf(::dirSize)
+        encryptedBrowsable.sumOf(::dirSize)
     ) { ctx ->
-        File(ctx.cacheDir, PIC_ZIP_CACHE_DIR).listFiles()?.forEach { child ->
-            if (isEncryptedPicCacheChild(child)) child.deleteRecursively()
+        BROWSABLE_CACHE_DIRS.forEach { dirName ->
+            File(ctx.cacheDir, dirName).listFiles()?.forEach { child ->
+                if (isEncryptedBrowsableCacheChild(child)) child.deleteRecursively()
+            }
         }
     }
 
@@ -86,7 +88,7 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
             otherSize += dirSize(f)
         } else {
             f.listFiles()?.forEach { child ->
-                if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedPicCacheChild(child)) {
+                if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedBrowsableCacheChild(child)) {
                     otherSize += dirSize(child)
                 }
             }
@@ -102,7 +104,7 @@ fun getCacheEntries(context: Context): List<CacheEntry> {
                 f.deleteRecursively()
             } else {
                 f.listFiles()?.forEach { child ->
-                    if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedPicCacheChild(child)) {
+                    if (!isNonEncryptedBrowsableCacheChild(child) && !isEncryptedBrowsableCacheChild(child)) {
                         child.deleteRecursively()
                     }
                 }

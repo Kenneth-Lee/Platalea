@@ -393,8 +393,8 @@
     <string name="file_log_copy_name_failed">复制 %1$s 失败: %2$s</string>
     <string name="cache_browsable_name">普通浏览缓存</string>
     <string name="cache_browsable_desc">所有非加密的需展开后浏览的缓存，含 .md.zip/.rst.zip/.html.zip/.pic.zip 与 .epub/.txt/.llm/.llm.zip。</string>
-    <string name="cache_encrypted_pic_name">加密图片缓存</string>
-    <string name="cache_encrypted_pic_desc">仅加密 .pic.zip 允许保留退出后的缓存；可能包含敏感图片明文。</string>
+    <string name="cache_encrypted_pic_name">加密浏览缓存</string>
+    <string name="cache_encrypted_pic_desc">所有允许保留退出后缓存的加密浏览内容，含 .md.zip/.rst.zip/.html.zip/.pic.zip/.epub/.llm.zip；可能包含敏感明文。</string>
     <string name="cache_other_name">其他临时缓存</string>
     <string name="cache_other_desc">未纳入前两类的其他缓存或异常残留。</string>
     <string name="ftp_error_list_dir_failed">错误: 列出目录失败 %1$s</string>
