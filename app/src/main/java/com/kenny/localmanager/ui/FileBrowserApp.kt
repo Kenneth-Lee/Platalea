@@ -7101,6 +7101,7 @@ fun PlaybackScreen(
     var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
     var playlistNoteEditText by remember { mutableStateOf("") }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
+    var showBookmarkManagerDialog by remember { mutableStateOf(false) }
     var bookmarkNoteInput by remember { mutableStateOf("") }
     var bookmarkPendingPlaylistId by remember { mutableStateOf<String?>(null) }
     var bookmarkPendingDirUri by remember { mutableStateOf<String?>(null) }
@@ -7118,6 +7119,7 @@ fun PlaybackScreen(
     LaunchedEffect(prefs) {
         prefs.playerListBookmarks.collect { playerBookmarks = it }
     }
+    val playlistById = remember(playlists) { playlists.associateBy { it.id } }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
 
@@ -7162,6 +7164,11 @@ fun PlaybackScreen(
                 title = {
                     Text(selectedPlaylist?.name ?: context.getString(R.string.player_screen_title))
                 },
+                actions = {
+                    TextButton(onClick = { showBookmarkManagerDialog = true }) {
+                        Text("书签")
+                    }
+                },
                 navigationIcon = if (showBackButton) {
                     {
                         IconButton(onClick = {
@@ -7181,295 +7188,16 @@ fun PlaybackScreen(
             )
         }
     ) { padding ->
-        if (selectedPlaylist != null) {
-            val pl = selectedPlaylist
-            val isSelectedPlaylistPlaying = playbackState?.playlistId == pl.id
-            val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
-            LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex) {
-                val state = playbackState ?: return@LaunchedEffect
-                if (state.playlistId != pl.id) return@LaunchedEffect
-                val target = state.trackIndex.coerceIn(0, maxOf(0, pl.uris.lastIndex))
-                selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
-            }
-            val playlistBookmarks = playerBookmarks
-                .filter { it.playlistId == pl.id }
-                .sortedByDescending { it.savedAt }
-            if (pl.uris.isEmpty()) {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text(context.getString(R.string.player_list_empty), style = MaterialTheme.typography.bodyLarge)
-                }
-            } else {
-                Column(Modifier.fillMaxSize().padding(padding)) {
-                    if (isSelectedPlaylistPlaying && playbackState != null) {
-                        val state = playbackState
-                        var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
-                        var seekDragging by remember { mutableStateOf(false) }
-                        LaunchedEffect(state.positionMs, state.durationMs) {
-                            if (!seekDragging) {
-                                seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
-                            }
-                        }
-                        Card(
-                            Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 8.dp, vertical = 4.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(
-                                    context.getString(R.string.player_current_playlist),
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                                Text(
-                                    "${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                if (state.durationMs > 0) {
-                                    Spacer(Modifier.height(4.dp))
-                                    Slider(
-                                        value = seekSliderPosition,
-                                        onValueChange = {
-                                            seekDragging = true
-                                            seekSliderPosition = it
-                                        },
-                                        onValueChangeFinished = {
-                                            onSeek(seekSliderPosition.toInt().coerceIn(0, state.durationMs))
-                                            seekDragging = false
-                                        },
-                                        valueRange = 0f..maxOf(1f, state.durationMs.toFloat()),
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = SliderDefaults.colors(
-                                            thumbColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            activeTrackColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                            inactiveTrackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.3f)
-                                        )
-                                    )
-                                }
-                                Row(Modifier.fillMaxWidth()) {
-                                    Text(
-                                        formatPlaybackTime(state.positionMs),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                    )
-                                    Spacer(Modifier.weight(1f))
-                                    Text(
-                                        if (state.durationMs > 0) formatPlaybackTime(state.durationMs) else "--:--",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Card(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                    ) {
-                        Column(Modifier.padding(10.dp)) {
-                            Text(
-                                context.getString(R.string.player_bookmarks_count, playlistBookmarks.size),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                            )
-                            if (playlistBookmarks.isEmpty()) {
-                                Text(
-                                    context.getString(R.string.player_no_bookmarks),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                            } else {
-                                playlistBookmarks.forEach { bm ->
-                                    Row(
-                                        Modifier.fillMaxWidth().padding(top = 6.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(Modifier.weight(1f)) {
-                                            Text(
-                                                context.getString(R.string.player_bookmark_position, bm.trackIndex + 1, formatPlaybackTime(bm.positionMs.toInt())),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSecondaryContainer
-                                            )
-                                            if (bm.note.isNotBlank()) {
-                                                Text(
-                                                    bm.note,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                                    maxLines = 2,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            } else if (bm.trackName.isNotBlank()) {
-                                                Text(
-                                                    bm.trackName,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                editingBookmarkId = bm.id
-                                                editingBookmarkNote = bm.note
-                                            }
-                                        ) {
-                                            Icon(Icons.Filled.Edit, contentDescription = context.getString(R.string.player_edit_bookmark_note))
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                scope.launch {
-                                                    prefs.deletePlayerListBookmark(bm.id)
-                                                }
-                                            }
-                                        ) {
-                                            Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.player_delete_bookmark))
-                                        }
-                                        TextButton(
-                                            onClick = {
-                                                startPlaylistFromIndex(pl, bm.trackIndex, bm.positionMs.toInt())
-                                            },
-                                            enabled = bm.trackIndex in pl.uris.indices
-                                        ) {
-                                            Text(context.getString(R.string.player_jump))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                playlistNoteEditTarget = pl
-                                playlistNoteEditText = pl.note
-                                showPlaylistNoteDialog = true
-                            }
-                            .padding(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            if (pl.note.isNotBlank()) {
-                                Text(pl.note, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                            } else {
-                                Text(context.getString(R.string.player_add_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                        Icon(Icons.Filled.Edit, contentDescription = context.getString(R.string.player_edit_note), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        state = selectedPlaylistTrackListState,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                    items(pl.uris.size) { i ->
-                        val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
-                        val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { startPlaylistFromIndex(pl, i) }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "${i + 1}.",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.width(28.dp)
-                            )
-                            Text(
-                                name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f),
-                                color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                            )
-                            if (isCurrentTrack) {
-                                Text(
-                                    context.getString(R.string.player_now_playing_badge),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.padding(horizontal = 4.dp)
-                                )
-                                IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = context.getString(R.string.player_play_from_here), Modifier.size(24.dp))
-                                }
-                            } else {
-                                Spacer(Modifier.size(48.dp))
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (i > 0) scope.launch {
-                                        val uris = pl.uris.toMutableList()
-                                        val names = pl.names.toMutableList()
-                                        uris.add(i - 1, uris.removeAt(i))
-                                        names.add(i - 1, names.removeAt(i))
-                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                    }
-                                },
-                                enabled = i > 0
-                            ) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = context.getString(R.string.player_move_up), Modifier.size(20.dp))
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (i < pl.uris.size - 1) scope.launch {
-                                        val uris = pl.uris.toMutableList()
-                                        val names = pl.names.toMutableList()
-                                        uris.add(i + 1, uris.removeAt(i))
-                                        names.add(i + 1, names.removeAt(i))
-                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                    }
-                                },
-                                enabled = i < pl.uris.size - 1
-                            ) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = context.getString(R.string.player_move_down), Modifier.size(20.dp))
-                            }
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        val uris = pl.uris.toMutableList().apply { removeAt(i) }
-                                        val names = pl.names.toMutableList().apply { removeAt(i) }
-                                        if (uris.isEmpty()) {
-                                            prefs.removePlaylist(pl.id)
-                                            selectedPlaylistId = null
-                                        } else {
-                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                        }
-                                    }
-                                }
-                            ) {
-                                Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.common_delete), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
-                            }
-                        }
-                    }
-                }
-                    PlaybackBottomControlBar(
-                        isPlaying = playbackState?.isPlaying == true,
-                        enabled = isSelectedPlaylistPlaying,
-                        onPrev = onPlayPrev,
-                        onPlayPause = onPlayPause,
-                        onNext = onPlayNext
-                    )
-                }
-            }
-        } else {
+        val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
         Column(Modifier.fillMaxSize().padding(padding)) {
-            val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
             if (playbackState != null) {
                 val state = playbackState
-                val stateBookmarkCount = playerBookmarks.count { it.playlistId != null && it.playlistId == state.playlistId }
                 var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
                 var seekDragging by remember { mutableStateOf(false) }
                 LaunchedEffect(state.positionMs, state.durationMs) {
-                    if (!seekDragging) seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
+                    if (!seekDragging) {
+                        seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
+                    }
                 }
                 Card(
                     Modifier
@@ -7544,19 +7272,6 @@ fun PlaybackScreen(
                             ) {
                                 Text(context.getString(R.string.player_save_bookmark))
                             }
-                            Button(
-                                onClick = {
-                                    val pid = state.playlistId
-                                    if (pid == null) {
-                                        Toast.makeText(context, context.getString(R.string.player_not_playlist), Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        selectedPlaylistId = pid
-                                    }
-                                },
-                                enabled = state.playlistId != null
-                            ) {
-                                Text(context.getString(R.string.player_view_bookmarks, stateBookmarkCount))
-                            }
                         }
                     }
                 }
@@ -7590,102 +7305,276 @@ fun PlaybackScreen(
                     }
                 }
             }
-            Text(
-                context.getString(R.string.player_playlist_section),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-            )
-            if (playlists.isEmpty()) {
-                Box(
-                    Modifier.fillMaxSize().weight(1f),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(context.getString(R.string.player_no_playlists_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (selectedPlaylist != null) {
+                val pl = selectedPlaylist
+                val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
+                LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex) {
+                    val state = playbackState ?: return@LaunchedEffect
+                    if (state.playlistId != pl.id) return@LaunchedEffect
+                    val target = state.trackIndex.coerceIn(0, maxOf(0, pl.uris.lastIndex))
+                    selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
                 }
-            } else {
-                LazyColumn(
-                    Modifier.weight(1f),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                Text(
+                    pl.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            playlistNoteEditTarget = pl
+                            playlistNoteEditText = pl.note
+                            showPlaylistNoteDialog = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    items(playlists.size) { i ->
-                        val pl = playlists[i]
-                        val isCurrent = playbackState?.playlistId == pl.id
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { startPlaylist(pl) }
-                                .padding(4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isCurrent) {
+                    Column(Modifier.weight(1f)) {
+                        if (pl.note.isNotBlank()) {
+                            Text(
+                                pl.note,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 3,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                context.getString(R.string.player_add_note),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = context.getString(R.string.player_edit_note),
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                if (pl.uris.isEmpty()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(context.getString(R.string.player_list_empty), style = MaterialTheme.typography.bodyLarge)
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.weight(1f),
+                        state = selectedPlaylistTrackListState,
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        items(pl.uris.size) { i ->
+                            val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
+                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { startPlaylistFromIndex(pl, i) }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "${i + 1}.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.width(28.dp)
+                                )
+                                Text(
+                                    name,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                    color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
+                                if (isCurrentTrack) {
+                                    Text(
+                                        context.getString(R.string.player_now_playing_badge),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 4.dp)
+                                    )
+                                    IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = context.getString(R.string.player_play_from_here),
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
+                                } else {
+                                    Spacer(Modifier.size(48.dp))
+                                }
                                 IconButton(
-                                    onClick = { startPlaylist(pl) },
-                                    modifier = Modifier.size(40.dp)
+                                    onClick = {
+                                        if (i > 0) scope.launch {
+                                            val uris = pl.uris.toMutableList()
+                                            val names = pl.names.toMutableList()
+                                            uris.add(i - 1, uris.removeAt(i))
+                                            names.add(i - 1, names.removeAt(i))
+                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                        }
+                                    },
+                                    enabled = i > 0
                                 ) {
                                     Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = "播放",
-                                        tint = MaterialTheme.colorScheme.primary
+                                        Icons.Default.ArrowUpward,
+                                        contentDescription = context.getString(R.string.player_move_up),
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                            } else {
-                                Spacer(Modifier.size(40.dp))
-                            }
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    if (pl.note.isNotBlank()) pl.note else pl.name,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    maxLines = if (pl.note.isNotBlank()) 2 else 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
-                                Text(
-                                    "${pl.trackCount} 首 · 书签 $bookmarkCount",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            IconButton(onClick = { selectedPlaylistId = pl.id }) {
-                                Icon(Icons.Default.List, contentDescription = "查看列表音乐", Modifier.size(24.dp))
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (i > 0) scope.launch {
-                                        val ids = playlists.map { it.id }.toMutableList()
-                                        ids.removeAt(i)
-                                        ids.add(i - 1, pl.id)
-                                        prefs.updatePlaylistOrder(ids)
-                                    }
-                                },
-                                enabled = i > 0
-                            ) {
-                                Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
-                            }
-                            IconButton(
-                                onClick = {
-                                    if (i < playlists.size - 1) scope.launch {
-                                        val ids = playlists.map { it.id }.toMutableList()
-                                        ids.removeAt(i)
-                                        ids.add(i + 1, pl.id)
-                                        prefs.updatePlaylistOrder(ids)
-                                    }
-                                },
-                                enabled = i < playlists.size - 1
-                            ) {
-                                Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
-                            }
-                            IconButton(
-                                onClick = {
-                                    scope.launch {
-                                        if (playbackState?.playlistId == pl.id) {
-                                            onStopPlayback()
+                                IconButton(
+                                    onClick = {
+                                        if (i < pl.uris.size - 1) scope.launch {
+                                            val uris = pl.uris.toMutableList()
+                                            val names = pl.names.toMutableList()
+                                            uris.add(i + 1, uris.removeAt(i))
+                                            names.add(i + 1, names.removeAt(i))
+                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
                                         }
-                                        prefs.removePlaylist(pl.id)
-                                    }
+                                    },
+                                    enabled = i < pl.uris.size - 1
+                                ) {
+                                    Icon(
+                                        Icons.Default.ArrowDownward,
+                                        contentDescription = context.getString(R.string.player_move_down),
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            val uris = pl.uris.toMutableList().apply { removeAt(i) }
+                                            val names = pl.names.toMutableList().apply { removeAt(i) }
+                                            if (uris.isEmpty()) {
+                                                prefs.removePlaylist(pl.id)
+                                                selectedPlaylistId = null
+                                            } else {
+                                                prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = context.getString(R.string.common_delete),
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text(
+                    context.getString(R.string.player_playlist_section),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                )
+                if (playlists.isEmpty()) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .weight(1f),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            context.getString(R.string.player_no_playlists_hint),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(
+                        Modifier.weight(1f),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        items(playlists.size) { i ->
+                            val pl = playlists[i]
+                            val isCurrent = playbackState?.playlistId == pl.id
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { startPlaylist(pl) }
+                                    .padding(4.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                if (isCurrent) {
+                                    IconButton(
+                                        onClick = { startPlaylist(pl) },
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.PlayArrow,
+                                            contentDescription = "播放",
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                } else {
+                                    Spacer(Modifier.size(40.dp))
+                                }
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        if (pl.note.isNotBlank()) pl.note else pl.name,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        maxLines = if (pl.note.isNotBlank()) 2 else 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
+                                    Text(
+                                        "${pl.trackCount} 首 · 书签 $bookmarkCount",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { selectedPlaylistId = pl.id }) {
+                                    Icon(Icons.Default.List, contentDescription = "查看列表音乐", modifier = Modifier.size(24.dp))
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (i > 0) scope.launch {
+                                            val ids = playlists.map { it.id }.toMutableList()
+                                            ids.removeAt(i)
+                                            ids.add(i - 1, pl.id)
+                                            prefs.updatePlaylistOrder(ids)
+                                        }
+                                    },
+                                    enabled = i > 0
+                                ) {
+                                    Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
+                                }
+                                IconButton(
+                                    onClick = {
+                                        if (i < playlists.size - 1) scope.launch {
+                                            val ids = playlists.map { it.id }.toMutableList()
+                                            ids.removeAt(i)
+                                            ids.add(i + 1, pl.id)
+                                            prefs.updatePlaylistOrder(ids)
+                                        }
+                                    },
+                                    enabled = i < playlists.size - 1
+                                ) {
+                                    Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
+                                }
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            if (playbackState?.playlistId == pl.id) {
+                                                onStopPlayback()
+                                            }
+                                            prefs.removePlaylist(pl.id)
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
                     }
@@ -7705,7 +7594,6 @@ fun PlaybackScreen(
                     if (playbackState != null) onPlayNext()
                 }
             )
-        }
         }
         playlistNoteEditTarget?.let { target ->
             AlertDialog(
@@ -7816,6 +7704,124 @@ fun PlaybackScreen(
                     TextButton(onClick = { editingBookmarkId = null }) { Text("取消") }
                 }
             )
+        }
+        if (showBookmarkManagerDialog) {
+            Dialog(onDismissRequest = { showBookmarkManagerDialog = false }) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    tonalElevation = 6.dp,
+                    modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp)
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                            .heightIn(max = 560.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "播放书签",
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.weight(1f)
+                            )
+                            TextButton(onClick = { showBookmarkManagerDialog = false }) {
+                                Text("关闭")
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        if (playerBookmarks.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text("还没有保存任何书签", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        } else {
+                            LazyColumn(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(playerBookmarks.sortedByDescending { it.savedAt }, key = { it.id }) { bm ->
+                                    val playlist = bm.playlistId?.let { playlistById[it] }
+                                    val jumpEnabled = playlist != null && bm.trackIndex in playlist.uris.indices
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                                    ) {
+                                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                                            Text(
+                                                playlist?.name ?: "播放列表已不存在",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                "第 ${bm.trackIndex + 1} 首 · ${formatPlaybackTime(bm.positionMs.toInt())}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (bm.trackName.isNotBlank()) {
+                                                Text(
+                                                    bm.trackName,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            if (bm.note.isNotBlank()) {
+                                                Spacer(Modifier.height(4.dp))
+                                                Text(
+                                                    bm.note,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 3,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                            Spacer(Modifier.height(8.dp))
+                                            Row(
+                                                Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                            ) {
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        editingBookmarkId = bm.id
+                                                        editingBookmarkNote = bm.note
+                                                    }
+                                                ) {
+                                                    Text("备注")
+                                                }
+                                                OutlinedButton(
+                                                    onClick = {
+                                                        scope.launch {
+                                                            prefs.deletePlayerListBookmark(bm.id)
+                                                        }
+                                                    }
+                                                ) {
+                                                    Text("删除")
+                                                }
+                                                Button(
+                                                    onClick = {
+                                                        playlist?.let {
+                                                            startPlaylistFromIndex(it, bm.trackIndex, bm.positionMs.toInt())
+                                                            showBookmarkManagerDialog = false
+                                                        }
+                                                    },
+                                                    enabled = jumpEnabled
+                                                ) {
+                                                    Text("跳转")
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
