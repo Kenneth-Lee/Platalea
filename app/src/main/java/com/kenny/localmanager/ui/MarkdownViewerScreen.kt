@@ -3879,6 +3879,20 @@ fun EpubViewerScreen(
     val chapters = extractResult.chapters
     val contentDir = extractResult.contentDir
     val opfDir = extractResult.opfDir
+    val chapterScrollRatios = remember { mutableMapOf<Int, Float>() }
+
+    fun rememberedChapterScrollRatio(index: Int, fallback: Float = 0f): Float {
+        return chapterScrollRatios[index] ?: fallback
+    }
+
+    fun switchToChapter(index: Int, fallbackScrollRatio: Float = 0f) {
+        if (index !in chapters.indices) return
+        chapterScrollRatios[currentChapterIndex] = currentScrollRatio.coerceIn(0f, 1f)
+        val restoredRatio = rememberedChapterScrollRatio(index, fallbackScrollRatio).coerceIn(0f, 1f)
+        currentChapterIndex = index
+        currentScrollRatio = restoredRatio
+        pendingProgrammaticScrollRatio = restoredRatio
+    }
 
     LaunchedEffect(epubUri) {
         val restored = withContext(Dispatchers.IO) {
@@ -3918,6 +3932,7 @@ fun EpubViewerScreen(
             currentScrollRatio = progress.scrollRatio
             currentChapterIndex = progress.chapterIndex
             pendingProgrammaticScrollRatio = progress.scrollRatio
+            chapterScrollRatios[progress.chapterIndex] = progress.scrollRatio.coerceIn(0f, 1f)
             restoredProgressMarker = progress
             Log.d("EpubViewer", "恢复进度成功: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
             logDebug?.invoke("[EPUB] 恢复进度: 章节${progress.chapterIndex}, 比例${progress.scrollRatio}")
@@ -3992,34 +4007,27 @@ fun EpubViewerScreen(
     // 跳转到指定章节
     fun goToChapter(index: Int, scrollRatio: Float = 0f) {
         if (index in chapters.indices) {
-            currentChapterIndex = index
-            currentScrollRatio = scrollRatio
-            pendingProgrammaticScrollRatio = scrollRatio
+            switchToChapter(index, scrollRatio)
             showToc = false
         }
     }
 
     // 跳转到收藏位置
     fun goToBookmark(bookmark: EpubBookmark) {
-        currentChapterIndex = bookmark.chapterIndex
-        currentScrollRatio = bookmark.scrollRatio
-        pendingProgrammaticScrollRatio = bookmark.scrollRatio
+        chapterScrollRatios[bookmark.chapterIndex] = bookmark.scrollRatio.coerceIn(0f, 1f)
+        switchToChapter(bookmark.chapterIndex, bookmark.scrollRatio)
         showBookmarks = false
     }
 
     fun goToPreviousChapter() {
         if (currentChapterIndex > 0) {
-            currentChapterIndex--
-            currentScrollRatio = 0f
-            pendingProgrammaticScrollRatio = 0f
+            switchToChapter(currentChapterIndex - 1)
         }
     }
 
     fun goToNextChapter() {
         if (currentChapterIndex < chapters.size - 1) {
-            currentChapterIndex++
-            currentScrollRatio = 0f
-            pendingProgrammaticScrollRatio = 0f
+            switchToChapter(currentChapterIndex + 1)
         }
     }
 
@@ -4663,11 +4671,11 @@ fun EpubViewerScreen(
                     val chapterFileForUpdate = chapterFile
                     val chaptersSize = chapters.size
                     val onChapterChanged: (Int) -> Unit = { newIndex ->
-                        currentChapterIndex = newIndex
-                        currentScrollRatio = 0f // 章节切换时重置滚动位置
+                        switchToChapter(newIndex)
                     }
                     val onScrollRatioChanged: (Float) -> Unit = { ratio ->
                         currentScrollRatio = ratio
+                        chapterScrollRatios[currentChapterIndex] = ratio.coerceIn(0f, 1f)
                     }
                     AndroidView(
                         factory = { ctx ->
