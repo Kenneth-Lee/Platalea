@@ -4669,17 +4669,13 @@ fun EpubViewerScreen(
                     val cacheIsTxtContent = File(extractResult.cacheDir, ".txt_source").exists()
 
                     val chapterFileForUpdate = chapterFile
-                    val chaptersSize = chapters.size
-                    val onChapterChanged: (Int) -> Unit = { newIndex ->
-                        switchToChapter(newIndex)
-                    }
                     val onScrollRatioChanged: (Float) -> Unit = { ratio ->
                         currentScrollRatio = ratio
                         chapterScrollRatios[currentChapterIndex] = ratio.coerceIn(0f, 1f)
                     }
                     AndroidView(
                         factory = { ctx ->
-                            GestureWebView(ctx, chaptersSize, onChapterChanged, onScrollRatioChanged).apply {
+                            GestureWebView(ctx, onScrollRatioChanged).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
@@ -4701,8 +4697,6 @@ fun EpubViewerScreen(
                         modifier = Modifier.fillMaxSize(),
                         update = { webView ->
                             webViewRef.value = webView
-                            // 更新当前章节索引给GestureWebView
-                            webView.currentChapterIndex = currentChapterIndex
                             try {
                                 val htmlContent = chapterFileForUpdate.readText()
                                 val chapterIsLlm = htmlContent.contains("<!--LM_CHAPTER_TYPE:LLM-->") || cacheIsLlmContent
@@ -4981,11 +4975,8 @@ private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
 /** 支持章节切换和滚动位置恢复的 WebView */
 private class GestureWebView(
     context: Context,
-    private val totalChapters: Int,
-    private val onChapterChange: (Int) -> Unit,
     private val onScrollRatioChange: ((Float) -> Unit)? = null
 ) : WebView(context) {
-    var currentChapterIndex: Int = 0
     private var pendingScrollRatio: Float? = null
     private var isRestoringScroll = false
 
@@ -4995,41 +4986,39 @@ private class GestureWebView(
         val viewWidth = width.toFloat().coerceAtLeast(1f)
         val edgeWidth = viewWidth * 0.3f
         return when {
-            x < edgeWidth && currentChapterIndex > 0 -> {
-                onChapterChange(currentChapterIndex - 1)
+            x < edgeWidth -> {
+                jumpByViewport(-1)
                 true
             }
-            x > viewWidth - edgeWidth && currentChapterIndex < totalChapters - 1 -> {
-                onChapterChange(currentChapterIndex + 1)
+            x > viewWidth - edgeWidth -> {
+                jumpByViewport(1)
                 true
             }
             else -> false
         }
     }
 
-    private fun navigateByDoubleTap(x: Float): Boolean {
-        val viewWidth = width.toFloat().coerceAtLeast(1f)
-        val edgeWidth = viewWidth * 0.3f
-        return when {
-            x < edgeWidth && currentChapterIndex < totalChapters - 1 -> {
-                onChapterChange(currentChapterIndex + 1)
-                true
-            }
-            x > viewWidth - edgeWidth && currentChapterIndex > 0 -> {
-                onChapterChange(currentChapterIndex - 1)
-                true
-            }
-            else -> false
-        }
+    private fun jumpByViewport(direction: Int) {
+        val signedDirection = direction.coerceIn(-1, 1)
+        if (signedDirection == 0) return
+        val js = """
+            (function() {
+                var viewHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                var docHeight = Math.max(document.documentElement.scrollHeight, document.body.scrollHeight, viewHeight);
+                var maxScroll = Math.max(0, docHeight - viewHeight);
+                var currentY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+                var targetY = currentY + ($signedDirection * viewHeight);
+                if (targetY < 0) targetY = 0;
+                if (targetY > maxScroll) targetY = maxScroll;
+                window.scrollTo(0, targetY);
+            })();
+        """.trimIndent()
+        post { evaluateJavascript(js, null) }
     }
 
     private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
             return navigateBySingleTap(e.x)
-        }
-
-        override fun onDoubleTap(e: MotionEvent): Boolean {
-            return navigateByDoubleTap(e.x)
         }
     })
 
