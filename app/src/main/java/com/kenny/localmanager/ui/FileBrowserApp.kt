@@ -7158,6 +7158,32 @@ fun PlaybackScreen(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     }
 
+    fun resumeLastPlayback(playlist: Playlist?) {
+        if (playlist != null) {
+            startPlaylist(playlist)
+            return
+        }
+        val intent = Intent(context, PlaybackService::class.java).apply {
+            action = ACTION_RESUME
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    }
+
+    fun promptSaveCurrentBookmark() {
+        val state = playbackState
+        if (state?.playlistId == null) {
+            Toast.makeText(context, context.getString(R.string.player_bookmark_playlist_only), Toast.LENGTH_SHORT).show()
+            return
+        }
+        bookmarkPendingPlaylistId = state.playlistId
+        bookmarkPendingDirUri = null
+        bookmarkPendingTrackIndex = state.trackIndex
+        bookmarkPendingPositionMs = state.positionMs.toLong()
+        bookmarkPendingTrackName = state.trackName
+        bookmarkNoteInput = ""
+        showAddBookmarkDialog = true
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -7165,8 +7191,13 @@ fun PlaybackScreen(
                     Text(selectedPlaylist?.name ?: context.getString(R.string.player_screen_title))
                 },
                 actions = {
+                    if (playbackState?.playlistId != null) {
+                        TextButton(onClick = { promptSaveCurrentBookmark() }) {
+                            Text(context.getString(R.string.player_mark_action))
+                        }
+                    }
                     TextButton(onClick = { showBookmarkManagerDialog = true }) {
-                        Text("书签")
+                        Text(context.getString(R.string.player_bookmarks_action))
                     }
                 },
                 navigationIcon = if (showBackButton) {
@@ -7251,28 +7282,6 @@ fun PlaybackScreen(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                             )
                         }
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = {
-                                    if (state.playlistId == null) {
-                                        Toast.makeText(context, context.getString(R.string.player_bookmark_playlist_only), Toast.LENGTH_SHORT).show()
-                                        return@OutlinedButton
-                                    }
-                                    bookmarkPendingPlaylistId = state.playlistId
-                                    bookmarkPendingDirUri = null
-                                    bookmarkPendingTrackIndex = state.trackIndex
-                                    bookmarkPendingPositionMs = state.positionMs.toLong()
-                                    bookmarkPendingTrackName = state.trackName
-                                    bookmarkNoteInput = ""
-                                    showAddBookmarkDialog = true
-                                }
-                            ) {
-                                Text(context.getString(R.string.player_save_bookmark))
-                            }
-                        }
                     }
                 }
             } else {
@@ -7298,7 +7307,7 @@ fun PlaybackScreen(
                         )
                         if (restorePlaylist != null) {
                             Spacer(Modifier.height(8.dp))
-                            OutlinedButton(onClick = { startPlaylist(restorePlaylist) }) {
+                            OutlinedButton(onClick = { resumeLastPlayback(restorePlaylist) }) {
                                 Text(context.getString(R.string.player_resume_last))
                             }
                         }
@@ -7319,6 +7328,12 @@ fun PlaybackScreen(
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                ) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -7354,6 +7369,7 @@ fun PlaybackScreen(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+                }
                 if (pl.uris.isEmpty()) {
                     Box(
                         Modifier
@@ -7373,11 +7389,17 @@ fun PlaybackScreen(
                         items(pl.uris.size) { i ->
                             val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
                             val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surface
+                                )
+                            ) {
                             Row(
                                 Modifier
                                     .fillMaxWidth()
                                     .clickable { startPlaylistFromIndex(pl, i) }
-                                    .padding(vertical = 4.dp),
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
@@ -7451,10 +7473,26 @@ fun PlaybackScreen(
                                         scope.launch {
                                             val uris = pl.uris.toMutableList().apply { removeAt(i) }
                                             val names = pl.names.toMutableList().apply { removeAt(i) }
+                                            val currentState = playbackState
+                                            val isCurrentPlaylist = currentState?.playlistId == pl.id
+                                            val currentTrackIndex = currentState?.trackIndex ?: -1
                                             if (uris.isEmpty()) {
+                                                if (isCurrentPlaylist) {
+                                                    onStopPlayback()
+                                                }
                                                 prefs.removePlaylist(pl.id)
                                                 selectedPlaylistId = null
                                             } else {
+                                                if (isCurrentPlaylist) {
+                                                    val nextResumeIndex = when {
+                                                        currentTrackIndex < 0 -> 0
+                                                        i < currentTrackIndex -> currentTrackIndex - 1
+                                                        i == currentTrackIndex -> currentTrackIndex.coerceAtMost(uris.lastIndex)
+                                                        else -> currentTrackIndex
+                                                    }.coerceIn(0, uris.lastIndex)
+                                                    onStopPlayback()
+                                                    prefs.setPlayerLastStateForPlaylist(pl.id, nextResumeIndex, 0L)
+                                                }
                                                 prefs.updatePlaylist(pl.copy(uris = uris, names = names))
                                             }
                                         }
@@ -7467,6 +7505,7 @@ fun PlaybackScreen(
                                         tint = MaterialTheme.colorScheme.error
                                     )
                                 }
+                            }
                             }
                         }
                     }
@@ -7499,26 +7538,28 @@ fun PlaybackScreen(
                         items(playlists.size) { i ->
                             val pl = playlists[i]
                             val isCurrent = playbackState?.playlistId == pl.id
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
                             Row(
                                 Modifier
                                     .fillMaxWidth()
-                                    .clickable { startPlaylist(pl) }
-                                    .padding(4.dp),
+                                    .clickable { selectedPlaylistId = pl.id }
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                if (isCurrent) {
-                                    IconButton(
-                                        onClick = { startPlaylist(pl) },
-                                        modifier = Modifier.size(40.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = "播放",
-                                            tint = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                } else {
-                                    Spacer(Modifier.size(40.dp))
+                                IconButton(
+                                    onClick = { startPlaylist(pl) },
+                                    modifier = Modifier.size(40.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.PlayArrow,
+                                        contentDescription = context.getString(R.string.player_play_desc),
+                                        tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                                 Column(Modifier.weight(1f)) {
                                     Text(
@@ -7534,9 +7575,6 @@ fun PlaybackScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                IconButton(onClick = { selectedPlaylistId = pl.id }) {
-                                    Icon(Icons.Default.List, contentDescription = "查看列表音乐", modifier = Modifier.size(24.dp))
-                                }
                                 IconButton(
                                     onClick = {
                                         if (i > 0) scope.launch {
@@ -7548,7 +7586,7 @@ fun PlaybackScreen(
                                     },
                                     enabled = i > 0
                                 ) {
-                                    Icon(Icons.Default.ArrowUpward, contentDescription = "上移")
+                                    Icon(Icons.Default.ArrowUpward, contentDescription = context.getString(R.string.player_move_up))
                                 }
                                 IconButton(
                                     onClick = {
@@ -7561,7 +7599,7 @@ fun PlaybackScreen(
                                     },
                                     enabled = i < playlists.size - 1
                                 ) {
-                                    Icon(Icons.Default.ArrowDownward, contentDescription = "下移")
+                                    Icon(Icons.Default.ArrowDownward, contentDescription = context.getString(R.string.player_move_down))
                                 }
                                 IconButton(
                                     onClick = {
@@ -7573,8 +7611,9 @@ fun PlaybackScreen(
                                         }
                                     }
                                 ) {
-                                    Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.common_delete), tint = MaterialTheme.colorScheme.error)
                                 }
+                            }
                             }
                         }
                     }
@@ -7588,7 +7627,7 @@ fun PlaybackScreen(
                 },
                 onPlayPause = {
                     if (playbackState != null) onPlayPause()
-                    else restorePlaylist?.let { startPlaylist(it) }
+                    else resumeLastPlayback(restorePlaylist)
                 },
                 onNext = {
                     if (playbackState != null) onPlayNext()
@@ -7598,13 +7637,13 @@ fun PlaybackScreen(
         playlistNoteEditTarget?.let { target ->
             AlertDialog(
                 onDismissRequest = { playlistNoteEditTarget = null },
-                title = { Text("播放列表备注") },
+                title = { Text(context.getString(R.string.player_playlist_note_title)) },
                 text = {
                     OutlinedTextField(
                         value = playlistNoteEditText,
                         onValueChange = { playlistNoteEditText = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("备注") },
+                        label = { Text(context.getString(R.string.common_note)) },
                         minLines = 2,
                         maxLines = 4
                     )
@@ -7615,19 +7654,23 @@ fun PlaybackScreen(
                             prefs.updatePlaylist(target.copy(note = playlistNoteEditText.trim()))
                             playlistNoteEditTarget = null
                         }
-                    }) { Text("保存") }
+                    }) { Text(context.getString(R.string.common_save)) }
                 },
-                dismissButton = { TextButton(onClick = { playlistNoteEditTarget = null }) { Text("取消") } }
+                dismissButton = { TextButton(onClick = { playlistNoteEditTarget = null }) { Text(context.getString(R.string.common_cancel)) } }
             )
         }
         if (showAddBookmarkDialog) {
             AlertDialog(
                 onDismissRequest = { showAddBookmarkDialog = false },
-                title = { Text("保存播放书签") },
+                title = { Text(context.getString(R.string.player_save_playback_bookmark_title)) },
                 text = {
                     Column {
                         Text(
-                            "第 ${bookmarkPendingTrackIndex + 1} 首 ${formatPlaybackTime(bookmarkPendingPositionMs.toInt())}",
+                            context.getString(
+                                R.string.player_bookmark_position,
+                                bookmarkPendingTrackIndex + 1,
+                                formatPlaybackTime(bookmarkPendingPositionMs.toInt())
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -7644,8 +7687,8 @@ fun PlaybackScreen(
                             value = bookmarkNoteInput,
                             onValueChange = { bookmarkNoteInput = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("书签备注") },
-                            placeholder = { Text("例如：副歌开始 / 重点段落") },
+                            label = { Text(context.getString(R.string.player_bookmark_note_label)) },
+                            placeholder = { Text(context.getString(R.string.player_bookmark_note_placeholder)) },
                             minLines = 2,
                             maxLines = 4
                         )
@@ -7666,26 +7709,26 @@ fun PlaybackScreen(
                                     note = bookmarkNoteInput
                                 )
                                 showAddBookmarkDialog = false
-                                Toast.makeText(context, "已保存书签", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.player_bookmark_saved), Toast.LENGTH_SHORT).show()
                             }
                         }
-                    ) { Text("保存") }
+                    ) { Text(context.getString(R.string.common_save)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showAddBookmarkDialog = false }) { Text("取消") }
+                    TextButton(onClick = { showAddBookmarkDialog = false }) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
         }
         editingBookmarkId?.let { bookmarkId ->
             AlertDialog(
                 onDismissRequest = { editingBookmarkId = null },
-                title = { Text("编辑书签备注") },
+                title = { Text(context.getString(R.string.player_edit_bookmark_note)) },
                 text = {
                     OutlinedTextField(
                         value = editingBookmarkNote,
                         onValueChange = { editingBookmarkNote = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("备注") },
+                        label = { Text(context.getString(R.string.common_note)) },
                         minLines = 2,
                         maxLines = 4
                     )
@@ -7698,10 +7741,10 @@ fun PlaybackScreen(
                                 editingBookmarkId = null
                             }
                         }
-                    ) { Text("保存") }
+                    ) { Text(context.getString(R.string.common_save)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { editingBookmarkId = null }) { Text("取消") }
+                    TextButton(onClick = { editingBookmarkId = null }) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
         }
@@ -7720,12 +7763,12 @@ fun PlaybackScreen(
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                "播放书签",
+                                context.getString(R.string.player_bookmark_manager_title),
                                 style = MaterialTheme.typography.titleLarge,
                                 modifier = Modifier.weight(1f)
                             )
                             TextButton(onClick = { showBookmarkManagerDialog = false }) {
-                                Text("关闭")
+                                Text(context.getString(R.string.common_close))
                             }
                         }
                         Spacer(Modifier.height(8.dp))
@@ -7736,7 +7779,7 @@ fun PlaybackScreen(
                                     .weight(1f),
                                 contentAlignment = Alignment.Center
                             ) {
-                                Text("还没有保存任何书签", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(context.getString(R.string.player_no_saved_bookmarks), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         } else {
                             LazyColumn(
@@ -7752,13 +7795,17 @@ fun PlaybackScreen(
                                     ) {
                                         Column(Modifier.fillMaxWidth().padding(12.dp)) {
                                             Text(
-                                                playlist?.name ?: "播放列表已不存在",
+                                                playlist?.name ?: context.getString(R.string.player_playlist_missing),
                                                 style = MaterialTheme.typography.titleSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Spacer(Modifier.height(4.dp))
                                             Text(
-                                                "第 ${bm.trackIndex + 1} 首 · ${formatPlaybackTime(bm.positionMs.toInt())}",
+                                                context.getString(
+                                                    R.string.player_bookmark_position_compact,
+                                                    bm.trackIndex + 1,
+                                                    formatPlaybackTime(bm.positionMs.toInt())
+                                                ),
                                                 style = MaterialTheme.typography.bodySmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
@@ -7791,7 +7838,7 @@ fun PlaybackScreen(
                                                         editingBookmarkNote = bm.note
                                                     }
                                                 ) {
-                                                    Text("备注")
+                                                    Text(context.getString(R.string.common_note))
                                                 }
                                                 OutlinedButton(
                                                     onClick = {
@@ -7800,7 +7847,7 @@ fun PlaybackScreen(
                                                         }
                                                     }
                                                 ) {
-                                                    Text("删除")
+                                                    Text(context.getString(R.string.common_delete))
                                                 }
                                                 Button(
                                                     onClick = {
@@ -7811,7 +7858,7 @@ fun PlaybackScreen(
                                                     },
                                                     enabled = jumpEnabled
                                                 ) {
-                                                    Text("跳转")
+                                                    Text(context.getString(R.string.player_jump))
                                                 }
                                             }
                                         }

@@ -254,7 +254,37 @@ class PlaybackService : Service() {
             ACTION_PREV -> playPrev()
             ACTION_NEXT -> playNext()
             ACTION_PAUSE -> pausePlayback(PauseOrigin.USER)
-            ACTION_RESUME -> resumePlayback()
+            ACTION_RESUME -> {
+                if (mediaPlayer != null) {
+                    resumePlayback()
+                } else {
+                    scope.launch {
+                        val lastPlaylistId = withContext(Dispatchers.IO) {
+                            prefs.playerLastPlaylistId.first()
+                        }
+                        if (lastPlaylistId.isNullOrBlank()) {
+                            Log.w(TAG, "ACTION_RESUME ignored because there is no saved playlist id")
+                            stopSelf()
+                            return@launch
+                        }
+                        val lastPlaylist = withContext(Dispatchers.IO) {
+                            prefs.getPlaylistById(lastPlaylistId)
+                        }
+                        if (lastPlaylist == null || lastPlaylist.uris.isEmpty()) {
+                            Log.w(TAG, "ACTION_RESUME failed because saved playlist=$lastPlaylistId is missing or empty")
+                            stopSelf()
+                            return@launch
+                        }
+                        startPlayback(
+                            uris = lastPlaylist.uris,
+                            names = lastPlaylist.names,
+                            dir = "",
+                            playlistId = lastPlaylist.id,
+                            playlistName = lastPlaylist.name
+                        )
+                    }
+                }
+            }
             ACTION_SEEK -> {
                 val posMs = intent.getIntExtra(EXTRA_POSITION_MS, 0)
                 mediaPlayer?.let { mp ->
@@ -531,6 +561,7 @@ class PlaybackService : Service() {
         val mp = mediaPlayer ?: return
         if (mp.isPlaying) {
             mp.pause()
+            val pausedPositionMs = currentPlaybackPositionMsSafe().toLong()
             lastPauseOrigin = origin
             if (origin != PauseOrigin.AUDIO_FOCUS) {
                 resumeWhenAudioFocusGained = false
@@ -539,7 +570,8 @@ class PlaybackService : Service() {
                 pausedByBluetoothDisconnect = false
             }
             progressUpdateRunnable?.let(handler::removeCallbacks)
-            updateState(isPlaying = false)
+            persistPlaybackState(positionMsOverride = pausedPositionMs)
+            updateState(positionMs = pausedPositionMs.toInt(), isPlaying = false)
             updateNotification()
             if (origin == PauseOrigin.USER) {
                 abandonAudioFocus()
@@ -767,6 +799,9 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
+        if (playlistUris.isNotEmpty()) {
+            persistPlaybackState(positionMsOverride = currentPlaybackPositionMsSafe().toLong())
+        }
         try {
             unregisterReceiver(noisyReceiver)
         } catch (_: Exception) {}

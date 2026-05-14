@@ -67,6 +67,8 @@
     <string name="player_move_up">上移</string>
     <string name="player_move_down">下移</string>
     <string name="player_current_playback">当前播放</string>
+    <string name="player_mark_action">标记</string>
+    <string name="player_bookmarks_action">书签</string>
     <string name="player_save_bookmark">保存书签</string>
     <string name="player_view_bookmarks">查看书签(%1$d)</string>
     <string name="player_bookmark_playlist_only">仅播放列表支持书签</string>
@@ -81,6 +83,16 @@
     <string name="player_add_to_playback_prompt">请选择要把 %1$d 首音频加入到哪里。</string>
     <string name="player_track_count">%1$d 首</string>
     <string name="player_new_list">新建列表</string>
+    <string name="player_playlist_note_title">播放列表备注</string>
+    <string name="player_save_playback_bookmark_title">保存播放书签</string>
+    <string name="player_bookmark_note_label">书签备注</string>
+    <string name="player_bookmark_note_placeholder">例如：副歌开始 / 重点段落</string>
+    <string name="player_bookmark_saved">已保存书签</string>
+    <string name="player_bookmark_manager_title">播放书签</string>
+    <string name="player_no_saved_bookmarks">还没有保存任何书签</string>
+    <string name="player_playlist_missing">播放列表已不存在</string>
+    <string name="player_bookmark_position_compact">第 %1$d 首 · %2$s</string>
+    <string name="common_note">备注</string>
     <string name="main_menu">菜单</string>
     <string name="main_menu_add_filtered_to_pending">把当前过滤结果全部加入待处理列表</string>
     <string name="main_menu_add_filtered_done">已加入 %1$d 项到待处理列表</string>

@@ -67,6 +67,8 @@
     <string name="player_move_up">Move up</string>
     <string name="player_move_down">Move down</string>
     <string name="player_current_playback">Current Playback</string>
+    <string name="player_mark_action">Mark</string>
+    <string name="player_bookmarks_action">Bookmarks</string>
     <string name="player_save_bookmark">Save Bookmark</string>
     <string name="player_view_bookmarks">View Bookmarks (%1$d)</string>
     <string name="player_bookmark_playlist_only">Only playlists support bookmarks.</string>
@@ -81,6 +83,16 @@
     <string name="player_add_to_playback_prompt">Choose where to add %1$d audio track(s).</string>
     <string name="player_track_count">%1$d track(s)</string>
     <string name="player_new_list">New Playlist</string>
+    <string name="player_playlist_note_title">Playlist Note</string>
+    <string name="player_save_playback_bookmark_title">Save Playback Bookmark</string>
+    <string name="player_bookmark_note_label">Bookmark Note</string>
+    <string name="player_bookmark_note_placeholder">For example: chorus start / key passage</string>
+    <string name="player_bookmark_saved">Bookmark saved</string>
+    <string name="player_bookmark_manager_title">Playback Bookmarks</string>
+    <string name="player_no_saved_bookmarks">No bookmarks have been saved yet.</string>
+    <string name="player_playlist_missing">Playlist no longer exists</string>
+    <string name="player_bookmark_position_compact">Track %1$d · %2$s</string>
+    <string name="common_note">Note</string>
     <string name="main_menu">Menu</string>
     <string name="main_menu_add_filtered_to_pending">Add all filtered results to the pending list</string>
     <string name="main_menu_add_filtered_done">Added %1$d item(s) to the pending list</string>
