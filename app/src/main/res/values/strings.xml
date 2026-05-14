@@ -14,6 +14,8 @@
     <string name="common_create">创建</string>
     <string name="common_delete">删除</string>
     <string name="common_delete_failed">删除失败</string>
+    <string name="common_enabled">开启</string>
+    <string name="common_disabled">关闭</string>
     <string name="main_tab_directory">目录</string>
     <string name="main_tab_recent">最近</string>
     <string name="main_tab_player">播放器</string>
@@ -147,9 +149,13 @@
     <string name="config_viewer_preview_range">范围：%1$d～%2$dM</string>
     <string name="config_ftp_password">FTP 密码</string>
     <string name="config_ftp_password_hint">留空则无需密码</string>
+    <string name="config_ftp_password_set">已设置密码</string>
+    <string name="config_ftp_password_unset">未设置密码</string>
     <string name="config_ftp_timeout_minutes">FTP 倒计时（分钟）</string>
     <string name="config_ftp_timeout_placeholder">0=不退出</string>
     <string name="config_ftp_timeout_hint">0 表示不自动退出</string>
+    <string name="config_ftp_section">FTP 配置</string>
+    <string name="config_ftp_summary">%1$s；倒计时 %2$d 分钟</string>
     <string name="config_git">Git 配置</string>
     <string name="config_gpg_keys">gpg钥匙管理</string>
     <string name="config_cache">缓存管理</string>
@@ -164,6 +170,7 @@
     <string name="config_epub_tts_speed_value">当前速度：%1$d%%</string>
     <string name="config_epub_tts_auto_next">自动跳到下一章</string>
     <string name="config_epub_tts_auto_next_hint">开启后，当前章朗读完成且存在下一章时，会自动切到下一章继续朗读。</string>
+    <string name="config_epub_tts_summary">引擎：%1$s；语音：%2$s；速度：%3$d%%；自动下一章：%4$s</string>
     <string name="config_epub_tts_unset">未设置，将自动选择</string>
     <string name="config_export_success">配置已导出到根目录</string>
     <string name="config_export_failed">导出失败</string>

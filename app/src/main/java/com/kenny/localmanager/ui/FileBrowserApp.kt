@@ -8605,6 +8605,8 @@ private fun ConfigPanel(
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
     var localFtpTimeoutMinutes by remember { mutableStateOf(ftpTimeoutMinutes.toString()) }
+    var showFtpConfigDialog by remember { mutableStateOf(false) }
+    var showEpubTtsConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsEngineDialog by remember { mutableStateOf(false) }
     var showEpubTtsVoiceDialog by remember { mutableStateOf(false) }
     var epubTtsEngines by remember { mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList()) }
@@ -8634,8 +8636,189 @@ private fun ConfigPanel(
         }
     }
 
+    val ftpSummary = remember(localFtpPassword, localFtpTimeoutMinutes, context) {
+        val passwordState = if (localFtpPassword.isBlank()) {
+            context.getString(R.string.config_ftp_password_unset)
+        } else {
+            context.getString(R.string.config_ftp_password_set)
+        }
+        val timeoutValue = localFtpTimeoutMinutes.filter { it.isDigit() }.toIntOrNull() ?: ftpTimeoutMinutes
+        context.getString(R.string.config_ftp_summary, passwordState, timeoutValue)
+    }
+    val epubTtsSummary = remember(
+        effectiveEpubTtsEngine,
+        selectedEpubTtsVoiceName,
+        effectiveEpubTtsVoice,
+        epubTtsSpeedPercent,
+        epubTtsAutoNextChapter,
+        context
+    ) {
+        val voiceLabel = when {
+            effectiveEpubTtsEngine == null -> context.getString(R.string.config_epub_tts_unset)
+            selectedEpubTtsVoiceName == null -> context.getString(R.string.epub_tts_voice_default_choice)
+            else -> effectiveEpubTtsVoice?.label ?: context.getString(R.string.config_epub_tts_unset)
+        }
+        context.getString(
+            R.string.config_epub_tts_summary,
+            effectiveEpubTtsEngine?.label ?: context.getString(R.string.config_epub_tts_unset),
+            voiceLabel,
+            epubTtsSpeedPercent,
+            if (epubTtsAutoNextChapter) context.getString(R.string.common_enabled) else context.getString(R.string.common_disabled)
+        )
+    }
+
     LaunchedEffect(Unit) {
         refreshEpubTtsEngines()
+    }
+
+    if (showFtpConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showFtpConfigDialog = false },
+            title = { Text(context.getString(R.string.config_ftp_section)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = localFtpPassword,
+                        onValueChange = { s ->
+                            localFtpPassword = s
+                            onFtpPasswordChange(s)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(context.getString(R.string.config_ftp_password)) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        supportingText = {
+                            Text(
+                                context.getString(R.string.config_ftp_password_hint),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = localFtpTimeoutMinutes,
+                        onValueChange = { s ->
+                            localFtpTimeoutMinutes = s
+                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onFtpTimeoutMinutesChange(it) }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(context.getString(R.string.config_ftp_timeout_minutes)) },
+                        singleLine = true,
+                        placeholder = { Text(context.getString(R.string.config_ftp_timeout_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) },
+                        supportingText = {
+                            Text(
+                                context.getString(R.string.config_ftp_timeout_hint),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFtpConfigDialog = false }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            }
+        )
+    }
+
+    if (showEpubTtsConfigDialog) {
+        AlertDialog(
+            onDismissRequest = { showEpubTtsConfigDialog = false },
+            title = { Text(context.getString(R.string.config_epub_tts_section)) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = {
+                            refreshEpubTtsEngines()
+                            showEpubTtsEngineDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(context.getString(R.string.config_epub_tts_engine))
+                            Text(
+                                text = effectiveEpubTtsEngine?.label ?: context.getString(R.string.config_epub_tts_unset),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            refreshEpubTtsEngines()
+                            showEpubTtsVoiceDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(context.getString(R.string.config_epub_tts_voice))
+                            Text(
+                                text = when {
+                                    effectiveEpubTtsEngine == null -> context.getString(R.string.config_epub_tts_unset)
+                                    selectedEpubTtsVoiceName == null -> context.getString(R.string.epub_tts_voice_default_choice)
+                                    else -> effectiveEpubTtsVoice?.label ?: context.getString(R.string.config_epub_tts_unset)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(context.getString(R.string.config_epub_tts_speed), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(6.dp))
+                        Slider(
+                            value = epubTtsSpeedPercent.toFloat(),
+                            onValueChange = { value ->
+                                scope.launch {
+                                    prefs.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
+                                }
+                            },
+                            valueRange = 50f..300f,
+                            steps = 24,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            text = context.getString(R.string.config_epub_tts_speed_value, epubTtsSpeedPercent),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(context.getString(R.string.config_epub_tts_auto_next), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                            Text(context.getString(R.string.config_epub_tts_auto_next_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = epubTtsAutoNextChapter,
+                            onCheckedChange = { enabled ->
+                                scope.launch {
+                                    prefs.setEpubTtsAutoNextChapter(enabled)
+                                }
+                            }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showEpubTtsConfigDialog = false }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { refreshEpubTtsEngines() }) {
+                    Text(context.getString(R.string.common_refresh))
+                }
+            }
+        )
     }
 
     if (showEpubTtsEngineDialog) {
@@ -8860,11 +9043,17 @@ private fun ConfigPanel(
     Column(
         Modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .statusBarsPadding()
+            .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        Text(context.getString(R.string.config_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.height(16.dp))
+                OutlinedButton(
+                    onClick = onChangeRoot,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(context.getString(R.string.config_change_root))
+                }
+                Spacer(Modifier.height(12.dp))
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -8913,155 +9102,59 @@ private fun ConfigPanel(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(context.getString(R.string.config_ftp_password), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(end = 12.dp))
-                    OutlinedTextField(
-                        value = localFtpPassword,
-                        onValueChange = { s ->
-                            localFtpPassword = s
-                            onFtpPasswordChange(s)
-                        },
-                        modifier = Modifier.weight(1f),
-                        label = { Text(context.getString(R.string.config_ftp_password)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        supportingText = {
-                            Text(context.getString(R.string.config_ftp_password_hint), color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                        }
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(context.getString(R.string.config_ftp_timeout_minutes), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                    OutlinedTextField(
-                        value = localFtpTimeoutMinutes,
-                        onValueChange = { s ->
-                            localFtpTimeoutMinutes = s
-                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onFtpTimeoutMinutesChange(it) }
-                        },
-                        modifier = Modifier.width(100.dp),
-                        singleLine = true,
-                        placeholder = { Text(context.getString(R.string.config_ftp_timeout_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    )
-                }
-                Text(context.getString(R.string.config_ftp_timeout_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
                 Spacer(Modifier.height(16.dp))
-                Text(context.getString(R.string.config_epub_tts_section), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = {
-                        refreshEpubTtsEngines()
-                        showEpubTtsEngineDialog = true
+                        showFtpConfigDialog = true
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(context.getString(R.string.config_epub_tts_engine))
+                        Text(context.getString(R.string.config_ftp_section))
                         Text(
-                            text = effectiveEpubTtsEngine?.label ?: context.getString(R.string.config_epub_tts_unset),
+                            text = ftpSummary,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(16.dp))
                 OutlinedButton(
                     onClick = {
                         refreshEpubTtsEngines()
-                        showEpubTtsVoiceDialog = true
+                        showEpubTtsConfigDialog = true
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(context.getString(R.string.config_epub_tts_voice))
+                        Text(context.getString(R.string.config_epub_tts_section))
                         Text(
-                            text = when {
-                                effectiveEpubTtsEngine == null -> context.getString(R.string.config_epub_tts_unset)
-                                selectedEpubTtsVoiceName == null -> context.getString(R.string.epub_tts_voice_default_choice)
-                                else -> effectiveEpubTtsVoice?.label ?: context.getString(R.string.config_epub_tts_unset)
-                            },
+                            text = epubTtsSummary,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                Column(Modifier.fillMaxWidth()) {
-                    Text(context.getString(R.string.config_epub_tts_speed), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(6.dp))
-                    Slider(
-                        value = epubTtsSpeedPercent.toFloat(),
-                        onValueChange = { value ->
-                            scope.launch {
-                                prefs.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
-                            }
-                        },
-                        valueRange = 50f..300f,
-                        steps = 24,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Text(
-                        text = context.getString(R.string.config_epub_tts_speed_value, epubTtsSpeedPercent),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(context.getString(R.string.config_epub_tts_auto_next), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                        Text(context.getString(R.string.config_epub_tts_auto_next_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Switch(
-                        checked = epubTtsAutoNextChapter,
-                        onCheckedChange = { enabled ->
-                            scope.launch {
-                                prefs.setEpubTtsAutoNextChapter(enabled)
-                            }
-                        }
-                    )
-                }
                 Spacer(Modifier.height(16.dp))
-                Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_git)) }
+                OutlinedButton(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_git)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_gpg_keys)) }
+                OutlinedButton(onClick = onManageKeys, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_gpg_keys)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_cache)) }
+                OutlinedButton(onClick = onOpenCacheManagement, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_cache)) }
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_export)) }
+                OutlinedButton(onClick = onExportConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_export)) }
                 Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                OutlinedButton(
+                    onClick = onCreatePlayerShortcut,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    OutlinedButton(
-                        onClick = onCreatePlayerShortcut,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(context.getString(R.string.config_create_player_shortcut))
-                    }
-                    OutlinedButton(
-                        onClick = onCreateQuickNoteShortcut,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(context.getString(R.string.config_create_quick_note_shortcut))
-                    }
+                    Text(context.getString(R.string.config_create_player_shortcut))
                 }
                 Spacer(Modifier.height(12.dp))
                 OutlinedButton(
-                    onClick = onChangeRoot,
+                    onClick = onCreateQuickNoteShortcut,
                     modifier = Modifier.fillMaxWidth()
-                ) { Text(context.getString(R.string.config_change_root)) }
+                ) { Text(context.getString(R.string.config_create_quick_note_shortcut)) }
         Spacer(Modifier.height(24.dp))
         if (showCloseButton && onClose != null) {
             TextButton(onClick = onClose) { Text(context.getString(R.string.common_close)) }
