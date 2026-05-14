@@ -8611,6 +8611,8 @@ private fun ConfigPanel(
     var epubTtsLoading by remember { mutableStateOf(false) }
     val selectedEpubTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
     val selectedEpubTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
     val preferredTtsLocale = remember { preferredEpubTtsLocale(null) }
     val effectiveEpubTtsEngine = remember(epubTtsEngines, selectedEpubTtsEnginePackage) {
         epubTtsEngines.firstOrNull { it.packageName == selectedEpubTtsEnginePackage }
@@ -8989,6 +8991,45 @@ private fun ConfigPanel(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+                }
+                Spacer(Modifier.height(12.dp))
+                Column(Modifier.fillMaxWidth()) {
+                    Text(context.getString(R.string.config_epub_tts_speed), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(6.dp))
+                    Slider(
+                        value = epubTtsSpeedPercent.toFloat(),
+                        onValueChange = { value ->
+                            scope.launch {
+                                prefs.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
+                            }
+                        },
+                        valueRange = 50f..300f,
+                        steps = 24,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text(
+                        text = context.getString(R.string.config_epub_tts_speed_value, epubTtsSpeedPercent),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(context.getString(R.string.config_epub_tts_auto_next), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
+                        Text(context.getString(R.string.config_epub_tts_auto_next_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = epubTtsAutoNextChapter,
+                        onCheckedChange = { enabled ->
+                            scope.launch {
+                                prefs.setEpubTtsAutoNextChapter(enabled)
+                            }
+                        }
+                    )
                 }
                 Spacer(Modifier.height(16.dp))
                 Button(onClick = onOpenGitConfig, modifier = Modifier.fillMaxWidth()) { Text(context.getString(R.string.config_git)) }

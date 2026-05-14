@@ -160,6 +160,10 @@
     <string name="config_epub_tts_section">EPUB 离线朗读</string>
     <string name="config_epub_tts_engine">朗读引擎</string>
     <string name="config_epub_tts_voice">朗读语音</string>
+    <string name="config_epub_tts_speed">朗读速度</string>
+    <string name="config_epub_tts_speed_value">当前速度：%1$d%%</string>
+    <string name="config_epub_tts_auto_next">自动跳到下一章</string>
+    <string name="config_epub_tts_auto_next_hint">开启后，当前章朗读完成且存在下一章时，会自动切到下一章继续朗读。</string>
     <string name="config_epub_tts_unset">未设置，将自动选择</string>
     <string name="config_export_success">配置已导出到根目录</string>
     <string name="config_export_failed">导出失败</string>

@@ -43,6 +43,8 @@ private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup
 private val EPUB_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("epub_zoom_percent_by_uri_json")
 private val EPUB_TTS_ENGINE_PACKAGE = stringPreferencesKey("epub_tts_engine_package")
 private val EPUB_TTS_VOICE_NAME = stringPreferencesKey("epub_tts_voice_name")
+private val EPUB_TTS_SPEED_PERCENT = intPreferencesKey("epub_tts_speed_percent")
+private val EPUB_TTS_AUTO_NEXT_CHAPTER = booleanPreferencesKey("epub_tts_auto_next_chapter")
 private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
@@ -105,6 +107,14 @@ class Preferences(private val context: Context) {
 
     val epubTtsVoiceName: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[EPUB_TTS_VOICE_NAME]?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    val epubTtsSpeedPercent: Flow<Int> = context.dataStore.data.map { prefs ->
+        (prefs[EPUB_TTS_SPEED_PERCENT] ?: 100).coerceIn(50, 300)
+    }
+
+    val epubTtsAutoNextChapter: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[EPUB_TTS_AUTO_NEXT_CHAPTER] ?: true
     }
 
     val dictQueryHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
@@ -277,6 +287,18 @@ class Preferences(private val context: Context) {
             } else {
                 prefs[EPUB_TTS_VOICE_NAME] = normalized
             }
+        }
+    }
+
+    suspend fun setEpubTtsSpeedPercent(speedPercent: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[EPUB_TTS_SPEED_PERCENT] = speedPercent.coerceIn(50, 300)
+        }
+    }
+
+    suspend fun setEpubTtsAutoNextChapter(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[EPUB_TTS_AUTO_NEXT_CHAPTER] = enabled
         }
     }
 

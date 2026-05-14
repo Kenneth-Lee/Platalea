@@ -3713,6 +3713,8 @@ fun EpubViewerScreen(
     }
     val selectedTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
     val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
     val ttsSession = remember { EpubTtsSession(context) }
 
     // 词典查询状态
@@ -4127,6 +4129,7 @@ fun EpubViewerScreen(
         ttsSegmentsLoading,
         selectedTtsEnginePackage,
         selectedTtsVoiceName,
+        epubTtsSpeedPercent,
         availableTtsEngines,
         ttsEngineLoading
     ) {
@@ -4200,6 +4203,7 @@ fun EpubViewerScreen(
                 enginePackage = chosenEnginePackage,
                 voiceName = effectiveTtsVoice?.name,
                 preferredLocale = speakLocale,
+                speechRate = epubTtsSpeedPercent / 100f,
                 utteranceId = utteranceId,
                 chunks = speakChunks,
                 onPreparing = {
@@ -4229,7 +4233,7 @@ fun EpubViewerScreen(
                         publishTtsStatus(message)
                     }
                     if (completed) {
-                        if (targetChapterIndex < chapters.lastIndex) {
+                        if (epubTtsAutoNextChapter && targetChapterIndex < chapters.lastIndex) {
                             autoAdvanceTtsChapterIndex = targetChapterIndex
                         } else {
                             publishTtsStatus(context.getString(R.string.epub_tts_finished))
@@ -6063,6 +6067,7 @@ private class EpubTtsSession(
         enginePackage: String?,
         voiceName: String?,
         preferredLocale: Locale,
+        speechRate: Float,
         utteranceId: String,
         chunks: List<EpubTtsChunk>,
         onPreparing: () -> Unit,
@@ -6079,9 +6084,10 @@ private class EpubTtsSession(
             return
         }
         val totalTextLength = normalizedChunks.sumOf { it.text.length }
-        Log.d(EPUB_DEBUG, "[TTS] speak request engine=${enginePackage ?: "<default>"} voice=${voiceName ?: "<default>"} locale=${preferredLocale.toLanguageTag()} textLength=$totalTextLength chunks=${normalizedChunks.size} utteranceId=$utteranceId")
+        val normalizedSpeechRate = speechRate.coerceIn(0.5f, 3.0f)
+        Log.d(EPUB_DEBUG, "[TTS] speak request engine=${enginePackage ?: "<default>"} voice=${voiceName ?: "<default>"} locale=${preferredLocale.toLanguageTag()} speechRate=$normalizedSpeechRate textLength=$totalTextLength chunks=${normalizedChunks.size} utteranceId=$utteranceId")
         mainHandler.post(onPreparing)
-        val instance = ensureEngine(enginePackage, voiceName, preferredLocale, onError) ?: return
+        val instance = ensureEngine(enginePackage, voiceName, preferredLocale, normalizedSpeechRate, onError) ?: return
         var started = false
         var finished = false
         var completedCount = 0
@@ -6194,6 +6200,7 @@ private class EpubTtsSession(
         enginePackage: String?,
         voiceName: String?,
         preferredLocale: Locale,
+        speechRate: Float,
         onError: (String) -> Unit
     ): TextToSpeech? {
         val normalizedEngine = enginePackage?.trim()?.takeIf { it.isNotEmpty() }
@@ -6238,6 +6245,8 @@ private class EpubTtsSession(
                 Log.w(EPUB_DEBUG, "[TTS] requested voice missing engine=$currentEnginePackage voice=$normalizedVoiceName")
             }
         }
+        val speechRateResult = instance.setSpeechRate(speechRate)
+        Log.d(EPUB_DEBUG, "[TTS] setSpeechRate rate=$speechRate result=$speechRateResult engine=$currentEnginePackage")
         return instance
     }
 }
