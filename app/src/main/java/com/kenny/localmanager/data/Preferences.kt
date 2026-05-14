@@ -41,6 +41,8 @@ private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_ope
 private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
 private val EPUB_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("epub_zoom_percent_by_uri_json")
+private val EPUB_TTS_ENGINE_PACKAGE = stringPreferencesKey("epub_tts_engine_package")
+private val EPUB_TTS_VOICE_NAME = stringPreferencesKey("epub_tts_voice_name")
 private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
@@ -95,6 +97,14 @@ class Preferences(private val context: Context) {
 
     val epubDictLookupWords: Flow<List<String>> = context.dataStore.data.map { prefs ->
         parseStringListJson(prefs[EPUB_DICT_LOOKUP_WORDS_JSON])
+    }
+
+    val epubTtsEnginePackage: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[EPUB_TTS_ENGINE_PACKAGE]?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    val epubTtsVoiceName: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[EPUB_TTS_VOICE_NAME]?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     val dictQueryHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
@@ -244,6 +254,28 @@ class Preferences(private val context: Context) {
                 prefs.remove(EPUB_DICT_LOOKUP_WORDS_JSON)
             } else {
                 prefs[EPUB_DICT_LOOKUP_WORDS_JSON] = stringListToJson(normalized)
+            }
+        }
+    }
+
+    suspend fun setEpubTtsEnginePackage(packageName: String?) {
+        context.dataStore.edit { prefs ->
+            val normalized = packageName?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalized == null) {
+                prefs.remove(EPUB_TTS_ENGINE_PACKAGE)
+            } else {
+                prefs[EPUB_TTS_ENGINE_PACKAGE] = normalized
+            }
+        }
+    }
+
+    suspend fun setEpubTtsVoiceName(voiceName: String?) {
+        context.dataStore.edit { prefs ->
+            val normalized = voiceName?.trim()?.takeIf { it.isNotEmpty() }
+            if (normalized == null) {
+                prefs.remove(EPUB_TTS_VOICE_NAME)
+            } else {
+                prefs[EPUB_TTS_VOICE_NAME] = normalized
             }
         }
     }

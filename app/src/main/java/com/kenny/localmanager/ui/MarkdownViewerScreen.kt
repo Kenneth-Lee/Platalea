@@ -12,6 +12,8 @@ import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import android.os.Handler
 import android.os.Looper
@@ -46,11 +48,15 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Bookmarks
@@ -61,6 +67,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Badge
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -93,6 +101,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
+import androidx.core.text.HtmlCompat
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
@@ -103,8 +113,11 @@ import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.epub.EpubBookmark
 import com.kenny.localmanager.epub.EpubBookmarkManager
 import com.kenny.localmanager.epub.EpubReadingProgress
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
 import org.commonmark.renderer.html.HtmlRenderer
@@ -117,6 +130,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.util.Locale
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -144,6 +158,7 @@ import com.kenny.localmanager.dict.loadImportedStarDict
 import com.kenny.localmanager.dict.lookupExactWord
 import com.kenny.localmanager.dict.readStarDictExplanation
 import com.kenny.localmanager.dict.StarDictLoaded
+import kotlin.coroutines.resume
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
@@ -3675,8 +3690,29 @@ fun EpubViewerScreen(
     var currentScrollRatio by remember { mutableStateOf(0f) }
     var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showTtsEngineDialog by remember { mutableStateOf(false) }
+    var showTtsVoiceDialog by remember { mutableStateOf(false) }
+    var availableTtsEngines by remember { mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList()) }
+    var ttsEngineLoading by remember { mutableStateOf(false) }
+    var ttsStatusMessage by remember { mutableStateOf<String?>(null) }
+    var ttsIsStarting by remember { mutableStateOf(false) }
+    var ttsIsSpeaking by remember { mutableStateOf(false) }
+    var ttsRequestJob by remember { mutableStateOf<Job?>(null) }
+    var ttsSpeakingChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingTtsStartChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var ttsPendingRefreshAttempted by remember { mutableStateOf(false) }
+    var autoAdvanceTtsChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var currentChapterReadableText by remember { mutableStateOf("") }
+    var chapterTextLoading by remember { mutableStateOf(false) }
+    val preferredTtsLocale = remember(extractResult.bookInfo.language) {
+        preferredEpubTtsLocale(extractResult.bookInfo.language)
+    }
+    val selectedTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
+    val ttsSession = remember { EpubTtsSession(context) }
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -3881,6 +3917,33 @@ fun EpubViewerScreen(
     val opfDir = extractResult.opfDir
     val chapterScrollRatios = remember { mutableMapOf<Int, Float>() }
 
+    fun requestRefreshTtsEngines() {
+        scope.launch {
+            ttsEngineLoading = true
+            availableTtsEngines = withContext(Dispatchers.IO) {
+                loadOfflineTtsEngines(context, preferredTtsLocale)
+            }
+            ttsEngineLoading = false
+        }
+    }
+
+    val effectiveTtsEngine = remember(availableTtsEngines, selectedTtsEnginePackage) {
+        availableTtsEngines.firstOrNull { it.packageName == selectedTtsEnginePackage }
+            ?: availableTtsEngines.firstOrNull()
+    }
+    val effectiveTtsVoice = remember(effectiveTtsEngine, selectedTtsVoiceName) {
+        selectedTtsVoiceName?.let { selectedVoice ->
+            effectiveTtsEngine?.offlineVoices?.firstOrNull { it.name == selectedVoice }
+        }
+    }
+
+    fun publishTtsStatus(message: String, toast: Boolean = true) {
+        ttsStatusMessage = message
+        if (toast) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     fun rememberedChapterScrollRatio(index: Int, fallback: Float = 0f): Float {
         return chapterScrollRatios[index] ?: fallback
     }
@@ -4000,8 +4063,170 @@ fun EpubViewerScreen(
         }
     }
 
+    DisposableEffect(ttsSession) {
+        onDispose {
+            ttsRequestJob?.cancel()
+            ttsSession.shutdown()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        requestRefreshTtsEngines()
+    }
+
+    LaunchedEffect(showTtsEngineDialog) {
+        if (showTtsEngineDialog) {
+            requestRefreshTtsEngines()
+        }
+    }
+
+    LaunchedEffect(chapterFile?.absolutePath) {
+        chapterTextLoading = true
+        currentChapterReadableText = withContext(Dispatchers.IO) {
+            if (chapterFile == null || !chapterFile.exists()) {
+                ""
+            } else {
+                runCatching {
+                    extractReadableTextFromHtml(chapterFile.readText())
+                }.getOrElse { error ->
+                    logDebug?.invoke("[EPUB-TTS] 提取章节文本失败: ${error.javaClass.simpleName}: ${error.message}")
+                    ""
+                }
+            }
+        }
+        chapterTextLoading = false
+    }
+
     LaunchedEffect(currentChapterIndex) {
         regexFindUiState = RegexFindUiState()
+        if ((ttsIsSpeaking || pendingTtsStartChapterIndex != null || ttsIsStarting) && currentChapterIndex != (ttsSpeakingChapterIndex ?: pendingTtsStartChapterIndex ?: currentChapterIndex)) {
+            ttsRequestJob?.cancel()
+            ttsRequestJob = null
+            ttsSession.stop()
+            ttsIsStarting = false
+            ttsIsSpeaking = false
+            ttsSpeakingChapterIndex = null
+            pendingTtsStartChapterIndex = null
+            ttsPendingRefreshAttempted = false
+            autoAdvanceTtsChapterIndex = null
+            publishTtsStatus(context.getString(R.string.epub_tts_chapter_switched))
+        }
+    }
+
+    LaunchedEffect(autoAdvanceTtsChapterIndex) {
+        val finishedChapterIndex = autoAdvanceTtsChapterIndex ?: return@LaunchedEffect
+        autoAdvanceTtsChapterIndex = null
+        val nextIndex = finishedChapterIndex + 1
+        if (nextIndex in chapters.indices) {
+            pendingTtsStartChapterIndex = nextIndex
+            ttsPendingRefreshAttempted = false
+            switchToChapter(nextIndex)
+            showToc = false
+        } else {
+            publishTtsStatus(context.getString(R.string.epub_tts_finished))
+        }
+    }
+
+    LaunchedEffect(
+        pendingTtsStartChapterIndex,
+        currentChapterReadableText,
+        chapterTextLoading,
+        selectedTtsEnginePackage,
+        selectedTtsVoiceName,
+        availableTtsEngines,
+        ttsEngineLoading
+    ) {
+        val targetChapterIndex = pendingTtsStartChapterIndex ?: return@LaunchedEffect
+        if (targetChapterIndex != currentChapterIndex) return@LaunchedEffect
+        if (chapterTextLoading) {
+            publishTtsStatus(context.getString(R.string.epub_tts_preparing))
+            return@LaunchedEffect
+        }
+        if (currentChapterReadableText.isBlank()) {
+            pendingTtsStartChapterIndex = null
+            ttsPendingRefreshAttempted = false
+            publishTtsStatus(context.getString(R.string.epub_tts_no_text))
+            return@LaunchedEffect
+        }
+        if (ttsEngineLoading) {
+            publishTtsStatus(context.getString(R.string.epub_tts_engine_loading))
+            return@LaunchedEffect
+        }
+        if (availableTtsEngines.isEmpty()) {
+            if (!ttsPendingRefreshAttempted) {
+                ttsPendingRefreshAttempted = true
+                requestRefreshTtsEngines()
+                publishTtsStatus(context.getString(R.string.epub_tts_engine_loading))
+                return@LaunchedEffect
+            }
+            pendingTtsStartChapterIndex = null
+            ttsPendingRefreshAttempted = false
+            publishTtsStatus(context.getString(R.string.epub_tts_engine_empty))
+            return@LaunchedEffect
+        }
+        val chosenEnginePackage = selectedTtsEnginePackage
+            ?.takeIf { selected -> availableTtsEngines.any { it.packageName == selected } }
+            ?: availableTtsEngines.firstOrNull()?.packageName
+        if (chosenEnginePackage == null) {
+            pendingTtsStartChapterIndex = null
+            ttsPendingRefreshAttempted = false
+            publishTtsStatus(context.getString(R.string.epub_tts_engine_empty))
+            return@LaunchedEffect
+        }
+        pendingTtsStartChapterIndex = null
+        ttsPendingRefreshAttempted = false
+        val chapterTitle = currentChapter?.title ?: "第${targetChapterIndex + 1}章"
+        val utteranceId = "epub_${epubUri.hashCode()}_${targetChapterIndex}_${System.currentTimeMillis()}"
+        val speakLocale = effectiveTtsVoice
+            ?.localeTag
+            ?.takeIf { it.isNotBlank() && !it.equals("und", ignoreCase = true) }
+            ?.let(Locale::forLanguageTag)
+            ?: preferredTtsLocale
+        ttsRequestJob?.cancel()
+        ttsRequestJob = scope.launch {
+            ttsSession.speak(
+                enginePackage = chosenEnginePackage,
+                voiceName = effectiveTtsVoice?.name,
+                preferredLocale = speakLocale,
+                utteranceId = utteranceId,
+                text = currentChapterReadableText,
+                onPreparing = {
+                    ttsIsStarting = true
+                    ttsIsSpeaking = false
+                    ttsSpeakingChapterIndex = null
+                    publishTtsStatus(context.getString(R.string.epub_tts_engine_loading), toast = false)
+                },
+                onStart = {
+                    ttsIsStarting = false
+                    ttsIsSpeaking = true
+                    ttsSpeakingChapterIndex = targetChapterIndex
+                    publishTtsStatus(context.getString(R.string.epub_tts_running, chapterTitle))
+                },
+                onFinish = { completed, message ->
+                    ttsRequestJob = null
+                    ttsIsStarting = false
+                    ttsIsSpeaking = false
+                    ttsSpeakingChapterIndex = null
+                    if (!message.isNullOrBlank()) {
+                        publishTtsStatus(message)
+                    }
+                    if (completed) {
+                        if (targetChapterIndex < chapters.lastIndex) {
+                            autoAdvanceTtsChapterIndex = targetChapterIndex
+                        } else {
+                            publishTtsStatus(context.getString(R.string.epub_tts_finished))
+                        }
+                    }
+                },
+                onError = { error ->
+                    ttsRequestJob = null
+                    ttsIsStarting = false
+                    ttsIsSpeaking = false
+                    ttsSpeakingChapterIndex = null
+                    publishTtsStatus(error)
+                }
+            )
+        }
     }
 
     // 跳转到指定章节
@@ -4116,6 +4341,242 @@ fun EpubViewerScreen(
             onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
             onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
+        )
+    }
+
+    if (showTtsEngineDialog) {
+        AlertDialog(
+            onDismissRequest = { showTtsEngineDialog = false },
+            title = { Text(context.getString(R.string.epub_tts_engine_title)) },
+            text = {
+                when {
+                    ttsEngineLoading -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator()
+                            Spacer(Modifier.height(12.dp))
+                            Text(context.getString(R.string.epub_tts_engine_loading))
+                        }
+                    }
+                    availableTtsEngines.isEmpty() -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_engine_empty))
+                        }
+                    }
+                    else -> {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            items(availableTtsEngines) { engine ->
+                                val selected = selectedTtsEnginePackage == engine.packageName
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = {
+                                        scope.launch {
+                                            runCatching {
+                                                prefs.setEpubTtsEnginePackage(engine.packageName)
+                                                prefs.setEpubTtsVoiceName(null)
+                                            }.onSuccess {
+                                                ttsSession.shutdown()
+                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
+                                                showTtsEngineDialog = false
+                                            }.onFailure { error ->
+                                                publishTtsStatus(context.getString(
+                                                    R.string.epub_tts_engine_save_failed,
+                                                    error.message ?: error.javaClass.simpleName
+                                                ))
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(
+                                            selected = selected,
+                                            onClick = null
+                                        )
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(engine.label, style = MaterialTheme.typography.bodyLarge)
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_engine_voice_count, engine.offlineVoiceCount),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (engine.supportsPreferredLocale) {
+                                                Text(
+                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            if (engine.sampleLocaleTags.isNotEmpty()) {
+                                                Text(
+                                                    text = engine.sampleLocaleTags.joinToString(" · "),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_engine_package, engine.packageName),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTtsEngineDialog = false }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { requestRefreshTtsEngines() }) {
+                    Text(context.getString(R.string.common_refresh))
+                }
+            }
+        )
+    }
+
+    if (showTtsVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = { showTtsVoiceDialog = false },
+            title = { Text(context.getString(R.string.epub_tts_voice_title)) },
+            text = {
+                when {
+                    ttsEngineLoading -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator()
+                            Spacer(Modifier.height(12.dp))
+                            Text(context.getString(R.string.epub_tts_voice_loading))
+                        }
+                    }
+                    effectiveTtsEngine == null -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_engine_empty))
+                        }
+                    }
+                    effectiveTtsEngine.offlineVoices.isEmpty() -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_voice_empty))
+                        }
+                    }
+                    else -> {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            item {
+                                val selected = selectedTtsVoiceName == null
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = {
+                                        scope.launch {
+                                            runCatching {
+                                                prefs.setEpubTtsVoiceName(null)
+                                            }.onSuccess {
+                                                ttsSession.shutdown()
+                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
+                                                showTtsVoiceDialog = false
+                                            }.onFailure { error ->
+                                                publishTtsStatus(context.getString(
+                                                    R.string.epub_tts_voice_save_failed,
+                                                    error.message ?: error.javaClass.simpleName
+                                                ))
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(context.getString(R.string.epub_tts_voice_default_choice), modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                            items(effectiveTtsEngine.offlineVoices) { voice ->
+                                val selected = selectedTtsVoiceName == voice.name
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = {
+                                        scope.launch {
+                                            runCatching {
+                                                prefs.setEpubTtsVoiceName(voice.name)
+                                            }.onSuccess {
+                                                ttsSession.shutdown()
+                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
+                                                showTtsVoiceDialog = false
+                                            }.onFailure { error ->
+                                                publishTtsStatus(context.getString(
+                                                    R.string.epub_tts_voice_save_failed,
+                                                    error.message ?: error.javaClass.simpleName
+                                                ))
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(voice.label, style = MaterialTheme.typography.bodyLarge)
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_voice_locale, voice.localeTag),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (voice.supportsPreferredLocale) {
+                                                Text(
+                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showTtsVoiceDialog = false }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { requestRefreshTtsEngines() }) {
+                    Text(context.getString(R.string.common_refresh))
+                }
+            }
         )
     }
 
@@ -4364,50 +4825,126 @@ fun EpubViewerScreen(
                     }
                 },
                 actions = {
-                    WebViewRegexFindAction(enabled = webViewRef.value != null) {
-                        showFindDialog = true
-                    }
                     // 目录按钮
                     IconButton(onClick = { showToc = true }) {
                         Icon(Icons.Default.Menu, contentDescription = "目录")
                     }
-                    // 收藏按钮
-                    IconButton(onClick = { showAddBookmark = true }) {
-                        Icon(Icons.Default.BookmarkAdd, contentDescription = "添加收藏")
-                    }
-                    // 收藏夹按钮
-                    IconButton(onClick = { showBookmarks = true }) {
-                        BadgedBox(
-                            badge = {
-                                if (epubBookmarks.isNotEmpty()) {
-                                    Badge { Text("${epubBookmarks.size}", style = MaterialTheme.typography.labelSmall) }
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            BadgedBox(
+                                badge = {
+                                    if (epubBookmarks.isNotEmpty()) {
+                                        Badge { Text("${epubBookmarks.size}", style = MaterialTheme.typography.labelSmall) }
+                                    }
                                 }
+                            ) {
+                                Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
                             }
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
                         ) {
-                            Icon(Icons.Default.Bookmarks, contentDescription = "收藏夹")
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (ttsIsSpeaking) context.getString(R.string.epub_tts_stop)
+                                        else context.getString(R.string.epub_tts_play)
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (ttsIsSpeaking) {
+                                        ttsRequestJob?.cancel()
+                                        ttsRequestJob = null
+                                        ttsSession.stop()
+                                        ttsIsStarting = false
+                                        ttsIsSpeaking = false
+                                        ttsSpeakingChapterIndex = null
+                                        pendingTtsStartChapterIndex = null
+                                        ttsPendingRefreshAttempted = false
+                                        autoAdvanceTtsChapterIndex = null
+                                        publishTtsStatus(context.getString(R.string.epub_tts_stopped))
+                                    } else {
+                                        ttsPendingRefreshAttempted = false
+                                        pendingTtsStartChapterIndex = currentChapterIndex
+                                        publishTtsStatus(context.getString(R.string.epub_tts_start_requested, currentChapter?.title ?: "第${currentChapterIndex + 1}章"))
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (ttsIsSpeaking) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showTtsEngineDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showTtsVoiceDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_find)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showFindDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_add_bookmark)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showAddBookmark = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_view_bookmarks)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showBookmarks = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_zoom_in)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    scalePercent = minOf(200, scalePercent + 25)
+                                    val appliedScalePercent = scalePercent
+                                    webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
+                                    scope.launch(Dispatchers.IO) {
+                                        prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.ZoomIn, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_zoom_out)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    scalePercent = maxOf(50, scalePercent - 25)
+                                    val appliedScalePercent = scalePercent
+                                    webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
+                                    scope.launch(Dispatchers.IO) {
+                                        prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                                    }
+                                },
+                                leadingIcon = { Icon(Icons.Default.ZoomOut, contentDescription = null) }
+                            )
                         }
-                    }
-                    // 缩小
-                    IconButton(onClick = {
-                        scalePercent = maxOf(50, scalePercent - 25)
-                        val appliedScalePercent = scalePercent
-                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
-                        scope.launch(Dispatchers.IO) {
-                            prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
-                        }
-                    }) {
-                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
-                    }
-                    // 放大
-                    IconButton(onClick = {
-                        scalePercent = minOf(200, scalePercent + 25)
-                        val appliedScalePercent = scalePercent
-                        webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
-                        scope.launch(Dispatchers.IO) {
-                            prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
-                        }
-                    }) {
-                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -4491,11 +5028,22 @@ fun EpubViewerScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    "${currentChapterIndex + 1} / ${chapters.size}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "${currentChapterIndex + 1} / ${chapters.size}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    ttsStatusMessage?.takeIf { it.isNotBlank() }?.let { message ->
+                                        Text(
+                                            text = message,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = if (ttsIsSpeaking) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
                                 // 展开/收起按钮（有词典时显示）
                                 if (hasDictLoaded) {
                                     IconButton(
@@ -4970,6 +5518,461 @@ private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
         else -> "末尾"
     }
     return "章节内$section ($percent%)"
+}
+
+data class EpubOfflineTtsEngine(
+    val packageName: String,
+    val label: String,
+    val offlineVoiceCount: Int,
+    val supportsPreferredLocale: Boolean,
+    val sampleLocaleTags: List<String>,
+    val offlineVoices: List<EpubOfflineTtsVoice>
+)
+
+data class EpubOfflineTtsVoice(
+    val name: String,
+    val label: String,
+    val localeTag: String,
+    val supportsPreferredLocale: Boolean
+)
+
+fun preferredEpubTtsLocale(languageTag: String?): Locale {
+    val normalized = languageTag
+        ?.trim()
+        ?.replace('_', '-')
+        ?.takeIf { it.isNotEmpty() }
+        ?: return Locale.getDefault()
+    return runCatching { Locale.forLanguageTag(normalized) }
+        .getOrNull()
+        ?.takeIf { it.language.isNotBlank() && it.language != "und" }
+        ?: Locale.getDefault()
+}
+
+private fun extractReadableTextFromHtml(html: String): String {
+    val withoutScript = html
+        .replace(Regex("(?is)<script[^>]*>.*?</script>"), " ")
+        .replace(Regex("(?is)<style[^>]*>.*?</style>"), " ")
+        .replace(Regex("(?is)<!--.*?-->"), " ")
+        .replace(Regex("(?i)<br\\s*/?>"), "\n")
+        .replace(Regex("(?i)</(p|div|h[1-6]|li|blockquote|tr|section|article|details|summary|pre)>"), "\n")
+    val plain = HtmlCompat.fromHtml(withoutScript, HtmlCompat.FROM_HTML_MODE_LEGACY).toString()
+    return plain
+        .replace('\u00A0', ' ')
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString("\n")
+}
+
+private suspend fun initTextToSpeechWithTimeout(
+    context: Context,
+    enginePackage: String?,
+    timeoutMs: Long = 8_000L
+): TextToSpeech? {
+    Log.d(EPUB_DEBUG, "[TTS] init request engine=${enginePackage ?: "<default>"} timeoutMs=$timeoutMs")
+    val result = withTimeoutOrNull(timeoutMs) {
+        initTextToSpeech(context, enginePackage)
+    }
+    if (result == null) {
+        Log.w(EPUB_DEBUG, "[TTS] init timeout/null engine=${enginePackage ?: "<default>"} timeoutMs=$timeoutMs")
+    } else {
+        Log.d(EPUB_DEBUG, "[TTS] init success engine=${enginePackage ?: "<default>"}")
+    }
+    return result
+}
+
+private suspend fun initTextToSpeech(context: Context, enginePackage: String?): TextToSpeech? =
+    withContext(Dispatchers.Main.immediate) {
+        suspendCancellableCoroutine { continuation ->
+            val appContext = context.applicationContext
+            val holder = arrayOfNulls<TextToSpeech>(1)
+            var resumed = false
+            Log.d(EPUB_DEBUG, "[TTS] constructing TextToSpeech on main thread engine=${enginePackage ?: "<default>"}")
+            val listener = TextToSpeech.OnInitListener { status ->
+                val tts = holder[0]
+                Log.d(EPUB_DEBUG, "[TTS] onInit engine=${enginePackage ?: "<default>"} status=$status resumed=$resumed active=${continuation.isActive}")
+                if (resumed) {
+                    tts?.shutdown()
+                    return@OnInitListener
+                }
+                resumed = true
+                if (!continuation.isActive) {
+                    tts?.shutdown()
+                    return@OnInitListener
+                }
+                if (status == TextToSpeech.SUCCESS && tts != null) {
+                    continuation.resume(tts)
+                } else {
+                    tts?.shutdown()
+                    continuation.resume(null)
+                }
+            }
+            val tts = if (enginePackage.isNullOrBlank()) {
+                TextToSpeech(appContext, listener)
+            } else {
+                TextToSpeech(appContext, listener, enginePackage)
+            }
+            holder[0] = tts
+            continuation.invokeOnCancellation {
+                Log.w(EPUB_DEBUG, "[TTS] init cancelled engine=${enginePackage ?: "<default>"} resumed=$resumed")
+                if (!resumed) {
+                    tts.shutdown()
+                }
+            }
+        }
+    }
+
+suspend fun inspectOfflineTtsEngine(
+    context: Context,
+    packageName: String,
+    label: String,
+    preferredLocale: Locale
+): EpubOfflineTtsEngine? {
+    Log.d(EPUB_DEBUG, "[TTS] inspect engine start package=$packageName label=$label locale=${preferredLocale.toLanguageTag()}")
+    val tts = initTextToSpeechWithTimeout(context, packageName, timeoutMs = 4_000L) ?: return null
+    return try {
+        val offlineVoices = tts.voices.orEmpty().filter { !it.isNetworkConnectionRequired }
+        Log.d(EPUB_DEBUG, "[TTS] inspect engine voices package=$packageName offlineCount=${offlineVoices.size} total=${tts.voices?.size ?: 0}")
+        if (offlineVoices.isEmpty()) return null
+        val preferredLanguage = preferredLocale.language
+        val voiceList = offlineVoices.map { voice ->
+            val localeTag = voice.locale?.toLanguageTag()?.takeIf { it.isNotBlank() } ?: "und"
+            val matchesPreferred = voice.locale?.language?.equals(preferredLanguage, ignoreCase = true) == true
+            EpubOfflineTtsVoice(
+                name = voice.name,
+                label = buildString {
+                    append(localeTag)
+                    append(" · ")
+                    append(voice.name)
+                },
+                localeTag = localeTag,
+                supportsPreferredLocale = matchesPreferred
+            )
+        }.sortedWith(
+            compareByDescending<EpubOfflineTtsVoice> { it.supportsPreferredLocale }
+                .thenBy { it.localeTag }
+                .thenBy { it.name }
+        )
+        val localeTags = offlineVoices
+            .mapNotNull { it.locale?.toLanguageTag()?.takeIf { tag -> tag.isNotBlank() } }
+            .distinct()
+            .sorted()
+        val supportsPreferredLocale = offlineVoices.any { voice ->
+            val voiceLocale = voice.locale ?: return@any false
+            voiceLocale.language.equals(preferredLanguage, ignoreCase = true)
+        }
+        EpubOfflineTtsEngine(
+            packageName = packageName,
+            label = label.ifBlank { packageName },
+            offlineVoiceCount = offlineVoices.size,
+            supportsPreferredLocale = supportsPreferredLocale,
+            sampleLocaleTags = localeTags.take(3),
+            offlineVoices = voiceList
+        )
+    } finally {
+        Log.d(EPUB_DEBUG, "[TTS] inspect engine shutdown package=$packageName")
+        tts.shutdown()
+    }
+}
+
+suspend fun loadOfflineTtsEngines(
+    context: Context,
+    preferredLocale: Locale
+): List<EpubOfflineTtsEngine> {
+    Log.d(EPUB_DEBUG, "[TTS] load engines start locale=${preferredLocale.toLanguageTag()}")
+    val bootstrap = initTextToSpeechWithTimeout(context, null, timeoutMs = 4_000L) ?: return emptyList()
+    val engines = try {
+        bootstrap.engines.orEmpty().map { it.name to it.label }
+    } finally {
+        bootstrap.shutdown()
+    }
+    Log.d(EPUB_DEBUG, "[TTS] load engines discovered count=${engines.size} names=${engines.joinToString { it.first }}")
+    val result = engines.mapNotNull { (packageName, label) ->
+        runCatching {
+            inspectOfflineTtsEngine(context, packageName, label, preferredLocale)
+        }.onFailure { error ->
+            Log.e(EPUB_DEBUG, "[TTS] inspect engine failure package=$packageName", error)
+        }.getOrNull()
+    }.sortedWith(
+        compareByDescending<EpubOfflineTtsEngine> { it.supportsPreferredLocale }
+            .thenByDescending { it.offlineVoiceCount }
+            .thenBy { it.label.lowercase(Locale.getDefault()) }
+    )
+    Log.d(EPUB_DEBUG, "[TTS] load engines result count=${result.size} names=${result.joinToString { it.packageName }}")
+    return result
+}
+
+private fun splitTextForTts(text: String, maxChunkLength: Int = 3000): List<String> {
+    val normalized = text
+        .replace("\r\n", "\n")
+        .replace('\r', '\n')
+        .trim()
+    if (normalized.isEmpty()) return emptyList()
+    if (normalized.length <= maxChunkLength) return listOf(normalized)
+
+    val chunks = mutableListOf<String>()
+    val paragraphs = normalized
+        .split(Regex("\\n{2,}"))
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+
+    fun flush(buffer: StringBuilder) {
+        val chunk = buffer.toString().trim()
+        if (chunk.isNotEmpty()) {
+            chunks += chunk
+        }
+        buffer.clear()
+    }
+
+    fun appendSegment(segment: String, buffer: StringBuilder) {
+        val trimmed = segment.trim()
+        if (trimmed.isEmpty()) return
+        if (trimmed.length <= maxChunkLength) {
+            val prefix = if (buffer.isEmpty()) "" else "\n\n"
+            if (buffer.length + prefix.length + trimmed.length > maxChunkLength) {
+                flush(buffer)
+            }
+            if (buffer.isNotEmpty()) buffer.append("\n\n")
+            buffer.append(trimmed)
+            return
+        }
+
+        val sentenceParts = trimmed
+            .split(Regex("(?<=[。！？!?；;.:])\\s+|(?<=\\.)\\s+"))
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+
+        if (sentenceParts.size <= 1) {
+            var start = 0
+            while (start < trimmed.length) {
+                val end = (start + maxChunkLength).coerceAtMost(trimmed.length)
+                val piece = trimmed.substring(start, end).trim()
+                if (piece.isNotEmpty()) {
+                    if (buffer.isNotEmpty()) flush(buffer)
+                    chunks += piece
+                }
+                start = end
+            }
+            return
+        }
+
+        sentenceParts.forEach { sentence ->
+            appendSegment(sentence, buffer)
+        }
+    }
+
+    val buffer = StringBuilder()
+    paragraphs.forEach { paragraph ->
+        appendSegment(paragraph, buffer)
+    }
+    flush(buffer)
+    return chunks
+}
+
+private class EpubTtsSession(
+    context: Context
+) {
+    private val appContext = context.applicationContext
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var tts: TextToSpeech? = null
+    private var currentEnginePackage: String? = null
+
+    private fun buildSpeakFailureMessage(
+        enginePackage: String?,
+        voiceName: String?,
+        preferredLocale: Locale,
+        detail: String
+    ): String {
+        val engineLabel = enginePackage ?: "system-default"
+        val voiceLabel = voiceName ?: "default"
+        return appContext.getString(
+            R.string.epub_tts_start_failed_detail,
+            engineLabel,
+            voiceLabel,
+            preferredLocale.toLanguageTag(),
+            detail
+        )
+    }
+
+    suspend fun speak(
+        enginePackage: String?,
+        voiceName: String?,
+        preferredLocale: Locale,
+        utteranceId: String,
+        text: String,
+        onPreparing: () -> Unit,
+        onStart: () -> Unit,
+        onFinish: (completed: Boolean, message: String?) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        val normalizedText = text.trim()
+        if (normalizedText.isEmpty()) {
+            onError(appContext.getString(R.string.epub_tts_no_text))
+            return
+        }
+        val chunks = splitTextForTts(normalizedText)
+        if (chunks.isEmpty()) {
+            onError(appContext.getString(R.string.epub_tts_no_text))
+            return
+        }
+        Log.d(EPUB_DEBUG, "[TTS] speak request engine=${enginePackage ?: "<default>"} voice=${voiceName ?: "<default>"} locale=${preferredLocale.toLanguageTag()} textLength=${normalizedText.length} utteranceId=$utteranceId")
+        mainHandler.post(onPreparing)
+        val instance = ensureEngine(enginePackage, voiceName, preferredLocale, onError) ?: return
+        var started = false
+        var finished = false
+        var completedCount = 0
+        val utteranceIds = chunks.mapIndexed { index, _ -> "$utteranceId#$index" }.toSet()
+
+        fun finishOnce(completed: Boolean, message: String?) {
+            if (finished) return
+            finished = true
+            onFinish(completed, message)
+        }
+
+        instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                if (utteranceId !in utteranceIds) return
+                Log.d(EPUB_DEBUG, "[TTS] onStart utteranceId=$utteranceId engine=$currentEnginePackage")
+                if (!started) {
+                    started = true
+                    mainHandler.post(onStart)
+                }
+            }
+
+            override fun onDone(utteranceId: String?) {
+                if (utteranceId !in utteranceIds) return
+                Log.d(EPUB_DEBUG, "[TTS] onDone utteranceId=$utteranceId engine=$currentEnginePackage")
+                completedCount += 1
+                if (completedCount >= chunks.size) {
+                    mainHandler.post { finishOnce(true, null) }
+                }
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                if (utteranceId !in utteranceIds) return
+                Log.e(EPUB_DEBUG, "[TTS] onError(deprecated) utteranceId=$utteranceId engine=$currentEnginePackage")
+                mainHandler.post {
+                    finishOnce(
+                        false,
+                        buildSpeakFailureMessage(
+                            currentEnginePackage,
+                            voiceName,
+                            preferredLocale,
+                            "deprecated-callback utteranceId=$utteranceId"
+                        )
+                    )
+                }
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                if (utteranceId !in utteranceIds) return
+                Log.e(EPUB_DEBUG, "[TTS] onError utteranceId=$utteranceId engine=$currentEnginePackage errorCode=$errorCode")
+                mainHandler.post {
+                    finishOnce(
+                        false,
+                        buildSpeakFailureMessage(
+                            currentEnginePackage,
+                            voiceName,
+                            preferredLocale,
+                            "errorCode=$errorCode utteranceId=$utteranceId"
+                        )
+                    )
+                }
+            }
+
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                if (utteranceId != null && utteranceId !in utteranceIds) return
+                Log.w(EPUB_DEBUG, "[TTS] onStop utteranceId=$utteranceId engine=$currentEnginePackage interrupted=$interrupted")
+                if (!interrupted) return
+                mainHandler.post {
+                    finishOnce(false, appContext.getString(R.string.epub_tts_stopped))
+                }
+            }
+        })
+        instance.stop()
+        chunks.forEachIndexed { index, chunk ->
+            val chunkUtteranceId = "$utteranceId#$index"
+            val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+            val result = instance.speak(chunk, queueMode, null, chunkUtteranceId)
+            Log.d(EPUB_DEBUG, "[TTS] speak returned result=$result engine=$currentEnginePackage utteranceId=$chunkUtteranceId chunk=${index + 1}/${chunks.size} chunkLength=${chunk.length}")
+            if (result == TextToSpeech.ERROR) {
+                onError(
+                    buildSpeakFailureMessage(
+                        currentEnginePackage,
+                        voiceName,
+                        preferredLocale,
+                        "speakResult=$result chunk=${index + 1}/${chunks.size} chunkLength=${chunk.length}"
+                    )
+                )
+                return
+            }
+        }
+    }
+
+    fun stop() {
+        Log.d(EPUB_DEBUG, "[TTS] session stop engine=$currentEnginePackage")
+        tts?.stop()
+    }
+
+    fun shutdown() {
+        Log.d(EPUB_DEBUG, "[TTS] session shutdown engine=$currentEnginePackage")
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+        currentEnginePackage = null
+    }
+
+    private suspend fun ensureEngine(
+        enginePackage: String?,
+        voiceName: String?,
+        preferredLocale: Locale,
+        onError: (String) -> Unit
+    ): TextToSpeech? {
+        val normalizedEngine = enginePackage?.trim()?.takeIf { it.isNotEmpty() }
+        val current = tts
+        val reusable = current != null && currentEnginePackage == normalizedEngine
+        Log.d(EPUB_DEBUG, "[TTS] ensureEngine target=${normalizedEngine ?: "<default>"} reusable=$reusable current=$currentEnginePackage voice=${voiceName ?: "<default>"}")
+        val instance = if (reusable) {
+            current
+        } else {
+            shutdown()
+            initTextToSpeechWithTimeout(appContext, normalizedEngine, timeoutMs = 10_000L)?.also {
+                tts = it
+                currentEnginePackage = normalizedEngine
+            }
+        }
+        if (instance == null) {
+            Log.e(EPUB_DEBUG, "[TTS] ensureEngine failed target=${normalizedEngine ?: "<default>"}")
+            onError(appContext.getString(R.string.epub_tts_engine_init_failed, normalizedEngine ?: "system-default"))
+            return null
+        }
+        val languageResult = instance.setLanguage(preferredLocale)
+        Log.d(EPUB_DEBUG, "[TTS] setLanguage primary locale=${preferredLocale.toLanguageTag()} result=$languageResult engine=$currentEnginePackage")
+        if (languageResult == TextToSpeech.LANG_MISSING_DATA || languageResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+            val fallbackLocale = Locale.getDefault()
+            val fallbackResult = instance.setLanguage(fallbackLocale)
+            Log.d(EPUB_DEBUG, "[TTS] setLanguage fallback locale=${fallbackLocale.toLanguageTag()} result=$fallbackResult engine=$currentEnginePackage")
+            if (fallbackResult == TextToSpeech.LANG_MISSING_DATA || fallbackResult == TextToSpeech.LANG_NOT_SUPPORTED) {
+                Log.e(EPUB_DEBUG, "[TTS] language unsupported engine=$currentEnginePackage preferred=${preferredLocale.toLanguageTag()} fallback=${fallbackLocale.toLanguageTag()}")
+                onError(appContext.getString(R.string.epub_tts_engine_language_failed, preferredLocale.toLanguageTag()))
+                return null
+            }
+        }
+        val normalizedVoiceName = voiceName?.trim()?.takeIf { it.isNotEmpty() }
+        if (normalizedVoiceName != null) {
+            val chosenVoice = instance.voices.orEmpty().firstOrNull { voice ->
+                !voice.isNetworkConnectionRequired && voice.name == normalizedVoiceName
+            }
+            if (chosenVoice != null) {
+                instance.voice = chosenVoice
+                Log.d(EPUB_DEBUG, "[TTS] voice applied engine=$currentEnginePackage voice=${chosenVoice.name} locale=${chosenVoice.locale?.toLanguageTag()}")
+            } else {
+                Log.w(EPUB_DEBUG, "[TTS] requested voice missing engine=$currentEnginePackage voice=$normalizedVoiceName")
+            }
+        }
+        return instance
+    }
 }
 
 /** 支持章节切换和滚动位置恢复的 WebView */
