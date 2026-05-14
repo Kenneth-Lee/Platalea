@@ -3701,12 +3701,13 @@ fun EpubViewerScreen(
     var ttsIsStarting by remember { mutableStateOf(false) }
     var ttsIsSpeaking by remember { mutableStateOf(false) }
     var ttsRequestJob by remember { mutableStateOf<Job?>(null) }
+    var currentChapterTtsSegments by remember { mutableStateOf<List<EpubTtsSegment>>(emptyList()) }
+    var ttsSegmentsLoading by remember { mutableStateOf(false) }
+    var ttsActiveSegmentId by remember { mutableStateOf<String?>(null) }
     var ttsSpeakingChapterIndex by remember { mutableStateOf<Int?>(null) }
     var pendingTtsStartChapterIndex by remember { mutableStateOf<Int?>(null) }
     var ttsPendingRefreshAttempted by remember { mutableStateOf(false) }
     var autoAdvanceTtsChapterIndex by remember { mutableStateOf<Int?>(null) }
-    var currentChapterReadableText by remember { mutableStateOf("") }
-    var chapterTextLoading by remember { mutableStateOf(false) }
     val preferredTtsLocale = remember(extractResult.bookInfo.language) {
         preferredEpubTtsLocale(extractResult.bookInfo.language)
     }
@@ -4066,6 +4067,7 @@ fun EpubViewerScreen(
     DisposableEffect(ttsSession) {
         onDispose {
             ttsRequestJob?.cancel()
+            setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
             ttsSession.shutdown()
         }
     }
@@ -4081,24 +4083,16 @@ fun EpubViewerScreen(
     }
 
     LaunchedEffect(chapterFile?.absolutePath) {
-        chapterTextLoading = true
-        currentChapterReadableText = withContext(Dispatchers.IO) {
-            if (chapterFile == null || !chapterFile.exists()) {
-                ""
-            } else {
-                runCatching {
-                    extractReadableTextFromHtml(chapterFile.readText())
-                }.getOrElse { error ->
-                    logDebug?.invoke("[EPUB-TTS] 提取章节文本失败: ${error.javaClass.simpleName}: ${error.message}")
-                    ""
-                }
-            }
-        }
-        chapterTextLoading = false
+        currentChapterTtsSegments = emptyList()
+        ttsSegmentsLoading = chapterFile != null
+        ttsActiveSegmentId = null
+        setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
     }
 
     LaunchedEffect(currentChapterIndex) {
         regexFindUiState = RegexFindUiState()
+        ttsActiveSegmentId = null
+        setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
         if ((ttsIsSpeaking || pendingTtsStartChapterIndex != null || ttsIsStarting) && currentChapterIndex != (ttsSpeakingChapterIndex ?: pendingTtsStartChapterIndex ?: currentChapterIndex)) {
             ttsRequestJob?.cancel()
             ttsRequestJob = null
@@ -4129,8 +4123,8 @@ fun EpubViewerScreen(
 
     LaunchedEffect(
         pendingTtsStartChapterIndex,
-        currentChapterReadableText,
-        chapterTextLoading,
+        currentChapterTtsSegments,
+        ttsSegmentsLoading,
         selectedTtsEnginePackage,
         selectedTtsVoiceName,
         availableTtsEngines,
@@ -4138,11 +4132,11 @@ fun EpubViewerScreen(
     ) {
         val targetChapterIndex = pendingTtsStartChapterIndex ?: return@LaunchedEffect
         if (targetChapterIndex != currentChapterIndex) return@LaunchedEffect
-        if (chapterTextLoading) {
+        if (ttsSegmentsLoading) {
             publishTtsStatus(context.getString(R.string.epub_tts_preparing))
             return@LaunchedEffect
         }
-        if (currentChapterReadableText.isBlank()) {
+        if (currentChapterTtsSegments.isEmpty()) {
             pendingTtsStartChapterIndex = null
             ttsPendingRefreshAttempted = false
             publishTtsStatus(context.getString(R.string.epub_tts_no_text))
@@ -4182,6 +4176,24 @@ fun EpubViewerScreen(
             ?.takeIf { it.isNotBlank() && !it.equals("und", ignoreCase = true) }
             ?.let(Locale::forLanguageTag)
             ?: preferredTtsLocale
+        val startSegmentIndex = resolveTtsStartSegmentIndex(currentChapterTtsSegments, currentScrollRatio)
+        val speakChunks = currentChapterTtsSegments
+            .drop(startSegmentIndex)
+            .flatMap { segment ->
+                splitTextForTts(segment.text).map { chunkText ->
+                    EpubTtsChunk(
+                        domId = segment.domId,
+                        topRatio = segment.topRatio,
+                        text = chunkText
+                    )
+                }
+            }
+        if (speakChunks.isEmpty()) {
+            pendingTtsStartChapterIndex = null
+            ttsPendingRefreshAttempted = false
+            publishTtsStatus(context.getString(R.string.epub_tts_no_text))
+            return@LaunchedEffect
+        }
         ttsRequestJob?.cancel()
         ttsRequestJob = scope.launch {
             ttsSession.speak(
@@ -4189,7 +4201,7 @@ fun EpubViewerScreen(
                 voiceName = effectiveTtsVoice?.name,
                 preferredLocale = speakLocale,
                 utteranceId = utteranceId,
-                text = currentChapterReadableText,
+                chunks = speakChunks,
                 onPreparing = {
                     ttsIsStarting = true
                     ttsIsSpeaking = false
@@ -4202,11 +4214,17 @@ fun EpubViewerScreen(
                     ttsSpeakingChapterIndex = targetChapterIndex
                     publishTtsStatus(context.getString(R.string.epub_tts_running, chapterTitle))
                 },
+                onChunkStart = { chunk, _, _ ->
+                    ttsActiveSegmentId = chunk.domId
+                    setEpubTtsHighlight(webViewRef.value, chunk.domId, scrollToSegment = true)
+                },
                 onFinish = { completed, message ->
                     ttsRequestJob = null
                     ttsIsStarting = false
                     ttsIsSpeaking = false
                     ttsSpeakingChapterIndex = null
+                    ttsActiveSegmentId = null
+                    setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
                     if (!message.isNullOrBlank()) {
                         publishTtsStatus(message)
                     }
@@ -4223,6 +4241,8 @@ fun EpubViewerScreen(
                     ttsIsStarting = false
                     ttsIsSpeaking = false
                     ttsSpeakingChapterIndex = null
+                    ttsActiveSegmentId = null
+                    setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
                     publishTtsStatus(error)
                 }
             )
@@ -4857,6 +4877,8 @@ fun EpubViewerScreen(
                                     if (ttsIsSpeaking) {
                                         ttsRequestJob?.cancel()
                                         ttsRequestJob = null
+                                        ttsActiveSegmentId = null
+                                        setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
                                         ttsSession.stop()
                                         ttsIsStarting = false
                                         ttsIsSpeaking = false
@@ -4877,14 +4899,6 @@ fun EpubViewerScreen(
                                         contentDescription = null
                                     )
                                 }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_engine)) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    showTtsEngineDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_tts_voice)) },
@@ -5234,10 +5248,19 @@ fun EpubViewerScreen(
                                 }) { view ->
                                     regexFindUiState = RegexFindUiState()
                                     installRegexFindBridge(view)
+                                    installEpubTtsBridge(view)
                                     // 页面加载完成后恢复滚动位置
                                     (view as? GestureWebView)?.restoreScrollPosition()
                                     // 页面完成后再应用最新缩放，避免旧闭包值覆盖。
                                     view.evaluateJavascript("document.body.style.zoom = ${latestScalePercent / 100.0}", null)
+                                    scope.launch {
+                                        ttsSegmentsLoading = true
+                                        currentChapterTtsSegments = collectEpubTtsSegments(view)
+                                        ttsSegmentsLoading = false
+                                        if (ttsActiveSegmentId != null) {
+                                            setEpubTtsHighlight(view, ttsActiveSegmentId, scrollToSegment = false)
+                                        }
+                                    }
                                 }
                                 webViewRef.value = this
                             }
@@ -5321,6 +5344,15 @@ fun EpubViewerScreen(
                                                 background: rgba(13, 110, 253, 0.98);
                                                 color: #ffffff;
                                                 box-shadow: 0 6px 16px rgba(13, 110, 253, 0.34);
+                                            }
+                                            [data-lm-tts-id] {
+                                                transition: background-color 0.22s ease, box-shadow 0.22s ease;
+                                                scroll-margin-top: 72px;
+                                            }
+                                            .lm-epub-tts-active {
+                                                background: rgba(255, 235, 59, 0.28);
+                                                box-shadow: 0 0 0 3px rgba(255, 235, 59, 0.18);
+                                                border-radius: 8px;
                                             }
                                             $extraStyles
                                         </style>
@@ -5536,6 +5568,18 @@ data class EpubOfflineTtsVoice(
     val supportsPreferredLocale: Boolean
 )
 
+data class EpubTtsSegment(
+    val domId: String,
+    val text: String,
+    val topRatio: Float
+)
+
+data class EpubTtsChunk(
+    val domId: String,
+    val topRatio: Float,
+    val text: String
+)
+
 fun preferredEpubTtsLocale(languageTag: String?): Locale {
     val normalized = languageTag
         ?.trim()
@@ -5562,6 +5606,227 @@ private fun extractReadableTextFromHtml(html: String): String {
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .joinToString("\n")
+}
+
+private val EPUB_TTS_BOOTSTRAP_JS = """
+(function() {
+    if (window.__lmEpubTts) {
+        return true;
+    }
+
+    var containerSelector = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, .assistant-content, .content, div';
+    var skipSelector = 'script, style, noscript, summary, .assistant-label, .other-label';
+
+    function normalizeText(value) {
+        return String(value || '')
+            .replace(/\u00a0/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function shouldSkipTextNode(node) {
+        if (!node || !node.nodeValue || !normalizeText(node.nodeValue)) {
+            return true;
+        }
+        var parent = node.parentElement;
+        if (!parent) {
+            return true;
+        }
+        if (parent.closest(skipSelector)) {
+            return true;
+        }
+        if (parent.closest('details:not([open])')) {
+            return true;
+        }
+        return false;
+    }
+
+    function resolveContainer(node) {
+        var parent = node.parentElement;
+        if (!parent) {
+            return null;
+        }
+        var container = parent.closest(containerSelector);
+        if (!container || !document.body.contains(container)) {
+            return null;
+        }
+        if (container.matches(skipSelector)) {
+            return null;
+        }
+        if (container.closest('details:not([open])')) {
+            return null;
+        }
+        return container;
+    }
+
+    function ensureSegmentId(container, index) {
+        var existing = container.getAttribute('data-lm-tts-id');
+        if (existing) {
+            return existing;
+        }
+        var generated = 'lm-tts-segment-' + index;
+        container.setAttribute('data-lm-tts-id', generated);
+        return generated;
+    }
+
+    function collect() {
+        var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+        var ordered = [];
+        var segmentMap = new Map();
+        var node;
+        while ((node = walker.nextNode())) {
+            if (shouldSkipTextNode(node)) {
+                continue;
+            }
+            var container = resolveContainer(node);
+            if (!container) {
+                continue;
+            }
+            var entry = segmentMap.get(container);
+            if (!entry) {
+                entry = {
+                    element: container,
+                    parts: []
+                };
+                segmentMap.set(container, entry);
+                ordered.push(entry);
+            }
+            entry.parts.push(node.nodeValue);
+        }
+
+        var docEl = document.documentElement;
+        var body = document.body;
+        var viewHeight = window.innerHeight || docEl.clientHeight || 0;
+        var docHeight = Math.max(docEl.scrollHeight, body.scrollHeight, docEl.offsetHeight, body.offsetHeight, viewHeight);
+        var maxScroll = Math.max(1, docHeight - viewHeight);
+
+        return ordered.map(function(entry, index) {
+            var text = normalizeText(entry.parts.join(' '));
+            if (!text) {
+                return null;
+            }
+            var domId = ensureSegmentId(entry.element, index);
+            var rect = entry.element.getBoundingClientRect();
+            var top = Math.max(0, rect.top + (window.scrollY || window.pageYOffset || 0));
+            var topRatio = Math.min(1, Math.max(0, top / maxScroll));
+            return {
+                id: domId,
+                text: text,
+                topRatio: topRatio
+            };
+        }).filter(function(item) { return !!item; });
+    }
+
+    function clearHighlight() {
+        document.querySelectorAll('.lm-epub-tts-active').forEach(function(node) {
+            node.classList.remove('lm-epub-tts-active');
+        });
+    }
+
+    function highlight(segmentId, shouldScroll) {
+        clearHighlight();
+        if (!segmentId) {
+            return false;
+        }
+        var target = null;
+        document.querySelectorAll('[data-lm-tts-id]').forEach(function(node) {
+            if (target == null && node.getAttribute('data-lm-tts-id') === segmentId) {
+                target = node;
+            }
+        });
+        if (!target) {
+            return false;
+        }
+        target.classList.add('lm-epub-tts-active');
+        if (shouldScroll) {
+            target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+        }
+        return true;
+    }
+
+    window.__lmEpubTts = {
+        collect: collect,
+        clear: function() { return highlight(null, false); },
+        highlight: highlight
+    };
+    return true;
+})();
+""".trimIndent()
+
+private fun parseEpubTtsSegments(rawResult: String?): List<EpubTtsSegment> {
+    val decoded = decodeJsStringResult(rawResult) ?: return emptyList()
+    return runCatching {
+        val array = org.json.JSONArray(decoded)
+        buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val domId = item.optString("id").trim()
+                val text = item.optString("text").trim()
+                if (domId.isEmpty() || text.isEmpty()) continue
+                add(
+                    EpubTtsSegment(
+                        domId = domId,
+                        text = text,
+                        topRatio = item.optDouble("topRatio", 0.0).toFloat().coerceIn(0f, 1f)
+                    )
+                )
+            }
+        }
+    }.getOrDefault(emptyList())
+}
+
+private fun installEpubTtsBridge(view: WebView?, onInstalled: (() -> Unit)? = null) {
+    if (view == null) {
+        onInstalled?.invoke()
+        return
+    }
+    view.post {
+        view.evaluateJavascript(EPUB_TTS_BOOTSTRAP_JS) {
+            onInstalled?.invoke()
+        }
+    }
+}
+
+private suspend fun collectEpubTtsSegments(view: WebView?): List<EpubTtsSegment> {
+    if (view == null) return emptyList()
+    return suspendCancellableCoroutine { continuation ->
+        installEpubTtsBridge(view) {
+            view.post {
+                view.evaluateJavascript(
+                    """(function(){
+                        try {
+                            return JSON.stringify(window.__lmEpubTts.collect());
+                        } catch (error) {
+                            return JSON.stringify([]);
+                        }
+                    })();""".trimIndent()
+                ) { rawResult ->
+                    if (continuation.isActive) {
+                        continuation.resume(parseEpubTtsSegments(rawResult))
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun setEpubTtsHighlight(view: WebView?, domId: String?, scrollToSegment: Boolean) {
+    if (view == null) return
+    installEpubTtsBridge(view) {
+        val js = if (domId == null) {
+            "window.__lmEpubTts.clear();"
+        } else {
+            val quotedDomId = org.json.JSONObject.quote(domId)
+            "window.__lmEpubTts.highlight($quotedDomId, ${if (scrollToSegment) "true" else "false"});"
+        }
+        view.post { view.evaluateJavascript(js, null) }
+    }
+}
+
+private fun resolveTtsStartSegmentIndex(segments: List<EpubTtsSegment>, currentScrollRatio: Float): Int {
+    if (segments.isEmpty()) return 0
+    val lastBeforeOrAtCurrent = segments.indexOfLast { it.topRatio <= currentScrollRatio + 0.01f }
+    return if (lastBeforeOrAtCurrent >= 0) lastBeforeOrAtCurrent else 0
 }
 
 private suspend fun initTextToSpeechWithTimeout(
@@ -5799,29 +6064,30 @@ private class EpubTtsSession(
         voiceName: String?,
         preferredLocale: Locale,
         utteranceId: String,
-        text: String,
+        chunks: List<EpubTtsChunk>,
         onPreparing: () -> Unit,
         onStart: () -> Unit,
+        onChunkStart: (chunk: EpubTtsChunk, index: Int, total: Int) -> Unit,
         onFinish: (completed: Boolean, message: String?) -> Unit,
         onError: (String) -> Unit
     ) {
-        val normalizedText = text.trim()
-        if (normalizedText.isEmpty()) {
+        val normalizedChunks = chunks
+            .map { chunk -> chunk.copy(text = chunk.text.trim()) }
+            .filter { it.text.isNotEmpty() }
+        if (normalizedChunks.isEmpty()) {
             onError(appContext.getString(R.string.epub_tts_no_text))
             return
         }
-        val chunks = splitTextForTts(normalizedText)
-        if (chunks.isEmpty()) {
-            onError(appContext.getString(R.string.epub_tts_no_text))
-            return
-        }
-        Log.d(EPUB_DEBUG, "[TTS] speak request engine=${enginePackage ?: "<default>"} voice=${voiceName ?: "<default>"} locale=${preferredLocale.toLanguageTag()} textLength=${normalizedText.length} utteranceId=$utteranceId")
+        val totalTextLength = normalizedChunks.sumOf { it.text.length }
+        Log.d(EPUB_DEBUG, "[TTS] speak request engine=${enginePackage ?: "<default>"} voice=${voiceName ?: "<default>"} locale=${preferredLocale.toLanguageTag()} textLength=$totalTextLength chunks=${normalizedChunks.size} utteranceId=$utteranceId")
         mainHandler.post(onPreparing)
         val instance = ensureEngine(enginePackage, voiceName, preferredLocale, onError) ?: return
         var started = false
         var finished = false
         var completedCount = 0
-        val utteranceIds = chunks.mapIndexed { index, _ -> "$utteranceId#$index" }.toSet()
+        val utteranceInfo = normalizedChunks.mapIndexed { index, chunk ->
+            "$utteranceId#$index" to Pair(index, chunk)
+        }.toMap()
 
         fun finishOnce(completed: Boolean, message: String?) {
             if (finished) return
@@ -5831,26 +6097,27 @@ private class EpubTtsSession(
 
         instance.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
-                if (utteranceId !in utteranceIds) return
+                val (chunkIndex, chunk) = utteranceInfo[utteranceId] ?: return
                 Log.d(EPUB_DEBUG, "[TTS] onStart utteranceId=$utteranceId engine=$currentEnginePackage")
                 if (!started) {
                     started = true
                     mainHandler.post(onStart)
                 }
+                mainHandler.post { onChunkStart(chunk, chunkIndex, normalizedChunks.size) }
             }
 
             override fun onDone(utteranceId: String?) {
-                if (utteranceId !in utteranceIds) return
+                if (utteranceId !in utteranceInfo) return
                 Log.d(EPUB_DEBUG, "[TTS] onDone utteranceId=$utteranceId engine=$currentEnginePackage")
                 completedCount += 1
-                if (completedCount >= chunks.size) {
+                if (completedCount >= normalizedChunks.size) {
                     mainHandler.post { finishOnce(true, null) }
                 }
             }
 
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) {
-                if (utteranceId !in utteranceIds) return
+                if (utteranceId !in utteranceInfo) return
                 Log.e(EPUB_DEBUG, "[TTS] onError(deprecated) utteranceId=$utteranceId engine=$currentEnginePackage")
                 mainHandler.post {
                     finishOnce(
@@ -5866,7 +6133,7 @@ private class EpubTtsSession(
             }
 
             override fun onError(utteranceId: String?, errorCode: Int) {
-                if (utteranceId !in utteranceIds) return
+                if (utteranceId !in utteranceInfo) return
                 Log.e(EPUB_DEBUG, "[TTS] onError utteranceId=$utteranceId engine=$currentEnginePackage errorCode=$errorCode")
                 mainHandler.post {
                     finishOnce(
@@ -5882,7 +6149,7 @@ private class EpubTtsSession(
             }
 
             override fun onStop(utteranceId: String?, interrupted: Boolean) {
-                if (utteranceId != null && utteranceId !in utteranceIds) return
+                if (utteranceId != null && utteranceId !in utteranceInfo) return
                 Log.w(EPUB_DEBUG, "[TTS] onStop utteranceId=$utteranceId engine=$currentEnginePackage interrupted=$interrupted")
                 if (!interrupted) return
                 mainHandler.post {
@@ -5891,18 +6158,18 @@ private class EpubTtsSession(
             }
         })
         instance.stop()
-        chunks.forEachIndexed { index, chunk ->
+        normalizedChunks.forEachIndexed { index, chunk ->
             val chunkUtteranceId = "$utteranceId#$index"
             val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
-            val result = instance.speak(chunk, queueMode, null, chunkUtteranceId)
-            Log.d(EPUB_DEBUG, "[TTS] speak returned result=$result engine=$currentEnginePackage utteranceId=$chunkUtteranceId chunk=${index + 1}/${chunks.size} chunkLength=${chunk.length}")
+            val result = instance.speak(chunk.text, queueMode, null, chunkUtteranceId)
+            Log.d(EPUB_DEBUG, "[TTS] speak returned result=$result engine=$currentEnginePackage utteranceId=$chunkUtteranceId chunk=${index + 1}/${normalizedChunks.size} chunkLength=${chunk.text.length} domId=${chunk.domId}")
             if (result == TextToSpeech.ERROR) {
                 onError(
                     buildSpeakFailureMessage(
                         currentEnginePackage,
                         voiceName,
                         preferredLocale,
-                        "speakResult=$result chunk=${index + 1}/${chunks.size} chunkLength=${chunk.length}"
+                        "speakResult=$result chunk=${index + 1}/${normalizedChunks.size} chunkLength=${chunk.text.length} domId=${chunk.domId}"
                     )
                 )
                 return
