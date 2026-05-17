@@ -152,6 +152,8 @@ import androidx.compose.material3.BottomAppBar
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.getEpubChapterFile
 import com.kenny.localmanager.dict.listImportedStarDicts
@@ -1717,7 +1719,16 @@ private val REGEX_FIND_BOOTSTRAP_JS = """
         var currentGroup = matches[normalizedIndex];
         var current = currentGroup && currentGroup.length ? currentGroup[0] : null;
         if (current && current.scrollIntoView) {
-            current.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+            var rect = current.getBoundingClientRect ? current.getBoundingClientRect() : null;
+            if (viewportHeight > 0 && rect) {
+                var targetAnchor = viewportHeight * 0.28;
+                var currentCenter = rect.top + (rect.height / 2);
+                var delta = currentCenter - targetAnchor;
+                window.scrollBy({ top: delta, behavior: 'smooth' });
+            } else {
+                current.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+            }
         }
         return result();
     }
@@ -1983,48 +1994,71 @@ private fun WebViewRegexFindDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    Dialog(
         onDismissRequest = onDismiss,
-        title = { Text("正则查找") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("正则表达式") },
-                    placeholder = { Text("例如 /error|warn/i 或 (?i)error") },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    text = "使用 JavaScript 正则语法；支持 /pattern/flags 与 (?i)pattern 形式。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(8.dp))
-                when {
-                    result.error != null -> Text(result.error, color = MaterialTheme.colorScheme.error)
-                    result.hasMatches -> Text("第 ${result.currentIndex + 1} / ${result.count} 处", color = MaterialTheme.colorScheme.primary)
-                    query.isNotBlank() -> Text("未找到匹配", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    else -> Text("输入正则后点击“查找”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    TextButton(onClick = onSearch) { Text("查找") }
-                    TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
-                    TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
-                    TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp, vertical = 16.dp),
+            contentAlignment = Alignment.BottomCenter
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.large
+            ) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = query,
+                            onValueChange = onQueryChange,
+                            modifier = Modifier.weight(1f),
+                            placeholder = { Text("正则，例如 /error|warn/i") },
+                            singleLine = true
+                        )
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭查找")
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = when {
+                            result.error != null -> result.error
+                            result.hasMatches -> "第 ${result.currentIndex + 1} / ${result.count} 处，定位时会自动避开底部查找栏。"
+                            query.isNotBlank() -> "未找到匹配"
+                            else -> "支持 /pattern/flags 与 (?i)pattern。"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = when {
+                            result.error != null -> MaterialTheme.colorScheme.error
+                            result.hasMatches -> MaterialTheme.colorScheme.primary
+                            else -> MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = onSearch) { Text("查找") }
+                        TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
+                        TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
+                        TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
         }
-    )
+    }
 }
 
 /** 独立 Markdown 渲染查看器：支持内链（同应用内打开、可退回）、外链（仅提示用浏览器打开）。 */
