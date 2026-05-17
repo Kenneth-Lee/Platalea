@@ -99,6 +99,7 @@
     <string name="main_menu">菜单</string>
     <string name="main_menu_add_filtered_to_pending">把当前过滤结果全部加入待处理列表</string>
     <string name="main_menu_add_filtered_done">已加入 %1$d 项到待处理列表</string>
+    <string name="main_menu_open_url">打开网址</string>
     <string name="main_menu_empty_trash">清空回收站</string>
     <string name="main_menu_config">配置</string>
     <string name="main_menu_about">关于</string>
@@ -111,6 +112,11 @@
     <string name="context_render_markdown">渲染 (Markdown/RST)</string>
     <string name="context_view_zip_markdown">查看压缩 Markdown</string>
     <string name="context_view_zip_html">查看压缩 HTML</string>
+    <string name="open_url_label">网址</string>
+    <string name="open_url_placeholder">例如 https://example.com 或 example.com</string>
+    <string name="open_url_hint">仅支持 HTTP/HTTPS；若未填写协议，将自动补全为 https://</string>
+    <string name="open_url_invalid">请输入有效的 HTTP 或 HTTPS 地址，且必须包含主机名。例如 https://example.com/path</string>
+    <string name="open_url_confirm">打开</string>
     <string name="context_view_zip_llm">查看压缩 LLM</string>
     <string name="context_view_images">查看图片</string>
     <string name="context_gpg_encrypt">GnuPG 加密</string>

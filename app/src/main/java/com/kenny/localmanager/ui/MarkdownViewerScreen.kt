@@ -1279,6 +1279,13 @@ private fun InputStream.readBytesUpTo(maxLen: Int): ByteArray {
 private const val MD_DEBUG = "MdViewer"
 private const val MDZIP_DEBUG = "MdZipViewer"
 private const val MD_VIEWER_BASE_URL = "https://local-md.invalid/"
+private const val MAX_LOCAL_HTML_BYTES = 2 * 1024 * 1024
+
+data class HtmlViewerLocation(
+    val initialUrl: String,
+    val title: String,
+    val localFileUri: String? = null
+)
 
 private class LinkCallbackHolder { var onLink: (String) -> Unit = {} }
 
@@ -1374,7 +1381,7 @@ private fun resolveResource(
         return null
     }
     return try {
-        val mime = context.contentResolver.getType(childUri) ?: "application/octet-stream"
+        val mime = guessWebResourceMime(path, context.contentResolver.getType(childUri))
         val stream = context.contentResolver.openInputStream(childUri) ?: run {
             Log.d(MD_DEBUG, "[图片] openInputStream 失败 uri=$childUri")
             return null
@@ -1384,6 +1391,27 @@ private fun resolveResource(
     } catch (e: Exception) {
         Log.d(MD_DEBUG, "[图片] 异常 resourceUrl=$resourceUrl", e)
         null
+    }
+}
+
+private fun guessWebResourceMime(path: String, fallback: String? = null): String {
+    val normalized = path.substringBefore('#').substringBefore('?').lowercase(Locale.getDefault())
+    return when {
+        normalized.endsWith(".html") || normalized.endsWith(".htm") -> "text/html"
+        normalized.endsWith(".css") -> "text/css"
+        normalized.endsWith(".js") || normalized.endsWith(".mjs") -> "application/javascript"
+        normalized.endsWith(".json") -> "application/json"
+        normalized.endsWith(".svg") -> "image/svg+xml"
+        normalized.endsWith(".png") -> "image/png"
+        normalized.endsWith(".jpg") || normalized.endsWith(".jpeg") -> "image/jpeg"
+        normalized.endsWith(".gif") -> "image/gif"
+        normalized.endsWith(".webp") -> "image/webp"
+        normalized.endsWith(".woff") -> "font/woff"
+        normalized.endsWith(".woff2") -> "font/woff2"
+        normalized.endsWith(".ttf") -> "font/ttf"
+        normalized.endsWith(".otf") -> "font/otf"
+        normalized.endsWith(".txt") -> "text/plain"
+        else -> fallback ?: "application/octet-stream"
     }
 }
 
@@ -3813,6 +3841,482 @@ fun HtmlZipViewerScreen(
                     webViewRef.value = webView
                 }
             )
+        }
+    }
+}
+
+private class RemoteHtmlWebViewClient(
+    private val onExternalUrl: (String) -> Unit,
+    private val onError: (String) -> Unit,
+    private val onPageFinished: ((WebView) -> Unit)? = null
+) : WebViewClient() {
+    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+        val url = request?.url?.toString() ?: return false
+        val scheme = request.url?.scheme?.lowercase() ?: ""
+        return when (scheme) {
+            "mailto", "tel", "sms", "intent" -> {
+                onExternalUrl(url)
+                true
+            }
+            else -> false
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
+        super.onReceivedError(view, errorCode, description, failingUrl)
+        if (view == null || failingUrl != view.url) return
+        onError("网页加载失败：${description ?: "未知错误"}（错误码：$errorCode）")
+    }
+
+    override fun onPageFinished(view: WebView?, url: String?) {
+        super.onPageFinished(view, url)
+        view?.let { onPageFinished?.invoke(it) }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HtmlViewerScreen(
+    initialLocation: HtmlViewerLocation,
+    onBack: () -> Unit
+) {
+    KeepScreenOnEffect()
+    val context = LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
+    var currentLocation by remember(initialLocation) { mutableStateOf(initialLocation) }
+    var localBackStack by remember { mutableStateOf(listOf<HtmlViewerLocation>()) }
+    var localHtmlContent by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(initialLocation.localFileUri != null) }
+    var pageLoading by remember { mutableStateOf(initialLocation.localFileUri == null) }
+    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
+    var showFindDialog by remember { mutableStateOf(false) }
+    var regexQuery by remember { mutableStateOf("") }
+    var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var pendingAnchor by remember { mutableStateOf<String?>(null) }
+    var currentPageToken by remember { mutableStateOf(initialLocation.localFileUri ?: initialLocation.initialUrl) }
+
+    val ttsController = rememberStandaloneWebViewTtsController(
+        preferredLocale = remember { Locale.getDefault() },
+        contentToken = currentPageToken,
+        documentTitle = currentLocation.title,
+        webViewProvider = { webViewRef.value },
+        scrollRatioProvider = { currentWebViewScrollRatio(webViewRef.value) }
+    )
+    val linkHolder = remember { LinkCallbackHolder() }
+    val resourceHolder = remember { ResourceResolverHolder(initialLocation.localFileUri ?: "") }
+
+    fun navigateTo(location: HtmlViewerLocation, pushCurrent: Boolean = true) {
+        if (pushCurrent) {
+            localBackStack = localBackStack + currentLocation
+        }
+        currentLocation = location
+        currentPageToken = location.localFileUri ?: location.initialUrl
+        loadError = null
+        if (location.localFileUri != null) {
+            loading = true
+            pageLoading = false
+            loadingMessage = "正在读取 HTML…"
+        } else {
+            loading = false
+            pageLoading = true
+            loadingMessage = "正在加载网页…"
+        }
+    }
+
+    linkHolder.onLink = { url ->
+        val localUri = currentLocation.localFileUri
+        val parsed = Uri.parse(url)
+        val scheme = parsed.scheme?.lowercase() ?: ""
+        val fragment = parsed.fragment?.takeIf { it.isNotBlank() }
+        val mainHandler = Handler(Looper.getMainLooper())
+        if (localUri != null) {
+            when {
+                scheme == "http" || scheme == "https" -> {
+                    mainHandler.post {
+                        navigateTo(HtmlViewerLocation(initialUrl = url, title = url, localFileUri = null))
+                    }
+                }
+                scheme == "mailto" || scheme == "tel" || scheme == "sms" || scheme == "intent" -> {
+                    mainHandler.post { pendingExternalUrl = url }
+                }
+                else -> {
+                    val resolved = resolveRelativeToCurrent(context, localUri, url)
+                    if (resolved != null) {
+                        val targetUri = Uri.parse(resolved)
+                        val name = DocumentFile.fromSingleUri(context, targetUri)?.name
+                            ?: targetUri.lastPathSegment
+                            ?: "HTML"
+                        if (name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)) {
+                            mainHandler.post {
+                                pendingAnchor = fragment
+                                navigateTo(
+                                    HtmlViewerLocation(
+                                        initialUrl = resolved,
+                                        title = name,
+                                        localFileUri = resolved
+                                    )
+                                )
+                            }
+                        } else {
+                            mainHandler.post {
+                                Toast.makeText(context, "当前 HTML 查看器只支持继续打开 HTML/HTM 链接", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } else if (MdLinkUtils.looksLikeExternalUrl(url)) {
+                        val normalized = if (url.startsWith("http://") || url.startsWith("https://")) url else "https://$url"
+                        mainHandler.post {
+                            navigateTo(HtmlViewerLocation(initialUrl = normalized, title = normalized, localFileUri = null))
+                        }
+                    } else {
+                        mainHandler.post {
+                            Toast.makeText(context, "无法解析 HTML 链接：$url", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(currentLocation.localFileUri) {
+        val localUri = currentLocation.localFileUri ?: run {
+            localHtmlContent = null
+            loadError = null
+            loading = false
+            pageLoading = true
+            loadingMessage = "正在加载网页…"
+            return@LaunchedEffect
+        }
+        regexFindUiState = RegexFindUiState()
+        loading = true
+        pageLoading = false
+        loadingMessage = "正在读取 HTML…"
+        localHtmlContent = null
+        loadError = null
+        val decoded = withContext(Dispatchers.IO) {
+            val stream = context.contentResolver.openInputStreamSafe(Uri.parse(localUri))
+            if (stream == null) {
+                loadError = "无法打开 HTML 文件：$localUri"
+                return@withContext null
+            }
+            stream.use { raw ->
+                raw.readBytesUpTo(MAX_LOCAL_HTML_BYTES).decodeToString().dropLastWhile { it == '\uFFFD' }
+            }
+        }
+        localHtmlContent = decoded
+        loading = false
+        pageLoading = decoded != null
+        loadingMessage = if (decoded != null) "正在初始化页面…" else loadingMessage
+    }
+
+    BackHandler {
+        val webView = webViewRef.value
+        when {
+            currentLocation.localFileUri == null && webView != null && webView.canGoBack() -> webView.goBack()
+            localBackStack.isNotEmpty() -> {
+                val previous = localBackStack.last()
+                localBackStack = localBackStack.dropLast(1)
+                currentLocation = previous
+                currentPageToken = previous.localFileUri ?: previous.initialUrl
+            }
+            else -> onBack()
+        }
+    }
+
+    if (pendingExternalUrl != null) {
+        val urlToShow = pendingExternalUrl!!
+        AlertDialog(
+            onDismissRequest = { pendingExternalUrl = null },
+            title = { Text("链接") },
+            text = {
+                Column {
+                    Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                    Spacer(Modifier.height(8.dp))
+                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    try {
+                        val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
+                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                    } catch (_: Exception) {
+                    }
+                    pendingExternalUrl = null
+                }) { Text("复制链接") }
+                TextButton(onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
+                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                    } catch (_: Exception) {
+                    }
+                    pendingExternalUrl = null
+                }) { Text("用浏览器打开") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+            }
+        )
+    }
+
+    if (showFindDialog) {
+        WebViewRegexFindDialog(
+            query = regexQuery,
+            result = regexFindUiState,
+            onQueryChange = {
+                regexQuery = it
+                if (it.isBlank()) regexFindUiState = RegexFindUiState()
+            },
+            onSearch = {
+                if (regexQuery.isBlank()) {
+                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                } else {
+                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                }
+            },
+            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onDismiss = { showFindDialog = false }
+        )
+    }
+
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = ttsController.showTtsEngineDialog,
+        onDismissEngineDialog = { ttsController.showTtsEngineDialog = false },
+        showVoiceDialog = ttsController.showTtsVoiceDialog,
+        onDismissVoiceDialog = { ttsController.showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsController.ttsEngineLoading,
+        availableTtsEngines = ttsController.availableTtsEngines,
+        selectedTtsEnginePackage = ttsController.selectedTtsEnginePackage,
+        selectedTtsVoiceName = ttsController.selectedTtsVoiceName,
+        effectiveTtsEngine = ttsController.effectiveTtsEngine,
+        onRefreshEngines = { ttsController.requestRefreshTtsEngines() },
+        onSelectEngine = { ttsController.selectEngine(it) },
+        onSelectDefaultVoice = { ttsController.selectDefaultVoice() },
+        onSelectVoice = { ttsController.selectVoice(it) }
+    )
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(currentLocation.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                },
+                navigationIcon = {
+                    IconButton(onClick = {
+                        val webView = webViewRef.value
+                        when {
+                            currentLocation.localFileUri == null && webView != null && webView.canGoBack() -> webView.goBack()
+                            localBackStack.isNotEmpty() -> {
+                                val previous = localBackStack.last()
+                                localBackStack = localBackStack.dropLast(1)
+                                currentLocation = previous
+                                currentPageToken = previous.localFileUri ?: previous.initialUrl
+                            }
+                            else -> onBack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    WebViewRegexFindAction(enabled = webViewRef.value != null) {
+                        showFindDialog = true
+                    }
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) context.getString(R.string.epub_tts_stop)
+                                        else context.getString(R.string.webview_tts_play)
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) ttsController.stop() else ttsController.start()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsEngineDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsVoiceDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                        }
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                )
+            )
+        }
+    ) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            when {
+                loadError != null -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        SelectionContainer {
+                            Text(loadError!!, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                currentLocation.localFileUri != null && localHtmlContent == null && loading -> {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Card {
+                            Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                                Text("正在准备 HTML", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                                Spacer(Modifier.height(8.dp))
+                                Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+                else -> {
+                    val localFileUri = currentLocation.localFileUri
+                    if (localFileUri != null) {
+                        resourceHolder.currentUri = localFileUri
+                        val htmlContent = localHtmlContent.orEmpty()
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    setBackgroundColor(Color.TRANSPARENT)
+                                    addJavascriptInterface(FootnoteToastHandler(context), "androidFootnote")
+                                    addJavascriptInterface(PageReadyJsBridge {
+                                        regexFindUiState = RegexFindUiState()
+                                        installRegexFindBridge(this)
+                                        installEpubTtsBridge(this)
+                                        pageLoading = false
+                                        loadingMessage = "页面已准备完成"
+                                        currentPageToken = currentLocation.localFileUri ?: currentLocation.initialUrl
+                                        pendingAnchor?.let { anchor ->
+                                            scrollToAnchor(this, anchor)
+                                            pendingAnchor = null
+                                        }
+                                    }, "androidPageReady")
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    webViewClient = LinkInterceptClient(linkHolder, context, resourceHolder) { view ->
+                                        regexFindUiState = RegexFindUiState()
+                                        installRegexFindBridge(view)
+                                        installEpubTtsBridge(view)
+                                        pageLoading = false
+                                        loadingMessage = "页面已准备完成"
+                                        currentPageToken = currentLocation.localFileUri ?: currentLocation.initialUrl
+                                        pendingAnchor?.let { anchor ->
+                                            scrollToAnchor(view, anchor)
+                                            pendingAnchor = null
+                                        }
+                                    }
+                                    webViewRef.value = this
+                                    loadDataWithBaseURL(MD_VIEWER_BASE_URL, htmlContent, "text/html", "UTF-8", null)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            update = { webView ->
+                                webViewRef.value = webView
+                                resourceHolder.currentUri = localFileUri
+                                val loadKey = "html-local|$localFileUri|${htmlContent.hashCode()}"
+                                if (webView.tag != loadKey) {
+                                    pageLoading = true
+                                    loadingMessage = "正在初始化页面…"
+                                    webView.tag = loadKey
+                                    webView.loadDataWithBaseURL(MD_VIEWER_BASE_URL, htmlContent, "text/html", "UTF-8", null)
+                                }
+                            }
+                        )
+                    } else {
+                        val remoteUrl = currentLocation.initialUrl
+                        AndroidView(
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    setBackgroundColor(Color.TRANSPARENT)
+                                    settings.javaScriptEnabled = true
+                                    settings.domStorageEnabled = true
+                                    settings.allowFileAccess = true
+                                    settings.allowContentAccess = true
+                                    webViewClient = RemoteHtmlWebViewClient(
+                                        onExternalUrl = { url -> pendingExternalUrl = url },
+                                        onError = { error ->
+                                            loadError = error
+                                            pageLoading = false
+                                        }
+                                    ) { view ->
+                                        regexFindUiState = RegexFindUiState()
+                                        installRegexFindBridge(view)
+                                        installEpubTtsBridge(view)
+                                        pageLoading = false
+                                        loadingMessage = "页面已准备完成"
+                                        loadError = null
+                                        currentPageToken = view.url ?: remoteUrl
+                                    }
+                                    webViewRef.value = this
+                                    loadUrl(remoteUrl)
+                                }
+                            },
+                            modifier = Modifier.fillMaxSize(),
+                            update = { webView ->
+                                webViewRef.value = webView
+                                val loadKey = "html-remote|$remoteUrl"
+                                if (webView.tag != loadKey) {
+                                    loadError = null
+                                    pageLoading = true
+                                    loadingMessage = "正在加载网页…"
+                                    webView.tag = loadKey
+                                    webView.loadUrl(remoteUrl)
+                                }
+                            }
+                        )
+                    }
+                    if (loading || pageLoading) {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Card {
+                                Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+                                    Text(
+                                        if (loading) "正在准备 HTML" else "正在准备页面",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        style = MaterialTheme.typography.titleSmall
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        loadingMessage,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -78,6 +78,7 @@ import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -295,6 +296,7 @@ private data class ExternalAppTarget(
 )
 
 private const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
+private const val RECENT_TYPE_HTML_VIEWER = "html_viewer"
 private const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
 private const val RECENT_TYPE_PDF_VIEWER = "pdf_viewer"
 private const val RECENT_TYPE_PLAYLIST = "playlist"
@@ -421,6 +423,8 @@ private fun openRecentItemByType(
     switchMainTab: (MainTab) -> Unit,
     onMdZipTarget: (DocumentFileModel) -> Unit,
     onHtmlZipTarget: (DocumentFileModel) -> Unit,
+    onHtmlTarget: (DocumentFileModel) -> Unit,
+    onHtmlUrlTarget: (String) -> Unit,
     onPicZipTarget: (DocumentFileModel) -> Unit,
     onLlmZipTarget: (DocumentFileModel) -> Unit,
     onTxtTarget: (DocumentFileModel) -> Unit,
@@ -489,6 +493,19 @@ private fun openRecentItemByType(
                     Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
                     return
                 }
+            }
+        }
+
+        RECENT_TYPE_HTML_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (uri.startsWith("http://", ignoreCase = true) || uri.startsWith("https://", ignoreCase = true)) {
+                onHtmlUrlTarget(uri)
+            } else {
+                onHtmlTarget(buildRecentModel(uri, item.title))
             }
         }
 
@@ -1408,6 +1425,7 @@ private fun FileBrowserAppScreen(
     var saveInProgress by remember { mutableStateOf(false) }
     var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var htmlViewState by remember { mutableStateOf<HtmlViewState?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
     var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
@@ -2551,6 +2569,30 @@ private fun FileBrowserAppScreen(
                             switchMainTab = { switchMainTab(it) },
                             onMdZipTarget = { mdZipTarget = it },
                             onHtmlZipTarget = { htmlZipTarget = it },
+                            onHtmlTarget = {
+                                htmlViewState = HtmlViewState(
+                                    location = HtmlViewerLocation(
+                                        initialUrl = it.uri.toString(),
+                                        title = it.name,
+                                        localFileUri = it.uri.toString()
+                                    ),
+                                    recentKey = it.uri.toString(),
+                                    recentUri = it.uri.toString(),
+                                    recentTitle = it.name
+                                )
+                            },
+                            onHtmlUrlTarget = { url ->
+                                htmlViewState = HtmlViewState(
+                                    location = HtmlViewerLocation(
+                                        initialUrl = url,
+                                        title = url,
+                                        localFileUri = null
+                                    ),
+                                    recentKey = url,
+                                    recentUri = url,
+                                    recentTitle = url
+                                )
+                            },
                             onPicZipTarget = { picZipTarget = it },
                             onLlmZipTarget = { llmZipTarget = it },
                             onTxtTarget = { txtTarget = it },
@@ -2720,7 +2762,31 @@ private fun FileBrowserAppScreen(
                             },
                             onUnzipRequest = { zipUnzipTarget = it },
                             onRequestMdZipView = { mdZipTarget = it },
+                            onRequestHtmlView = {
+                                htmlViewState = HtmlViewState(
+                                    location = HtmlViewerLocation(
+                                        initialUrl = it.uri.toString(),
+                                        title = it.name,
+                                        localFileUri = it.uri.toString()
+                                    ),
+                                    recentKey = it.uri.toString(),
+                                    recentUri = it.uri.toString(),
+                                    recentTitle = it.name
+                                )
+                            },
                             onRequestHtmlZipView = { htmlZipTarget = it },
+                            onRequestOpenUrl = { url ->
+                                htmlViewState = HtmlViewState(
+                                    location = HtmlViewerLocation(
+                                        initialUrl = url,
+                                        title = url,
+                                        localFileUri = null
+                                    ),
+                                    recentKey = url,
+                                    recentUri = url,
+                                    recentTitle = url
+                                )
+                            },
                             onRequestLlmZipView = { llmZipTarget = it },
                             onRequestEpubView = { epubTarget = it },
                             onRequestTxtView = { txtTarget = it },
@@ -4991,8 +5057,45 @@ private fun FileBrowserAppScreen(
                 sessionCache = markdownViewerSessionCache,
                 onBack = { markdownViewFile = null },
                 onOpenFile = { openUri, openName, openEncrypted ->
-                    markdownViewFile = Triple(openUri, openName, openEncrypted)
+                    when {
+                        openName.endsWith(".md", ignoreCase = true) || openName.endsWith(".rst", ignoreCase = true) -> {
+                            markdownViewFile = Triple(openUri, openName, openEncrypted)
+                        }
+                        isHtmlFile(openName) -> {
+                            htmlViewState = HtmlViewState(
+                                location = HtmlViewerLocation(
+                                    initialUrl = openUri,
+                                    title = openName,
+                                    localFileUri = openUri
+                                ),
+                                recentKey = openUri,
+                                recentUri = openUri,
+                                recentTitle = openName
+                            )
+                            markdownViewFile = null
+                        }
+                        else -> {
+                            viewingFile = Triple(openUri, openName, openEncrypted)
+                            markdownViewFile = null
+                        }
+                    }
                 }
+            )
+        }
+        htmlViewState != null -> {
+            val state = htmlViewState!!
+            LaunchedEffect(state.recentKey) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_HTML_VIEWER,
+                    key = state.recentKey,
+                    title = state.recentTitle,
+                    uri = state.recentUri
+                )
+            }
+            BackHandler { htmlViewState = null }
+            HtmlViewerScreen(
+                initialLocation = state.location,
+                onBack = { htmlViewState = null }
             )
         }
         mdZipViewState != null -> {
@@ -5375,6 +5478,10 @@ private fun isLlmFile(name: String): Boolean =
 private fun isPdfFile(name: String): Boolean =
     name.endsWith(".pdf", ignoreCase = true)
 
+/** 判断文件名是否为 HTML 文件。 */
+private fun isHtmlFile(name: String): Boolean =
+    name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
+
 /** .html.zip 查看器状态。 */
 private data class HtmlZipViewState(
     val indexFile: java.io.File?,
@@ -5382,6 +5489,14 @@ private data class HtmlZipViewState(
     val zipFileName: String,
     val zipUri: Uri,
     val isEncrypted: Boolean
+)
+
+/** 通用 HTML 查看器状态：支持本地 HTML 文件或远程 URL。 */
+private data class HtmlViewState(
+    val location: HtmlViewerLocation,
+    val recentKey: String,
+    val recentUri: String,
+    val recentTitle: String
 )
 
 /** EPUB 查看器状态。 */
@@ -5517,7 +5632,9 @@ internal fun FileBrowserScreen(
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
+    onRequestHtmlView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
+    onRequestOpenUrl: (String) -> Unit = {},
     onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
@@ -5555,6 +5672,9 @@ internal fun FileBrowserScreen(
     var showSortMenu by remember { mutableStateOf(false) }
     var externalOpenTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var externalOpenOptions by remember { mutableStateOf<List<ExternalAppTarget>>(emptyList()) }
+    var showOpenUrlDialog by remember { mutableStateOf(false) }
+    var openUrlInput by remember { mutableStateOf("") }
+    var openUrlError by remember { mutableStateOf<String?>(null) }
 
     fun showExternalOpenDialog(target: DocumentFileModel) {
         val options = queryExternalOpenTargets(context, target.uri.toString())
@@ -5564,6 +5684,16 @@ internal fun FileBrowserScreen(
         }
         externalOpenTarget = target
         externalOpenOptions = options
+    }
+
+    fun normalizeUserInputUrl(raw: String): String? {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return null
+        val normalized = if (Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+        val parsed = runCatching { Uri.parse(normalized) }.getOrNull() ?: return null
+        val scheme = parsed.scheme?.lowercase()
+        val host = parsed.host?.trim().orEmpty()
+        return if ((scheme == "http" || scheme == "https") && host.isNotEmpty()) normalized else null
     }
 
     LaunchedEffect(currentUri, refreshTrigger) {
@@ -5679,6 +5809,15 @@ internal fun FileBrowserScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.main_menu_open_url)) },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    showOpenUrlDialog = true
+                                    openUrlError = null
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.main_menu_add_filtered_to_pending)) },
                                 leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
@@ -5837,6 +5976,8 @@ internal fun FileBrowserScreen(
                                         when {
                                             isCompressedMarkdown(item.name) ->
                                                 onRequestMdZipView(item)
+                                            isHtmlFile(item.name) ->
+                                                onRequestHtmlView(item)
                                             isCompressedHtml(item.name) ->
                                                 onRequestHtmlZipView(item)
                                             isCompressedLlmZip(item.name) ->
@@ -5886,6 +6027,65 @@ internal fun FileBrowserScreen(
                 }
             }
         }
+    }
+
+    if (showOpenUrlDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showOpenUrlDialog = false
+                openUrlError = null
+            },
+            title = { Text(context.getString(R.string.main_menu_open_url)) },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = openUrlInput,
+                        onValueChange = {
+                            openUrlInput = it
+                            if (openUrlError != null) openUrlError = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(context.getString(R.string.open_url_label)) },
+                        placeholder = { Text(context.getString(R.string.open_url_placeholder)) },
+                        singleLine = true
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = context.getString(R.string.open_url_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    openUrlError?.let { error ->
+                        Spacer(Modifier.height(8.dp))
+                        SelectionContainer {
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val normalized = normalizeUserInputUrl(openUrlInput)
+                    if (normalized == null) {
+                        openUrlError = context.getString(R.string.open_url_invalid)
+                        return@TextButton
+                    }
+                    showOpenUrlDialog = false
+                    openUrlError = null
+                    onRequestOpenUrl(normalized)
+                }) {
+                    Text(context.getString(R.string.open_url_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showOpenUrlDialog = false
+                    openUrlError = null
+                }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            }
+        )
     }
 
     if (showContextMenu && contextMenuTarget != null) {
