@@ -33,6 +33,19 @@ fun DocumentFile.listFilesSafe(): Array<DocumentFile> =
  */
 class DirectoryAccessException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
+data class RecursiveFileSearchCriteria(
+    val nameRegex: Regex? = null,
+    val minSizeBytes: Long? = null,
+    val maxSizeBytes: Long? = null,
+    val modifiedAfterMillis: Long? = null,
+    val modifiedBeforeMillis: Long? = null
+)
+
+data class RecursiveFileSearchHit(
+    val model: DocumentFileModel,
+    val relativePath: String
+)
+
 fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileModel> {
     val treeUri = Uri.parse(treeUriStr)
     val docId = if (treeUriStr.contains("/document/")) {
@@ -87,6 +100,47 @@ fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileMod
         throw DirectoryAccessException(context.getString(R.string.file_error_access_failed, e.javaClass.simpleName, e.message ?: ""), e)
     }
     return result
+}
+
+fun searchFilesRecursively(
+    context: Context,
+    rootUriStr: String,
+    criteria: RecursiveFileSearchCriteria
+): List<RecursiveFileSearchHit> {
+    fun matches(model: DocumentFileModel): Boolean {
+        if (model.isDirectory) return false
+        val nameRegex = criteria.nameRegex
+        if (nameRegex != null && !nameRegex.containsMatchIn(model.name)) return false
+        val minSize = criteria.minSizeBytes
+        if (minSize != null && model.size < minSize) return false
+        val maxSize = criteria.maxSizeBytes
+        if (maxSize != null && model.size > maxSize) return false
+        val modifiedAfter = criteria.modifiedAfterMillis
+        if (modifiedAfter != null && model.lastModified < modifiedAfter) return false
+        val modifiedBefore = criteria.modifiedBeforeMillis
+        if (modifiedBefore != null && model.lastModified > modifiedBefore) return false
+        return true
+    }
+
+    val pendingDirs = ArrayDeque<Pair<String, String>>()
+    val results = mutableListOf<RecursiveFileSearchHit>()
+    pendingDirs.addLast(rootUriStr to "")
+    while (pendingDirs.isNotEmpty()) {
+        val (dirUri, relativeDir) = pendingDirs.removeLast()
+        val children = listChildrenFast(context, dirUri)
+        children.forEach { child ->
+            val childRelativePath = if (relativeDir.isBlank()) child.name else "$relativeDir/${child.name}"
+            if (child.isDirectory) {
+                pendingDirs.addLast(child.uri.toString() to childRelativePath)
+            } else if (matches(child)) {
+                results += RecursiveFileSearchHit(
+                    model = child,
+                    relativePath = childRelativePath
+                )
+            }
+        }
+    }
+    return results
 }
 
 fun ContentResolver.getDisplayName(uri: Uri): String? =

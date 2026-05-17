@@ -224,6 +224,9 @@ import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
 import com.kenny.localmanager.file.formatSize
+import com.kenny.localmanager.file.RecursiveFileSearchCriteria
+import com.kenny.localmanager.file.RecursiveFileSearchHit
+import com.kenny.localmanager.file.searchFilesRecursively
 import com.kenny.localmanager.ui.EpubViewerScreen
 import com.kenny.localmanager.ui.PicZipViewerScreen
 import com.kenny.localmanager.ui.PdfViewerScreen
@@ -285,6 +288,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -5672,6 +5676,227 @@ private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Co
     }
 }
 
+private fun parseFileSearchSize(raw: String): Long? {
+    val normalized = raw.trim()
+    if (normalized.isEmpty()) return null
+    val match = Regex("""^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?b?)?$""", RegexOption.IGNORE_CASE).matchEntire(normalized)
+        ?: throw IllegalArgumentException("大小格式无效：$raw。支持 1024、10KB、1.5MB、2GB")
+    val value = match.groupValues[1].toDoubleOrNull()
+        ?: throw IllegalArgumentException("大小数值无效：$raw")
+    val unit = match.groupValues[2].lowercase(Locale.getDefault())
+    val multiplier = when (unit) {
+        "", "b" -> 1.0
+        "k", "kb" -> 1024.0
+        "m", "mb" -> 1024.0 * 1024
+        "g", "gb" -> 1024.0 * 1024 * 1024
+        "t", "tb" -> 1024.0 * 1024 * 1024 * 1024
+        else -> throw IllegalArgumentException("不支持的大小单位：$unit")
+    }
+    val bytes = value * multiplier
+    if (!bytes.isFinite() || bytes < 0.0) {
+        throw IllegalArgumentException("大小必须为非负数：$raw")
+    }
+    return bytes.toLong()
+}
+
+private fun parseFileSearchDate(raw: String, endOfDay: Boolean): Long? {
+    val normalized = raw.trim()
+    if (normalized.isEmpty()) return null
+    val parser = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
+    val parsed = parser.parse(normalized)
+        ?: throw IllegalArgumentException("日期格式无效：$raw，应为 yyyy-MM-dd")
+    if (!endOfDay) return parsed.time
+    return Calendar.getInstance().apply {
+        time = parsed
+        set(Calendar.HOUR_OF_DAY, 23)
+        set(Calendar.MINUTE, 59)
+        set(Calendar.SECOND, 59)
+        set(Calendar.MILLISECOND, 999)
+    }.timeInMillis
+}
+
+@Composable
+private fun FileSearchDialog(
+    namePattern: String,
+    minSize: String,
+    maxSize: String,
+    modifiedAfter: String,
+    modifiedBefore: String,
+    searching: Boolean,
+    error: String?,
+    onNamePatternChange: (String) -> Unit,
+    onMinSizeChange: (String) -> Unit,
+    onMaxSizeChange: (String) -> Unit,
+    onModifiedAfterChange: (String) -> Unit,
+    onModifiedBeforeChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text("文件查找", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = namePattern,
+                    onValueChange = onNamePatternChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("文件名正则") },
+                    placeholder = { Text("例如 .*\\.pdf$ 或 ^IMG_") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = minSize,
+                    onValueChange = onMinSizeChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("最小大小") },
+                    placeholder = { Text("例如 10MB 或 1024") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = maxSize,
+                    onValueChange = onMaxSizeChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("最大大小") },
+                    placeholder = { Text("例如 500MB") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = modifiedAfter,
+                    onValueChange = onModifiedAfterChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("修改时间下限") },
+                    placeholder = { Text("yyyy-MM-dd") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = modifiedBefore,
+                    onValueChange = onModifiedBeforeChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("修改时间上限") },
+                    placeholder = { Text("yyyy-MM-dd") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "将从当前目录递归搜索全部子目录；留空表示不限制。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                error?.let {
+                    Spacer(Modifier.height(8.dp))
+                    SelectionContainer {
+                        Text(it, color = MaterialTheme.colorScheme.error)
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onClear, enabled = !searching) { Text("清空") }
+                    TextButton(onClick = onDismiss, enabled = !searching) { Text("关闭") }
+                    TextButton(onClick = onSearch, enabled = !searching) {
+                        Text(if (searching) "搜索中..." else "开始查找")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FileSearchResultsDialog(
+    results: List<RecursiveFileSearchHit>,
+    pendingUris: Set<String>,
+    onAddAll: () -> Unit,
+    onAddOne: (DocumentFileModel) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val timeFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp)
+                    .heightIn(max = 640.dp)
+            ) {
+                Text("查找结果 (${results.size})", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onAddAll, enabled = results.any { it.model.uri.toString() !in pendingUris }) {
+                        Text("全部加入待处理")
+                    }
+                    TextButton(onClick = onDismiss) { Text("关闭") }
+                }
+                Spacer(Modifier.height(8.dp))
+                if (results.isEmpty()) {
+                    Text("没有符合条件的文件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(results, key = { it.model.uri.toString() }) { item ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(item.model.name, style = MaterialTheme.typography.titleSmall)
+                                    Spacer(Modifier.height(4.dp))
+                                    SelectionContainer {
+                                        Text(
+                                            item.relativePath,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "大小 ${item.model.displaySize.ifBlank { "未知" }} · 修改 ${timeFormatter.format(Date(item.model.lastModified))}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                        TextButton(
+                                            onClick = { onAddOne(item.model) },
+                                            enabled = item.model.uri.toString() !in pendingUris
+                                        ) {
+                                            Text(if (item.model.uri.toString() in pendingUris) "已在待处理" else "加入待处理")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun FileBrowserScreen(
@@ -5733,6 +5958,7 @@ internal fun FileBrowserScreen(
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
     var loading by remember(currentUri) { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -5756,6 +5982,16 @@ internal fun FileBrowserScreen(
     var showOpenUrlDialog by remember { mutableStateOf(false) }
     var openUrlInput by remember { mutableStateOf("") }
     var openUrlError by remember { mutableStateOf<String?>(null) }
+    var showFileSearchDialog by remember { mutableStateOf(false) }
+    var showFileSearchResultsDialog by remember { mutableStateOf(false) }
+    var fileSearchNamePattern by remember { mutableStateOf("") }
+    var fileSearchMinSize by remember { mutableStateOf("") }
+    var fileSearchMaxSize by remember { mutableStateOf("") }
+    var fileSearchModifiedAfter by remember { mutableStateOf("") }
+    var fileSearchModifiedBefore by remember { mutableStateOf("") }
+    var fileSearchResults by remember { mutableStateOf<List<RecursiveFileSearchHit>>(emptyList()) }
+    var fileSearchRunning by remember { mutableStateOf(false) }
+    var fileSearchError by remember { mutableStateOf<String?>(null) }
 
     fun showExternalOpenDialog(target: DocumentFileModel) {
         val options = queryExternalOpenTargets(context, target.uri.toString())
@@ -5775,6 +6011,89 @@ internal fun FileBrowserScreen(
         val scheme = parsed.scheme?.lowercase()
         val host = parsed.host?.trim().orEmpty()
         return if ((scheme == "http" || scheme == "https") && host.isNotEmpty()) normalized else null
+    }
+
+    fun clearFileSearchInputs() {
+        fileSearchNamePattern = ""
+        fileSearchMinSize = ""
+        fileSearchMaxSize = ""
+        fileSearchModifiedAfter = ""
+        fileSearchModifiedBefore = ""
+        fileSearchError = null
+    }
+
+    fun addSearchResultsToPending(targets: List<DocumentFileModel>) {
+        val existingUris = pendingList.map { it.uri.toString() }.toHashSet()
+        val toAdd = targets.filter { existingUris.add(it.uri.toString()) }
+        toAdd.forEach(onAddToPendingList)
+        Toast.makeText(context, if (toAdd.isEmpty()) "没有新的文件可加入待处理列表" else "已加入 ${toAdd.size} 项到待处理列表", Toast.LENGTH_SHORT).show()
+    }
+
+    fun runFileSearch() {
+        val nameRegex = try {
+            fileSearchNamePattern.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
+        } catch (error: Exception) {
+            fileSearchError = "文件名正则无效：${error.message ?: error.javaClass.simpleName}"
+            return
+        }
+        val minSizeBytes = try {
+            parseFileSearchSize(fileSearchMinSize)
+        } catch (error: Exception) {
+            fileSearchError = error.message ?: "最小大小无效"
+            return
+        }
+        val maxSizeBytes = try {
+            parseFileSearchSize(fileSearchMaxSize)
+        } catch (error: Exception) {
+            fileSearchError = error.message ?: "最大大小无效"
+            return
+        }
+        val modifiedAfterMillis = try {
+            parseFileSearchDate(fileSearchModifiedAfter, endOfDay = false)
+        } catch (error: Exception) {
+            fileSearchError = error.message ?: "修改时间下限无效"
+            return
+        }
+        val modifiedBeforeMillis = try {
+            parseFileSearchDate(fileSearchModifiedBefore, endOfDay = true)
+        } catch (error: Exception) {
+            fileSearchError = error.message ?: "修改时间上限无效"
+            return
+        }
+        if (minSizeBytes != null && maxSizeBytes != null && minSizeBytes > maxSizeBytes) {
+            fileSearchError = "大小范围无效：最小大小不能大于最大大小"
+            return
+        }
+        if (modifiedAfterMillis != null && modifiedBeforeMillis != null && modifiedAfterMillis > modifiedBeforeMillis) {
+            fileSearchError = "时间范围无效：开始日期不能晚于结束日期"
+            return
+        }
+        scope.launch {
+            fileSearchRunning = true
+            fileSearchError = null
+            try {
+                val criteria = RecursiveFileSearchCriteria(
+                    nameRegex = nameRegex,
+                    minSizeBytes = minSizeBytes,
+                    maxSizeBytes = maxSizeBytes,
+                    modifiedAfterMillis = modifiedAfterMillis,
+                    modifiedBeforeMillis = modifiedBeforeMillis
+                )
+                val results = withContext(Dispatchers.IO) {
+                    searchFilesRecursively(context, currentUri, criteria)
+                }
+                fileSearchResults = results
+                showFileSearchDialog = false
+                showFileSearchResultsDialog = true
+                if (results.isEmpty()) {
+                    Toast.makeText(context, "没有符合条件的文件", Toast.LENGTH_SHORT).show()
+                }
+            } catch (error: Exception) {
+                fileSearchError = "文件查找失败：${error.message ?: error.javaClass.simpleName}"
+            } finally {
+                fileSearchRunning = false
+            }
+        }
     }
 
     LaunchedEffect(currentUri, refreshTrigger) {
@@ -5904,6 +6223,15 @@ internal fun FileBrowserScreen(
                                     showOverflowMenu = false
                                     showOpenUrlDialog = true
                                     openUrlError = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("文件查找") },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    fileSearchError = null
+                                    showFileSearchDialog = true
                                 }
                             )
                             DropdownMenuItem(
@@ -6175,6 +6503,53 @@ internal fun FileBrowserScreen(
                     Text(context.getString(R.string.common_close))
                 }
             }
+        )
+    }
+
+    if (showFileSearchDialog) {
+        FileSearchDialog(
+            namePattern = fileSearchNamePattern,
+            minSize = fileSearchMinSize,
+            maxSize = fileSearchMaxSize,
+            modifiedAfter = fileSearchModifiedAfter,
+            modifiedBefore = fileSearchModifiedBefore,
+            searching = fileSearchRunning,
+            error = fileSearchError,
+            onNamePatternChange = {
+                fileSearchNamePattern = it
+                if (fileSearchError != null) fileSearchError = null
+            },
+            onMinSizeChange = {
+                fileSearchMinSize = it
+                if (fileSearchError != null) fileSearchError = null
+            },
+            onMaxSizeChange = {
+                fileSearchMaxSize = it
+                if (fileSearchError != null) fileSearchError = null
+            },
+            onModifiedAfterChange = {
+                fileSearchModifiedAfter = it
+                if (fileSearchError != null) fileSearchError = null
+            },
+            onModifiedBeforeChange = {
+                fileSearchModifiedBefore = it
+                if (fileSearchError != null) fileSearchError = null
+            },
+            onSearch = { runFileSearch() },
+            onClear = { clearFileSearchInputs() },
+            onDismiss = {
+                if (!fileSearchRunning) showFileSearchDialog = false
+            }
+        )
+    }
+
+    if (showFileSearchResultsDialog) {
+        FileSearchResultsDialog(
+            results = fileSearchResults,
+            pendingUris = pendingList.map { it.uri.toString() }.toSet(),
+            onAddAll = { addSearchResultsToPending(fileSearchResults.map { it.model }) },
+            onAddOne = { addSearchResultsToPending(listOf(it)) },
+            onDismiss = { showFileSearchResultsDialog = false }
         )
     }
 
