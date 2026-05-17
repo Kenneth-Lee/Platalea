@@ -1583,6 +1583,56 @@ private fun FileBrowserAppScreen(
         return ok
     }
 
+    suspend fun openDirectoryImageGallery(
+        currentItem: DocumentFileModel,
+        currentDirUri: String,
+        siblingImages: List<DocumentFileModel>
+    ) {
+        val normalizedImages = siblingImages
+            .filter { !it.isDirectory && isGalleryImageFile(it.name) }
+            .distinctBy { it.uri.toString() }
+        if (normalizedImages.isEmpty()) {
+            Toast.makeText(context, "当前目录没有可查看的图片文件", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val initialIndex = normalizedImages.indexOfFirst { it.uri == currentItem.uri }
+        if (initialIndex < 0) {
+            Toast.makeText(context, "无法定位当前图片在目录中的位置：${currentItem.name}", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val galleryRoot = File(context.cacheDir, "pic_dir_gallery")
+        val galleryKey = currentDirUri.hashCode().toUInt().toString(16)
+        val cacheDir = File(galleryRoot, galleryKey)
+        val contentDir = File(cacheDir, "content")
+        withContext(Dispatchers.IO) {
+            if (cacheDir.exists()) {
+                cacheDir.deleteRecursively()
+            }
+            contentDir.mkdirs()
+            normalizedImages.forEachIndexed { index, model ->
+                val targetFile = File(contentDir, model.name)
+                val bytes = context.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
+                    ?: throw IllegalStateException("无法读取第 ${index + 1} 张图片：${model.name} uri=${model.uri}")
+                targetFile.outputStream().use { it.write(bytes) }
+            }
+            File(cacheDir, ".last_index").writeText(initialIndex.toString())
+        }
+        val dirTitle = DocumentFile.fromTreeUri(context, Uri.parse(currentDirUri))?.name
+            ?: DocumentFile.fromSingleUri(context, Uri.parse(currentDirUri))?.name
+            ?: currentItem.name
+        picZipViewState = PicZipViewState(
+            contentDir = contentDir,
+            imagePaths = normalizedImages.map { it.name },
+            zipFileName = dirTitle,
+            zipUri = currentItem.uri,
+            isEncrypted = false,
+            password = null,
+            initialIndex = initialIndex,
+            recordRecent = false,
+            cleanupCacheDir = cacheDir
+        )
+    }
+
     fun persistQuickNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
         val currentData = quickNoteData ?: run {
             onFinished?.invoke(true)
@@ -2792,6 +2842,19 @@ private fun FileBrowserAppScreen(
                             onRequestTxtView = { txtTarget = it },
                             onRequestLlmView = { llmTarget = it },
                             onRequestPicZipView = { picZipTarget = it },
+                            onRequestDirectoryImageView = { item, dirUri, siblings ->
+                                scope.launch {
+                                    runCatching {
+                                        openDirectoryImageGallery(item, dirUri, siblings)
+                                    }.onFailure { error ->
+                                        Toast.makeText(
+                                            context,
+                                            "打开目录图片失败：${error.message ?: error.javaClass.simpleName}",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            },
                             onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
                             onCompressToZipRequest = { zipCompressTarget = it },
                             onCompressTo7zRequest = { sevenZCompressTarget = it },
@@ -5260,15 +5323,20 @@ private fun FileBrowserAppScreen(
         }
         picZipViewState != null -> {
             val state = picZipViewState!!
-            LaunchedEffect(state.zipUri) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_ZIP_VIEWER,
-                    key = state.zipUri.toString(),
-                    title = state.zipFileName,
-                    uri = state.zipUri.toString()
-                )
+            LaunchedEffect(state.zipUri, state.recordRecent) {
+                if (state.recordRecent) {
+                    recordRecentOpen(
+                        type = RECENT_TYPE_ZIP_VIEWER,
+                        key = state.zipUri.toString(),
+                        title = state.zipFileName,
+                        uri = state.zipUri.toString()
+                    )
+                }
             }
-            BackHandler { picZipViewState = null }
+            BackHandler {
+                state.cleanupCacheDir?.deleteRecursively()
+                picZipViewState = null
+            }
             PicZipViewerScreen(
                 contentDir = state.contentDir,
                 imagePaths = state.imagePaths,
@@ -5281,6 +5349,7 @@ private fun FileBrowserAppScreen(
                 },
                 onBack = { doDelete ->
                     if (doDelete == true) cleanPicZipCache(context, state.zipUri)
+                    state.cleanupCacheDir?.deleteRecursively()
                     picZipViewState = null
                 }
             )
@@ -5478,6 +5547,15 @@ private fun isLlmFile(name: String): Boolean =
 private fun isPdfFile(name: String): Boolean =
     name.endsWith(".pdf", ignoreCase = true)
 
+/** 判断文件名是否为图片文件（目录图库查看用；不含 SVG）。 */
+private fun isGalleryImageFile(name: String): Boolean =
+    name.endsWith(".jpg", ignoreCase = true) ||
+        name.endsWith(".jpeg", ignoreCase = true) ||
+        name.endsWith(".png", ignoreCase = true) ||
+        name.endsWith(".gif", ignoreCase = true) ||
+        name.endsWith(".webp", ignoreCase = true) ||
+        name.endsWith(".bmp", ignoreCase = true)
+
 /** 判断文件名是否为 HTML 文件。 */
 private fun isHtmlFile(name: String): Boolean =
     name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
@@ -5515,7 +5593,9 @@ private data class PicZipViewState(
     val zipUri: Uri,
     val isEncrypted: Boolean,
     val password: CharArray? = null,
-    val initialIndex: Int = 0
+    val initialIndex: Int = 0,
+    val recordRecent: Boolean = true,
+    val cleanupCacheDir: File? = null
 )
 
 private data class EncryptedCacheExitDialogState(
@@ -5638,6 +5718,7 @@ internal fun FileBrowserScreen(
     onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
+    onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onCompressTo7zRequest: (DocumentFileModel) -> Unit = {},
@@ -5746,6 +5827,13 @@ internal fun FileBrowserScreen(
         list
     }
     val displayItems = filteredItems
+    val galleryImageItems = remember(sortedItems, hideDotFiles) {
+        sortedItems.filter { item ->
+            !item.isDirectory &&
+                isGalleryImageFile(item.name) &&
+                (!hideDotFiles || !item.name.startsWith("."))
+        }
+    }
 
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -5988,6 +6076,8 @@ internal fun FileBrowserScreen(
                                                 onRequestTxtView(item)
                                             isLlmFile(item.name) ->
                                                 onRequestLlmView(item)
+                                            isGalleryImageFile(item.name) ->
+                                                onRequestDirectoryImageView(item, currentUri, galleryImageItems)
                                             isPicZip(item.name) ->
                                                 onRequestPicZipView(item)
                                             isPdfFile(item.name) ->
