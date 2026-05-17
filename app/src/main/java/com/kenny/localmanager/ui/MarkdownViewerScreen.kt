@@ -113,6 +113,7 @@ import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.epub.EpubBookmark
 import com.kenny.localmanager.epub.EpubBookmarkManager
 import com.kenny.localmanager.epub.EpubReadingProgress
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -2029,6 +2030,14 @@ fun MarkdownViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val ttsController = rememberStandaloneWebViewTtsController(
+        preferredLocale = remember { Locale.getDefault() },
+        contentToken = "$currentUri:$currentEncrypted",
+        documentTitle = currentName,
+        webViewProvider = { webViewRef.value },
+        scrollRatioProvider = { currentWebViewScrollRatio(webViewRef.value) }
+    )
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -2272,6 +2281,22 @@ fun MarkdownViewerScreen(
         )
     }
 
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = ttsController.showTtsEngineDialog,
+        onDismissEngineDialog = { ttsController.showTtsEngineDialog = false },
+        showVoiceDialog = ttsController.showTtsVoiceDialog,
+        onDismissVoiceDialog = { ttsController.showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsController.ttsEngineLoading,
+        availableTtsEngines = ttsController.availableTtsEngines,
+        selectedTtsEnginePackage = ttsController.selectedTtsEnginePackage,
+        selectedTtsVoiceName = ttsController.selectedTtsVoiceName,
+        effectiveTtsEngine = ttsController.effectiveTtsEngine,
+        onRefreshEngines = { ttsController.requestRefreshTtsEngines() },
+        onSelectEngine = { ttsController.selectEngine(it) },
+        onSelectDefaultVoice = { ttsController.selectDefaultVoice() },
+        onSelectVoice = { ttsController.selectVoice(it) }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2311,6 +2336,54 @@ fun MarkdownViewerScreen(
                             }
                         ) {
                             Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        }
+                        Box {
+                            IconButton(onClick = { showMoreMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) context.getString(R.string.epub_tts_stop)
+                                            else context.getString(R.string.webview_tts_play)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) {
+                                            ttsController.stop()
+                                        } else {
+                                            ttsController.start()
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        ttsController.showTtsEngineDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        ttsController.showTtsVoiceDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                            }
                         }
                     }
                 },
@@ -2465,6 +2538,14 @@ fun PassContentViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val ttsController = rememberStandaloneWebViewTtsController(
+        preferredLocale = remember { Locale.getDefault() },
+        contentToken = "pass:$innerFileName:${decryptedBytes.size}",
+        documentTitle = innerFileName,
+        webViewProvider = { webViewRef.value },
+        scrollRatioProvider = { currentWebViewScrollRatio(webViewRef.value) }
+    )
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -2560,6 +2641,22 @@ fun PassContentViewerScreen(
         )
     }
 
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = ttsController.showTtsEngineDialog,
+        onDismissEngineDialog = { ttsController.showTtsEngineDialog = false },
+        showVoiceDialog = ttsController.showTtsVoiceDialog,
+        onDismissVoiceDialog = { ttsController.showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsController.ttsEngineLoading,
+        availableTtsEngines = ttsController.availableTtsEngines,
+        selectedTtsEnginePackage = ttsController.selectedTtsEnginePackage,
+        selectedTtsVoiceName = ttsController.selectedTtsVoiceName,
+        effectiveTtsEngine = ttsController.effectiveTtsEngine,
+        onRefreshEngines = { ttsController.requestRefreshTtsEngines() },
+        onSelectEngine = { ttsController.selectEngine(it) },
+        onSelectDefaultVoice = { ttsController.selectDefaultVoice() },
+        onSelectVoice = { ttsController.selectVoice(it) }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -2588,6 +2685,54 @@ fun PassContentViewerScreen(
                         }
                     ) {
                         Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                    }
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) context.getString(R.string.epub_tts_stop)
+                                        else context.getString(R.string.webview_tts_play)
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) {
+                                        ttsController.stop()
+                                    } else {
+                                        ttsController.start()
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsEngineDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsVoiceDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -2772,6 +2917,14 @@ fun MdZipViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    val ttsController = rememberStandaloneWebViewTtsController(
+        preferredLocale = remember { Locale.getDefault() },
+        contentToken = "mdzip:${currentFile.absolutePath}",
+        documentTitle = currentFile.name,
+        webViewProvider = { webViewRef.value },
+        scrollRatioProvider = { currentWebViewScrollRatio(webViewRef.value) }
+    )
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -3065,6 +3218,22 @@ fun MdZipViewerScreen(
         )
     }
 
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = ttsController.showTtsEngineDialog,
+        onDismissEngineDialog = { ttsController.showTtsEngineDialog = false },
+        showVoiceDialog = ttsController.showTtsVoiceDialog,
+        onDismissVoiceDialog = { ttsController.showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsController.ttsEngineLoading,
+        availableTtsEngines = ttsController.availableTtsEngines,
+        selectedTtsEnginePackage = ttsController.selectedTtsEnginePackage,
+        selectedTtsVoiceName = ttsController.selectedTtsVoiceName,
+        effectiveTtsEngine = ttsController.effectiveTtsEngine,
+        onRefreshEngines = { ttsController.requestRefreshTtsEngines() },
+        onSelectEngine = { ttsController.selectEngine(it) },
+        onSelectDefaultVoice = { ttsController.selectDefaultVoice() },
+        onSelectVoice = { ttsController.selectVoice(it) }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -3094,6 +3263,54 @@ fun MdZipViewerScreen(
                             }
                         ) {
                             Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        }
+                        Box {
+                            IconButton(onClick = { showMoreMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) context.getString(R.string.epub_tts_stop)
+                                            else context.getString(R.string.webview_tts_play)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) {
+                                            ttsController.stop()
+                                        } else {
+                                            ttsController.start()
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        ttsController.showTtsEngineDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        ttsController.showTtsVoiceDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                            }
                         }
                     }
                 },
@@ -3379,6 +3596,15 @@ fun HtmlZipViewerScreen(
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var currentPageToken by remember { mutableStateOf(initialIndexFile.absolutePath) }
+    val ttsController = rememberStandaloneWebViewTtsController(
+        preferredLocale = remember { Locale.getDefault() },
+        contentToken = "htmlzip:${currentPageToken.substringBefore('#')}",
+        documentTitle = zipFileName,
+        webViewProvider = { webViewRef.value },
+        scrollRatioProvider = { currentWebViewScrollRatio(webViewRef.value) }
+    )
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -3473,6 +3699,22 @@ fun HtmlZipViewerScreen(
         )
     }
 
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = ttsController.showTtsEngineDialog,
+        onDismissEngineDialog = { ttsController.showTtsEngineDialog = false },
+        showVoiceDialog = ttsController.showTtsVoiceDialog,
+        onDismissVoiceDialog = { ttsController.showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsController.ttsEngineLoading,
+        availableTtsEngines = ttsController.availableTtsEngines,
+        selectedTtsEnginePackage = ttsController.selectedTtsEnginePackage,
+        selectedTtsVoiceName = ttsController.selectedTtsVoiceName,
+        effectiveTtsEngine = ttsController.effectiveTtsEngine,
+        onRefreshEngines = { ttsController.requestRefreshTtsEngines() },
+        onSelectEngine = { ttsController.selectEngine(it) },
+        onSelectDefaultVoice = { ttsController.selectDefaultVoice() },
+        onSelectVoice = { ttsController.selectVoice(it) }
+    )
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -3488,6 +3730,54 @@ fun HtmlZipViewerScreen(
                 actions = {
                     WebViewRegexFindAction(enabled = webViewRef.value != null) {
                         showFindDialog = true
+                    }
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.epub_more_actions))
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) context.getString(R.string.epub_tts_stop)
+                                        else context.getString(R.string.webview_tts_play)
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) {
+                                        ttsController.stop()
+                                    } else {
+                                        ttsController.start()
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (ttsController.ttsIsSpeaking || ttsController.ttsIsStarting) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsEngineDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    ttsController.showTtsVoiceDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -3510,6 +3800,7 @@ fun HtmlZipViewerScreen(
                         webViewClient = HtmlZipWebViewClient(contentDir, { url ->
                             pendingExternalUrl = url
                         }) { view ->
+                            currentPageToken = view.url ?: currentPageToken
                             regexFindUiState = RegexFindUiState()
                             installRegexFindBridge(view)
                         }
@@ -4368,241 +4659,73 @@ fun EpubViewerScreen(
         )
     }
 
-    if (showTtsEngineDialog) {
-        AlertDialog(
-            onDismissRequest = { showTtsEngineDialog = false },
-            title = { Text(context.getString(R.string.epub_tts_engine_title)) },
-            text = {
-                when {
-                    ttsEngineLoading -> {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            androidx.compose.material3.CircularProgressIndicator()
-                            Spacer(Modifier.height(12.dp))
-                            Text(context.getString(R.string.epub_tts_engine_loading))
-                        }
-                    }
-                    availableTtsEngines.isEmpty() -> {
-                        SelectionContainer {
-                            Text(context.getString(R.string.epub_tts_engine_empty))
-                        }
-                    }
-                    else -> {
-                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            items(availableTtsEngines) { engine ->
-                                val selected = selectedTtsEnginePackage == engine.packageName
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    onClick = {
-                                        scope.launch {
-                                            runCatching {
-                                                prefs.setEpubTtsEnginePackage(engine.packageName)
-                                                prefs.setEpubTtsVoiceName(null)
-                                            }.onSuccess {
-                                                ttsSession.shutdown()
-                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
-                                                showTtsEngineDialog = false
-                                            }.onFailure { error ->
-                                                publishTtsStatus(context.getString(
-                                                    R.string.epub_tts_engine_save_failed,
-                                                    error.message ?: error.javaClass.simpleName
-                                                ))
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        androidx.compose.material3.RadioButton(
-                                            selected = selected,
-                                            onClick = null
-                                        )
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(engine.label, style = MaterialTheme.typography.bodyLarge)
-                                            Text(
-                                                text = context.getString(R.string.epub_tts_engine_voice_count, engine.offlineVoiceCount),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            if (engine.supportsPreferredLocale) {
-                                                Text(
-                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                            if (engine.sampleLocaleTags.isNotEmpty()) {
-                                                Text(
-                                                    text = engine.sampleLocaleTags.joinToString(" · "),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                            Text(
-                                                text = context.getString(R.string.epub_tts_engine_package, engine.packageName),
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTtsEngineDialog = false }) {
-                    Text(context.getString(R.string.common_close))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { requestRefreshTtsEngines() }) {
-                    Text(context.getString(R.string.common_refresh))
+    OfflineTtsEngineVoiceDialogs(
+        showEngineDialog = showTtsEngineDialog,
+        onDismissEngineDialog = { showTtsEngineDialog = false },
+        showVoiceDialog = showTtsVoiceDialog,
+        onDismissVoiceDialog = { showTtsVoiceDialog = false },
+        ttsEngineLoading = ttsEngineLoading,
+        availableTtsEngines = availableTtsEngines,
+        selectedTtsEnginePackage = selectedTtsEnginePackage,
+        selectedTtsVoiceName = selectedTtsVoiceName,
+        effectiveTtsEngine = effectiveTtsEngine,
+        onRefreshEngines = { requestRefreshTtsEngines() },
+        onSelectEngine = { engine ->
+            scope.launch {
+                runCatching {
+                    prefs.setEpubTtsEnginePackage(engine.packageName)
+                    prefs.setEpubTtsVoiceName(null)
+                }.onSuccess {
+                    ttsSession.shutdown()
+                    publishTtsStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
+                    showTtsEngineDialog = false
+                }.onFailure { error ->
+                    publishTtsStatus(
+                        context.getString(
+                            R.string.epub_tts_engine_save_failed,
+                            error.message ?: error.javaClass.simpleName
+                        )
+                    )
                 }
             }
-        )
-    }
-
-    if (showTtsVoiceDialog) {
-        AlertDialog(
-            onDismissRequest = { showTtsVoiceDialog = false },
-            title = { Text(context.getString(R.string.epub_tts_voice_title)) },
-            text = {
-                when {
-                    ttsEngineLoading -> {
-                        Column(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            androidx.compose.material3.CircularProgressIndicator()
-                            Spacer(Modifier.height(12.dp))
-                            Text(context.getString(R.string.epub_tts_voice_loading))
-                        }
-                    }
-                    effectiveTtsEngine == null -> {
-                        SelectionContainer {
-                            Text(context.getString(R.string.epub_tts_engine_empty))
-                        }
-                    }
-                    effectiveTtsEngine.offlineVoices.isEmpty() -> {
-                        SelectionContainer {
-                            Text(context.getString(R.string.epub_tts_voice_empty))
-                        }
-                    }
-                    else -> {
-                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            item {
-                                val selected = selectedTtsVoiceName == null
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    onClick = {
-                                        scope.launch {
-                                            runCatching {
-                                                prefs.setEpubTtsVoiceName(null)
-                                            }.onSuccess {
-                                                ttsSession.shutdown()
-                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
-                                                showTtsVoiceDialog = false
-                                            }.onFailure { error ->
-                                                publishTtsStatus(context.getString(
-                                                    R.string.epub_tts_voice_save_failed,
-                                                    error.message ?: error.javaClass.simpleName
-                                                ))
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(context.getString(R.string.epub_tts_voice_default_choice), modifier = Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                            items(effectiveTtsEngine.offlineVoices) { voice ->
-                                val selected = selectedTtsVoiceName == voice.name
-                                Card(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 4.dp),
-                                    onClick = {
-                                        scope.launch {
-                                            runCatching {
-                                                prefs.setEpubTtsVoiceName(voice.name)
-                                            }.onSuccess {
-                                                ttsSession.shutdown()
-                                                publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
-                                                showTtsVoiceDialog = false
-                                            }.onFailure { error ->
-                                                publishTtsStatus(context.getString(
-                                                    R.string.epub_tts_voice_save_failed,
-                                                    error.message ?: error.javaClass.simpleName
-                                                ))
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
-                                        Spacer(Modifier.width(12.dp))
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            Text(voice.label, style = MaterialTheme.typography.bodyLarge)
-                                            Text(
-                                                text = context.getString(R.string.epub_tts_voice_locale, voice.localeTag),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            if (voice.supportsPreferredLocale) {
-                                                Text(
-                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.primary
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showTtsVoiceDialog = false }) {
-                    Text(context.getString(R.string.common_close))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { requestRefreshTtsEngines() }) {
-                    Text(context.getString(R.string.common_refresh))
+        },
+        onSelectDefaultVoice = {
+            scope.launch {
+                runCatching {
+                    prefs.setEpubTtsVoiceName(null)
+                }.onSuccess {
+                    ttsSession.shutdown()
+                    publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
+                    showTtsVoiceDialog = false
+                }.onFailure { error ->
+                    publishTtsStatus(
+                        context.getString(
+                            R.string.epub_tts_voice_save_failed,
+                            error.message ?: error.javaClass.simpleName
+                        )
+                    )
                 }
             }
-        )
-    }
+        },
+        onSelectVoice = { voice ->
+            scope.launch {
+                runCatching {
+                    prefs.setEpubTtsVoiceName(voice.name)
+                }.onSuccess {
+                    ttsSession.shutdown()
+                    publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
+                    showTtsVoiceDialog = false
+                }.onFailure { error ->
+                    publishTtsStatus(
+                        context.getString(
+                            R.string.epub_tts_voice_save_failed,
+                            error.message ?: error.javaClass.simpleName
+                        )
+                    )
+                }
+            }
+        }
+    )
 
     // 目录对话框
     if (showToc) {
@@ -5556,6 +5679,537 @@ private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
     return "章节内$section ($percent%)"
 }
 
+@Composable
+private fun OfflineTtsEngineVoiceDialogs(
+    showEngineDialog: Boolean,
+    onDismissEngineDialog: () -> Unit,
+    showVoiceDialog: Boolean,
+    onDismissVoiceDialog: () -> Unit,
+    ttsEngineLoading: Boolean,
+    availableTtsEngines: List<EpubOfflineTtsEngine>,
+    selectedTtsEnginePackage: String?,
+    selectedTtsVoiceName: String?,
+    effectiveTtsEngine: EpubOfflineTtsEngine?,
+    onRefreshEngines: () -> Unit,
+    onSelectEngine: (EpubOfflineTtsEngine) -> Unit,
+    onSelectDefaultVoice: () -> Unit,
+    onSelectVoice: (EpubOfflineTtsVoice) -> Unit
+) {
+    val context = LocalContext.current
+
+    if (showEngineDialog) {
+        AlertDialog(
+            onDismissRequest = onDismissEngineDialog,
+            title = { Text(context.getString(R.string.epub_tts_engine_title)) },
+            text = {
+                when {
+                    ttsEngineLoading -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator()
+                            Spacer(Modifier.height(12.dp))
+                            Text(context.getString(R.string.epub_tts_engine_loading))
+                        }
+                    }
+                    availableTtsEngines.isEmpty() -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_engine_empty))
+                        }
+                    }
+                    else -> {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            items(availableTtsEngines) { engine ->
+                                val selected = selectedTtsEnginePackage == engine.packageName
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = { onSelectEngine(engine) }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(
+                                            selected = selected,
+                                            onClick = null
+                                        )
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(engine.label, style = MaterialTheme.typography.bodyLarge)
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_engine_voice_count, engine.offlineVoiceCount),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (engine.supportsPreferredLocale) {
+                                                Text(
+                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                            if (engine.sampleLocaleTags.isNotEmpty()) {
+                                                Text(
+                                                    text = engine.sampleLocaleTags.joinToString(" · "),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_engine_package, engine.packageName),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismissEngineDialog) {
+                    Text(context.getString(R.string.common_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onRefreshEngines) {
+                    Text(context.getString(R.string.common_refresh))
+                }
+            }
+        )
+    }
+
+    if (showVoiceDialog) {
+        AlertDialog(
+            onDismissRequest = onDismissVoiceDialog,
+            title = { Text(context.getString(R.string.epub_tts_voice_title)) },
+            text = {
+                when {
+                    ttsEngineLoading -> {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator()
+                            Spacer(Modifier.height(12.dp))
+                            Text(context.getString(R.string.epub_tts_voice_loading))
+                        }
+                    }
+                    effectiveTtsEngine == null -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_engine_empty))
+                        }
+                    }
+                    effectiveTtsEngine.offlineVoices.isEmpty() -> {
+                        SelectionContainer {
+                            Text(context.getString(R.string.epub_tts_voice_empty))
+                        }
+                    }
+                    else -> {
+                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                            item {
+                                val selected = selectedTtsVoiceName == null
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = onSelectDefaultVoice
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(context.getString(R.string.epub_tts_voice_default_choice), modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                            items(effectiveTtsEngine.offlineVoices) { voice ->
+                                val selected = selectedTtsVoiceName == voice.name
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp),
+                                    onClick = { onSelectVoice(voice) }
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        androidx.compose.material3.RadioButton(selected = selected, onClick = null)
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(voice.label, style = MaterialTheme.typography.bodyLarge)
+                                            Text(
+                                                text = context.getString(R.string.epub_tts_voice_locale, voice.localeTag),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            if (voice.supportsPreferredLocale) {
+                                                Text(
+                                                    text = context.getString(R.string.epub_tts_engine_locale_hint),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onDismissVoiceDialog) {
+                    Text(context.getString(R.string.common_close))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onRefreshEngines) {
+                    Text(context.getString(R.string.common_refresh))
+                }
+            }
+        )
+    }
+}
+
+private class StandaloneWebViewTtsController(
+    private val context: Context,
+    private val prefs: Preferences,
+    private val scope: CoroutineScope,
+    private val preferredLocale: Locale
+) {
+    var showTtsEngineDialog by mutableStateOf(false)
+    var showTtsVoiceDialog by mutableStateOf(false)
+    var availableTtsEngines by mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList())
+    var ttsEngineLoading by mutableStateOf(false)
+    var ttsStatusMessage by mutableStateOf<String?>(null)
+    var ttsIsStarting by mutableStateOf(false)
+    var ttsIsSpeaking by mutableStateOf(false)
+    var ttsActiveSegmentId by mutableStateOf<String?>(null)
+    var selectedTtsEnginePackage by mutableStateOf<String?>(null)
+    var selectedTtsVoiceName by mutableStateOf<String?>(null)
+    var ttsSpeedPercent by mutableStateOf(100)
+
+    private var ttsRequestJob by mutableStateOf<Job?>(null)
+    private val ttsSession = EpubTtsSession(context)
+    private var contentToken: String? = null
+    private var contentInitialized = false
+    private var documentTitleProvider: () -> String = { "当前页面" }
+    private var webViewProvider: () -> WebView? = { null }
+    private var scrollRatioProvider: () -> Float = { 0f }
+
+    val effectiveTtsEngine: EpubOfflineTtsEngine?
+        get() = availableTtsEngines.firstOrNull { it.packageName == selectedTtsEnginePackage }
+            ?: availableTtsEngines.firstOrNull()
+
+    val effectiveTtsVoice: EpubOfflineTtsVoice?
+        get() = selectedTtsVoiceName?.let { selectedVoice ->
+            effectiveTtsEngine?.offlineVoices?.firstOrNull { it.name == selectedVoice }
+        }
+
+    fun bind(
+        documentTitleProvider: () -> String,
+        webViewProvider: () -> WebView?,
+        scrollRatioProvider: () -> Float,
+        selectedTtsEnginePackage: String?,
+        selectedTtsVoiceName: String?,
+        ttsSpeedPercent: Int
+    ) {
+        this.documentTitleProvider = documentTitleProvider
+        this.webViewProvider = webViewProvider
+        this.scrollRatioProvider = scrollRatioProvider
+        this.selectedTtsEnginePackage = selectedTtsEnginePackage
+        this.selectedTtsVoiceName = selectedTtsVoiceName
+        this.ttsSpeedPercent = ttsSpeedPercent
+    }
+
+    fun requestRefreshTtsEngines() {
+        scope.launch {
+            ttsEngineLoading = true
+            availableTtsEngines = withContext(Dispatchers.IO) {
+                loadOfflineTtsEngines(context, preferredLocale)
+            }
+            ttsEngineLoading = false
+        }
+    }
+
+    fun onContentChanged(newToken: String) {
+        if (!contentInitialized) {
+            contentInitialized = true
+            contentToken = newToken
+            return
+        }
+        if (contentToken == newToken) return
+        contentToken = newToken
+        if (ttsIsSpeaking || ttsIsStarting || ttsRequestJob != null) {
+            stop(context.getString(R.string.webview_tts_content_switched))
+        } else {
+            ttsActiveSegmentId = null
+            setEpubTtsHighlight(webViewProvider(), null, scrollToSegment = false)
+        }
+    }
+
+    fun start() {
+        val title = documentTitleProvider().ifBlank { "当前页面" }
+        publishStatus(context.getString(R.string.epub_tts_start_requested, title))
+        startInternal(title)
+    }
+
+    fun stop(message: String = context.getString(R.string.epub_tts_stopped)) {
+        ttsRequestJob?.cancel()
+        ttsRequestJob = null
+        ttsSession.stop()
+        ttsIsStarting = false
+        ttsIsSpeaking = false
+        ttsActiveSegmentId = null
+        setEpubTtsHighlight(webViewProvider(), null, scrollToSegment = false)
+        publishStatus(message)
+    }
+
+    fun shutdown() {
+        ttsRequestJob?.cancel()
+        ttsRequestJob = null
+        setEpubTtsHighlight(webViewProvider(), null, scrollToSegment = false)
+        ttsSession.shutdown()
+    }
+
+    fun selectEngine(engine: EpubOfflineTtsEngine) {
+        scope.launch {
+            runCatching {
+                prefs.setEpubTtsEnginePackage(engine.packageName)
+                prefs.setEpubTtsVoiceName(null)
+            }.onSuccess {
+                ttsSession.shutdown()
+                publishStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
+                showTtsEngineDialog = false
+            }.onFailure { error ->
+                publishStatus(
+                    context.getString(
+                        R.string.epub_tts_engine_save_failed,
+                        error.message ?: error.javaClass.simpleName
+                    )
+                )
+            }
+        }
+    }
+
+    fun selectDefaultVoice() {
+        scope.launch {
+            runCatching {
+                prefs.setEpubTtsVoiceName(null)
+            }.onSuccess {
+                ttsSession.shutdown()
+                publishStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
+                showTtsVoiceDialog = false
+            }.onFailure { error ->
+                publishStatus(
+                    context.getString(
+                        R.string.epub_tts_voice_save_failed,
+                        error.message ?: error.javaClass.simpleName
+                    )
+                )
+            }
+        }
+    }
+
+    fun selectVoice(voice: EpubOfflineTtsVoice) {
+        scope.launch {
+            runCatching {
+                prefs.setEpubTtsVoiceName(voice.name)
+            }.onSuccess {
+                ttsSession.shutdown()
+                publishStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
+                showTtsVoiceDialog = false
+            }.onFailure { error ->
+                publishStatus(
+                    context.getString(
+                        R.string.epub_tts_voice_save_failed,
+                        error.message ?: error.javaClass.simpleName
+                    )
+                )
+            }
+        }
+    }
+
+    private fun startInternal(documentTitle: String) {
+        ttsRequestJob?.cancel()
+        ttsRequestJob = scope.launch {
+            val view = webViewProvider()
+            if (view == null) {
+                publishStatus(context.getString(R.string.webview_tts_no_text))
+                return@launch
+            }
+            publishStatus(context.getString(R.string.webview_tts_preparing), toast = false)
+            val segments = collectEpubTtsSegments(view)
+            if (segments.isEmpty()) {
+                publishStatus(context.getString(R.string.webview_tts_no_text))
+                return@launch
+            }
+            if (ttsEngineLoading) {
+                publishStatus(context.getString(R.string.epub_tts_engine_loading))
+                return@launch
+            }
+            if (availableTtsEngines.isEmpty()) {
+                requestRefreshTtsEngines()
+                publishStatus(context.getString(R.string.epub_tts_engine_loading))
+                return@launch
+            }
+            val chosenEnginePackage = selectedTtsEnginePackage
+                ?.takeIf { selected -> availableTtsEngines.any { it.packageName == selected } }
+                ?: availableTtsEngines.firstOrNull()?.packageName
+            if (chosenEnginePackage == null) {
+                publishStatus(context.getString(R.string.epub_tts_engine_empty))
+                return@launch
+            }
+            val speakLocale = effectiveTtsVoice
+                ?.localeTag
+                ?.takeIf { it.isNotBlank() && !it.equals("und", ignoreCase = true) }
+                ?.let(Locale::forLanguageTag)
+                ?: preferredLocale
+            val startSegmentIndex = resolveTtsStartSegmentIndex(segments, scrollRatioProvider())
+            val speakChunks = segments
+                .drop(startSegmentIndex)
+                .flatMap { segment ->
+                    splitTextForTts(segment.text).map { chunkText ->
+                        EpubTtsChunk(
+                            domId = segment.domId,
+                            topRatio = segment.topRatio,
+                            text = chunkText
+                        )
+                    }
+                }
+            if (speakChunks.isEmpty()) {
+                publishStatus(context.getString(R.string.webview_tts_no_text))
+                return@launch
+            }
+            val utteranceId = "webview_${System.currentTimeMillis()}"
+            ttsSession.speak(
+                enginePackage = chosenEnginePackage,
+                voiceName = effectiveTtsVoice?.name,
+                preferredLocale = speakLocale,
+                speechRate = ttsSpeedPercent / 100f,
+                utteranceId = utteranceId,
+                chunks = speakChunks,
+                onPreparing = {
+                    ttsIsStarting = true
+                    ttsIsSpeaking = false
+                    publishStatus(context.getString(R.string.epub_tts_engine_loading), toast = false)
+                },
+                onStart = {
+                    ttsIsStarting = false
+                    ttsIsSpeaking = true
+                    publishStatus(context.getString(R.string.epub_tts_running, documentTitle))
+                },
+                onChunkStart = { chunk, _, _ ->
+                    ttsActiveSegmentId = chunk.domId
+                    setEpubTtsHighlight(webViewProvider(), chunk.domId, scrollToSegment = true)
+                },
+                onFinish = { completed, message ->
+                    ttsRequestJob = null
+                    ttsIsStarting = false
+                    ttsIsSpeaking = false
+                    ttsActiveSegmentId = null
+                    setEpubTtsHighlight(webViewProvider(), null, scrollToSegment = false)
+                    if (!message.isNullOrBlank()) {
+                        publishStatus(message)
+                    } else if (completed) {
+                        publishStatus(context.getString(R.string.webview_tts_finished))
+                    }
+                },
+                onError = { error ->
+                    ttsRequestJob = null
+                    ttsIsStarting = false
+                    ttsIsSpeaking = false
+                    ttsActiveSegmentId = null
+                    setEpubTtsHighlight(webViewProvider(), null, scrollToSegment = false)
+                    publishStatus(error)
+                }
+            )
+        }
+    }
+
+    private fun publishStatus(message: String, toast: Boolean = true) {
+        ttsStatusMessage = message
+        if (toast) {
+            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+@Composable
+private fun rememberStandaloneWebViewTtsController(
+    preferredLocale: Locale,
+    contentToken: String,
+    documentTitle: String,
+    webViewProvider: () -> WebView?,
+    scrollRatioProvider: () -> Float
+): StandaloneWebViewTtsController {
+    val context = LocalContext.current
+    val prefs = remember { Preferences(context) }
+    val scope = rememberCoroutineScope()
+    val controller = remember(preferredLocale) {
+        StandaloneWebViewTtsController(context, prefs, scope, preferredLocale)
+    }
+    val selectedTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
+
+    controller.bind(
+        documentTitleProvider = { documentTitle },
+        webViewProvider = webViewProvider,
+        scrollRatioProvider = scrollRatioProvider,
+        selectedTtsEnginePackage = selectedTtsEnginePackage,
+        selectedTtsVoiceName = selectedTtsVoiceName,
+        ttsSpeedPercent = epubTtsSpeedPercent
+    )
+
+    LaunchedEffect(Unit) {
+        controller.requestRefreshTtsEngines()
+    }
+
+    LaunchedEffect(controller.showTtsEngineDialog) {
+        if (controller.showTtsEngineDialog) {
+            controller.requestRefreshTtsEngines()
+        }
+    }
+
+    LaunchedEffect(contentToken) {
+        controller.onContentChanged(contentToken)
+    }
+
+    DisposableEffect(controller) {
+        onDispose {
+            controller.shutdown()
+        }
+    }
+
+    return controller
+}
+
+private fun currentWebViewScrollRatio(view: WebView?): Float {
+    if (view == null) return 0f
+    val viewportHeight = view.height.toFloat().coerceAtLeast(1f)
+    val contentHeight = (view.contentHeight * view.scale).coerceAtLeast(viewportHeight)
+    val maxScroll = (contentHeight - viewportHeight).coerceAtLeast(1f)
+    return (view.scrollY / maxScroll).coerceIn(0f, 1f)
+}
+
 data class EpubOfflineTtsEngine(
     val packageName: String,
     val label: String,
@@ -5618,8 +6272,21 @@ private val EPUB_TTS_BOOTSTRAP_JS = """
         return true;
     }
 
+    var styleId = 'lm-epub-tts-style';
+
     var containerSelector = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, .assistant-content, .content, div';
     var skipSelector = 'script, style, noscript, summary, .assistant-label, .other-label';
+
+    function ensureStyle() {
+        if (document.getElementById(styleId)) {
+            return;
+        }
+        var style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = '[data-lm-tts-id]{transition:background-color .22s ease,box-shadow .22s ease;scroll-margin-top:72px;}' +
+            '.lm-epub-tts-active{background:rgba(255,235,59,0.28)!important;box-shadow:0 0 0 3px rgba(255,235,59,0.18)!important;border-radius:8px;}';
+        (document.head || document.documentElement).appendChild(style);
+    }
 
     function normalizeText(value) {
         return String(value || '')
@@ -5722,12 +6389,14 @@ private val EPUB_TTS_BOOTSTRAP_JS = """
     }
 
     function clearHighlight() {
+        ensureStyle();
         document.querySelectorAll('.lm-epub-tts-active').forEach(function(node) {
             node.classList.remove('lm-epub-tts-active');
         });
     }
 
     function highlight(segmentId, shouldScroll) {
+        ensureStyle();
         clearHighlight();
         if (!segmentId) {
             return false;
@@ -5753,6 +6422,7 @@ private val EPUB_TTS_BOOTSTRAP_JS = """
         clear: function() { return highlight(null, false); },
         highlight: highlight
     };
+    ensureStyle();
     return true;
 })();
 """.trimIndent()
