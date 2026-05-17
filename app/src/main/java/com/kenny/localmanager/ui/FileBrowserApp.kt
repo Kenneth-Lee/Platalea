@@ -296,6 +296,7 @@ private data class ExternalAppTarget(
 
 private const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
 private const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
+private const val RECENT_TYPE_PDF_VIEWER = "pdf_viewer"
 private const val RECENT_TYPE_PLAYLIST = "playlist"
 private const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
 private typealias RunProgressBlock = suspend (
@@ -424,7 +425,8 @@ private fun openRecentItemByType(
     onLlmZipTarget: (DocumentFileModel) -> Unit,
     onTxtTarget: (DocumentFileModel) -> Unit,
     onLlmTarget: (DocumentFileModel) -> Unit,
-    onEpubTarget: (DocumentFileModel) -> Unit
+    onEpubTarget: (DocumentFileModel) -> Unit,
+    onPdfTarget: (DocumentFileModel) -> Unit
 ) {
     when (item.type) {
         RECENT_TYPE_PLAYLIST -> {
@@ -503,6 +505,15 @@ private fun openRecentItemByType(
                 item.title.endsWith(".llm", ignoreCase = true) -> onLlmTarget(model)
                 else -> onEpubTarget(model)
             }
+        }
+
+        RECENT_TYPE_PDF_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            onPdfTarget(buildRecentModel(uri, item.title))
         }
 
         else -> {
@@ -909,6 +920,7 @@ private fun RecentTabContent(
         return when (item.type) {
             RECENT_TYPE_ZIP_VIEWER -> context.getString(R.string.recent_type_zip_viewer)
             RECENT_TYPE_EPUB_RENDERER -> context.getString(R.string.recent_type_epub_renderer)
+            RECENT_TYPE_PDF_VIEWER -> context.getString(R.string.recent_type_pdf_viewer)
             RECENT_TYPE_PLAYLIST -> context.getString(R.string.recent_type_playlist)
             RECENT_TYPE_EXTERNAL_OPEN -> context.getString(R.string.recent_type_external_open)
             else -> item.type
@@ -2543,7 +2555,8 @@ private fun FileBrowserAppScreen(
                             onLlmZipTarget = { llmZipTarget = it },
                             onTxtTarget = { txtTarget = it },
                             onLlmTarget = { llmTarget = it },
-                            onEpubTarget = { epubTarget = it }
+                            onEpubTarget = { epubTarget = it },
+                            onPdfTarget = { pdfViewState = Pair(it.uri.toString(), it.name) }
                         )
                     },
                     onDeleteRecentItem = { item ->
@@ -5171,10 +5184,19 @@ private fun FileBrowserAppScreen(
         }
         pdfViewState != null -> {
             val (pdfUri, pdfName) = pdfViewState!!
+            LaunchedEffect(pdfUri) {
+                recordRecentOpen(
+                    type = RECENT_TYPE_PDF_VIEWER,
+                    key = pdfUri,
+                    title = pdfName,
+                    uri = pdfUri
+                )
+            }
             BackHandler { pdfViewState = null }
             PdfViewerScreen(
                 uri = pdfUri,
                 fileName = pdfName,
+                prefs = prefs,
                 onBack = { pdfViewState = null }
             )
         }

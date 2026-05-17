@@ -6397,6 +6397,7 @@ data class PdfPageData(
 fun PdfViewerScreen(
     uri: String,
     fileName: String,
+    prefs: Preferences,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -6406,6 +6407,7 @@ fun PdfViewerScreen(
 
     var pageCount by remember { mutableStateOf(0) }
     var currentPage by remember { mutableStateOf(0) }
+    var initialPageLoaded by remember(uri) { mutableStateOf(false) }
     var currentPageBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var pageLoading by remember { mutableStateOf(false) }
     var fitToWidthZoom by remember { mutableStateOf<Float?>(null) } // 自适应宽度的缩放比例
@@ -6438,6 +6440,9 @@ fun PdfViewerScreen(
             if (result != null && result.first > 0) {
                 pageCount = result.first
                 pageInfo = Pair(result.second, result.third)
+                val savedPage = prefs.getPdfLastPageForUri(uri)?.coerceIn(0, result.first - 1) ?: 0
+                currentPage = savedPage
+                initialPageLoaded = true
                 // 计算自适应宽度的缩放比例
                 if (result.second > 0 && screenWidthPx > 0) {
                     fitToWidthZoom = screenWidthPx / result.second.toFloat()
@@ -6450,6 +6455,12 @@ fun PdfViewerScreen(
             errorMsg = "加载失败: ${e.message}"
         }
         isLoading = false
+    }
+
+    LaunchedEffect(uri, currentPage, initialPageLoaded) {
+        if (initialPageLoaded) {
+            prefs.setPdfLastPageForUri(uri, currentPage)
+        }
     }
 
     // 渲染当前页面

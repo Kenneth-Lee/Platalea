@@ -26,6 +26,7 @@
     <string name="main_tab_more">More</string>
     <string name="recent_type_zip_viewer">ZIP Viewer</string>
     <string name="recent_type_epub_renderer">EPUB Renderer</string>
+    <string name="recent_type_pdf_viewer">PDF Viewer</string>
     <string name="recent_type_playlist">Playlist</string>
     <string name="recent_type_external_open">External App</string>
     <string name="recent_empty">No recent items.</string>

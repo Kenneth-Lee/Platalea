@@ -41,6 +41,7 @@ private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_ope
 private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expanded")
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
 private val EPUB_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("epub_zoom_percent_by_uri_json")
+private val PDF_LAST_PAGE_BY_URI_JSON = stringPreferencesKey("pdf_last_page_by_uri_json")
 private val EPUB_TTS_ENGINE_PACKAGE = stringPreferencesKey("epub_tts_engine_package")
 private val EPUB_TTS_VOICE_NAME = stringPreferencesKey("epub_tts_voice_name")
 private val EPUB_TTS_SPEED_PERCENT = intPreferencesKey("epub_tts_speed_percent")
@@ -354,6 +355,37 @@ class Preferences(private val context: Context) {
                 obj.remove(key)
             }
             prefs[EPUB_ZOOM_PERCENT_BY_URI_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun getPdfLastPageForUri(uri: String): Int? {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return null
+        val json = context.dataStore.data.first()[PDF_LAST_PAGE_BY_URI_JSON] ?: return null
+        return try {
+            val obj = org.json.JSONObject(json)
+            val value = obj.optInt(normalizedUri, -1)
+            if (value >= 0) value else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun setPdfLastPageForUri(uri: String, pageIndex: Int) {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val obj = try {
+                org.json.JSONObject(prefs[PDF_LAST_PAGE_BY_URI_JSON] ?: "{}")
+            } catch (_: Exception) {
+                org.json.JSONObject()
+            }
+            obj.put(normalizedUri, pageIndex.coerceAtLeast(0))
+            while (obj.length() > 200) {
+                val key = obj.keys().asSequence().firstOrNull() ?: break
+                obj.remove(key)
+            }
+            prefs[PDF_LAST_PAGE_BY_URI_JSON] = obj.toString()
         }
     }
 

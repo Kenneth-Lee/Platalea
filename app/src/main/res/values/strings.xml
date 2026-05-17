@@ -28,6 +28,7 @@
     <string name="main_tab_more">更多</string>
     <string name="recent_type_zip_viewer">ZIP 查看器</string>
     <string name="recent_type_epub_renderer">EPUB 渲染器</string>
+    <string name="recent_type_pdf_viewer">PDF 查看器</string>
     <string name="recent_type_playlist">播放列表</string>
     <string name="recent_type_external_open">外部打开</string>
     <string name="recent_empty">暂无最近打开条目</string>
