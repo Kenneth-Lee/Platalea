@@ -1601,6 +1601,82 @@ private data class RegexFindUiState(
     val hasMatches: Boolean get() = count > 0
 }
 
+private data class EpubFullTextSearchResult(
+    val chapterIndex: Int,
+    val chapterTitle: String,
+    val matchCount: Int,
+    val snippet: String
+)
+
+private fun htmlToSearchableText(html: String): String {
+    val stripped = html
+        .replace(Regex("(?is)<script\\b[^>]*>.*?</script>"), " ")
+        .replace(Regex("(?is)<style\\b[^>]*>.*?</style>"), " ")
+    return HtmlCompat.fromHtml(stripped, HtmlCompat.FROM_HTML_MODE_LEGACY)
+        .toString()
+        .replace('\u00A0', ' ')
+        .replace(Regex("\\s+"), " ")
+        .trim()
+}
+
+private fun readTextForEpubSearch(file: File): String {
+    return runCatching { file.readText() }
+        .getOrElse {
+            runCatching { file.readBytes().decodeToString() }
+                .getOrElse { error -> throw IllegalStateException("读取章节文本失败：${file.absolutePath} ${error.message}", error) }
+        }
+}
+
+private fun countLiteralMatches(text: String, query: String): Int {
+    if (text.isEmpty() || query.isEmpty()) return 0
+    var count = 0
+    var searchFrom = 0
+    while (true) {
+        val found = text.indexOf(query, startIndex = searchFrom, ignoreCase = true)
+        if (found < 0) break
+        count += 1
+        searchFrom = found + query.length
+    }
+    return count
+}
+
+private fun buildLiteralMatchSnippet(text: String, query: String, radius: Int = 36): String {
+    val found = text.indexOf(query, ignoreCase = true)
+    if (found < 0) return text.take(radius * 2).trim()
+    val start = maxOf(0, found - radius)
+    val end = minOf(text.length, found + query.length + radius)
+    val prefix = if (start > 0) "..." else ""
+    val suffix = if (end < text.length) "..." else ""
+    return prefix + text.substring(start, end).trim() + suffix
+}
+
+private suspend fun searchEpubAcrossChapters(
+    extractResult: EpubExtractResult,
+    query: String
+): List<EpubFullTextSearchResult> = withContext(Dispatchers.IO) {
+    val normalizedQuery = query.trim()
+    if (normalizedQuery.isEmpty()) return@withContext emptyList()
+    extractResult.chapters.mapIndexedNotNull { index, chapter ->
+        val chapterFile = getEpubChapterFile(extractResult, chapter)
+            ?: return@mapIndexedNotNull null
+        if (!chapterFile.exists() || !chapterFile.isFile) {
+            throw IllegalStateException("章节文件不存在：index=$index href=${chapter.href} file=${chapterFile.absolutePath}")
+        }
+        val plainText = htmlToSearchableText(readTextForEpubSearch(chapterFile))
+        val matchCount = countLiteralMatches(plainText, normalizedQuery)
+        if (matchCount <= 0) {
+            null
+        } else {
+            EpubFullTextSearchResult(
+                chapterIndex = index,
+                chapterTitle = chapter.title ?: chapter.href.substringBeforeLast('.'),
+                matchCount = matchCount,
+                snippet = buildLiteralMatchSnippet(plainText, normalizedQuery)
+            )
+        }
+    }
+}
+
 private val REGEX_FIND_BOOTSTRAP_JS = """
 (function() {
     if (window.__lmRegexFind) {
@@ -2054,6 +2130,128 @@ private fun WebViewRegexFindDialog(
                         TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
                         TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
                         TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EpubFullTextSearchDialog(
+    query: String,
+    searching: Boolean,
+    error: String?,
+    results: List<EpubFullTextSearchResult>,
+    onQueryChange: (String) -> Unit,
+    onSearch: () -> Unit,
+    onClear: () -> Unit,
+    onSelectResult: (EpubFullTextSearchResult) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp)
+                .heightIn(max = 620.dp),
+            shape = MaterialTheme.shapes.large
+        ) {
+            Column(Modifier.padding(16.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("全文查找", style = MaterialTheme.typography.titleMedium)
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "关闭全文查找")
+                    }
+                }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("输入要搜索的文字") },
+                    singleLine = true
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextButton(onClick = onSearch, enabled = !searching) {
+                        Text(if (searching) "搜索中..." else "搜索")
+                    }
+                    TextButton(
+                        onClick = onClear,
+                        enabled = query.isNotBlank() || results.isNotEmpty() || error != null
+                    ) {
+                        Text("清除")
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                when {
+                    error != null -> {
+                        Text(error, color = MaterialTheme.colorScheme.error)
+                    }
+                    searching -> {
+                        Text("正在扫描全部章节，请稍候...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    query.isBlank() -> {
+                        Text("输入文字后可在全部章节中查找。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    results.isEmpty() -> {
+                        Text("未找到匹配章节。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    else -> {
+                        Text(
+                            "找到 ${results.sumOf { it.matchCount }} 处命中，分布在 ${results.size} 个章节。",
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                if (results.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(results) { item ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                onClick = { onSelectResult(item) }
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Text(
+                                        "第 ${item.chapterIndex + 1} 章 · ${item.chapterTitle}",
+                                        style = MaterialTheme.typography.labelLarge,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "命中 ${item.matchCount} 次",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        item.snippet,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -4519,9 +4717,15 @@ fun EpubViewerScreen(
     var currentScrollRatio by remember { mutableStateOf(0f) }
     var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
+    var showFullTextSearchDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
+    var fullTextQuery by remember { mutableStateOf("") }
+    var fullTextSearchResults by remember { mutableStateOf<List<EpubFullTextSearchResult>>(emptyList()) }
+    var fullTextSearchError by remember { mutableStateOf<String?>(null) }
+    var fullTextSearching by remember { mutableStateOf(false) }
+    var pendingFullTextHighlightQuery by remember { mutableStateOf<String?>(null) }
     var showTtsEngineDialog by remember { mutableStateOf(false) }
     var showTtsVoiceDialog by remember { mutableStateOf(false) }
     var availableTtsEngines by remember { mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList()) }
@@ -4787,6 +4991,33 @@ fun EpubViewerScreen(
         currentChapterIndex = index
         currentScrollRatio = restoredRatio
         pendingProgrammaticScrollRatio = restoredRatio
+    }
+
+    fun applyLiteralFindToCurrentChapter(rawQuery: String, targetView: WebView? = webViewRef.value) {
+        if (rawQuery.isBlank()) return
+        regexQuery = rawQuery
+        searchInWebViewByRegex(targetView, Regex.escape(rawQuery)) { regexFindUiState = it }
+    }
+
+    fun runFullTextSearch() {
+        val query = fullTextQuery.trim()
+        if (query.isBlank()) {
+            fullTextSearchResults = emptyList()
+            fullTextSearchError = "请输入要搜索的文字"
+            return
+        }
+        scope.launch {
+            fullTextSearching = true
+            fullTextSearchError = null
+            try {
+                fullTextSearchResults = searchEpubAcrossChapters(extractResult, query)
+            } catch (error: Exception) {
+                fullTextSearchResults = emptyList()
+                fullTextSearchError = "全文查找失败：${error.message ?: error.javaClass.simpleName}"
+            } finally {
+                fullTextSearching = false
+            }
+        }
     }
 
     LaunchedEffect(epubUri) {
@@ -5197,6 +5428,42 @@ fun EpubViewerScreen(
         )
     }
 
+    if (showFullTextSearchDialog) {
+        EpubFullTextSearchDialog(
+            query = fullTextQuery,
+            searching = fullTextSearching,
+            error = fullTextSearchError,
+            results = fullTextSearchResults,
+            onQueryChange = {
+                fullTextQuery = it
+                if (it.isBlank()) {
+                    fullTextSearchResults = emptyList()
+                    fullTextSearchError = null
+                }
+            },
+            onSearch = { runFullTextSearch() },
+            onClear = {
+                fullTextQuery = ""
+                fullTextSearchResults = emptyList()
+                fullTextSearchError = null
+            },
+            onSelectResult = { result ->
+                val query = fullTextQuery.trim()
+                showFullTextSearchDialog = false
+                if (query.isBlank()) return@EpubFullTextSearchDialog
+                showFindDialog = true
+                if (result.chapterIndex == currentChapterIndex) {
+                    pendingFullTextHighlightQuery = null
+                    applyLiteralFindToCurrentChapter(query)
+                } else {
+                    pendingFullTextHighlightQuery = query
+                    goToChapter(result.chapterIndex)
+                }
+            },
+            onDismiss = { showFullTextSearchDialog = false }
+        )
+    }
+
     OfflineTtsEngineVoiceDialogs(
         showEngineDialog = showTtsEngineDialog,
         onDismissEngineDialog = { showTtsEngineDialog = false },
@@ -5582,6 +5849,17 @@ fun EpubViewerScreen(
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
                             )
                             DropdownMenuItem(
+                                text = { Text("全文查找") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (fullTextQuery.isBlank() && regexQuery.isNotBlank()) {
+                                        fullTextQuery = regexQuery
+                                    }
+                                    showFullTextSearchDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_add_bookmark)) },
                                 onClick = {
                                     showMoreMenu = false
@@ -5913,6 +6191,10 @@ fun EpubViewerScreen(
                                 }) { view ->
                                     regexFindUiState = RegexFindUiState()
                                     installRegexFindBridge(view)
+                                    pendingFullTextHighlightQuery?.let { pendingQuery ->
+                                        applyLiteralFindToCurrentChapter(pendingQuery, view)
+                                        pendingFullTextHighlightQuery = null
+                                    }
                                     installEpubTtsBridge(view)
                                     // 页面加载完成后恢复滚动位置
                                     (view as? GestureWebView)?.restoreScrollPosition()
