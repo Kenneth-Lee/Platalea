@@ -1,11 +1,6 @@
 package com.kenny.localmanager.ui
 
 import android.widget.Toast
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -14,8 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -26,19 +19,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class BookNoteTabController(
-    val data: BookNoteLoadedData?,
+    override val data: BookNoteLoadedData?,
     val entriesSnapshot: List<BookNoteEntry>,
-    val password: String,
-    val passwordRequired: Boolean,
-    val inProgress: Boolean,
+    override val inProgress: Boolean,
+    override val passwordPromptState: TabPasswordPromptState,
     val requestOpen: (String?) -> Unit,
     val requestOpenWithCachedPassword: () -> Unit,
     val requestLoad: () -> Unit,
     val updateEntries: (List<BookNoteEntry>) -> Unit,
-    val updatePassword: (String) -> Unit,
-    val dismissPasswordPrompt: () -> Unit,
-    val persistIfNeeded: (String, ((Boolean) -> Unit)?) -> Unit
-)
+    private val persistHandler: (String, ((Boolean) -> Unit)?) -> Unit
+) : BaseTabRouteController<BookNoteLoadedData> {
+    override fun persistIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)?) {
+        persistHandler(reason, onFinished)
+    }
+}
 
 @Composable
 fun rememberBookNoteTabController(
@@ -164,9 +158,24 @@ fun rememberBookNoteTabController(
     return BookNoteTabController(
         data = bookNoteData,
         entriesSnapshot = bookNoteEntriesSnapshot,
-        password = bookNotePassword,
-        passwordRequired = bookNotePasswordRequired,
         inProgress = bookNoteInProgress,
+        passwordPromptState = TabPasswordPromptState(
+            required = bookNotePasswordRequired,
+            password = bookNotePassword,
+            inProgress = bookNoteInProgress,
+            onPasswordChange = { if (!bookNoteInProgress) bookNotePassword = it },
+            onConfirm = { pwd ->
+                if (!bookNoteInProgress) {
+                    requestOpenBookNote(pwd)
+                }
+            },
+            onDismiss = {
+                if (!bookNoteInProgress) {
+                    resetBookNotePromptState()
+                    bookNoteLoadRequested = false
+                }
+            }
+        ),
         requestOpen = ::requestOpenBookNote,
         requestOpenWithCachedPassword = {
             requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
@@ -176,33 +185,20 @@ fun rememberBookNoteTabController(
             bookNoteEntriesSnapshot = it
             bookNoteLoadRequested = true
         },
-        updatePassword = { if (!bookNoteInProgress) bookNotePassword = it },
-        dismissPasswordPrompt = {
-            if (!bookNoteInProgress) {
-                resetBookNotePromptState()
-                bookNoteLoadRequested = false
-            }
-        },
-        persistIfNeeded = ::persistBookNoteIfNeeded
+        persistHandler = ::persistBookNoteIfNeeded
     )
 }
 
 @Composable
 fun BookNoteTabRoute(controller: BookNoteTabController) {
-    val data = controller.data
-    if (data != null) {
+    TabRouteContent(
+        controller = controller,
+        loadingText = "正在打开读书笔记…"
+    ) { data ->
         BookNoteScreen(
             loadedData = data,
             inProgress = controller.inProgress,
             onEntriesChanged = controller.updateEntries
         )
-    } else {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (controller.inProgress) {
-                CircularProgressIndicator()
-            } else {
-                Text("正在打开读书笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }

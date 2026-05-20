@@ -1,11 +1,6 @@
 package com.kenny.localmanager.ui
 
 import android.widget.Toast
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -14,8 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -27,18 +20,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 data class QuickNoteTabController(
-    val data: QuickNoteLoadedData?,
+    override val data: QuickNoteLoadedData?,
     val startWithAddDialog: Boolean,
-    val password: String,
-    val passwordRequired: Boolean,
-    val inProgress: Boolean,
+    override val inProgress: Boolean,
+    override val passwordPromptState: TabPasswordPromptState,
     val requestOpen: (Boolean, String?) -> Unit,
     val requestOpenWithCachedPassword: (Boolean) -> Unit,
     val updateEntries: (List<QuickNoteEntry>) -> Unit,
-    val updatePassword: (String) -> Unit,
-    val dismissPasswordPrompt: () -> Unit,
-    val persistIfNeeded: (String, ((Boolean) -> Unit)?) -> Unit
-)
+    private val persistHandler: (String, ((Boolean) -> Unit)?) -> Unit
+) : BaseTabRouteController<QuickNoteLoadedData> {
+    override fun persistIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)?) {
+        persistHandler(reason, onFinished)
+    }
+}
 
 @Composable
 fun rememberQuickNoteTabController(
@@ -162,22 +156,30 @@ fun rememberQuickNoteTabController(
     return QuickNoteTabController(
         data = quickNoteData,
         startWithAddDialog = quickNoteStartWithAddDialog,
-        password = quickNotePassword,
-        passwordRequired = quickNotePasswordRequired,
         inProgress = quickNoteInProgress,
+        passwordPromptState = TabPasswordPromptState(
+            required = quickNotePasswordRequired,
+            password = quickNotePassword,
+            inProgress = quickNoteInProgress,
+            onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
+            onConfirm = { pwd ->
+                if (!quickNoteInProgress) {
+                    requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
+                }
+            },
+            onDismiss = {
+                if (!quickNoteInProgress) {
+                    resetQuickNotePromptState()
+                    quickNoteStartWithAddDialog = false
+                }
+            }
+        ),
         requestOpen = ::requestOpenQuickNote,
         requestOpenWithCachedPassword = { startWithAddDialog ->
             requestOpenQuickNote(startWithAddDialog, SecretKeyPasswordCache.get()?.let { String(it) })
         },
         updateEntries = { quickNoteEntriesSnapshot = it },
-        updatePassword = { if (!quickNoteInProgress) quickNotePassword = it },
-        dismissPasswordPrompt = {
-            if (!quickNoteInProgress) {
-                resetQuickNotePromptState()
-                quickNoteStartWithAddDialog = false
-            }
-        },
-        persistIfNeeded = ::persistQuickNoteIfNeeded
+        persistHandler = ::persistQuickNoteIfNeeded
     )
 }
 
@@ -186,8 +188,10 @@ fun QuickNoteTabRoute(
     prefs: Preferences,
     controller: QuickNoteTabController
 ) {
-    val data = controller.data
-    if (data != null) {
+    TabRouteContent(
+        controller = controller,
+        loadingText = "正在打开快速笔记…"
+    ) { data ->
         QuickNoteScreen(
             prefs = prefs,
             loadedData = data,
@@ -195,13 +199,5 @@ fun QuickNoteTabRoute(
             inProgress = controller.inProgress,
             onEntriesChanged = controller.updateEntries
         )
-    } else {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (controller.inProgress) {
-                CircularProgressIndicator()
-            } else {
-                Text("正在打开快速笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
     }
 }
