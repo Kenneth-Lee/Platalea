@@ -4699,6 +4699,11 @@ fun EpubViewerScreen(
     extractResult: EpubExtractResult,
     zipFileName: String,
     epubUri: Uri,
+    bookNoteLoadedData: BookNoteLoadedData?,
+    bookNoteEntries: List<BookNoteEntry>,
+    bookNoteInProgress: Boolean,
+    onRequestOpenBookNotes: () -> Unit,
+    onBookNoteEntriesChanged: (List<BookNoteEntry>) -> Unit,
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
@@ -4714,13 +4719,15 @@ fun EpubViewerScreen(
     var tocQuery by remember { mutableStateOf("") }
     var showBookmarks by remember { mutableStateOf(false) }
     var showAddBookmark by remember { mutableStateOf(false) }
-    var editingBookmark by remember { mutableStateOf<EpubBookmark?>(null) }
+    var pendingBookmarkQuote by remember { mutableStateOf("") }
     var currentChapterIndex by remember { mutableStateOf(0) }
     var currentScrollRatio by remember { mutableStateOf(0f) }
     var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var showFullTextSearchDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
+    var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var fullTextQuery by remember { mutableStateOf("") }
@@ -4939,7 +4946,7 @@ fun EpubViewerScreen(
         }
     }
 
-    // 收藏夹管理器
+    // 旧收藏夹管理器仅用于把历史数据迁移到全局读书笔记
     val bookmarkManager = remember(epubUri, extractResult.cacheDir.absolutePath, extractResult.isEncrypted) {
         EpubBookmarkManager(
             context = context,
@@ -4948,12 +4955,158 @@ fun EpubViewerScreen(
         )
     }
     val bookmarks by bookmarkManager.bookmarks.collectAsState()
-    val epubBookmarks = bookmarks.filter { it.epubUri == epubUri.toString() }
+    val legacyEpubBookmarks = bookmarks.filter { it.epubUri == epubUri.toString() }
 
     val chapters = extractResult.chapters
+    val currentBookTitle = extractResult.bookInfo.title.ifBlank { zipFileName }
+    val currentBookNoteEntries = remember(bookNoteEntries, currentBookTitle) {
+        bookNoteEntries.filter { it.matchesBookTitle(currentBookTitle) }
+    }
+    val currentBookBookmarkEntries = remember(currentBookNoteEntries) {
+        currentBookNoteEntries
+            .filter { it.hasLocation() }
+            .sortedByDescending { it.createdAt }
+    }
+    val visualBookmarks = remember(currentBookBookmarkEntries, epubUri, zipFileName) {
+        currentBookBookmarkEntries.map { entry ->
+            EpubBookmark(
+                id = entry.id.toString(),
+                epubUri = epubUri.toString(),
+                epubFileName = zipFileName,
+                chapterIndex = entry.chapterIndex ?: 0,
+                chapterTitle = entry.chapterTitle ?: entry.chapterInfo.orEmpty(),
+                scrollPosition = 0,
+                scrollRatio = entry.scrollRatio ?: 0f,
+                note = entry.content,
+                createTime = entry.createdAt,
+                highlightText = entry.quote.orEmpty()
+            )
+        }
+    }
     val contentDir = extractResult.contentDir
     val opfDir = extractResult.opfDir
     val chapterScrollRatios = remember { mutableMapOf<Int, Float>() }
+    var legacyBookmarkMigrationDone by remember(epubUri) { mutableStateOf(false) }
+
+    fun currentChapterLocationLabel(): String {
+        val chapter = chapters.getOrNull(currentChapterIndex)
+        return "第${currentChapterIndex + 1}章 - ${chapter?.title ?: ""} · ${formatEpubChapterProgressCompact(currentScrollRatio)}"
+    }
+
+    fun decodeEvaluateJavascriptString(result: String?): String {
+        if (result == null || result == "null") return ""
+        return runCatching { org.json.JSONObject("{\"value\":$result}").optString("value", "") }
+            .getOrElse { result.removePrefix("\"").removeSuffix("\"").replace("\\n", "\n").replace("\\\"", "\"") }
+            .trim()
+    }
+
+    fun requestCurrentParagraphQuote(onResult: (String) -> Unit) {
+        val view = webViewRef.value ?: run {
+            onResult("")
+            return
+        }
+        val js = """
+            (function() {
+                function normalize(value) {
+                    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+                }
+                var selector = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, div';
+                var x = Math.floor((window.innerWidth || document.documentElement.clientWidth || 0) / 2);
+                var y = Math.floor((window.innerHeight || document.documentElement.clientHeight || 0) / 2);
+                var el = document.elementFromPoint(x, y);
+                if (!el) return '';
+                var container = el.closest ? el.closest(selector) : el;
+                while (container && container.tagName && container.tagName.toLowerCase() === 'div' && container.children.length === 1) {
+                    var child = container.children[0];
+                    if (!child || !child.matches || !child.matches(selector)) break;
+                    container = child;
+                }
+                var text = normalize((container && (container.innerText || container.textContent)) || (el.innerText || el.textContent));
+                if (text.length > 220) {
+                    text = text.slice(0, 220).trim() + '…';
+                }
+                return text;
+            })();
+        """.trimIndent()
+        view.evaluateJavascript(js) { result ->
+            onResult(decodeEvaluateJavascriptString(result))
+        }
+    }
+
+    fun buildCurrentPositionBookNote(
+        id: Long,
+        content: String,
+        quote: String,
+        createdAt: Long = System.currentTimeMillis()
+    ): BookNoteEntry {
+        val chapter = chapters.getOrNull(currentChapterIndex)
+        return BookNoteEntry(
+            id = id,
+            bookTitle = currentBookTitle,
+            chapterInfo = currentChapterLocationLabel(),
+            quote = quote.takeIf { it.isNotBlank() },
+            content = content.trimEnd(),
+            chapterIndex = currentChapterIndex,
+            chapterTitle = chapter?.title,
+            scrollRatio = currentScrollRatio.coerceIn(0f, 1f),
+            createdAt = createdAt
+        )
+    }
+
+    fun upsertBookNoteEntry(updatedEntry: BookNoteEntry) {
+        onBookNoteEntriesChanged(
+            if (bookNoteEntries.any { it.id == updatedEntry.id }) {
+                bookNoteEntries.map { entry -> if (entry.id == updatedEntry.id) updatedEntry else entry }
+            } else {
+                bookNoteEntries + updatedEntry
+            }
+        )
+    }
+
+    fun goToBookNote(entry: BookNoteEntry) {
+        val targetChapterIndex = entry.chapterIndex
+        val targetScrollRatio = entry.scrollRatio
+        if (targetChapterIndex == null || targetScrollRatio == null || targetChapterIndex !in chapters.indices) {
+            Toast.makeText(context, "这条读书笔记没有可跳转的位置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        chapterScrollRatios[currentChapterIndex] = currentScrollRatio.coerceIn(0f, 1f)
+        chapterScrollRatios[targetChapterIndex] = targetScrollRatio.coerceIn(0f, 1f)
+        currentChapterIndex = targetChapterIndex
+        currentScrollRatio = targetScrollRatio.coerceIn(0f, 1f)
+        pendingProgrammaticScrollRatio = targetScrollRatio.coerceIn(0f, 1f)
+        showBookmarks = false
+    }
+
+    LaunchedEffect(bookNoteLoadedData, legacyEpubBookmarks, currentBookTitle, bookNoteEntries) {
+        if (legacyBookmarkMigrationDone || bookNoteLoadedData == null || legacyEpubBookmarks.isEmpty()) return@LaunchedEffect
+        val merged = bookNoteEntries.toMutableList()
+        var added = false
+        legacyEpubBookmarks.forEach { bookmark ->
+            val exists = merged.any {
+                it.matchesBookTitle(currentBookTitle) && it.matchesLocation(bookmark.chapterIndex, bookmark.scrollRatio)
+            }
+            if (!exists) {
+                merged += BookNoteEntry(
+                    id = (merged.maxOfOrNull { entry -> entry.id } ?: 0L) + 1L,
+                    bookTitle = currentBookTitle,
+                    chapterInfo = "第${bookmark.chapterIndex + 1}章 - ${bookmark.chapterTitle.ifBlank { "未命名章节" }} · ${formatEpubBookmarkPosition(bookmark.scrollRatio)}",
+                    quote = bookmark.highlightText.takeIf { it.isNotBlank() },
+                    content = bookmark.note,
+                    chapterIndex = bookmark.chapterIndex,
+                    chapterTitle = bookmark.chapterTitle,
+                    scrollRatio = bookmark.scrollRatio,
+                    createdAt = bookmark.createTime
+                )
+                added = true
+            }
+        }
+        legacyBookmarkMigrationDone = true
+        if (added) {
+            onBookNoteEntriesChanged(merged)
+        }
+        bookmarkManager.clearBookmarksForEpub(epubUri.toString())
+    }
 
     fun requestRefreshTtsEngines() {
         scope.launch {
@@ -5111,8 +5264,8 @@ fun EpubViewerScreen(
     val chapterFile = if (currentChapter != null) {
         getEpubChapterFile(extractResult, currentChapter)
     } else null
-    val currentChapterBookmarks = remember(epubBookmarks, currentChapterIndex) {
-        epubBookmarks.filter { it.chapterIndex == currentChapterIndex }
+    val currentChapterBookmarks = remember(visualBookmarks, currentChapterIndex) {
+        visualBookmarks.filter { it.chapterIndex == currentChapterIndex }
     }
     val currentChapterRestoredMarker = remember(restoredProgressMarker, currentChapterIndex) {
         restoredProgressMarker?.takeIf { it.chapterIndex == currentChapterIndex }
@@ -5335,13 +5488,6 @@ fun EpubViewerScreen(
         }
     }
 
-    // 跳转到收藏位置
-    fun goToBookmark(bookmark: EpubBookmark) {
-        chapterScrollRatios[bookmark.chapterIndex] = bookmark.scrollRatio.coerceIn(0f, 1f)
-        switchToChapter(bookmark.chapterIndex, bookmark.scrollRatio)
-        showBookmarks = false
-    }
-
     fun goToPreviousChapter() {
         if (currentChapterIndex > 0) {
             switchToChapter(currentChapterIndex - 1)
@@ -5366,25 +5512,16 @@ fun EpubViewerScreen(
         }
     }
 
-    // 添加收藏
-    fun addBookmark(note: String = "") {
-        val bookmark = EpubBookmark(
-            id = bookmarkManager.generateId(),
-            epubUri = epubUri.toString(),
-            epubFileName = zipFileName,
-            chapterIndex = currentChapterIndex,
-            chapterTitle = currentChapter?.title ?: "",
-            scrollPosition = 0,
-            scrollRatio = currentScrollRatio,
-            note = note,
-            createTime = System.currentTimeMillis()
-        )
-        if (bookmarkManager.addBookmark(bookmark)) {
-            Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(context, "该位置已收藏", Toast.LENGTH_SHORT).show()
+
+    // 添加收藏：现在直接写入全局读书笔记中的带定位记录
+    fun requestAddBookmark() {
+        if (bookNoteLoadedData == null && !bookNoteInProgress) {
+            onRequestOpenBookNotes()
         }
-        showAddBookmark = false
+        requestCurrentParagraphQuote { quote ->
+            pendingBookmarkQuote = quote
+            showAddBookmark = true
+        }
     }
 
     BackHandler {
@@ -5392,6 +5529,7 @@ fun EpubViewerScreen(
             showToc -> showToc = false
             showBookmarks -> showBookmarks = false
             showAddBookmark -> showAddBookmark = false
+            editingBookNote != null -> editingBookNote = null
             else -> onBack()
         }
     }
@@ -5652,11 +5790,36 @@ fun EpubViewerScreen(
 
     // 收藏夹对话框
     if (showBookmarks) {
+        var bookmarkFilterQuery by remember(showBookmarks, currentBookTitle, currentBookBookmarkEntries.size) { mutableStateOf("") }
+        val filteredBookmarkEntries = remember(currentBookBookmarkEntries, bookmarkFilterQuery) {
+            val query = bookmarkFilterQuery.trim()
+            if (query.isBlank()) {
+                currentBookBookmarkEntries
+            } else {
+                currentBookBookmarkEntries.filter { entry ->
+                    listOf(
+                        entry.chapterInfo.orEmpty(),
+                        entry.chapterTitle.orEmpty(),
+                        entry.quote.orEmpty(),
+                        entry.content
+                    ).any { it.contains(query, ignoreCase = true) }
+                }
+            }
+        }
         AlertDialog(
             onDismissRequest = { showBookmarks = false },
             title = { Text("收藏夹 - $zipFileName") },
             text = {
-                if (epubBookmarks.isEmpty()) {
+                if (bookNoteLoadedData == null && bookNoteInProgress) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                    }
+                } else if (currentBookBookmarkEntries.isEmpty()) {
                     Column(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalAlignment = Alignment.CenterHorizontally
@@ -5675,20 +5838,54 @@ fun EpubViewerScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "点击顶部收藏按钮可添加当前位置",
+                            "点击下方“新增当前位置收藏”可创建带定位的读书笔记",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 } else {
-                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                        items(epubBookmarks.size) { index ->
-                            val bookmark = epubBookmarks[index]
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        OutlinedTextField(
+                            value = bookmarkFilterQuery,
+                            onValueChange = { bookmarkFilterQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("过滤当前书收藏") },
+                            placeholder = { Text("输入章节、引文或感想") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = if (bookmarkFilterQuery.isBlank()) {
+                                "共 ${currentBookBookmarkEntries.size} 条定位笔记"
+                            } else {
+                                "匹配到 ${filteredBookmarkEntries.size} / ${currentBookBookmarkEntries.size} 条"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        if (filteredBookmarkEntries.isEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "没有匹配的收藏",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        } else {
+                            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                                items(filteredBookmarkEntries.size) { index ->
+                                    val bookmark = filteredBookmarkEntries[index]
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 4.dp),
-                                onClick = { goToBookmark(bookmark) }
+                                onClick = { goToBookNote(bookmark) }
                             ) {
                                 Column(
                                     modifier = Modifier.padding(12.dp)
@@ -5698,7 +5895,7 @@ fun EpubViewerScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = "第${bookmark.chapterIndex + 1}章",
+                                            text = bookmark.chapterIndex?.let { "第${it + 1}章" } ?: "整本书",
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.primary
                                         )
@@ -5710,21 +5907,31 @@ fun EpubViewerScreen(
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        text = bookmark.chapterTitle.ifBlank { "未命名章节" },
+                                        text = bookmark.chapterTitle ?: bookmark.chapterInfo ?: "未命名章节",
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Spacer(Modifier.height(2.dp))
                                     Text(
-                                        text = formatEpubBookmarkPosition(bookmark.scrollRatio),
+                                        text = bookmark.scrollRatio?.let { formatEpubBookmarkPosition(it) } ?: "未绑定具体位置",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    if (bookmark.note.isNotBlank()) {
+                                    bookmark.quote?.takeIf { it.isNotBlank() }?.let { quote ->
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            text = bookmark.note,
+                                            text = "引文：$quote",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    if (bookmark.content.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = bookmark.content,
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 2,
@@ -5738,15 +5945,24 @@ fun EpubViewerScreen(
                                         horizontalArrangement = Arrangement.End
                                     ) {
                                         TextButton(onClick = {
-                                            editingBookmark = bookmark
+                                            editingBookNote = BookNoteEditorState(
+                                                editingId = bookmark.id,
+                                                bookTitle = bookmark.bookTitle,
+                                                chapterInfo = bookmark.chapterInfo.orEmpty(),
+                                                quote = bookmark.quote.orEmpty(),
+                                                content = bookmark.content,
+                                                chapterIndex = bookmark.chapterIndex,
+                                                chapterTitle = bookmark.chapterTitle,
+                                                scrollRatio = bookmark.scrollRatio,
+                                                createdAt = bookmark.createdAt
+                                            )
                                         }) {
                                             Icon(Icons.Default.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
                                             Text("编辑")
                                         }
                                         TextButton(onClick = {
-                                            bookmarkManager.removeBookmark(bookmark.id)
-                                            Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                                            deleteBookNoteConfirm = bookmark
                                         }) {
                                             Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
@@ -5755,11 +5971,21 @@ fun EpubViewerScreen(
                                     }
                                 }
                             }
+                                }
+                            }
                         }
                     }
                 }
             },
             confirmButton = {
+                TextButton(onClick = {
+                    if (bookNoteLoadedData == null && !bookNoteInProgress) {
+                        onRequestOpenBookNotes()
+                    }
+                    requestAddBookmark()
+                }) { Text("新增当前位置收藏") }
+            },
+            dismissButton = {
                 TextButton(onClick = { showBookmarks = false }) { Text("关闭") }
             }
         )
@@ -5767,28 +5993,67 @@ fun EpubViewerScreen(
 
     // 添加收藏对话框
     if (showAddBookmark) {
-        var noteText by remember { mutableStateOf("") }
+        var noteText by remember(showAddBookmark, currentChapterIndex, currentScrollRatio) { mutableStateOf("") }
+        var quoteText by remember(showAddBookmark, currentChapterIndex, currentScrollRatio) { mutableStateOf(pendingBookmarkQuote) }
         AlertDialog(
             onDismissRequest = { showAddBookmark = false },
             title = { Text("添加收藏") },
             text = {
                 Column {
                     Text(
-                        "当前位置：第${currentChapterIndex + 1}章 - ${currentChapter?.title ?: ""}",
+                        "当前位置：${currentChapterLocationLabel()}",
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedTextField(
+                        value = quoteText,
+                        onValueChange = { quoteText = it },
+                        label = { Text("引文（已自动抓取当前段落）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 4
                     )
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
                         value = noteText,
                         onValueChange = { noteText = it },
-                        label = { Text("备注（可选）") },
+                        label = { Text("感想（可选）") },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
+                        minLines = 3,
+                        maxLines = 6
                     )
                 }
             },
             confirmButton = {
-                TextButton(onClick = { addBookmark(noteText) }) { Text("添加") }
+                TextButton(onClick = {
+                    val existing = currentBookBookmarkEntries.firstOrNull {
+                        it.matchesLocation(currentChapterIndex, currentScrollRatio)
+                    }
+                    if (existing != null) {
+                        editingBookNote = BookNoteEditorState(
+                            editingId = existing.id,
+                            bookTitle = existing.bookTitle,
+                            chapterInfo = currentChapterLocationLabel(),
+                            quote = if (quoteText.isNotBlank()) quoteText else existing.quote.orEmpty(),
+                            content = if (noteText.isNotBlank()) noteText else existing.content,
+                            chapterIndex = currentChapterIndex,
+                            chapterTitle = currentChapter?.title,
+                            scrollRatio = currentScrollRatio,
+                            createdAt = existing.createdAt
+                        )
+                        Toast.makeText(context, "该位置已收藏，已转为编辑", Toast.LENGTH_SHORT).show()
+                    } else {
+                        upsertBookNoteEntry(
+                            buildCurrentPositionBookNote(
+                                id = (bookNoteEntries.maxOfOrNull { it.id } ?: 0L) + 1L,
+                                content = noteText,
+                                quote = quoteText
+                            )
+                        )
+                        Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
+                    }
+                    showAddBookmark = false
+                }) { Text("添加") }
             },
             dismissButton = {
                 TextButton(onClick = { showAddBookmark = false }) { Text("取消") }
@@ -5796,43 +6061,79 @@ fun EpubViewerScreen(
         )
     }
 
-    // 编辑收藏对话框
-    editingBookmark?.let { bookmark ->
-        var noteText by remember { mutableStateOf(bookmark.note) }
+    editingBookNote?.let { state ->
+        BookNoteEditorDialog(
+            state = state,
+            inProgress = bookNoteInProgress,
+            onDismiss = { if (!bookNoteInProgress) editingBookNote = null },
+            onReassociateCurrentPosition = {
+                editingBookNote = state.copy(
+                    chapterInfo = currentChapterLocationLabel(),
+                    quote = state.quote.ifBlank { pendingBookmarkQuote },
+                    chapterIndex = currentChapterIndex,
+                    chapterTitle = currentChapter?.title,
+                    scrollRatio = currentScrollRatio
+                )
+            },
+            onClearLocation = {
+                editingBookNote = state.copy(
+                    chapterInfo = "",
+                    chapterIndex = null,
+                    chapterTitle = null,
+                    scrollRatio = null
+                )
+            },
+            onConfirm = { updated ->
+                val normalizedTitle = updated.bookTitle.trim()
+                val normalizedContent = updated.content.trimEnd()
+                val normalizedQuote = updated.quote.trim().takeIf { it.isNotEmpty() }
+                val normalizedChapterInfo = updated.chapterInfo.trim().takeIf { it.isNotEmpty() }
+                if (normalizedTitle.isBlank()) {
+                    Toast.makeText(context, context.getString(R.string.book_note_book_title_required), Toast.LENGTH_SHORT).show()
+                    return@BookNoteEditorDialog
+                }
+                if (normalizedContent.isBlank() && normalizedChapterInfo == null && normalizedQuote == null) {
+                    Toast.makeText(context, context.getString(R.string.book_note_content_or_position_required), Toast.LENGTH_SHORT).show()
+                    return@BookNoteEditorDialog
+                }
+                val updatedEntry = BookNoteEntry(
+                    id = updated.editingId ?: ((bookNoteEntries.maxOfOrNull { it.id } ?: 0L) + 1L),
+                    bookTitle = normalizedTitle,
+                    chapterInfo = normalizedChapterInfo,
+                    quote = normalizedQuote,
+                    content = normalizedContent,
+                    chapterIndex = updated.chapterIndex,
+                    chapterTitle = updated.chapterTitle,
+                    scrollRatio = updated.scrollRatio,
+                    createdAt = updated.createdAt
+                )
+                upsertBookNoteEntry(updatedEntry)
+                Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
+                editingBookNote = null
+            }
+        )
+    }
+
+    deleteBookNoteConfirm?.let { entry ->
         AlertDialog(
-            onDismissRequest = { editingBookmark = null },
-            title = { Text("编辑收藏") },
-            text = {
-                Column {
-                    Text(
-                        "位置：第${bookmark.chapterIndex + 1}章 - ${bookmark.chapterTitle}",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        formatEpubBookmarkPosition(bookmark.scrollRatio),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    OutlinedTextField(
-                        value = noteText,
-                        onValueChange = { noteText = it },
-                        label = { Text("备注") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
+            onDismissRequest = { deleteBookNoteConfirm = null },
+            title = { Text("删除读书笔记") },
+            text = { Text("确定删除这条读书笔记吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onBookNoteEntriesChanged(bookNoteEntries.filterNot { it.id == entry.id })
+                        deleteBookNoteConfirm = null
+                    },
+                    enabled = !bookNoteInProgress
+                ) {
+                    Text("删除")
                 }
             },
-            confirmButton = {
-                TextButton(onClick = {
-                    bookmarkManager.updateBookmarkNote(bookmark.id, noteText)
-                    Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
-                    editingBookmark = null
-                }) { Text("保存") }
-            },
             dismissButton = {
-                TextButton(onClick = { editingBookmark = null }) { Text("取消") }
+                TextButton(onClick = { deleteBookNoteConfirm = null }, enabled = !bookNoteInProgress) {
+                    Text("取消")
+                }
             }
         )
     }
@@ -5873,8 +6174,8 @@ fun EpubViewerScreen(
                         IconButton(onClick = { showMoreMenu = true }) {
                             BadgedBox(
                                 badge = {
-                                    if (epubBookmarks.isNotEmpty()) {
-                                        Badge { Text("${epubBookmarks.size}", style = MaterialTheme.typography.labelSmall) }
+                                    if (currentBookBookmarkEntries.isNotEmpty()) {
+                                        Badge { Text("${currentBookBookmarkEntries.size}", style = MaterialTheme.typography.labelSmall) }
                                     }
                                 }
                             ) {
@@ -5951,7 +6252,7 @@ fun EpubViewerScreen(
                                 text = { Text(context.getString(R.string.epub_action_add_bookmark)) },
                                 onClick = {
                                     showMoreMenu = false
-                                    showAddBookmark = true
+                                    requestAddBookmark()
                                 },
                                 leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
                             )
@@ -5959,6 +6260,9 @@ fun EpubViewerScreen(
                                 text = { Text(context.getString(R.string.epub_action_view_bookmarks)) },
                                 onClick = {
                                     showMoreMenu = false
+                                    if (bookNoteLoadedData == null && !bookNoteInProgress) {
+                                        onRequestOpenBookNotes()
+                                    }
                                     showBookmarks = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
