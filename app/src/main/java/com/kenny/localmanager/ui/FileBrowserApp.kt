@@ -1126,58 +1126,6 @@ private fun PlayerTabContent(
 }
 
 @Composable
-private fun BookNoteTabContent(
-    bookNoteData: BookNoteLoadedData?,
-    bookNoteInProgress: Boolean,
-    onEntriesChanged: (List<BookNoteEntry>) -> Unit
-) {
-    val data = bookNoteData
-    if (data != null) {
-        BookNoteScreen(
-            loadedData = data,
-            inProgress = bookNoteInProgress,
-            onEntriesChanged = onEntriesChanged
-        )
-    } else {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (bookNoteInProgress) {
-                CircularProgressIndicator()
-            } else {
-                Text("正在打开读书笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
-private fun QuickNoteTabContent(
-    prefs: Preferences,
-    quickNoteData: QuickNoteLoadedData?,
-    quickNoteStartWithAddDialog: Boolean,
-    quickNoteInProgress: Boolean,
-    onEntriesChanged: (List<QuickNoteEntry>) -> Unit
-) {
-    val data = quickNoteData
-    if (data != null) {
-        QuickNoteScreen(
-            prefs = prefs,
-            loadedData = data,
-            startWithAddDialog = quickNoteStartWithAddDialog,
-            inProgress = quickNoteInProgress,
-            onEntriesChanged = onEntriesChanged
-        )
-    } else {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            if (quickNoteInProgress) {
-                CircularProgressIndicator()
-            } else {
-                Text("正在打开快速笔记…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
 private fun DictionaryTabContent(onRequestExitApp: () -> Unit) {
     DictionaryScreen(showBackButton = false, onBack = { onRequestExitApp() })
 }
@@ -1339,7 +1287,7 @@ private fun PlaybackBottomControlBar(
 }
 
 /** 规范化 content URI 字符串，修正 authority 中可能被错误成空格的句点（如 android .externalstorage -> android.externalstorage） */
-private fun normalizeContentUriString(s: String): String {
+internal fun normalizeContentUriString(s: String): String {
     if (!s.startsWith("content://")) return s
     return s.replace("android ", "android.")
 }
@@ -1466,20 +1414,6 @@ private fun FileBrowserAppScreen(
     var passEditInProgress by remember { mutableStateOf(false) }
     var passEditTriedCache by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
-    var bookNoteData by remember { mutableStateOf<BookNoteLoadedData?>(null) }
-    var bookNoteEntriesSnapshot by remember { mutableStateOf<List<BookNoteEntry>>(emptyList()) }
-    var bookNoteLastSavedHash by remember { mutableStateOf<Int?>(null) }
-    var bookNotePassword by remember { mutableStateOf("") }
-    var bookNotePasswordRequired by remember { mutableStateOf(false) }
-    var bookNoteInProgress by remember { mutableStateOf(false) }
-    var bookNoteLoadRequested by remember { mutableStateOf(false) }
-    var quickNoteData by remember { mutableStateOf<QuickNoteLoadedData?>(null) }
-    var quickNoteEntriesSnapshot by remember { mutableStateOf<List<QuickNoteEntry>>(emptyList()) }
-    var quickNoteLastSavedHash by remember { mutableStateOf<Int?>(null) }
-    var quickNoteStartWithAddDialog by remember { mutableStateOf(false) }
-    var quickNotePassword by remember { mutableStateOf("") }
-    var quickNotePasswordRequired by remember { mutableStateOf(false) }
-    var quickNoteInProgress by remember { mutableStateOf(false) }
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
@@ -1558,9 +1492,6 @@ private fun FileBrowserAppScreen(
 
     fun switchMainTab(tab: MainTab) {
         if (currentMainTab == tab) return
-        if (tab == MainTab.BOOK_NOTE) {
-            bookNoteLoadRequested = true
-        }
         currentMainTab = tab
         scope.launch { prefs.setLastMainTab(tab.key) }
     }
@@ -1581,18 +1512,6 @@ private fun FileBrowserAppScreen(
                 playlistId = playlistId
             )
         }
-    }
-
-    fun resetQuickNotePromptState() {
-        quickNotePassword = ""
-        quickNotePasswordRequired = false
-        quickNoteInProgress = false
-    }
-
-    fun resetBookNotePromptState() {
-        bookNotePassword = ""
-        bookNotePasswordRequired = false
-        bookNoteInProgress = false
     }
 
     suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
@@ -1682,191 +1601,16 @@ private fun FileBrowserAppScreen(
         )
     }
 
-    fun persistQuickNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
-        val currentData = quickNoteData ?: run {
-            onFinished?.invoke(true)
-            return
-        }
-        if (quickNoteInProgress) {
-            onFinished?.invoke(false)
-            return
-        }
-        val snapshot = quickNoteEntriesSnapshot
-        val snapshotHash = snapshot.hashCode()
-        if (quickNoteLastSavedHash == snapshotHash) {
-            onFinished?.invoke(true)
-            return
-        }
-        quickNoteInProgress = true
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                saveQuickNoteData(context, currentData, snapshot)
-            }
-            quickNoteInProgress = false
-            result.onSuccess { saved ->
-                markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                quickNoteData = saved
-                quickNoteEntriesSnapshot = saved.entries
-                quickNoteLastSavedHash = saved.entries.hashCode()
-                onFinished?.invoke(true)
-            }.onFailure { throwable ->
-                Toast.makeText(context, "快速笔记自动保存失败（$reason）：${throwable.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                onFinished?.invoke(false)
-            }
-        }
-    }
-
-    fun persistBookNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
-        val currentData = bookNoteData ?: run {
-            onFinished?.invoke(true)
-            return
-        }
-        if (bookNoteInProgress) {
-            onFinished?.invoke(false)
-            return
-        }
-        val snapshot = bookNoteEntriesSnapshot
-        val snapshotHash = snapshot.hashCode()
-        if (bookNoteLastSavedHash == snapshotHash) {
-            onFinished?.invoke(true)
-            return
-        }
-        bookNoteInProgress = true
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                saveBookNoteData(context, currentData, snapshot)
-            }
-            bookNoteInProgress = false
-            result.onSuccess { saved ->
-                markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                bookNoteData = saved
-                bookNoteEntriesSnapshot = saved.entries
-                bookNoteLastSavedHash = saved.entries.hashCode()
-                onFinished?.invoke(true)
-            }.onFailure { throwable ->
-                Toast.makeText(context, "读书笔记自动保存失败（$reason）：${throwable.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                onFinished?.invoke(false)
-            }
-        }
-    }
-
-    fun requestOpenQuickNote(startWithAddDialog: Boolean, password: String? = null) {
-        val root = rootUri?.let { normalizeContentUriString(it) }
-        if (root == null) {
-            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-            return
-        }
-        quickNoteStartWithAddDialog = startWithAddDialog
-        quickNoteInProgress = true
-        scope.launch {
-            when (val result = withContext(Dispatchers.IO) {
-                openQuickNoteData(context, root, password)
-            }) {
-                is QuickNoteOpenResult.Success -> {
-                    quickNoteData = result.data
-                    quickNoteEntriesSnapshot = result.data.entries
-                    quickNoteLastSavedHash = result.data.entries.hashCode()
-                    quickNotePasswordRequired = false
-                    quickNotePassword = ""
-                }
-                QuickNoteOpenResult.RequiresPassword -> {
-                    quickNotePasswordRequired = true
-                }
-                is QuickNoteOpenResult.Error -> {
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                }
-            }
-            quickNoteInProgress = false
-        }
-    }
-
-    fun requestOpenBookNote(password: String? = null) {
-        val root = rootUri?.let { normalizeContentUriString(it) }
-        if (root == null) {
-            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
-            return
-        }
-        bookNoteLoadRequested = true
-        bookNoteInProgress = true
-        scope.launch {
-            when (val result = withContext(Dispatchers.IO) {
-                openBookNoteData(context, root, password)
-            }) {
-                is BookNoteOpenResult.Success -> {
-                    bookNoteData = result.data
-                    bookNoteEntriesSnapshot = result.data.entries
-                    bookNoteLastSavedHash = result.data.entries.hashCode()
-                    bookNotePasswordRequired = false
-                    bookNotePassword = ""
-                    bookNoteLoadRequested = false
-                }
-                BookNoteOpenResult.RequiresPassword -> {
-                    bookNotePasswordRequired = true
-                }
-                is BookNoteOpenResult.Error -> {
-                    bookNoteLoadRequested = false
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                }
-            }
-            bookNoteInProgress = false
-        }
-    }
-
-    LaunchedEffect(currentMainTab, rootUri, quickNoteData, quickNoteInProgress) {
-        if (currentMainTab == MainTab.QUICK_NOTE && rootUri != null && quickNoteData == null && !quickNoteInProgress) {
-            requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
-        }
-    }
-
-    LaunchedEffect(currentMainTab) {
-        if (currentMainTab == MainTab.BOOK_NOTE && bookNoteData == null) {
-            bookNoteLoadRequested = true
-        }
-    }
-
-    LaunchedEffect(rootUri, bookNoteData, bookNoteInProgress, bookNoteLoadRequested) {
-        if (bookNoteLoadRequested && rootUri != null && bookNoteData == null && !bookNoteInProgress) {
-            requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
-        }
-    }
-
-    LaunchedEffect(currentMainTab, quickNoteData, quickNoteStartWithAddDialog) {
-        if (currentMainTab == MainTab.QUICK_NOTE && quickNoteData != null && quickNoteStartWithAddDialog) {
-            quickNoteStartWithAddDialog = false
-        }
-    }
-
-    LaunchedEffect(bookNoteData, bookNoteEntriesSnapshot, bookNoteInProgress) {
-        if (bookNoteData == null || bookNoteInProgress) return@LaunchedEffect
-        val snapshotHash = bookNoteEntriesSnapshot.hashCode()
-        if (bookNoteLastSavedHash != snapshotHash) {
-            persistBookNoteIfNeeded("更新记录")
-        }
-    }
-
-    var previousMainTab by remember { mutableStateOf<MainTab?>(null) }
-    LaunchedEffect(currentMainTab) {
-        if (previousMainTab == MainTab.QUICK_NOTE && currentMainTab != MainTab.QUICK_NOTE) {
-            persistQuickNoteIfNeeded("切换标签")
-        }
-        previousMainTab = currentMainTab
-    }
-
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && currentMainTab == MainTab.QUICK_NOTE) {
-                persistQuickNoteIfNeeded("进入后台")
-            }
-            if (event == Lifecycle.Event.ON_STOP && bookNoteData != null) {
-                persistBookNoteIfNeeded("进入后台")
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-        }
-    }
+    val quickNoteController = rememberQuickNoteTabController(
+        rootUri = rootUri,
+        isActive = currentMainTab == MainTab.QUICK_NOTE,
+        markdownViewerSessionCache = markdownViewerSessionCache
+    )
+    val bookNoteController = rememberBookNoteTabController(
+        rootUri = rootUri,
+        isActive = currentMainTab == MainTab.BOOK_NOTE,
+        markdownViewerSessionCache = markdownViewerSessionCache
+    )
 
     val treeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -1953,11 +1697,11 @@ private fun FileBrowserAppScreen(
 
         fun requestExitApp() {
             if (activeMainTab == MainTab.QUICK_NOTE) {
-                if (quickNoteInProgress) {
+                if (quickNoteController.inProgress) {
                     Toast.makeText(context, "快速笔记仍在处理中，请稍后再试", Toast.LENGTH_SHORT).show()
                     return
                 }
-                persistQuickNoteIfNeeded("退出应用") { saved ->
+                quickNoteController.persistIfNeeded("退出应用") { saved ->
                     if (saved) {
                         finishCurrentActivity()
                     }
@@ -2900,7 +2644,7 @@ private fun FileBrowserAppScreen(
                             onOpenAbout = { showAboutDialog = true },
                             onCreateQuickNote = {
                                 switchMainTab(MainTab.QUICK_NOTE)
-                                requestOpenQuickNote(true, SecretKeyPasswordCache.get()?.let { String(it) })
+                                quickNoteController.requestOpenWithCachedPassword(true)
                             },
                             onRequestGpgDecrypt = { fileModel, dirUri ->
                                 gpgPassword = ""
@@ -3115,20 +2859,10 @@ private fun FileBrowserAppScreen(
                         )
                     },
                     bookNoteContent = {
-                        BookNoteTabContent(
-                            bookNoteData = bookNoteData,
-                            bookNoteInProgress = bookNoteInProgress,
-                            onEntriesChanged = { bookNoteEntriesSnapshot = it }
-                        )
+                        BookNoteTabRoute(controller = bookNoteController)
                     },
                     quickNoteContent = {
-                        QuickNoteTabContent(
-                            prefs = prefs,
-                            quickNoteData = quickNoteData,
-                            quickNoteStartWithAddDialog = quickNoteStartWithAddDialog,
-                            quickNoteInProgress = quickNoteInProgress,
-                            onEntriesChanged = { quickNoteEntriesSnapshot = it }
-                        )
+                        QuickNoteTabRoute(prefs = prefs, controller = quickNoteController)
                     },
                     quickCryptoContent = {
                         QuickCryptoTabContent()
@@ -3917,42 +3651,36 @@ private fun FileBrowserAppScreen(
                 }
             }
         }
-        if (quickNotePasswordRequired) {
+        if (quickNoteController.passwordRequired) {
             GpgPasswordDialog(
                 isDecrypt = true,
                 fileName = QUICK_NOTE_GPG_FILE_NAME,
-                password = quickNotePassword,
+                password = quickNoteController.password,
                 passwordLabel = "密钥密码",
-                inProgress = quickNoteInProgress,
-                onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
+                inProgress = quickNoteController.inProgress,
+                onPasswordChange = quickNoteController.updatePassword,
                 onConfirm = { pwd ->
-                    if (!quickNoteInProgress) requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
-                },
-                onDismiss = {
-                    if (!quickNoteInProgress) {
-                        resetQuickNotePromptState()
-                        quickNoteStartWithAddDialog = false
+                    if (!quickNoteController.inProgress) {
+                        quickNoteController.requestOpen(quickNoteController.startWithAddDialog, pwd)
                     }
-                }
+                },
+                onDismiss = quickNoteController.dismissPasswordPrompt
             )
         }
-        if (bookNotePasswordRequired) {
+        if (bookNoteController.passwordRequired) {
             GpgPasswordDialog(
                 isDecrypt = true,
                 fileName = QUICK_NOTE_GPG_FILE_NAME,
-                password = bookNotePassword,
+                password = bookNoteController.password,
                 passwordLabel = "密钥密码",
-                inProgress = bookNoteInProgress,
-                onPasswordChange = { if (!bookNoteInProgress) bookNotePassword = it },
+                inProgress = bookNoteController.inProgress,
+                onPasswordChange = bookNoteController.updatePassword,
                 onConfirm = { pwd ->
-                    if (!bookNoteInProgress) requestOpenBookNote(pwd)
-                },
-                onDismiss = {
-                    if (!bookNoteInProgress) {
-                        resetBookNotePromptState()
-                        bookNoteLoadRequested = false
+                    if (!bookNoteController.inProgress) {
+                        bookNoteController.requestOpen(pwd)
                     }
-                }
+                },
+                onDismiss = bookNoteController.dismissPasswordPrompt
             )
         }
         zipUnzipTarget?.let { target ->
@@ -5464,14 +5192,11 @@ private fun FileBrowserAppScreen(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,
-                bookNoteLoadedData = bookNoteData,
-                bookNoteEntries = bookNoteEntriesSnapshot,
-                bookNoteInProgress = bookNoteInProgress,
-                onRequestOpenBookNotes = { requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) }) },
-                onBookNoteEntriesChanged = {
-                    bookNoteEntriesSnapshot = it
-                    bookNoteLoadRequested = true
-                },
+                bookNoteLoadedData = bookNoteController.data,
+                bookNoteEntries = bookNoteController.entriesSnapshot,
+                bookNoteInProgress = bookNoteController.inProgress,
+                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
+                onBookNoteEntriesChanged = bookNoteController.updateEntries,
                 onBack = {
                     if (state.isEncrypted) {
                         encryptedCacheExitDialog = EncryptedCacheExitDialogState(
