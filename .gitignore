@@ -40,3 +40,4 @@ testdir
 tags
 tmp
 build_*.txt
+*_output.txt

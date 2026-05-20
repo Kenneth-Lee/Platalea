@@ -955,6 +955,45 @@ private fun collectFilesWithExtension(baseDir: File, ext: String): List<Pair<Str
     return result
 }
 
+private fun normalizeArchiveRelativePath(rawPath: String): String {
+    return rawPath
+        .trim()
+        .removePrefix("\uFEFF")
+        .replace('\\', '/')
+        .removePrefix("./")
+}
+
+private fun resolveIndexedChapterFile(relativePath: String, roots: List<File>): File? {
+    val normalized = normalizeArchiveRelativePath(relativePath)
+    if (normalized.isBlank() || normalized.startsWith("/") || normalized.split('/').any { it == ".." }) {
+        return null
+    }
+    roots.forEach { root ->
+        val candidate = File(root, normalized)
+        if (candidate.isFile) return candidate
+    }
+    return null
+}
+
+private fun loadIndexedChapterFiles(indexFile: File, roots: List<File>): List<Pair<String, File>> {
+    val lines = indexFile.readLines()
+    val chapters = mutableListOf<Pair<String, File>>()
+    lines.forEachIndexed { index, rawLine ->
+        val normalized = normalizeArchiveRelativePath(rawLine)
+        if (normalized.isBlank()) return@forEachIndexed
+        if (!normalized.endsWith(".txt", ignoreCase = true) && !normalized.endsWith(".llm", ignoreCase = true)) {
+            throw IllegalStateException(".index 第 ${index + 1} 行不是支持的章节文件：$normalized；只支持 .txt 或 .llm")
+        }
+        val sourceFile = resolveIndexedChapterFile(normalized, roots)
+            ?: throw IllegalStateException(".index 第 ${index + 1} 行指向的章节文件不存在：$normalized；查找根目录=${roots.joinToString { it.absolutePath }}")
+        chapters += normalized to sourceFile
+    }
+    if (chapters.isEmpty()) {
+        throw IllegalStateException("检测到 .index 文件，但其中没有可用的章节条目：${indexFile.absolutePath}")
+    }
+    return chapters
+}
+
 /** 生成 index 文件内容，包含所有同类文件的链接。 */
 private fun generateIndexContent(
     files: List<Pair<String, File>>,
@@ -2118,9 +2157,17 @@ fun extractLlmZipToCache(
         tmpZip.delete()
 
         val effectiveRawDir = unwrapSingleChildDir(rawDir)
-        val txtFiles = collectFilesWithExtension(effectiveRawDir, "txt")
-        val llmFiles = collectFilesWithExtension(effectiveRawDir, "llm")
-        val sourceFiles = (txtFiles + llmFiles).sortedBy { it.first.lowercase() }
+        val indexFile = sequenceOf(
+            File(rawDir, ".index"),
+            File(effectiveRawDir, ".index")
+        ).firstOrNull { it.exists() && it.isFile }
+        val sourceFiles = if (indexFile != null) {
+            loadIndexedChapterFiles(indexFile, listOf(rawDir, effectiveRawDir).distinctBy { it.absolutePath })
+        } else {
+            val txtFiles = collectFilesWithExtension(effectiveRawDir, "txt")
+            val llmFiles = collectFilesWithExtension(effectiveRawDir, "llm")
+            (txtFiles + llmFiles).sortedBy { it.first.lowercase() }
+        }
         if (sourceFiles.isEmpty()) {
             Log.w(TAG, "extractLlmZipToCache: no .txt/.llm files found in $zipUri")
             cacheDir.deleteRecursively()

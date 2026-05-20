@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -4710,6 +4711,7 @@ fun EpubViewerScreen(
     var scalePercentLoaded by remember { mutableStateOf(false) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var showToc by remember { mutableStateOf(false) }
+    var tocQuery by remember { mutableStateOf("") }
     var showBookmarks by remember { mutableStateOf(false) }
     var showAddBookmark by remember { mutableStateOf(false) }
     var editingBookmark by remember { mutableStateOf<EpubBookmark?>(null) }
@@ -5094,6 +5096,18 @@ fun EpubViewerScreen(
     }
 
     val currentChapter = chapters.getOrNull(currentChapterIndex)
+    val filteredTocEntries = remember(chapters, tocQuery) {
+        val query = tocQuery.trim()
+        chapters.mapIndexedNotNull { index, chapter ->
+            val title = chapter.title ?: chapter.href.substringBeforeLast(".")
+            val matches = query.isBlank() ||
+                title.contains(query, ignoreCase = true) ||
+                chapter.href.contains(query, ignoreCase = true) ||
+                (index + 1).toString().contains(query) ||
+                "第${index + 1}章".contains(query, ignoreCase = true)
+            if (matches) index to chapter else null
+        }
+    }
     val chapterFile = if (currentChapter != null) {
         getEpubChapterFile(extractResult, currentChapter)
     } else null
@@ -5546,24 +5560,86 @@ fun EpubViewerScreen(
 
     // 目录对话框
     if (showToc) {
+        val tocListState = rememberLazyListState()
+        LaunchedEffect(showToc, tocQuery, currentChapterIndex, filteredTocEntries.size) {
+            if (!showToc || filteredTocEntries.isEmpty()) return@LaunchedEffect
+            val targetIndex = filteredTocEntries.indexOfFirst { it.first == currentChapterIndex }
+                .takeIf { it >= 0 }
+                ?: 0
+            tocListState.scrollToItem((targetIndex - 3).coerceAtLeast(0))
+        }
         AlertDialog(
             onDismissRequest = { showToc = false },
             title = { Text("目录 - ${extractResult.bookInfo.title}") },
             text = {
-                LazyColumn {
-                    items(chapters.size) { index ->
-                        val chapter = chapters[index]
-                        TextButton(
-                            onClick = { goToChapter(index) },
-                            modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 520.dp)
+                ) {
+                    OutlinedTextField(
+                        value = tocQuery,
+                        onValueChange = { tocQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("筛选章节") },
+                        placeholder = { Text("输入章节号、标题或文件名") },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (tocQuery.isBlank()) {
+                            "当前第 ${currentChapterIndex + 1} 章，共 ${chapters.size} 章"
+                        } else {
+                            "匹配到 ${filteredTocEntries.size} / ${chapters.size} 章"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (filteredTocEntries.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(180.dp),
+                            contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = chapter.title ?: chapter.href.substringBeforeLast("."),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = if (index == currentChapterIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                text = "没有匹配的章节",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium
                             )
+                        }
+                    } else {
+                        LazyColumn(
+                            state = tocListState,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            items(filteredTocEntries.size) { listIndex ->
+                                val (index, chapter) = filteredTocEntries[listIndex]
+                                val title = chapter.title ?: chapter.href.substringBeforeLast(".")
+                                TextButton(
+                                    onClick = { goToChapter(index) },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        Text(
+                                            text = title,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = if (index == currentChapterIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "第 ${index + 1} 章${if (index == currentChapterIndex) " · 当前位置" else ""}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (index == currentChapterIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
