@@ -955,12 +955,38 @@ private fun collectFilesWithExtension(baseDir: File, ext: String): List<Pair<Str
     return result
 }
 
+private data class IndexedChapterEntry(
+    val relativePath: String,
+    val sourceFile: File,
+    val title: String
+)
+
 private fun normalizeArchiveRelativePath(rawPath: String): String {
     return rawPath
         .trim()
         .removePrefix("\uFEFF")
         .replace('\\', '/')
         .removePrefix("./")
+}
+
+private fun parseIndexedChapterLine(rawLine: String, lineNumber: Int): Pair<String, String?>? {
+    val line = rawLine.trim().removePrefix("\uFEFF")
+    if (line.isBlank()) return null
+    if (line.first() == '"' || line.first() == '\'') {
+        val quote = line.first()
+        val closingIndex = line.indexOf(quote, startIndex = 1)
+        if (closingIndex < 0) {
+            throw IllegalStateException(".index 第 $lineNumber 行格式错误：带引号的章节路径缺少结束引号")
+        }
+        val path = line.substring(1, closingIndex)
+        val title = line.substring(closingIndex + 1).trim().ifBlank { null }
+        return path to title
+    }
+    val firstWhitespace = line.indexOfFirst { it.isWhitespace() }
+    if (firstWhitespace < 0) return line to null
+    val path = line.substring(0, firstWhitespace)
+    val title = line.substring(firstWhitespace + 1).trim().ifBlank { null }
+    return path to title
 }
 
 private fun resolveIndexedChapterFile(relativePath: String, roots: List<File>): File? {
@@ -975,23 +1001,38 @@ private fun resolveIndexedChapterFile(relativePath: String, roots: List<File>): 
     return null
 }
 
-private fun loadIndexedChapterFiles(indexFile: File, roots: List<File>): List<Pair<String, File>> {
+private fun loadIndexedChapterFiles(indexFile: File, roots: List<File>): List<IndexedChapterEntry> {
     val lines = indexFile.readLines()
-    val chapters = mutableListOf<Pair<String, File>>()
+    val chapters = mutableListOf<IndexedChapterEntry>()
     lines.forEachIndexed { index, rawLine ->
-        val normalized = normalizeArchiveRelativePath(rawLine)
-        if (normalized.isBlank()) return@forEachIndexed
+        val lineNumber = index + 1
+        val parsed = parseIndexedChapterLine(rawLine, lineNumber) ?: return@forEachIndexed
+        val normalized = normalizeArchiveRelativePath(parsed.first)
         if (!normalized.endsWith(".txt", ignoreCase = true) && !normalized.endsWith(".llm", ignoreCase = true)) {
-            throw IllegalStateException(".index 第 ${index + 1} 行不是支持的章节文件：$normalized；只支持 .txt 或 .llm")
+            throw IllegalStateException(".index 第 $lineNumber 行不是支持的章节文件：$normalized；只支持 .txt 或 .llm")
         }
         val sourceFile = resolveIndexedChapterFile(normalized, roots)
-            ?: throw IllegalStateException(".index 第 ${index + 1} 行指向的章节文件不存在：$normalized；查找根目录=${roots.joinToString { it.absolutePath }}")
-        chapters += normalized to sourceFile
+            ?: throw IllegalStateException(".index 第 $lineNumber 行指向的章节文件不存在：$normalized；查找根目录=${roots.joinToString { it.absolutePath }}")
+        chapters += IndexedChapterEntry(
+            relativePath = normalized,
+            sourceFile = sourceFile,
+            title = parsed.second ?: normalized
+        )
     }
     if (chapters.isEmpty()) {
         throw IllegalStateException("检测到 .index 文件，但其中没有可用的章节条目：${indexFile.absolutePath}")
     }
     return chapters
+}
+
+private fun toDefaultIndexedChapterEntries(files: List<Pair<String, File>>): List<IndexedChapterEntry> {
+    return files.map { (relativePath, sourceFile) ->
+        IndexedChapterEntry(
+            relativePath = relativePath,
+            sourceFile = sourceFile,
+            title = relativePath.substringBeforeLast('.').ifBlank { sourceFile.nameWithoutExtension }
+        )
+    }
 }
 
 /** 生成 index 文件内容，包含所有同类文件的链接。 */
@@ -2166,7 +2207,7 @@ fun extractLlmZipToCache(
         } else {
             val txtFiles = collectFilesWithExtension(effectiveRawDir, "txt")
             val llmFiles = collectFilesWithExtension(effectiveRawDir, "llm")
-            (txtFiles + llmFiles).sortedBy { it.first.lowercase() }
+            toDefaultIndexedChapterEntries((txtFiles + llmFiles).sortedBy { it.first.lowercase() })
         }
         if (sourceFiles.isEmpty()) {
             Log.w(TAG, "extractLlmZipToCache: no .txt/.llm files found in $zipUri")
@@ -2194,10 +2235,12 @@ fun extractLlmZipToCache(
         val manifestBuilder = StringBuilder()
         val spineBuilder = StringBuilder()
 
-        sourceFiles.forEachIndexed { index, (relativePath, sourceFile) ->
+        sourceFiles.forEachIndexed { index, entry ->
             val chapterId = "chapter_$index"
             val htmlFileName = "$chapterId.html"
-            val chapterTitle = relativePath.substringBeforeLast('.').ifBlank { sourceFile.nameWithoutExtension }
+            val relativePath = entry.relativePath
+            val sourceFile = entry.sourceFile
+            val chapterTitle = entry.title
             val chapterText = readTextWithFallback(sourceFile)
             val chapterHtml = if (sourceFile.name.endsWith(".llm", ignoreCase = true)) {
                 buildLlmChapterHtml(chapterTitle, chapterText)
