@@ -5334,9 +5334,21 @@ fun EpubViewerScreen(
         }
     }
 
+    fun goToPreviousChapterLastPage() {
+        if (currentChapterIndex > 0) {
+            switchToChapter(currentChapterIndex - 1, 1f)
+        }
+    }
+
     fun goToNextChapter() {
         if (currentChapterIndex < chapters.size - 1) {
             switchToChapter(currentChapterIndex + 1)
+        }
+    }
+
+    fun goToNextChapterFirstPage() {
+        if (currentChapterIndex < chapters.size - 1) {
+            switchToChapter(currentChapterIndex + 1, 0f)
         }
     }
 
@@ -5987,7 +5999,7 @@ fun EpubViewerScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        "${currentChapterIndex + 1} / ${chapters.size}",
+                                        "${currentChapterIndex + 1} / ${chapters.size} · ${formatEpubChapterProgressCompact(currentScrollRatio)}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -6180,7 +6192,12 @@ fun EpubViewerScreen(
                     }
                     AndroidView(
                         factory = { ctx ->
-                            GestureWebView(ctx, onScrollRatioChanged).apply {
+                            GestureWebView(
+                                ctx,
+                                onScrollRatioChange = onScrollRatioChanged,
+                                onEdgeNavigatePreviousChapter = { goToPreviousChapterLastPage() },
+                                onEdgeNavigateNextChapter = { goToNextChapterFirstPage() }
+                            ).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
                                 settings.javaScriptEnabled = true
@@ -6497,6 +6514,20 @@ private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
         else -> "末尾"
     }
     return "章节内$section ($percent%)"
+}
+
+private fun formatEpubChapterProgressCompact(scrollRatio: Float): String {
+    val percent = (scrollRatio.coerceIn(0f, 1f) * 100f).toInt().coerceIn(0, 100)
+    val section = when {
+        percent <= 5 -> "开头"
+        percent <= 25 -> "前段"
+        percent <= 45 -> "前中段"
+        percent <= 65 -> "中段"
+        percent <= 85 -> "后中段"
+        percent <= 97 -> "后段"
+        else -> "末尾"
+    }
+    return "本章$section $percent%"
 }
 
 @Composable
@@ -7744,7 +7775,9 @@ private class EpubTtsSession(
 /** 支持章节切换和滚动位置恢复的 WebView */
 private class GestureWebView(
     context: Context,
-    private val onScrollRatioChange: ((Float) -> Unit)? = null
+    private val onScrollRatioChange: ((Float) -> Unit)? = null,
+    private val onEdgeNavigatePreviousChapter: (() -> Unit)? = null,
+    private val onEdgeNavigateNextChapter: (() -> Unit)? = null
 ) : WebView(context) {
     private var pendingScrollRatio: Float? = null
     private var isRestoringScroll = false
@@ -7777,12 +7810,41 @@ private class GestureWebView(
                 var maxScroll = Math.max(0, docHeight - viewHeight);
                 var currentY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
                 var targetY = currentY + ($signedDirection * viewHeight);
-                if (targetY < 0) targetY = 0;
-                if (targetY > maxScroll) targetY = maxScroll;
+                var reachedStart = false;
+                var reachedEnd = false;
+                if (targetY < 0) {
+                    targetY = 0;
+                    reachedStart = true;
+                }
+                if (targetY > maxScroll) {
+                    targetY = maxScroll;
+                    reachedEnd = true;
+                }
                 window.scrollTo(0, targetY);
+                return JSON.stringify({
+                    reachedStart: reachedStart,
+                    reachedEnd: reachedEnd,
+                    maxScroll: maxScroll,
+                    currentY: currentY,
+                    targetY: targetY
+                });
             })();
         """.trimIndent()
-        post { evaluateJavascript(js, null) }
+        post {
+            evaluateJavascript(js) { result ->
+                val normalized = result
+                    ?.removePrefix("\"")
+                    ?.removeSuffix("\"")
+                    ?.replace("\\\"", "\"")
+                    ?: return@evaluateJavascript
+                val reachedStart = normalized.contains("\"reachedStart\":true")
+                val reachedEnd = normalized.contains("\"reachedEnd\":true")
+                when {
+                    signedDirection < 0 && reachedStart -> onEdgeNavigatePreviousChapter?.invoke()
+                    signedDirection > 0 && reachedEnd -> onEdgeNavigateNextChapter?.invoke()
+                }
+            }
+        }
     }
 
     private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
@@ -7816,24 +7878,34 @@ private class GestureWebView(
     /** 设置待恢复的滚动位置 */
     fun setPendingScrollRatio(ratio: Float) {
         pendingScrollRatio = ratio
+        alpha = if (ratio > 0f) 0f else 1f
     }
 
-    /** 直接滚动到指定比例（用于恢复进度时内容未变的情况） */
-    fun scrollToRatio(ratio: Float) {
-        if (ratio <= 0f) return
-        val js = """
+    private fun buildScrollToRatioScript(ratio: Float): String {
+        return """
             (function() {
                 var ratio = $ratio;
                 var docHeight = document.documentElement.scrollHeight;
                 var viewHeight = window.innerHeight;
                 if (docHeight > viewHeight) {
                     var maxScroll = docHeight - viewHeight;
-                    var adjustedRatio = ratio * 0.97;
-                    var targetY = Math.floor(adjustedRatio * maxScroll);
+                    var targetY;
+                    if (ratio >= 0.995) {
+                        targetY = maxScroll;
+                    } else {
+                        var adjustedRatio = ratio * 0.97;
+                        targetY = Math.floor(adjustedRatio * maxScroll);
+                    }
                     window.scrollTo(0, targetY);
                 }
             })();
         """.trimIndent()
+    }
+
+    /** 直接滚动到指定比例（用于恢复进度时内容未变的情况） */
+    fun scrollToRatio(ratio: Float) {
+        if (ratio <= 0f) return
+        val js = buildScrollToRatioScript(ratio)
         post { evaluateJavascript(js, null) }
     }
 
@@ -7841,29 +7913,19 @@ private class GestureWebView(
     fun restoreScrollPosition() {
         val ratio = pendingScrollRatio ?: return
         pendingScrollRatio = null
-        if (ratio <= 0f) return
+        if (ratio <= 0f) {
+            alpha = 1f
+            return
+        }
         isRestoringScroll = true
-        // 使用 JavaScript 滚动
-        // 由于文档高度可能在保存和恢复时不同（如图片加载），需要适当调整
-        // 用户反馈：恢复后位置偏上（内容被工具栏遮挡），所以需要减少滚动量
-        val js = """
-            (function() {
-                var ratio = $ratio;
-                var docHeight = document.documentElement.scrollHeight;
-                var viewHeight = window.innerHeight;
-                if (docHeight > viewHeight) {
-                    var maxScroll = docHeight - viewHeight;
-                    // 稍微减少滚动量，补偿文档高度变化带来的误差
-                    var adjustedRatio = ratio * 0.97;
-                    var targetY = Math.floor(adjustedRatio * maxScroll);
-                    window.scrollTo(0, targetY);
-                }
-            })();
-        """.trimIndent()
+        val js = buildScrollToRatioScript(ratio)
         // 延迟执行，确保页面已渲染
         postDelayed({
             evaluateJavascript(js, null)
-            postDelayed({ isRestoringScroll = false }, 200)
+            postDelayed({
+                isRestoringScroll = false
+                alpha = 1f
+            }, 120)
         }, 100)
     }
 }
