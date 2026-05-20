@@ -27,6 +27,7 @@ private val GIT_USER_NAME = stringPreferencesKey("git_user_name")
 private val GIT_USER_EMAIL = stringPreferencesKey("git_user_email")
 private val GIT_HTTPS_PASSWORD = stringPreferencesKey("git_https_password")
 private val GIT_CONFIG_APPLIED = booleanPreferencesKey("git_config_applied")
+private val GIT_MANAGED_PROJECTS_JSON = stringPreferencesKey("git_managed_projects_json")
 private val PLAYER_LAST_DIR_URI = stringPreferencesKey("player_last_dir_uri")
 private val PLAYER_LAST_INDEX = intPreferencesKey("player_last_index")
 private val PLAYER_LAST_POSITION_MS = longPreferencesKey("player_last_position_ms")
@@ -79,6 +80,16 @@ data class RecentOpenItem(
     val uri: String?,
     val playlistId: String?,
     val openedAt: Long
+)
+
+data class ManagedGitProject(
+    val id: String,
+    val projectName: String,
+    val repoUrl: String,
+    val localDirName: String,
+    val createdAt: Long,
+    val lastSyncAt: Long,
+    val lastPushAt: Long
 )
 
 class Preferences(private val context: Context) {
@@ -164,6 +175,10 @@ class Preferences(private val context: Context) {
 
     val gitConfigApplied: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[GIT_CONFIG_APPLIED] ?: false
+    }
+
+    val managedGitProjects: Flow<List<ManagedGitProject>> = context.dataStore.data.map { prefs ->
+        parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON])
     }
 
     val playerLastDirUri: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -515,6 +530,20 @@ class Preferences(private val context: Context) {
         }
     }
 
+    suspend fun replaceRecentOpenItems(items: List<RecentOpenItem>) {
+        context.dataStore.edit { prefs ->
+            val normalized = items
+                .filter { it.type.isNotBlank() && it.key.isNotBlank() && it.title.isNotBlank() }
+                .sortedByDescending { it.openedAt }
+                .take(30)
+            if (normalized.isEmpty()) {
+                prefs.remove(RECENT_OPEN_ITEMS_JSON)
+            } else {
+                prefs[RECENT_OPEN_ITEMS_JSON] = recentOpenItemsToJson(normalized)
+            }
+        }
+    }
+
     suspend fun setGitRepoUrl(url: String?) {
         context.dataStore.edit { prefs ->
             if (url.isNullOrBlank()) prefs.remove(GIT_REPO_URL)
@@ -546,6 +575,49 @@ class Preferences(private val context: Context) {
     suspend fun setGitConfigApplied(applied: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[GIT_CONFIG_APPLIED] = applied
+        }
+    }
+
+    suspend fun addManagedGitProject(project: ManagedGitProject) {
+        context.dataStore.edit { prefs ->
+            val existing = parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON])
+            val updated = (existing.filterNot { it.id == project.id || it.localDirName == project.localDirName || it.repoUrl == project.repoUrl } + project)
+                .sortedBy { it.createdAt }
+            prefs[GIT_MANAGED_PROJECTS_JSON] = managedGitProjectsToJson(updated)
+        }
+    }
+
+    suspend fun updateManagedGitProject(project: ManagedGitProject) {
+        context.dataStore.edit { prefs ->
+            val existing = parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON])
+            val updated = existing.map { if (it.id == project.id) project else it }
+            prefs[GIT_MANAGED_PROJECTS_JSON] = managedGitProjectsToJson(updated)
+        }
+    }
+
+    suspend fun removeManagedGitProject(id: String) {
+        context.dataStore.edit { prefs ->
+            val updated = parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON]).filterNot { it.id == id }
+            if (updated.isEmpty()) prefs.remove(GIT_MANAGED_PROJECTS_JSON)
+            else prefs[GIT_MANAGED_PROJECTS_JSON] = managedGitProjectsToJson(updated)
+        }
+    }
+
+    suspend fun markManagedGitProjectSynced(id: String, syncedAt: Long = System.currentTimeMillis()) {
+        context.dataStore.edit { prefs ->
+            val updated = parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON]).map {
+                if (it.id == id) it.copy(lastSyncAt = syncedAt) else it
+            }
+            prefs[GIT_MANAGED_PROJECTS_JSON] = managedGitProjectsToJson(updated)
+        }
+    }
+
+    suspend fun markManagedGitProjectPushed(id: String, pushedAt: Long = System.currentTimeMillis()) {
+        context.dataStore.edit { prefs ->
+            val updated = parseManagedGitProjects(prefs[GIT_MANAGED_PROJECTS_JSON]).map {
+                if (it.id == id) it.copy(lastPushAt = pushedAt, lastSyncAt = maxOf(it.lastSyncAt, pushedAt)) else it
+            }
+            prefs[GIT_MANAGED_PROJECTS_JSON] = managedGitProjectsToJson(updated)
         }
     }
 
@@ -968,6 +1040,54 @@ class Preferences(private val context: Context) {
                     put("uri", item.uri ?: "")
                     put("playlistId", item.playlistId ?: "")
                     put("openedAt", item.openedAt)
+                }
+            )
+        }
+        return arr.toString()
+    }
+
+    private fun parseManagedGitProjects(json: String?): List<ManagedGitProject> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val id = obj.optString("id").trim().ifBlank { UUID.randomUUID().toString() }
+                    val projectName = obj.optString("projectName").trim()
+                    val repoUrl = obj.optString("repoUrl").trim()
+                    val localDirName = obj.optString("localDirName").trim()
+                    if (projectName.isBlank() || repoUrl.isBlank() || localDirName.isBlank()) continue
+                    add(
+                        ManagedGitProject(
+                            id = id,
+                            projectName = projectName,
+                            repoUrl = repoUrl,
+                            localDirName = localDirName,
+                            createdAt = obj.optLong("createdAt", 0L),
+                            lastSyncAt = obj.optLong("lastSyncAt", 0L),
+                            lastPushAt = obj.optLong("lastPushAt", 0L)
+                        )
+                    )
+                }
+            }.sortedBy { it.createdAt }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun managedGitProjectsToJson(list: List<ManagedGitProject>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { item ->
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("id", item.id)
+                    put("projectName", item.projectName)
+                    put("repoUrl", item.repoUrl)
+                    put("localDirName", item.localDirName)
+                    put("createdAt", item.createdAt)
+                    put("lastSyncAt", item.lastSyncAt)
+                    put("lastPushAt", item.lastPushAt)
                 }
             )
         }

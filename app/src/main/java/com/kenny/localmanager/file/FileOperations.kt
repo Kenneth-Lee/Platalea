@@ -863,6 +863,57 @@ fun copyLocalDirToTree(
     return copyLocalDirRecursive(context, destUri, sourceDir, log)
 }
 
+fun deleteTreeRelativeDirIfExists(
+    context: Context,
+    treeRootUri: Uri,
+    relativeDirPath: String
+): Boolean {
+    val normalizedSegments = relativeDirPath.trim().split('/').filter { it.isNotBlank() }
+    if (normalizedSegments.isEmpty()) return true
+    val rootDocId = try { DocumentsContract.getTreeDocumentId(treeRootUri) } catch (_: Exception) { return true }
+    var currentUri = DocumentsContract.buildDocumentUriUsingTree(treeRootUri, rootDocId) ?: return true
+    for (segment in normalizedSegments) {
+        currentUri = findChildByName(context, currentUri, segment) ?: return true
+    }
+    return deleteDocumentRecursive(context, currentUri, treeRootUri)
+}
+
+fun copyLocalDirToTreePath(
+    context: Context,
+    treeRootUri: Uri,
+    sourceDir: File,
+    relativeDirPath: String,
+    log: ((String) -> Unit)? = null
+): Boolean {
+    if (!sourceDir.isDirectory) return false
+    val segments = relativeDirPath.trim().split('/').filter { it.isNotBlank() }
+    if (segments.isEmpty()) return false
+    val cr = context.contentResolver
+    val rootDocId = try { DocumentsContract.getTreeDocumentId(treeRootUri) } catch (_: Exception) { null } ?: return false
+    var parentDocUri = DocumentsContract.buildDocumentUriUsingTree(treeRootUri, rootDocId) ?: return false
+    for (segment in segments.dropLast(1)) {
+        val existing = findChildByName(context, parentDocUri, segment)
+        parentDocUri = if (existing != null) {
+            existing
+        } else {
+            try {
+                DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, segment)
+            } catch (e: Exception) {
+                log?.invoke(context.getString(R.string.file_log_create_dir_failed_detail, segment, e.message ?: ""))
+                return false
+            } ?: return false
+        }
+    }
+    val leafName = segments.last()
+    val destUri = try {
+        DocumentsContract.createDocument(cr, parentDocUri, DocumentsContract.Document.MIME_TYPE_DIR, leafName)
+    } catch (e: Exception) {
+        log?.invoke(context.getString(R.string.file_log_create_dir_failed_detail, leafName, e.message ?: ""))
+        return false
+    } ?: return false
+    return copyLocalDirRecursive(context, destUri, sourceDir, log)
+}
+
 private fun copyLocalDirRecursive(context: Context, parentDocUri: Uri, sourceDir: File, log: ((String) -> Unit)?): Boolean {
     val cr = context.contentResolver
     val list = sourceDir.listFiles() ?: return true

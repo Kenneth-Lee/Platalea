@@ -9,9 +9,12 @@ import org.json.JSONObject
 import java.io.File
 
 private const val KEY_CONFIG_VERSION = "config_version"
+private const val KEY_CONFIG_SCOPE = "config_scope"
+private const val CONFIG_SCOPE_CUSTOM = "custom"
 private const val KEY_FILTER_VISIBLE = "filter_visible"
 private const val KEY_HIDE_DOT_FILES = "hide_dot_files"
 private const val KEY_VIEWER_PREVIEW_BYTES = "viewer_preview_bytes"
+private const val KEY_STARTUP_DECRYPT_KEY = "startup_decrypt_key"
 private const val KEY_FTP_PORT = "ftp_port"
 private const val KEY_FTP_PASSWORD = "ftp_password"
 private const val KEY_FTP_TIMEOUT_MINUTES = "ftp_timeout_minutes"
@@ -25,9 +28,25 @@ private const val KEY_GPG_SECRET_KEYS_BASE64 = "gpg_secret_keys_base64"
 private const val KEY_PLAYER_PLAYLISTS = "player_playlists"
 private const val KEY_PLAYER_LIST_BOOKMARKS = "player_list_bookmarks"
 private const val KEY_PLAYER_PLAYLIST_RESUMES = "player_playlist_resumes"
+private const val KEY_RECENT_OPEN_ITEMS = "recent_open_items"
+private const val KEY_EPUB_DICT_AREA_EXPANDED = "epub_dict_area_expanded"
+private const val KEY_EPUB_DICT_LOOKUP_WORDS = "epub_dict_lookup_words"
+private const val KEY_EPUB_TTS_ENGINE_PACKAGE = "epub_tts_engine_package"
+private const val KEY_EPUB_TTS_VOICE_NAME = "epub_tts_voice_name"
+private const val KEY_EPUB_TTS_SPEED_PERCENT = "epub_tts_speed_percent"
+private const val KEY_EPUB_TTS_AUTO_NEXT_CHAPTER = "epub_tts_auto_next_chapter"
 private const val KEY_EXTERNAL_OPEN_BY_EXTENSION = "external_open_by_extension"
 private const val KEY_ROOT_BOOKMARKS = "root_bookmarks"
 private const val KEY_LEGACY_PLAYER_LIST_BOOKMARK = "player_list_bookmark"
+
+enum class ConfigExportCategory {
+    GIT,
+    MUSIC,
+    RECENT,
+    EPUB,
+    GPG,
+    OTHER
+}
 
 enum class ConfigPlaylistImportMode {
     OVERWRITE,
@@ -39,31 +58,64 @@ enum class ConfigPlaylistImportMode {
  * FTP 密码与倒计时、Git 配置、公钥与私钥（base64）。
  */
 suspend fun exportConfig(context: Context, prefs: Preferences): String {
+    return exportConfig(
+        context = context,
+        prefs = prefs,
+        categories = ConfigExportCategory.entries.toSet()
+    )
+}
+
+suspend fun exportConfig(
+    context: Context,
+    prefs: Preferences,
+    categories: Set<ConfigExportCategory>
+): String {
     val obj = JSONObject()
     obj.put(KEY_CONFIG_VERSION, 2)
-    obj.put(KEY_FILTER_VISIBLE, prefs.filterVisible.first())
-    obj.put(KEY_HIDE_DOT_FILES, prefs.hideDotFiles.first())
-    obj.put(KEY_VIEWER_PREVIEW_BYTES, prefs.viewerPreviewBytes.first())
-    obj.put(KEY_FTP_PORT, prefs.ftpPort.first())
-    prefs.ftpPassword.first()?.let { obj.put(KEY_FTP_PASSWORD, it) }
-    obj.put(KEY_FTP_TIMEOUT_MINUTES, prefs.ftpTimeoutMinutes.first())
-    prefs.gitRepoUrl.first()?.let { obj.put(KEY_GIT_REPO_URL, it) }
-    prefs.gitUserName.first()?.let { obj.put(KEY_GIT_USER_NAME, it) }
-    prefs.gitUserEmail.first()?.let { obj.put(KEY_GIT_USER_EMAIL, it) }
-    prefs.gitHttpsPassword.first()?.let { obj.put(KEY_GIT_HTTPS_PASSWORD, it) }
-    obj.put(KEY_GIT_CONFIG_APPLIED, prefs.gitConfigApplied.first())
-    obj.put(KEY_PLAYER_PLAYLISTS, JSONArray(prefs.playlists.first().map { it.toJson() }))
-    obj.put(KEY_PLAYER_LIST_BOOKMARKS, JSONArray(prefs.playerListBookmarks.first().map { it.toJson() }))
-    obj.put(KEY_PLAYER_PLAYLIST_RESUMES, prefs.playerPlaylistResumeStates.first().toJson())
-    obj.put(KEY_EXTERNAL_OPEN_BY_EXTENSION, JSONObject(prefs.externalOpenByExtension.first()))
-    obj.put(KEY_ROOT_BOOKMARKS, RootBookmarkManager(context).toJson())
+    obj.put(KEY_CONFIG_SCOPE, CONFIG_SCOPE_CUSTOM)
 
-    val keyDir = getGpgKeyDir(context)
-    File(keyDir, "pubring.gpg").takeIf { it.exists() }?.readBytes()?.let { bytes ->
-        obj.put(KEY_GPG_PUBLIC_KEYS_BASE64, Base64.encodeToString(bytes, Base64.NO_WRAP))
+    if (ConfigExportCategory.OTHER in categories) {
+        obj.put(KEY_FILTER_VISIBLE, prefs.filterVisible.first())
+        obj.put(KEY_HIDE_DOT_FILES, prefs.hideDotFiles.first())
+        obj.put(KEY_VIEWER_PREVIEW_BYTES, prefs.viewerPreviewBytes.first())
+        obj.put(KEY_STARTUP_DECRYPT_KEY, prefs.startupDecryptKey.first())
+        obj.put(KEY_FTP_PORT, prefs.ftpPort.first())
+        prefs.ftpPassword.first()?.let { obj.put(KEY_FTP_PASSWORD, it) }
+        obj.put(KEY_FTP_TIMEOUT_MINUTES, prefs.ftpTimeoutMinutes.first())
+        obj.put(KEY_EXTERNAL_OPEN_BY_EXTENSION, JSONObject(prefs.externalOpenByExtension.first()))
+        obj.put(KEY_ROOT_BOOKMARKS, RootBookmarkManager(context).toJson())
     }
-    File(keyDir, "secring.gpg").takeIf { it.exists() }?.readBytes()?.let { bytes ->
-        obj.put(KEY_GPG_SECRET_KEYS_BASE64, Base64.encodeToString(bytes, Base64.NO_WRAP))
+    if (ConfigExportCategory.GIT in categories) {
+        prefs.gitRepoUrl.first()?.let { obj.put(KEY_GIT_REPO_URL, it) }
+        prefs.gitUserName.first()?.let { obj.put(KEY_GIT_USER_NAME, it) }
+        prefs.gitUserEmail.first()?.let { obj.put(KEY_GIT_USER_EMAIL, it) }
+        prefs.gitHttpsPassword.first()?.let { obj.put(KEY_GIT_HTTPS_PASSWORD, it) }
+        obj.put(KEY_GIT_CONFIG_APPLIED, prefs.gitConfigApplied.first())
+    }
+    if (ConfigExportCategory.MUSIC in categories) {
+        obj.put(KEY_PLAYER_PLAYLISTS, JSONArray(prefs.playlists.first().map { it.toJson() }))
+        obj.put(KEY_PLAYER_LIST_BOOKMARKS, JSONArray(prefs.playerListBookmarks.first().map { it.toJson() }))
+        obj.put(KEY_PLAYER_PLAYLIST_RESUMES, prefs.playerPlaylistResumeStates.first().toJson())
+    }
+    if (ConfigExportCategory.RECENT in categories) {
+        obj.put(KEY_RECENT_OPEN_ITEMS, JSONArray(prefs.recentOpenItems.first().map { it.toJson() }))
+    }
+    if (ConfigExportCategory.EPUB in categories) {
+        obj.put(KEY_EPUB_DICT_AREA_EXPANDED, prefs.epubDictAreaExpanded.first())
+        obj.put(KEY_EPUB_DICT_LOOKUP_WORDS, JSONArray(prefs.epubDictLookupWords.first()))
+        prefs.epubTtsEnginePackage.first()?.let { obj.put(KEY_EPUB_TTS_ENGINE_PACKAGE, it) }
+        prefs.epubTtsVoiceName.first()?.let { obj.put(KEY_EPUB_TTS_VOICE_NAME, it) }
+        obj.put(KEY_EPUB_TTS_SPEED_PERCENT, prefs.epubTtsSpeedPercent.first())
+        obj.put(KEY_EPUB_TTS_AUTO_NEXT_CHAPTER, prefs.epubTtsAutoNextChapter.first())
+    }
+    if (ConfigExportCategory.GPG in categories) {
+        val keyDir = getGpgKeyDir(context)
+        File(keyDir, "pubring.gpg").takeIf { it.exists() }?.readBytes()?.let { bytes ->
+            obj.put(KEY_GPG_PUBLIC_KEYS_BASE64, Base64.encodeToString(bytes, Base64.NO_WRAP))
+        }
+        File(keyDir, "secring.gpg").takeIf { it.exists() }?.readBytes()?.let { bytes ->
+            obj.put(KEY_GPG_SECRET_KEYS_BASE64, Base64.encodeToString(bytes, Base64.NO_WRAP))
+        }
     }
 
     return obj.toString(2)
@@ -90,6 +142,50 @@ fun configJsonPlaylistCount(jsonString: String): Int {
     return obj.optJSONArray(KEY_PLAYER_PLAYLISTS)?.length() ?: 0
 }
 
+fun configJsonCategories(jsonString: String): Set<ConfigExportCategory> {
+    val obj = try {
+        JSONObject(jsonString)
+    } catch (_: Exception) {
+        return emptySet()
+    }
+    return buildSet {
+        if (
+            obj.has(KEY_GIT_REPO_URL) ||
+            obj.has(KEY_GIT_USER_NAME) ||
+            obj.has(KEY_GIT_USER_EMAIL) ||
+            obj.has(KEY_GIT_HTTPS_PASSWORD) ||
+            obj.has(KEY_GIT_CONFIG_APPLIED)
+        ) add(ConfigExportCategory.GIT)
+        if (
+            obj.has(KEY_PLAYER_PLAYLISTS) ||
+            obj.has(KEY_PLAYER_LIST_BOOKMARKS) ||
+            obj.has(KEY_LEGACY_PLAYER_LIST_BOOKMARK) ||
+            obj.has(KEY_PLAYER_PLAYLIST_RESUMES)
+        ) add(ConfigExportCategory.MUSIC)
+        if (obj.has(KEY_RECENT_OPEN_ITEMS)) add(ConfigExportCategory.RECENT)
+        if (
+            obj.has(KEY_EPUB_DICT_AREA_EXPANDED) ||
+            obj.has(KEY_EPUB_DICT_LOOKUP_WORDS) ||
+            obj.has(KEY_EPUB_TTS_ENGINE_PACKAGE) ||
+            obj.has(KEY_EPUB_TTS_VOICE_NAME) ||
+            obj.has(KEY_EPUB_TTS_SPEED_PERCENT) ||
+            obj.has(KEY_EPUB_TTS_AUTO_NEXT_CHAPTER)
+        ) add(ConfigExportCategory.EPUB)
+        if (obj.has(KEY_GPG_PUBLIC_KEYS_BASE64) || obj.has(KEY_GPG_SECRET_KEYS_BASE64)) add(ConfigExportCategory.GPG)
+        if (
+            obj.has(KEY_FILTER_VISIBLE) ||
+            obj.has(KEY_HIDE_DOT_FILES) ||
+            obj.has(KEY_VIEWER_PREVIEW_BYTES) ||
+            obj.has(KEY_STARTUP_DECRYPT_KEY) ||
+            obj.has(KEY_FTP_PORT) ||
+            obj.has(KEY_FTP_PASSWORD) ||
+            obj.has(KEY_FTP_TIMEOUT_MINUTES) ||
+            obj.has(KEY_EXTERNAL_OPEN_BY_EXTENSION) ||
+            obj.has(KEY_ROOT_BOOKMARKS)
+        ) add(ConfigExportCategory.OTHER)
+    }
+}
+
 /**
  * 从 JSON 字符串导入配置。仅对存在的键写入，缺失的键不修改。
  * @param importKeys 是否导入并覆盖公钥/私钥；为 false 时跳过密钥，保留本机现有密钥
@@ -100,7 +196,8 @@ suspend fun importConfig(
     prefs: Preferences,
     jsonString: String,
     importKeys: Boolean = true,
-    playlistImportMode: ConfigPlaylistImportMode = ConfigPlaylistImportMode.OVERWRITE
+    playlistImportMode: ConfigPlaylistImportMode = ConfigPlaylistImportMode.OVERWRITE,
+    categories: Set<ConfigExportCategory> = ConfigExportCategory.entries.toSet()
 ): Boolean {
     val obj = try {
         JSONObject(jsonString)
@@ -108,19 +205,24 @@ suspend fun importConfig(
         return false
     }
 
-    if (obj.has(KEY_FILTER_VISIBLE)) prefs.setFilterVisible(obj.getBoolean(KEY_FILTER_VISIBLE))
-    if (obj.has(KEY_HIDE_DOT_FILES)) prefs.setHideDotFiles(obj.getBoolean(KEY_HIDE_DOT_FILES))
-    if (obj.has(KEY_VIEWER_PREVIEW_BYTES)) prefs.setViewerPreviewBytes(obj.getInt(KEY_VIEWER_PREVIEW_BYTES).coerceIn(1024, 10 * 1024 * 1024))
-    if (obj.has(KEY_FTP_PORT)) prefs.setFtpPort(obj.getInt(KEY_FTP_PORT).coerceIn(1024, 65535))
-    if (obj.has(KEY_FTP_PASSWORD)) prefs.setFtpPassword(obj.optString(KEY_FTP_PASSWORD).ifBlank { null })
-    if (obj.has(KEY_FTP_TIMEOUT_MINUTES)) prefs.setFtpTimeoutMinutes(obj.getInt(KEY_FTP_TIMEOUT_MINUTES).coerceIn(0, 1440))
-    if (obj.has(KEY_GIT_REPO_URL)) prefs.setGitRepoUrl(obj.optString(KEY_GIT_REPO_URL).ifBlank { null })
-    if (obj.has(KEY_GIT_USER_NAME)) prefs.setGitUserName(obj.optString(KEY_GIT_USER_NAME).ifBlank { null })
-    if (obj.has(KEY_GIT_USER_EMAIL)) prefs.setGitUserEmail(obj.optString(KEY_GIT_USER_EMAIL).ifBlank { null })
-    if (obj.has(KEY_GIT_HTTPS_PASSWORD)) prefs.setGitHttpsPassword(obj.optString(KEY_GIT_HTTPS_PASSWORD).ifBlank { null })
-    if (obj.has(KEY_GIT_CONFIG_APPLIED)) prefs.setGitConfigApplied(obj.getBoolean(KEY_GIT_CONFIG_APPLIED))
+    if (ConfigExportCategory.OTHER in categories) {
+        if (obj.has(KEY_FILTER_VISIBLE)) prefs.setFilterVisible(obj.getBoolean(KEY_FILTER_VISIBLE))
+        if (obj.has(KEY_HIDE_DOT_FILES)) prefs.setHideDotFiles(obj.getBoolean(KEY_HIDE_DOT_FILES))
+        if (obj.has(KEY_VIEWER_PREVIEW_BYTES)) prefs.setViewerPreviewBytes(obj.getInt(KEY_VIEWER_PREVIEW_BYTES).coerceIn(1024, 10 * 1024 * 1024))
+        if (obj.has(KEY_STARTUP_DECRYPT_KEY)) prefs.setStartupDecryptKey(obj.getBoolean(KEY_STARTUP_DECRYPT_KEY))
+        if (obj.has(KEY_FTP_PORT)) prefs.setFtpPort(obj.getInt(KEY_FTP_PORT).coerceIn(1024, 65535))
+        if (obj.has(KEY_FTP_PASSWORD)) prefs.setFtpPassword(obj.optString(KEY_FTP_PASSWORD).ifBlank { null })
+        if (obj.has(KEY_FTP_TIMEOUT_MINUTES)) prefs.setFtpTimeoutMinutes(obj.getInt(KEY_FTP_TIMEOUT_MINUTES).coerceIn(0, 1440))
+    }
+    if (ConfigExportCategory.GIT in categories) {
+        if (obj.has(KEY_GIT_REPO_URL)) prefs.setGitRepoUrl(obj.optString(KEY_GIT_REPO_URL).ifBlank { null })
+        if (obj.has(KEY_GIT_USER_NAME)) prefs.setGitUserName(obj.optString(KEY_GIT_USER_NAME).ifBlank { null })
+        if (obj.has(KEY_GIT_USER_EMAIL)) prefs.setGitUserEmail(obj.optString(KEY_GIT_USER_EMAIL).ifBlank { null })
+        if (obj.has(KEY_GIT_HTTPS_PASSWORD)) prefs.setGitHttpsPassword(obj.optString(KEY_GIT_HTTPS_PASSWORD).ifBlank { null })
+        if (obj.has(KEY_GIT_CONFIG_APPLIED)) prefs.setGitConfigApplied(obj.getBoolean(KEY_GIT_CONFIG_APPLIED))
+    }
     var playlistIdMapping = emptyMap<String, String>()
-    if (obj.has(KEY_PLAYER_PLAYLISTS)) {
+    if (ConfigExportCategory.MUSIC in categories && obj.has(KEY_PLAYER_PLAYLISTS)) {
         val playlists = runCatching {
             val arr = obj.optJSONArray(KEY_PLAYER_PLAYLISTS) ?: JSONArray()
             (0 until arr.length()).map { Playlist.fromJson(arr.getJSONObject(it)) }
@@ -135,7 +237,7 @@ suspend fun importConfig(
             }
         }
     }
-    if (obj.has(KEY_PLAYER_LIST_BOOKMARKS) || obj.has(KEY_LEGACY_PLAYER_LIST_BOOKMARK)) {
+    if (ConfigExportCategory.MUSIC in categories && (obj.has(KEY_PLAYER_LIST_BOOKMARKS) || obj.has(KEY_LEGACY_PLAYER_LIST_BOOKMARK))) {
         val bookmarks = parseImportedPlayerBookmarks(obj)
             .map { bookmark ->
                 val mappedPlaylistId = bookmark.playlistId?.let { playlistIdMapping[it] ?: it }
@@ -146,7 +248,7 @@ suspend fun importConfig(
             ConfigPlaylistImportMode.APPEND -> prefs.appendPlayerListBookmarks(bookmarks)
         }
     }
-    if (obj.has(KEY_PLAYER_PLAYLIST_RESUMES)) {
+    if (ConfigExportCategory.MUSIC in categories && obj.has(KEY_PLAYER_PLAYLIST_RESUMES)) {
         val resumes = parseImportedPlayerResumes(obj.opt(KEY_PLAYER_PLAYLIST_RESUMES))
             .mapKeys { (playlistId, _) -> playlistIdMapping[playlistId] ?: playlistId }
         when (playlistImportMode) {
@@ -154,14 +256,27 @@ suspend fun importConfig(
             ConfigPlaylistImportMode.APPEND -> prefs.mergePlayerResumeStates(resumes)
         }
     }
-    if (obj.has(KEY_EXTERNAL_OPEN_BY_EXTENSION)) {
-        prefs.replaceExternalOpenPackages(parseExternalOpenMapping(obj.opt(KEY_EXTERNAL_OPEN_BY_EXTENSION)))
+    if (ConfigExportCategory.RECENT in categories && obj.has(KEY_RECENT_OPEN_ITEMS)) {
+        prefs.replaceRecentOpenItems(parseImportedRecentOpenItems(obj.optJSONArray(KEY_RECENT_OPEN_ITEMS)))
     }
-    if (obj.has(KEY_ROOT_BOOKMARKS)) {
-        RootBookmarkManager(context).importAll(parseRootBookmarks(obj.opt(KEY_ROOT_BOOKMARKS)))
+    if (ConfigExportCategory.EPUB in categories) {
+        if (obj.has(KEY_EPUB_DICT_AREA_EXPANDED)) prefs.setEpubDictAreaExpanded(obj.getBoolean(KEY_EPUB_DICT_AREA_EXPANDED))
+        if (obj.has(KEY_EPUB_DICT_LOOKUP_WORDS)) prefs.setEpubDictLookupWords(parseImportedStringList(obj.optJSONArray(KEY_EPUB_DICT_LOOKUP_WORDS)))
+        if (obj.has(KEY_EPUB_TTS_ENGINE_PACKAGE)) prefs.setEpubTtsEnginePackage(obj.optString(KEY_EPUB_TTS_ENGINE_PACKAGE).ifBlank { null })
+        if (obj.has(KEY_EPUB_TTS_VOICE_NAME)) prefs.setEpubTtsVoiceName(obj.optString(KEY_EPUB_TTS_VOICE_NAME).ifBlank { null })
+        if (obj.has(KEY_EPUB_TTS_SPEED_PERCENT)) prefs.setEpubTtsSpeedPercent(obj.optInt(KEY_EPUB_TTS_SPEED_PERCENT, 100))
+        if (obj.has(KEY_EPUB_TTS_AUTO_NEXT_CHAPTER)) prefs.setEpubTtsAutoNextChapter(obj.getBoolean(KEY_EPUB_TTS_AUTO_NEXT_CHAPTER))
+    }
+    if (ConfigExportCategory.OTHER in categories) {
+        if (obj.has(KEY_EXTERNAL_OPEN_BY_EXTENSION)) {
+            prefs.replaceExternalOpenPackages(parseExternalOpenMapping(obj.opt(KEY_EXTERNAL_OPEN_BY_EXTENSION)))
+        }
+        if (obj.has(KEY_ROOT_BOOKMARKS)) {
+            RootBookmarkManager(context).importAll(parseRootBookmarks(obj.opt(KEY_ROOT_BOOKMARKS)))
+        }
     }
 
-    if (importKeys) {
+    if (importKeys && ConfigExportCategory.GPG in categories) {
         val keyDir = getGpgKeyDir(context)
         if (obj.has(KEY_GPG_PUBLIC_KEYS_BASE64)) {
             try {
@@ -189,6 +304,15 @@ private fun PlayerListBookmark.toJson(): JSONObject = JSONObject().apply {
     put("trackName", trackName)
     put("note", note)
     put("savedAt", savedAt)
+}
+
+private fun RecentOpenItem.toJson(): JSONObject = JSONObject().apply {
+    put("type", type)
+    put("key", key)
+    put("title", title)
+    put("uri", uri ?: "")
+    put("playlistId", playlistId ?: "")
+    put("openedAt", openedAt)
 }
 
 private fun Map<String, PlayerResumeState>.toJson(): JSONObject = JSONObject().apply {
@@ -260,6 +384,39 @@ private fun parseImportedPlayerResumes(value: Any?): Map<String, PlayerResumeSta
                     positionMs = state.optLong("p", 0L).coerceAtLeast(0L)
                 )
             )
+        }
+    }
+}
+
+private fun parseImportedRecentOpenItems(arr: JSONArray?): List<RecentOpenItem> {
+    if (arr == null) return emptyList()
+    return buildList {
+        for (index in 0 until arr.length()) {
+            val obj = arr.optJSONObject(index) ?: continue
+            val type = obj.optString("type").trim()
+            val key = obj.optString("key").trim()
+            val title = obj.optString("title").trim()
+            if (type.isBlank() || key.isBlank() || title.isBlank()) continue
+            add(
+                RecentOpenItem(
+                    type = type,
+                    key = key,
+                    title = title,
+                    uri = obj.optString("uri").ifBlank { null },
+                    playlistId = obj.optString("playlistId").ifBlank { null },
+                    openedAt = obj.optLong("openedAt", 0L)
+                )
+            )
+        }
+    }.sortedByDescending { it.openedAt }.take(30)
+}
+
+private fun parseImportedStringList(arr: JSONArray?): List<String> {
+    if (arr == null) return emptyList()
+    return buildList {
+        for (index in 0 until arr.length()) {
+            val value = arr.optString(index).trim()
+            if (value.isNotBlank()) add(value)
         }
     }
 }

@@ -80,12 +80,17 @@ fun GitConfigDialog(
         configDirty = false
     }
 
-    fun saveConfig() {
+    fun persistConfig(
+        newRepoUrl: String = repoUrl,
+        newUserName: String = userName,
+        newUserEmail: String = userEmail,
+        newHttpsPassword: String = httpsPassword
+    ) {
         scope.launch {
-            prefs.setGitRepoUrl(repoUrl)
-            prefs.setGitUserName(userName)
-            prefs.setGitUserEmail(userEmail)
-            prefs.setGitHttpsPassword(httpsPassword)
+            prefs.setGitRepoUrl(newRepoUrl)
+            prefs.setGitUserName(newUserName)
+            prefs.setGitUserEmail(newUserEmail)
+            prefs.setGitHttpsPassword(newHttpsPassword)
         }
     }
 
@@ -106,7 +111,7 @@ fun GitConfigDialog(
             Toast.makeText(context, "请填写仓库地址", Toast.LENGTH_SHORT).show()
             return
         }
-        saveConfig()
+        persistConfig()
         syncStatus = SyncStatus.Syncing
         syncLogs.clear()
         syncLogs.add("正在连接...")
@@ -173,7 +178,11 @@ fun GitConfigDialog(
                     Text("仓库地址", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = repoUrl,
-                        onValueChange = { repoUrl = it; markConfigDirty() },
+                        onValueChange = {
+                            repoUrl = it
+                            persistConfig(newRepoUrl = it)
+                            markConfigDirty()
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         placeholder = { Text("https://gitcode.com/用户/仓库.git", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -186,7 +195,11 @@ fun GitConfigDialog(
                     Text("HTTPS 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = httpsPassword,
-                        onValueChange = { httpsPassword = it; markConfigDirty() },
+                        onValueChange = {
+                            httpsPassword = it
+                            persistConfig(newHttpsPassword = it)
+                            markConfigDirty()
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         placeholder = { Text("私有库需填令牌/密码", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -199,7 +212,11 @@ fun GitConfigDialog(
                     Text("Git 用户名", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = userName,
-                        onValueChange = { userName = it; markConfigDirty() },
+                        onValueChange = {
+                            userName = it
+                            persistConfig(newUserName = it)
+                            markConfigDirty()
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         placeholder = { Text("本地 commit 显示名", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -212,7 +229,11 @@ fun GitConfigDialog(
                     Text("Git 邮箱", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = userEmail,
-                        onValueChange = { userEmail = it; markConfigDirty() },
+                        onValueChange = {
+                            userEmail = it
+                            persistConfig(newUserEmail = it)
+                            markConfigDirty()
+                        },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
                         placeholder = { Text("本地 commit 邮箱", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -234,7 +255,7 @@ fun GitConfigDialog(
                             } else if (configApplied && !configDirty) {
                                 Text("已同步", color = MaterialTheme.colorScheme.primary)
                             } else {
-                                Text("配置未应用", color = MaterialTheme.colorScheme.error)
+                                Text("已保存或待保存，尚未应用", color = MaterialTheme.colorScheme.error)
                             }
                         }
                         is SyncStatus.Syncing -> {
@@ -280,29 +301,38 @@ fun GitConfigDialog(
                 Spacer(Modifier.height(24.dp))
 
                 // 操作按钮
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { applyConfig() },
-                        enabled = syncStatus !is SyncStatus.Syncing && repoUrl.isNotBlank()
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("应用配置")
+                        Button(
+                            onClick = { applyConfig() },
+                            enabled = syncStatus !is SyncStatus.Syncing && repoUrl.isNotBlank(),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("应用配置")
+                        }
+                        Spacer(Modifier.weight(1f))
                     }
-                    OutlinedButton(
-                        onClick = { showDeleteConfirm = true },
-                        enabled = syncStatus !is SyncStatus.Syncing,
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("删除本地仓库")
-                    }
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = {
-                        saveConfig()
-                        onDismiss()
-                    }) {
-                        Text("关闭")
+                        OutlinedButton(
+                            onClick = { showDeleteConfirm = true },
+                            enabled = syncStatus !is SyncStatus.Syncing,
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("删除本地仓库")
+                        }
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text("关闭")
+                        }
                     }
                 }
             }

@@ -146,9 +146,11 @@ import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
 import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
+import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
+import com.kenny.localmanager.data.configJsonCategories
 import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
 import com.kenny.localmanager.data.exportConfig
@@ -294,6 +296,12 @@ import java.util.Locale
 
 private const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
 
+private enum class ConfigExportResult {
+    SUCCESS,
+    FILE_EXISTS,
+    FAILED
+}
+
 private data class ExternalAppTarget(
     val packageName: String,
     val label: String
@@ -318,6 +326,7 @@ private enum class MainTab(val key: String, val labelRes: Int) {
     FTP("ftp", R.string.main_tab_ftp),
     CONFIG("config", R.string.main_tab_config),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
+    GIT_PROJECTS("git_projects", R.string.main_tab_git_projects),
     BOOK_NOTE("book_note", R.string.main_tab_book_note),
     QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
     QUICK_CRYPTO("quick_crypto", R.string.main_tab_quick_crypto),
@@ -343,6 +352,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.FTP -> Icons.Default.Wifi
         MainTab.CONFIG -> Icons.Default.Settings
         MainTab.GIT_SHARE -> Icons.Default.Share
+        MainTab.GIT_PROJECTS -> Icons.Default.FolderOpen
         MainTab.BOOK_NOTE -> Icons.Default.Article
         MainTab.QUICK_NOTE -> Icons.Default.Edit
         MainTab.QUICK_CRYPTO -> Icons.Default.Lock
@@ -786,6 +796,7 @@ private fun ScrollableMainTabBar(
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
         MainTab.CONFIG,
+        MainTab.GIT_PROJECTS,
         MainTab.BOOK_NOTE,
         MainTab.QUICK_NOTE,
         MainTab.QUICK_CRYPTO,
@@ -943,6 +954,7 @@ private fun MainTabContentHost(
     ftpContent: @Composable () -> Unit,
     configContent: @Composable () -> Unit,
     gitShareContent: @Composable () -> Unit,
+    gitProjectsContent: @Composable () -> Unit,
     playerContent: @Composable () -> Unit,
     bookNoteContent: @Composable () -> Unit,
     quickNoteContent: @Composable () -> Unit,
@@ -963,6 +975,7 @@ private fun MainTabContentHost(
         MainTab.FTP -> ftpContent()
         MainTab.CONFIG -> configContent()
         MainTab.GIT_SHARE -> gitShareContent()
+        MainTab.GIT_PROJECTS -> gitProjectsContent()
         MainTab.PLAYER -> playerContent()
         MainTab.BOOK_NOTE -> bookNoteContent()
         MainTab.QUICK_NOTE -> quickNoteContent()
@@ -1427,9 +1440,12 @@ private fun FileBrowserAppScreen(
         var showPendingList by remember { mutableStateOf(false) }
         var showPendingDeleteConfirm by remember { mutableStateOf(false) }
         var showPlaybackTargetDialog by remember { mutableStateOf(false) }
+        var showImportCategoryDialog by remember { mutableStateOf(false) }
         var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
         var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
         var pendingImportJson by remember { mutableStateOf<String?>(null) }
+        var pendingImportAvailableCategories by remember { mutableStateOf<Set<ConfigExportCategory>>(emptySet()) }
+        var pendingImportSelectedCategories by remember { mutableStateOf<Set<ConfigExportCategory>>(emptySet()) }
         var pendingImportPlaylistCount by remember { mutableStateOf(0) }
         var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
         var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
@@ -1512,6 +1528,14 @@ private fun FileBrowserAppScreen(
         var ftpTimeoutMinutes by remember { mutableStateOf(0) }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
+        var showExportConfigDialog by remember { mutableStateOf(false) }
+        var exportConfigFileName by remember { mutableStateOf(CONFIG_EXPORT_FILE_NAME) }
+        var exportGitCategory by remember { mutableStateOf(true) }
+        var exportMusicCategory by remember { mutableStateOf(true) }
+        var exportRecentCategory by remember { mutableStateOf(true) }
+        var exportEpubCategory by remember { mutableStateOf(true) }
+        var exportGpgCategory by remember { mutableStateOf(true) }
+        var exportOtherCategory by remember { mutableStateOf(true) }
         var showPubkeyShareScreen by remember { mutableStateOf(false) }
         var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         val shareGitLogs = remember { mutableStateListOf<String>() }
@@ -2074,8 +2098,11 @@ private fun FileBrowserAppScreen(
 
         fun clearPendingConfigImportState() {
             pendingImportJson = null
+            pendingImportAvailableCategories = emptySet()
+            pendingImportSelectedCategories = emptySet()
             pendingImportPlaylistCount = 0
             pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+            showImportCategoryDialog = false
             showImportKeyConfirmDialog = false
             showImportPlaylistConfirmDialog = false
         }
@@ -2119,38 +2146,78 @@ private fun FileBrowserAppScreen(
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
         }
 
-        suspend fun exportConfigToRoot(): Boolean {
-            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return false
+        suspend fun exportConfigToRoot(): ConfigExportResult {
+            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
             val targetUri = Uri.parse(targetRoot)
             val jsonBytes = exportConfig(context, prefs).toByteArray(Charsets.UTF_8)
             val existing = findChildByName(context, targetUri, CONFIG_EXPORT_FILE_NAME)
-            if (existing != null && !context.contentResolver.deleteDocument(existing)) return false
-            return createFileWithBytes(
+            if (existing != null) return ConfigExportResult.FILE_EXISTS
+            return if (createFileWithBytes(
                 context,
                 targetUri,
                 targetUri,
                 CONFIG_EXPORT_FILE_NAME,
                 "application/json",
                 jsonBytes
-            )
+            )) ConfigExportResult.SUCCESS else ConfigExportResult.FAILED
         }
 
-        suspend fun performConfigImport(jsonString: String, importKeys: Boolean) {
+        fun openExportConfigDialog() {
+            exportConfigFileName = CONFIG_EXPORT_FILE_NAME
+            exportGitCategory = true
+            exportMusicCategory = true
+            exportRecentCategory = true
+            exportEpubCategory = true
+            exportGpgCategory = true
+            exportOtherCategory = true
+            showExportConfigDialog = true
+        }
+
+        fun normalizeExportFileName(input: String): String? {
+            val trimmed = input.trim()
+            if (trimmed.isBlank() || trimmed.contains('/') || trimmed.contains('\\')) return null
+            return if (trimmed.endsWith(".json", ignoreCase = true)) trimmed else "$trimmed.json"
+        }
+
+        suspend fun exportConfigToRoot(fileName: String, categories: Set<ConfigExportCategory>): ConfigExportResult {
+            if (categories.isEmpty()) return ConfigExportResult.FAILED
+            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
+            val targetUri = Uri.parse(targetRoot)
+            val jsonBytes = exportConfig(context, prefs, categories).toByteArray(Charsets.UTF_8)
+            val existing = findChildByName(context, targetUri, fileName)
+            if (existing != null) return ConfigExportResult.FILE_EXISTS
+            return if (createFileWithBytes(
+                context,
+                targetUri,
+                targetUri,
+                fileName,
+                "application/json",
+                jsonBytes
+            )) ConfigExportResult.SUCCESS else ConfigExportResult.FAILED
+        }
+
+        suspend fun performConfigImport(
+            jsonString: String,
+            importKeys: Boolean,
+            categories: Set<ConfigExportCategory>
+        ) {
             val ok = importConfig(
                 context,
                 prefs,
                 jsonString,
                 importKeys = importKeys,
-                playlistImportMode = pendingImportPlaylistMode
+                playlistImportMode = pendingImportPlaylistMode,
+                categories = categories
             )
             refreshTrigger++
             val msg = when {
                 !ok -> "导入失败：无法解析 JSON"
-                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
+                ConfigExportCategory.GPG in categories && importKeys -> "配置已导入（含密钥）"
                 pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
-                pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
-                pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
-                importKeys -> "配置已导入（含密钥）"
                 else -> "配置已导入"
             }
             clearPendingConfigImportState()
@@ -2159,10 +2226,28 @@ private fun FileBrowserAppScreen(
 
         fun continueConfigImportAfterPlaylistChoice() {
             val jsonString = pendingImportJson ?: return
-            if (configJsonContainsKeys(jsonString)) {
+            val selectedCategories = pendingImportSelectedCategories
+            if (ConfigExportCategory.GPG in selectedCategories && configJsonContainsKeys(jsonString)) {
                 showImportKeyConfirmDialog = true
             } else {
-                scope.launch { performConfigImport(jsonString, importKeys = true) }
+                scope.launch { performConfigImport(jsonString, importKeys = false, categories = selectedCategories) }
+            }
+        }
+
+        fun continueConfigImportAfterCategoryChoice() {
+            val jsonString = pendingImportJson ?: return
+            val selectedCategories = pendingImportSelectedCategories
+            scope.launch {
+                val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
+                val playlistCount = if (ConfigExportCategory.MUSIC in selectedCategories) configJsonPlaylistCount(jsonString) else 0
+                pendingImportPlaylistCount = playlistCount
+                if (playlistCount > 0 && hasExistingPlaylists) {
+                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                    showImportPlaylistConfirmDialog = true
+                } else {
+                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+                    continueConfigImportAfterPlaylistChoice()
+                }
             }
         }
 
@@ -2171,18 +2256,17 @@ private fun FileBrowserAppScreen(
                 Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
                 return
             }
-            pendingImportJson = jsonString
-            pendingImportPlaylistCount = configJsonPlaylistCount(jsonString)
-            scope.launch {
-                val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
-                if (pendingImportPlaylistCount > 0 && hasExistingPlaylists) {
-                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                    showImportPlaylistConfirmDialog = true
-                } else {
-                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                    continueConfigImportAfterPlaylistChoice()
-                }
+            val categories = configJsonCategories(jsonString)
+            if (categories.isEmpty()) {
+                Toast.makeText(context, "导入失败：文件中没有可识别的配置类别", Toast.LENGTH_SHORT).show()
+                return
             }
+            pendingImportJson = jsonString
+            pendingImportAvailableCategories = categories
+            pendingImportSelectedCategories = categories
+            pendingImportPlaylistCount = 0
+            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
+            showImportCategoryDialog = true
         }
 
         val doCopyHere: () -> Unit = {
@@ -2571,13 +2655,7 @@ private fun FileBrowserAppScreen(
                                 onOpenGitConfig = { showGitConfigDialog = true },
                                 onManageKeys = { showKeyManagementDialog = true },
                                 onOpenCacheManagement = { showCacheManagementDialog = true },
-                                onExportConfig = {
-                                    scope.launch {
-                                        val ok = exportConfigToRoot()
-                                        Toast.makeText(context, if (ok) context.getString(R.string.config_export_success) else context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
-                                        if (ok) refreshTrigger++
-                                    }
-                                },
+                                onExportConfig = { openExportConfigDialog() },
                                 onChangeRoot = { showRootSwitchDialog = true },
                                 onCreatePlayerShortcut = {
                                     val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
@@ -2604,6 +2682,14 @@ private fun FileBrowserAppScreen(
                                 prefs = prefs,
                                 rootUri = rootUri,
                                 onRequestExitApp = { requestExitApp() }
+                            )
+                        )
+                    },
+                    gitProjectsContent = {
+                        GitProjectsTabRoute(
+                            GitProjectsTabRouteState(
+                                prefs = prefs,
+                                rootUri = rootUri
                             )
                         )
                     },
@@ -2852,6 +2938,99 @@ private fun FileBrowserAppScreen(
         if (showAboutDialog) {
             AboutDialog(onDismiss = { showAboutDialog = false })
         }
+        if (showImportCategoryDialog && pendingImportJson != null) {
+            AlertDialog(
+                onDismissRequest = { clearPendingConfigImportState() },
+                title = { Text(context.getString(R.string.config_import_category_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(
+                            text = context.getString(R.string.config_import_category_hint),
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (ConfigExportCategory.GIT in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.GIT in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.GIT else pendingImportSelectedCategories - ConfigExportCategory.GIT
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_git))
+                            }
+                        }
+                        if (ConfigExportCategory.MUSIC in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.MUSIC in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.MUSIC else pendingImportSelectedCategories - ConfigExportCategory.MUSIC
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_music))
+                            }
+                        }
+                        if (ConfigExportCategory.RECENT in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.RECENT in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.RECENT else pendingImportSelectedCategories - ConfigExportCategory.RECENT
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_recent))
+                            }
+                        }
+                        if (ConfigExportCategory.EPUB in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.EPUB in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.EPUB else pendingImportSelectedCategories - ConfigExportCategory.EPUB
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_epub))
+                            }
+                        }
+                        if (ConfigExportCategory.GPG in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.GPG in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.GPG else pendingImportSelectedCategories - ConfigExportCategory.GPG
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_gpg))
+                            }
+                        }
+                        if (ConfigExportCategory.OTHER in pendingImportAvailableCategories) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = ConfigExportCategory.OTHER in pendingImportSelectedCategories,
+                                    onCheckedChange = { checked ->
+                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.OTHER else pendingImportSelectedCategories - ConfigExportCategory.OTHER
+                                    }
+                                )
+                                Text(context.getString(R.string.config_export_category_other))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        if (pendingImportSelectedCategories.isEmpty()) {
+                            Toast.makeText(context, context.getString(R.string.config_import_select_one_category), Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        showImportCategoryDialog = false
+                        continueConfigImportAfterCategoryChoice()
+                    }) { Text(context.getString(R.string.common_continue)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { clearPendingConfigImportState() }) { Text(context.getString(R.string.common_cancel)) }
+                }
+            )
+        }
         if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
             AlertDialog(
                 onDismissRequest = { clearPendingConfigImportState() },
@@ -2899,7 +3078,7 @@ private fun FileBrowserAppScreen(
                         onClick = {
                             showImportKeyConfirmDialog = false
                             scope.launch {
-                                performConfigImport(jsonToImport, importKeys = true)
+                                performConfigImport(jsonToImport, importKeys = true, categories = pendingImportSelectedCategories)
                             }
                         }
                     ) { Text("全部替换") }
@@ -2909,7 +3088,7 @@ private fun FileBrowserAppScreen(
                         onClick = {
                             showImportKeyConfirmDialog = false
                             scope.launch {
-                                performConfigImport(jsonToImport, importKeys = false)
+                                performConfigImport(jsonToImport, importKeys = false, categories = pendingImportSelectedCategories)
                             }
                         }
                     ) { Text("跳过密钥（保留本机密钥）") }
@@ -2986,6 +3165,96 @@ private fun FileBrowserAppScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = { showRootSwitchDialog = false }) { Text("取消") }
+                }
+            )
+        }
+        if (showExportConfigDialog) {
+            AlertDialog(
+                onDismissRequest = { showExportConfigDialog = false },
+                title = { Text(context.getString(R.string.config_export_dialog_title)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        OutlinedTextField(
+                            value = exportConfigFileName,
+                            onValueChange = { exportConfigFileName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text(context.getString(R.string.config_export_file_name_label)) },
+                            placeholder = { Text(CONFIG_EXPORT_FILE_NAME) }
+                        )
+                        Text(
+                            text = context.getString(R.string.config_export_category_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportGitCategory, onCheckedChange = { exportGitCategory = it })
+                            Text(context.getString(R.string.config_export_category_git))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportMusicCategory, onCheckedChange = { exportMusicCategory = it })
+                            Text(context.getString(R.string.config_export_category_music))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportRecentCategory, onCheckedChange = { exportRecentCategory = it })
+                            Text(context.getString(R.string.config_export_category_recent))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportEpubCategory, onCheckedChange = { exportEpubCategory = it })
+                            Text(context.getString(R.string.config_export_category_epub))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportGpgCategory, onCheckedChange = { exportGpgCategory = it })
+                            Text(context.getString(R.string.config_export_category_gpg))
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = exportOtherCategory, onCheckedChange = { exportOtherCategory = it })
+                            Text(context.getString(R.string.config_export_category_other))
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        val normalizedFileName = normalizeExportFileName(exportConfigFileName)
+                        if (normalizedFileName == null) {
+                            Toast.makeText(context, context.getString(R.string.config_export_invalid_file_name), Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val categories = buildSet {
+                            if (exportGitCategory) add(ConfigExportCategory.GIT)
+                            if (exportMusicCategory) add(ConfigExportCategory.MUSIC)
+                            if (exportRecentCategory) add(ConfigExportCategory.RECENT)
+                            if (exportEpubCategory) add(ConfigExportCategory.EPUB)
+                            if (exportGpgCategory) add(ConfigExportCategory.GPG)
+                            if (exportOtherCategory) add(ConfigExportCategory.OTHER)
+                        }
+                        if (categories.isEmpty()) {
+                            Toast.makeText(context, context.getString(R.string.config_export_select_one_category), Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        showExportConfigDialog = false
+                        scope.launch {
+                            when (exportConfigToRoot(normalizedFileName, categories)) {
+                                ConfigExportResult.SUCCESS -> {
+                                    Toast.makeText(context, context.getString(R.string.config_export_success), Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                }
+                                ConfigExportResult.FILE_EXISTS -> {
+                                    Toast.makeText(context, context.getString(R.string.config_export_file_exists, normalizedFileName), Toast.LENGTH_LONG).show()
+                                }
+                                ConfigExportResult.FAILED -> {
+                                    Toast.makeText(context, context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    }) {
+                        Text(context.getString(R.string.config_export))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showExportConfigDialog = false }) {
+                        Text(context.getString(R.string.common_cancel))
+                    }
                 }
             )
         }
