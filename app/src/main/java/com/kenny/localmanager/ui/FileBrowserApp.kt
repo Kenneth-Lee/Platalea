@@ -2291,243 +2291,247 @@ private fun FileBrowserAppScreen(
                         }
                     },
                     directoryContent = {
-                        FileBrowserScreen(
-                            modifier = Modifier.fillMaxSize(),
-                            currentUri = displayUri,
-                            refreshTrigger = refreshTrigger,
-                            dirCache = dirCache,
-                            onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
-                            pendingList = pendingList,
-                            rootUri = rootUri,
-                            listState = fileListLazyState,
-                            onNavigate = { uri ->
-                                fileBrowserBackStack.add(displayUri)
-                                currentUri = normalizeContentUriString(uri)
-                            },
-                            onBack = {
-                                if (fileBrowserBackStack.isNotEmpty()) {
-                                    currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
-                                }
-                            },
-                            canGoBack = fileBrowserBackStack.isNotEmpty(),
-                            onEmptyTrash = rootUri?.let { r ->
-                                {
-                                    scope.launch {
-                                        val root = Uri.parse(normalizeContentUriString(r))
-                                        runWithProgress("清空回收站", null) { _ ->
-                                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                            if (ok) {
-                                                Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
-                                                refreshTrigger++
-                                            } else {
-                                                Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                        DirectoryTabRoute(
+                            DirectoryTabRouteState(
+                                modifier = Modifier.fillMaxSize(),
+                                currentUri = displayUri,
+                                refreshTrigger = refreshTrigger,
+                                dirCache = dirCache,
+                                onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
+                                pendingList = pendingList,
+                                rootUri = rootUri,
+                                listState = fileListLazyState,
+                                onNavigate = { uri ->
+                                    fileBrowserBackStack.add(displayUri)
+                                    currentUri = normalizeContentUriString(uri)
+                                },
+                                onBack = {
+                                    if (fileBrowserBackStack.isNotEmpty()) {
+                                        currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
+                                    }
+                                },
+                                canGoBack = fileBrowserBackStack.isNotEmpty(),
+                                onEmptyTrash = rootUri?.let { r ->
+                                    {
+                                        scope.launch {
+                                            val root = Uri.parse(normalizeContentUriString(r))
+                                            runWithProgress("清空回收站", null) { _ ->
+                                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                                                if (ok) {
+                                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                                    refreshTrigger++
+                                                } else {
+                                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            },
-                            onRestoreFromTrash = rootUri?.let { r ->
-                                { model ->
-                                    scope.launch {
-                                        val root = Uri.parse(normalizeContentUriString(r))
-                                        runWithProgress("恢复", null) { _ ->
-                                            val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                            if (ok) {
-                                                Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
-                                                refreshTrigger++
-                                            } else {
-                                                Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                },
+                                onRestoreFromTrash = rootUri?.let { r ->
+                                    { model ->
+                                        scope.launch {
+                                            val root = Uri.parse(normalizeContentUriString(r))
+                                            runWithProgress("恢复", null) { _ ->
+                                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
+                                                if (ok) {
+                                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                                    refreshTrigger++
+                                                } else {
+                                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            },
-                            filterVisible = filterVisible,
-                            hideDotFiles = hideDotFiles,
-                            isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
-                            preferredExternalPackages = preferredExternalPackages,
-                            onOpenFile = { uri, name, isEncrypted ->
-                                viewingFile = Triple(uri, name, false)
-                            },
-                            onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
-                                val opened = launchExternalOpen(context, uri, packageName)
-                                if (opened) {
-                                    recordRecentOpen(
-                                        type = RECENT_TYPE_EXTERNAL_OPEN,
-                                        key = uri,
-                                        title = name,
-                                        uri = uri
-                                    )
-                                    if (rememberChoice) {
-                                        val extension = fileExtensionKey(name)
-                                        if (extension != null && !packageName.isNullOrBlank()) {
-                                            scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                },
+                                filterVisible = filterVisible,
+                                hideDotFiles = hideDotFiles,
+                                isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
+                                preferredExternalPackages = preferredExternalPackages,
+                                onOpenFile = { uri, name, isEncrypted ->
+                                    viewingFile = Triple(uri, name, false)
+                                },
+                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
+                                    val opened = launchExternalOpen(context, uri, packageName)
+                                    if (opened) {
+                                        recordRecentOpen(
+                                            type = RECENT_TYPE_EXTERNAL_OPEN,
+                                            key = uri,
+                                            title = name,
+                                            uri = uri
+                                        )
+                                        if (rememberChoice) {
+                                            val extension = fileExtensionKey(name)
+                                            if (extension != null && !packageName.isNullOrBlank()) {
+                                                scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                            }
                                         }
-                                    }
-                                } else {
-                                    val extension = fileExtensionKey(name)
-                                    if (!packageName.isNullOrBlank() && extension != null) {
-                                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                        Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                        val extension = fileExtensionKey(name)
+                                        if (!packageName.isNullOrBlank() && extension != null) {
+                                            scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                            Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                        }
                                     }
-                                }
-                                opened
-                            },
-                            onClearExternalOpenPreference = { name ->
-                                val extension = fileExtensionKey(name) ?: return@FileBrowserScreen
-                                scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                            },
-                            onOpenMarkdownView = { uri, name, encrypted ->
-                                markdownViewFile = Triple(uri, name, encrypted)
-                            },
-                            onAddToPendingList = { pendingList.add(it) },
-                            onRemoveFromPendingList = { pendingList.remove(it) },
-                            onCopyPendingToCurrentDir = doCopyHere,
-                            onMovePendingToCurrentDir = doMoveHere,
-                            onShowPendingList = { showPendingList = it },
-                            onRefresh = { refreshTrigger++ },
-                            onOpenAbout = { showAboutDialog = true },
-                            onCreateQuickNote = {
-                                switchMainTab(MainTab.QUICK_NOTE)
-                                quickNoteController.requestOpenWithCachedPassword(true)
-                            },
-                            onRequestGpgDecrypt = { fileModel, dirUri ->
-                                gpgPassword = ""
-                                gpgDecryptMode = null
-                                gpgDecryptAutoTried = false
-                                gpgEncryptSelectedKeyId = null
-                                gpgState = GpgOpState.Decrypt(fileModel, dirUri)
-                            },
-                            onRequestGpgEncrypt = { fileModel, dirUri ->
-                                gpgPassword = ""
-                                gpgDecryptMode = null
-                                gpgDecryptAutoTried = false
-                                gpgEncryptSelectedKeyId = null
-                                gpgState = GpgOpState.Encrypt(fileModel, dirUri)
-                            },
-                            onRequestQuickObfuscate = { model ->
-                                quickObfuscateOp = model to true
-                                quickObfuscatePassword = ""
-                            },
-                            onRequestQuickDeobfuscate = { model ->
-                                quickObfuscateOp = model to false
-                                quickObfuscatePassword = ""
-                            },
-                            onConfirmDelete = { model, deletePermanently ->
-                                scope.launch {
-                                    val label = if (deletePermanently) "删除" else "移到回收站"
-                                    runWithProgress(label, null) { _ ->
-                                        val ok = withContext(Dispatchers.IO) {
-                                            if (deletePermanently) {
-                                                context.contentResolver.deleteDocument(model.uri)
+                                    opened
+                                },
+                                onClearExternalOpenPreference = { name ->
+                                    val extension = fileExtensionKey(name)
+                                    if (extension != null) {
+                                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                    }
+                                },
+                                onOpenMarkdownView = { uri, name, encrypted ->
+                                    markdownViewFile = Triple(uri, name, encrypted)
+                                },
+                                onAddToPendingList = { pendingList.add(it) },
+                                onRemoveFromPendingList = { pendingList.remove(it) },
+                                onCopyPendingToCurrentDir = doCopyHere,
+                                onMovePendingToCurrentDir = doMoveHere,
+                                onShowPendingList = { showPendingList = it },
+                                onRefresh = { refreshTrigger++ },
+                                onOpenAbout = { showAboutDialog = true },
+                                onCreateQuickNote = {
+                                    switchMainTab(MainTab.QUICK_NOTE)
+                                    quickNoteController.requestOpenWithCachedPassword(true)
+                                },
+                                onRequestGpgDecrypt = { fileModel, dirUri ->
+                                    gpgPassword = ""
+                                    gpgDecryptMode = null
+                                    gpgDecryptAutoTried = false
+                                    gpgEncryptSelectedKeyId = null
+                                    gpgState = GpgOpState.Decrypt(fileModel, dirUri)
+                                },
+                                onRequestGpgEncrypt = { fileModel, dirUri ->
+                                    gpgPassword = ""
+                                    gpgDecryptMode = null
+                                    gpgDecryptAutoTried = false
+                                    gpgEncryptSelectedKeyId = null
+                                    gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                                },
+                                onRequestQuickObfuscate = { model ->
+                                    quickObfuscateOp = model to true
+                                    quickObfuscatePassword = ""
+                                },
+                                onRequestQuickDeobfuscate = { model ->
+                                    quickObfuscateOp = model to false
+                                    quickObfuscatePassword = ""
+                                },
+                                onConfirmDelete = { model, deletePermanently ->
+                                    scope.launch {
+                                        val label = if (deletePermanently) "删除" else "移到回收站"
+                                        runWithProgress(label, null) { _ ->
+                                            val ok = withContext(Dispatchers.IO) {
+                                                if (deletePermanently) {
+                                                    context.contentResolver.deleteDocument(model.uri)
+                                                } else {
+                                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
+                                                    moveToTrash(context, model.uri, root, root)
+                                                }
+                                            }
+                                            if (ok) {
+                                                Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
                                             } else {
-                                                val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
-                                                moveToTrash(context, model.uri, root, root)
+                                                Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                            }
+                                            refreshTrigger++
+                                        }
+                                    }
+                                },
+                                onShareFileToGit = { model ->
+                                    shareFileToGitTarget = model
+                                },
+                                onUnzipRequest = { zipUnzipTarget = it },
+                                onRequestMdZipView = { mdZipTarget = it },
+                                onRequestHtmlView = {
+                                    htmlViewState = HtmlViewState(
+                                        location = HtmlViewerLocation(
+                                            initialUrl = it.uri.toString(),
+                                            title = it.name,
+                                            localFileUri = it.uri.toString()
+                                        ),
+                                        recentKey = it.uri.toString(),
+                                        recentUri = it.uri.toString(),
+                                        recentTitle = it.name
+                                    )
+                                },
+                                onRequestHtmlZipView = { htmlZipTarget = it },
+                                onRequestOpenUrl = { url ->
+                                    htmlViewState = HtmlViewState(
+                                        location = HtmlViewerLocation(
+                                            initialUrl = url,
+                                            title = url,
+                                            localFileUri = null
+                                        ),
+                                        recentKey = url,
+                                        recentUri = url,
+                                        recentTitle = url
+                                    )
+                                },
+                                onRequestLlmZipView = { llmZipTarget = it },
+                                onRequestEpubView = { epubTarget = it },
+                                onRequestTxtView = { txtTarget = it },
+                                onRequestLlmView = { llmTarget = it },
+                                onRequestPicZipView = { picZipTarget = it },
+                                onRequestDirectoryImageView = { item, dirUri, siblings ->
+                                    scope.launch {
+                                        runCatching {
+                                            openDirectoryImageGallery(item, dirUri, siblings)
+                                        }.onFailure { error ->
+                                            Toast.makeText(
+                                                context,
+                                                "打开目录图片失败：${error.message ?: error.javaClass.simpleName}",
+                                                Toast.LENGTH_LONG
+                                            ).show()
+                                        }
+                                    }
+                                },
+                                onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
+                                onCompressToZipRequest = { zipCompressTarget = it },
+                                onCompressTo7zRequest = { sevenZCompressTarget = it },
+                                onRequestPassProtect = { model -> passProtectTarget = model },
+                                onRequestPassView = { model ->
+                                    passViewTarget = model
+                                    passViewPassword = ""
+                                    passViewTriedCache = false
+                                },
+                                onRequestPassEdit = { model, dirUri ->
+                                    passEditRequest = Pair(model, dirUri)
+                                    passEditTriedCache = false
+                                },
+                                onRequestImportConfig = { model ->
+                                    scope.launch {
+                                        val jsonString = withContext(Dispatchers.IO) {
+                                            try {
+                                                context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
+                                            } catch (_: Exception) {
+                                                ""
                                             }
                                         }
-                                        if (ok) {
-                                            Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                        startConfigImport(jsonString)
+                                    }
+                                },
+                                onRequestImportStarDict = { model ->
+                                    scope.launch {
+                                        val result = withContext(Dispatchers.IO) {
+                                            importStarDict(context, model.uri, model.name)
                                         }
-                                        refreshTrigger++
-                                    }
-                                }
-                            },
-                            onShareFileToGit = { model ->
-                                shareFileToGitTarget = model
-                            },
-                            onUnzipRequest = { zipUnzipTarget = it },
-                            onRequestMdZipView = { mdZipTarget = it },
-                            onRequestHtmlView = {
-                                htmlViewState = HtmlViewState(
-                                    location = HtmlViewerLocation(
-                                        initialUrl = it.uri.toString(),
-                                        title = it.name,
-                                        localFileUri = it.uri.toString()
-                                    ),
-                                    recentKey = it.uri.toString(),
-                                    recentUri = it.uri.toString(),
-                                    recentTitle = it.name
-                                )
-                            },
-                            onRequestHtmlZipView = { htmlZipTarget = it },
-                            onRequestOpenUrl = { url ->
-                                htmlViewState = HtmlViewState(
-                                    location = HtmlViewerLocation(
-                                        initialUrl = url,
-                                        title = url,
-                                        localFileUri = null
-                                    ),
-                                    recentKey = url,
-                                    recentUri = url,
-                                    recentTitle = url
-                                )
-                            },
-                            onRequestLlmZipView = { llmZipTarget = it },
-                            onRequestEpubView = { epubTarget = it },
-                            onRequestTxtView = { txtTarget = it },
-                            onRequestLlmView = { llmTarget = it },
-                            onRequestPicZipView = { picZipTarget = it },
-                            onRequestDirectoryImageView = { item, dirUri, siblings ->
-                                scope.launch {
-                                    runCatching {
-                                        openDirectoryImageGallery(item, dirUri, siblings)
-                                    }.onFailure { error ->
-                                        Toast.makeText(
-                                            context,
-                                            "打开目录图片失败：${error.message ?: error.javaClass.simpleName}",
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            },
-                            onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
-                            onCompressToZipRequest = { zipCompressTarget = it },
-                            onCompressTo7zRequest = { sevenZCompressTarget = it },
-                            onRequestPassProtect = { model -> passProtectTarget = model },
-                            onRequestPassView = { model ->
-                                passViewTarget = model
-                                passViewPassword = ""
-                                passViewTriedCache = false
-                            },
-                            onRequestPassEdit = { model, dirUri ->
-                                passEditRequest = Pair(model, dirUri)
-                                passEditTriedCache = false
-                            },
-                            onRequestImportConfig = { model ->
-                                scope.launch {
-                                    val jsonString = withContext(Dispatchers.IO) {
-                                        try {
-                                            context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
-                                        } catch (_: Exception) {
-                                            ""
+                                        result.onSuccess {
+                                            val message = if (it.evicted != null) {
+                                                "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）；已移除最旧词典：${it.evicted.name}"
+                                            } else {
+                                                "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）"
+                                            }
+                                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                        }.onFailure {
+                                            Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
                                         }
                                     }
-                                    startConfigImport(jsonString)
-                                }
-                            },
-                            onRequestImportStarDict = { model ->
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        importStarDict(context, model.uri, model.name)
-                                    }
-                                    result.onSuccess {
-                                        val message = if (it.evicted != null) {
-                                            "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）；已移除最旧词典：${it.evicted.name}"
-                                        } else {
-                                            "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）"
-                                        }
-                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                    }.onFailure {
-                                        Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            },
-                            playbackState = playbackState,
-                            onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                                },
+                                playbackState = playbackState,
+                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                            )
                         )
                     },
                     ftpContent = {
