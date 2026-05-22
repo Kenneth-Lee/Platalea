@@ -8618,9 +8618,18 @@ fun PdfViewerScreen(
                                 )
                             }
                             .pointerInput(Unit) {
-                                detectTapGestures { offset ->
-                                    handleTap(offset.x, boxSizePx.width)
-                                }
+                                detectTapGestures(
+                                    onTap = { offset ->
+                                        handleTap(offset.x, boxSizePx.width)
+                                    },
+                                    onLongPress = {
+                                        Toast.makeText(
+                                            context,
+                                            "提示：PDF 页面渲染为图像，暂不支持文字选择。\n如需选择文字，请使用专业 PDF 阅读器。",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                )
                             }
                     ) {
                         Column(
@@ -8634,20 +8643,7 @@ fun PdfViewerScreen(
                             Image(
                                 bitmap = currentPageBitmap!!.asImageBitmap(),
                                 contentDescription = "第 ${currentPage + 1} 页",
-                                modifier = Modifier
-                                    .wrapContentSize()
-                                    .pointerInput(Unit) {
-                                        // 长按检测 - 显示提示（PDF作为位图不支持文字选择）
-                                        detectTapGestures(
-                                            onLongPress = {
-                                                Toast.makeText(
-                                                    context,
-                                                    "提示：PDF 页面渲染为图像，暂不支持文字选择。\n如需选择文字，请使用专业 PDF 阅读器。",
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        )
-                                    }
+                                modifier = Modifier.wrapContentSize()
                             )
                         }
                         if (pageLoading) {
