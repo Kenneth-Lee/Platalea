@@ -19,7 +19,10 @@ import org.bouncycastle.bcpg.ArmoredOutputStream
 import org.bouncycastle.openpgp.PGPPublicKeyRing
 import org.bouncycastle.openpgp.PGPUtil
 import org.bouncycastle.openpgp.bc.BcPGPObjectFactory
+import org.eclipse.jgit.api.CreateBranchCommand
 import org.eclipse.jgit.api.Git
+import org.eclipse.jgit.api.ListBranchCommand
+import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -29,6 +32,11 @@ private const val TAG = "GitHelper"
 const val SYSGIT_DIR = ".sysgit"
 const val PUBKEY_DIR = "pubkey"
 const val SHARE_DIR = "share"
+
+data class ManagedGitBranchInfo(
+    val name: String,
+    val isCurrent: Boolean
+)
 
 /** 校验为有效的 HTTPS 仓库地址（仅允许 https://，且可解析）。 */
 fun isValidHttpsRepoUrl(repoUrl: String): Boolean {
@@ -163,6 +171,54 @@ private fun normalizeManagedProjectPath(path: String): String =
 
 private fun managedProjectDisplayPath(path: String): String = "/${normalizeManagedProjectPath(path)}"
 
+private fun normalizeManagedBranchName(branchName: String?): String? {
+    val normalized = branchName
+        ?.trim()
+        ?.removePrefix("refs/heads/")
+        ?.removePrefix("refs/remotes/")
+        ?.removePrefix("origin/")
+        ?.substringAfter('/', missingDelimiterValue = branchName.trim().removePrefix("refs/heads/").removePrefix("origin/"))
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    return normalized
+}
+
+private fun currentManagedBranchName(git: Git): String? {
+    return runCatching { normalizeManagedBranchName(git.repository.branch) }.getOrNull()
+}
+
+private fun ensureManagedProjectBranchCheckedOut(
+    git: Git,
+    requestedBranchName: String?,
+    log: ((String) -> Unit)? = null
+): String? {
+    val normalizedBranch = normalizeManagedBranchName(requestedBranchName) ?: return currentManagedBranchName(git)
+    val localBranches = git.branchList().call().map { Repository.shortenRefName(it.name) }.toSet()
+    val remoteBranches = git.branchList().setListMode(ListBranchCommand.ListMode.REMOTE).call()
+        .map { Repository.shortenRefName(it.name) }
+        .mapNotNull { name ->
+            if (name == "origin/HEAD") null else normalizeManagedBranchName(name)
+        }
+        .toSet()
+    if (normalizedBranch !in localBranches && normalizedBranch !in remoteBranches) {
+        throw IllegalArgumentException("远程仓库中不存在分支：$normalizedBranch。可选分支：${(localBranches + remoteBranches).sorted().joinToString(", ")}")
+    }
+    val currentBranch = currentManagedBranchName(git)
+    if (currentBranch == normalizedBranch) return normalizedBranch
+    log?.invoke("正在切换到分支: $normalizedBranch")
+    if (normalizedBranch in localBranches) {
+        git.checkout().setName(normalizedBranch).call()
+    } else {
+        git.checkout()
+            .setCreateBranch(true)
+            .setName(normalizedBranch)
+            .setStartPoint("origin/$normalizedBranch")
+            .setUpstreamMode(CreateBranchCommand.SetupUpstreamMode.TRACK)
+            .call()
+    }
+    return normalizedBranch
+}
+
 private fun resolveManagedProjectDir(
     context: Context,
     treeRootUri: String,
@@ -215,6 +271,7 @@ fun syncManagedProjectToTree(
     treeRootUri: String,
     repoUrl: String,
     localDirName: String,
+    branchName: String? = null,
     userName: String? = null,
     userEmail: String? = null,
     httpsPassword: String? = null,
@@ -251,17 +308,23 @@ fun syncManagedProjectToTree(
             log?.invoke("正在拉取远程更新: $repoUrl")
             Git.open(repoDir).use { git ->
                 git.checkout().setAllPaths(true).call()
+                ensureManagedProjectBranchCheckedOut(git, branchName, log)
                 git.pull().setCredentialsProvider(creds).call()
             }
         } else {
             log?.invoke("正在克隆远程项目: $repoUrl")
             if (repoDir.exists()) repoDir.deleteRecursively()
-            Git.cloneRepository()
+            val cloneCommand = Git.cloneRepository()
                 .setURI(repoUrl.trim())
                 .setDirectory(repoDir)
                 .setCredentialsProvider(creds)
-                .call()
-                .close()
+            normalizeManagedBranchName(branchName)?.let { cloneCommand.setBranch("refs/heads/$it") }
+            cloneCommand.call().close()
+            if (!branchName.isNullOrBlank()) {
+                Git.open(repoDir).use { git ->
+                    ensureManagedProjectBranchCheckedOut(git, branchName, log)
+                }
+            }
         }
         if (!userName.isNullOrBlank() || !userEmail.isNullOrBlank()) {
             Git.open(repoDir).use { git ->
@@ -286,6 +349,46 @@ fun syncManagedProjectToTree(
     } catch (e: Throwable) {
         log?.invoke("错误: ${e.message ?: e.javaClass.simpleName}")
         return Result.failure(e)
+    }
+}
+
+fun getManagedProjectCurrentBranch(context: Context, repoUrl: String): String? {
+    val repoDir = getLocalGitCacheDir(context, repoUrl)
+    if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) return null
+    return try {
+        Git.open(repoDir).use { git -> currentManagedBranchName(git) }
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+fun listManagedProjectBranches(
+    context: Context,
+    repoUrl: String,
+    userName: String? = null,
+    httpsPassword: String? = null
+): Result<List<ManagedGitBranchInfo>> {
+    val repoDir = getLocalGitCacheDir(context, repoUrl)
+    if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
+        return Result.failure(IllegalStateException("本地缓存仓库不存在，请先执行下载同步后再切换分支"))
+    }
+    return runCatching {
+        Git.open(repoDir).use { git ->
+            val current = currentManagedBranchName(git)
+            val branchNames = buildSet {
+                git.branchList().call().forEach { add(Repository.shortenRefName(it.name)) }
+                git.branchList().setListMode(ListBranchCommand.ListMode.REMOTE).call().forEach { ref ->
+                    val shortened = Repository.shortenRefName(ref.name)
+                    if (shortened != "origin/HEAD") {
+                        normalizeManagedBranchName(shortened)?.let { add(it) }
+                    }
+                }
+            }.sorted()
+            if (branchNames.isEmpty()) {
+                throw IllegalStateException("仓库中没有可切换的分支")
+            }
+            branchNames.map { ManagedGitBranchInfo(name = it, isCurrent = it == current) }
+        }
     }
 }
 

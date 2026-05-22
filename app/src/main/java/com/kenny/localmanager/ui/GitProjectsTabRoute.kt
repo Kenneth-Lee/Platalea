@@ -1,6 +1,9 @@
 package com.kenny.localmanager.ui
 
 import android.widget.Toast
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,9 +25,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,8 +50,10 @@ import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.data.ManagedGitProject
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.resolvePathUnderRoot
-import com.kenny.localmanager.git.commitAndPushManagedProject
 import com.kenny.localmanager.git.deriveRepoUrlFromBaseRepo
+import com.kenny.localmanager.git.getManagedProjectCurrentBranch
+import com.kenny.localmanager.git.listManagedProjectBranches
+import com.kenny.localmanager.git.ManagedGitBranchInfo
 import com.kenny.localmanager.git.syncManagedProjectToTree
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -85,6 +93,10 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
     var busyProjectId by remember { mutableStateOf<String?>(null) }
     var syncState by remember { mutableStateOf<ManagedGitSyncState>(ManagedGitSyncState.Idle) }
     val syncLogs = remember { mutableStateListOf<String>() }
+    var pendingBranchProject by remember { mutableStateOf<ManagedGitProject?>(null) }
+    var branchOptions by remember { mutableStateOf<List<ManagedGitBranchInfo>>(emptyList()) }
+    var selectedBranchName by remember { mutableStateOf<String?>(null) }
+    var branchDialogLoading by remember { mutableStateOf(false) }
 
     fun formatTime(millis: Long): String {
         if (millis <= 0L) return "尚无记录"
@@ -179,6 +191,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                     treeRootUri = resolvedRootUri,
                     repoUrl = repoUrl,
                     localDirName = localDirName,
+                    branchName = null,
                     userName = gitUserName,
                     userEmail = gitUserEmail,
                     httpsPassword = gitHttpsPassword,
@@ -188,11 +201,15 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             creatingProject = false
             if (result.isSuccess) {
                 val now = System.currentTimeMillis()
+                val currentBranch = withContext(Dispatchers.IO) {
+                    getManagedProjectCurrentBranch(context, repoUrl)
+                }
                 val project = ManagedGitProject(
                     id = UUID.randomUUID().toString(),
                     projectName = projectName,
                     repoUrl = repoUrl,
                     localDirName = localDirName,
+                    branchName = currentBranch,
                     createdAt = now,
                     lastSyncAt = now,
                     lastPushAt = 0L
@@ -227,6 +244,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                     treeRootUri = resolvedRootUri,
                     repoUrl = project.repoUrl,
                     localDirName = project.localDirName,
+                    branchName = project.branchName,
                     userName = gitUserName,
                     userEmail = gitUserEmail,
                     httpsPassword = gitHttpsPassword,
@@ -236,9 +254,12 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             busyProjectId = null
             val message = result.getOrNull() ?: result.exceptionOrNull()?.message ?: "同步失败"
             if (result.isSuccess) {
+                val currentBranch = withContext(Dispatchers.IO) {
+                    getManagedProjectCurrentBranch(context, project.repoUrl)
+                }
                 syncState = ManagedGitSyncState.Success(message)
                 appendLog(message)
-                state.prefs.markManagedGitProjectSynced(project.id)
+                state.prefs.updateManagedGitProject(project.copy(branchName = currentBranch, lastSyncAt = System.currentTimeMillis()))
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             } else {
                 syncState = ManagedGitSyncState.Error(message)
@@ -248,7 +269,35 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
         }
     }
 
-    fun pushProject(project: ManagedGitProject) {
+    fun openBranchSwitcher(project: ManagedGitProject) {
+        pendingBranchProject = project
+        branchDialogLoading = true
+        branchOptions = emptyList()
+        selectedBranchName = project.branchName
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                listManagedProjectBranches(
+                    context = context,
+                    repoUrl = project.repoUrl,
+                    userName = gitUserName,
+                    httpsPassword = gitHttpsPassword
+                )
+            }
+            branchDialogLoading = false
+            if (result.isSuccess) {
+                branchOptions = result.getOrNull().orEmpty()
+                selectedBranchName = branchOptions.firstOrNull { it.isCurrent }?.name ?: project.branchName ?: branchOptions.firstOrNull()?.name
+            } else {
+                val message = result.exceptionOrNull()?.message ?: "加载分支失败"
+                pendingBranchProject = null
+                syncState = ManagedGitSyncState.Error(message)
+                appendLog("错误: $message")
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    fun switchProjectBranch(project: ManagedGitProject, branchName: String) {
         val normalizedRootUri = state.rootUri?.let { normalizeContentUriString(it) }
         if (normalizedRootUri.isNullOrBlank()) {
             Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
@@ -256,31 +305,29 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
         }
         val resolvedRootUri = normalizedRootUri!!
         busyProjectId = project.id
-        syncState = ManagedGitSyncState.Running("正在提交并推送 ${project.projectName}")
-        resetLogs("开始提交并推送 Git：${project.projectName}")
+        pendingBranchProject = null
+        syncState = ManagedGitSyncState.Running("正在切换分支 ${project.projectName}")
+        resetLogs("开始切换 Git 分支：${project.projectName} -> $branchName")
         scope.launch {
-            val commitUser = gitUserName?.ifBlank { null } ?: runCatching { state.prefs.gitUserName.first() }.getOrNull()
-            val commitMessage = "本地管家同步 ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}${commitUser?.let { " by $it" } ?: ""}"
             val result = withContext(Dispatchers.IO) {
-                commitAndPushManagedProject(
+                syncManagedProjectToTree(
                     context = context,
                     treeRootUri = resolvedRootUri,
                     repoUrl = project.repoUrl,
                     localDirName = project.localDirName,
-                    commitMessage = commitMessage,
+                    branchName = branchName,
                     userName = gitUserName,
+                    userEmail = gitUserEmail,
                     httpsPassword = gitHttpsPassword,
                     log = { msg -> appendLog(msg) }
                 )
             }
             busyProjectId = null
-            val message = result.getOrNull() ?: result.exceptionOrNull()?.message ?: "提交失败"
+            val message = result.getOrNull() ?: result.exceptionOrNull()?.message ?: "切换分支失败"
             if (result.isSuccess) {
                 syncState = ManagedGitSyncState.Success(message)
                 appendLog(message)
-                if (!message.contains("没有需要")) {
-                    state.prefs.markManagedGitProjectPushed(project.id)
-                }
+                state.prefs.updateManagedGitProject(project.copy(branchName = branchName, lastSyncAt = System.currentTimeMillis()))
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             } else {
                 syncState = ManagedGitSyncState.Error(message)
@@ -296,7 +343,18 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             .statusBarsPadding()
             .padding(16.dp)
     ) {
-        Text("Git", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Git", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+            Button(onClick = { showCreateDialog = true }, enabled = busyProjectId == null && !creatingProject) {
+                Icon(Icons.Default.Add, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("新建 Git")
+            }
+        }
         Spacer(Modifier.height(8.dp))
         Text(
             text = if (baseRepoUrl.isNullOrBlank()) {
@@ -307,12 +365,6 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Button(onClick = { showCreateDialog = true }, enabled = busyProjectId == null && !creatingProject) {
-                Text("新建 Git")
-            }
-        }
         Spacer(Modifier.height(8.dp))
         Row(
             Modifier.fillMaxWidth(),
@@ -384,18 +436,24 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = "目录：/${project.localDirName}",
+                                        text = "<当前根目录>/${project.localDirName}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
-                                if (busyProjectId == project.id) {
-                                    CircularProgressIndicator(modifier = Modifier.width(24.dp).height(24.dp), strokeWidth = 2.dp)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (busyProjectId == project.id) {
+                                        CircularProgressIndicator(modifier = Modifier.width(24.dp).height(24.dp), strokeWidth = 2.dp)
+                                    } else {
+                                        IconButton(onClick = { pendingDelete = project }, enabled = busyProjectId == null) {
+                                            Icon(Icons.Default.Delete, contentDescription = "移除管理记录")
+                                        }
+                                    }
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
                             Text("上次下载同步：${formatTime(project.lastSyncAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("上次提交推送：${formatTime(project.lastPushAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("当前分支：${project.branchName ?: "未记录（将使用仓库当前分支）"}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(12.dp))
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 OutlinedButton(
@@ -405,23 +463,12 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                                 ) {
                                     Text("下载同步")
                                 }
-                                Spacer(Modifier.weight(1f))
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = { pushProject(project) },
+                                OutlinedButton(
+                                    onClick = { openBranchSwitcher(project) },
                                     modifier = Modifier.weight(1f),
                                     enabled = busyProjectId == null
                                 ) {
-                                    Text("提交并推送")
-                                }
-                                TextButton(
-                                    onClick = { pendingDelete = project },
-                                    modifier = Modifier.weight(1f),
-                                    enabled = busyProjectId == null
-                                ) {
-                                    Text("移除管理记录")
+                                    Text("切换分支")
                                 }
                             }
                         }
@@ -479,7 +526,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             onDismissRequest = { pendingDelete = null },
             title = { Text("移除管理记录") },
             text = {
-                Text("确定移除 Git「${project.projectName}」的管理记录吗？这不会删除根目录下的 /${project.localDirName}，也不会删除远程仓库。")
+                Text("确定移除 Git「${project.projectName}」的管理记录吗？这不会删除当前根目录下的 /${project.localDirName}，也不会删除远程仓库。")
             },
             confirmButton = {
                 TextButton(
@@ -495,6 +542,92 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    pendingBranchProject?.let { project ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!branchDialogLoading && busyProjectId == null) {
+                    pendingBranchProject = null
+                }
+            },
+            title = { Text("切换分支") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Git：${project.projectName}\n切换分支会立即重新下载该分支内容并覆盖根目录下 /${project.localDirName}。若本地目录已有未提交改动，会直接拒绝切换。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    when {
+                        branchDialogLoading -> {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.width(20.dp).height(20.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(10.dp))
+                                Text("正在读取分支列表…", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        branchOptions.isEmpty() -> {
+                            Text("没有可切换的分支", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                        else -> {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 280.dp)
+                                    .verticalScroll(rememberScrollState()),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                branchOptions.forEach { branch ->
+                                    val selected = selectedBranchName == branch.name
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        onClick = { selectedBranchName = branch.name }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            RadioButton(selected = selected, onClick = null)
+                                            Spacer(Modifier.width(12.dp))
+                                            Column(Modifier.weight(1f)) {
+                                                Text(branch.name, style = MaterialTheme.typography.bodyLarge)
+                                                if (branch.isCurrent) {
+                                                    Text("当前缓存分支", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val selected = selectedBranchName
+                        if (!selected.isNullOrBlank()) {
+                            switchProjectBranch(project, selected)
+                        }
+                    },
+                    enabled = !branchDialogLoading && busyProjectId == null && !selectedBranchName.isNullOrBlank()
+                ) {
+                    Text("切换并同步")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingBranchProject = null },
+                    enabled = !branchDialogLoading && busyProjectId == null
+                ) {
                     Text("取消")
                 }
             }

@@ -87,6 +87,7 @@ data class ManagedGitProject(
     val projectName: String,
     val repoUrl: String,
     val localDirName: String,
+    val branchName: String?,
     val createdAt: Long,
     val lastSyncAt: Long,
     val lastPushAt: Long
@@ -1064,6 +1065,7 @@ class Preferences(private val context: Context) {
                             projectName = projectName,
                             repoUrl = repoUrl,
                             localDirName = localDirName,
+                            branchName = obj.optString("branchName").trim().ifBlank { null },
                             createdAt = obj.optLong("createdAt", 0L),
                             lastSyncAt = obj.optLong("lastSyncAt", 0L),
                             lastPushAt = obj.optLong("lastPushAt", 0L)
@@ -1085,6 +1087,7 @@ class Preferences(private val context: Context) {
                     put("projectName", item.projectName)
                     put("repoUrl", item.repoUrl)
                     put("localDirName", item.localDirName)
+                    item.branchName?.takeIf { it.isNotBlank() }?.let { put("branchName", it) }
                     put("createdAt", item.createdAt)
                     put("lastSyncAt", item.lastSyncAt)
                     put("lastPushAt", item.lastPushAt)
