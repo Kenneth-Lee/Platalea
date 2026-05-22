@@ -167,6 +167,8 @@ import kotlin.coroutines.resume
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
 private const val STANDALONE_MD_CACHE_LIMIT = 6
+private const val EPUB_BOOKMARK_QUOTE_MAX_LENGTH = 220
+private const val EPUB_BOOKMARK_TARGET_SELECTOR = "p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, div"
 
 /** 词典查询结果 */
 data class DictLookupResult(
@@ -5000,19 +5002,41 @@ fun EpubViewerScreen(
             .trim()
     }
 
-    fun requestCurrentParagraphQuote(onResult: (String) -> Unit) {
+    fun requestCurrentBookmarkQuote(onResult: (String) -> Unit) {
         val view = webViewRef.value ?: run {
             onResult("")
             return
         }
+        val quotedSelector = org.json.JSONObject.quote(EPUB_BOOKMARK_TARGET_SELECTOR)
         val js = """
             (function() {
                 function normalize(value) {
                     return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
                 }
-                var selector = 'p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, div';
-                var x = Math.floor((window.innerWidth || document.documentElement.clientWidth || 0) / 2);
-                var y = Math.floor((window.innerHeight || document.documentElement.clientHeight || 0) / 2);
+                function shorten(value) {
+                    if (value.length > $EPUB_BOOKMARK_QUOTE_MAX_LENGTH) {
+                        return value.slice(0, $EPUB_BOOKMARK_QUOTE_MAX_LENGTH).trim() + '…';
+                    }
+                    return value;
+                }
+                var selector = $quotedSelector;
+                var selection = window.getSelection ? window.getSelection() : null;
+                var selectedText = normalize(selection && selection.rangeCount > 0 ? selection.toString() : '');
+                if (selectedText) {
+                    return shorten(selectedText);
+                }
+                var viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+                var viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                var x = Math.floor(viewportWidth / 2);
+                var y = Math.floor(viewportHeight / 2);
+                if (selection && selection.rangeCount > 0) {
+                    var range = selection.getRangeAt(0);
+                    var rect = range && range.getBoundingClientRect ? range.getBoundingClientRect() : null;
+                    if (rect && (rect.width > 0 || rect.height > 0)) {
+                        x = Math.floor(Math.max(0, Math.min(viewportWidth - 1, rect.left + rect.width / 2)));
+                        y = Math.floor(Math.max(0, Math.min(viewportHeight - 1, rect.top + rect.height / 2)));
+                    }
+                }
                 var el = document.elementFromPoint(x, y);
                 if (!el) return '';
                 var container = el.closest ? el.closest(selector) : el;
@@ -5022,10 +5046,7 @@ fun EpubViewerScreen(
                     container = child;
                 }
                 var text = normalize((container && (container.innerText || container.textContent)) || (el.innerText || el.textContent));
-                if (text.length > 220) {
-                    text = text.slice(0, 220).trim() + '…';
-                }
-                return text;
+                return shorten(text);
             })();
         """.trimIndent()
         view.evaluateJavascript(js) { result ->
@@ -5518,7 +5539,7 @@ fun EpubViewerScreen(
         if (bookNoteLoadedData == null && !bookNoteInProgress) {
             onRequestOpenBookNotes()
         }
-        requestCurrentParagraphQuote { quote ->
+        requestCurrentBookmarkQuote { quote ->
             pendingBookmarkQuote = quote
             showAddBookmark = true
         }
@@ -6008,7 +6029,7 @@ fun EpubViewerScreen(
                     OutlinedTextField(
                         value = quoteText,
                         onValueChange = { quoteText = it },
-                        label = { Text("引文（已自动抓取当前段落）") },
+                        label = { Text("引文（优先使用当前选中内容，否则抓取当前段落，长文本会截断）") },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                         maxLines = 4
@@ -8180,6 +8201,44 @@ private class GestureWebView(
         }
     }
 
+    private fun selectParagraphAt(x: Float, y: Float): Boolean {
+        val viewportWidth = width.toFloat().coerceAtLeast(1f)
+        val viewportHeight = height.toFloat().coerceAtLeast(1f)
+        val clampedX = x.coerceIn(0f, viewportWidth - 1f)
+        val clampedY = y.coerceIn(0f, viewportHeight - 1f)
+        val quotedSelector = org.json.JSONObject.quote(EPUB_BOOKMARK_TARGET_SELECTOR)
+        val js = """
+            (function() {
+                function normalize(value) {
+                    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+                }
+                var selector = $quotedSelector;
+                var el = document.elementFromPoint(${clampedX.toInt()}, ${clampedY.toInt()});
+                if (!el) return false;
+                var container = el.closest ? el.closest(selector) : el;
+                while (container && container.tagName && container.tagName.toLowerCase() === 'div' && container.children.length === 1) {
+                    var child = container.children[0];
+                    if (!child || !child.matches || !child.matches(selector)) break;
+                    container = child;
+                }
+                var text = normalize((container && (container.innerText || container.textContent)) || (el.innerText || el.textContent));
+                if (!text) return false;
+                if (!container) container = el;
+                var selection = window.getSelection ? window.getSelection() : null;
+                if (!selection) return false;
+                var range = document.createRange();
+                range.selectNodeContents(container);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                return true;
+            })();
+        """.trimIndent()
+        post {
+            evaluateJavascript(js, null)
+        }
+        return true
+    }
+
     private fun jumpByViewport(direction: Int) {
         val signedDirection = direction.coerceIn(-1, 1)
         if (signedDirection == 0) return
@@ -8230,6 +8289,10 @@ private class GestureWebView(
     private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
             return navigateBySingleTap(e.x)
+        }
+
+        override fun onDoubleTap(e: MotionEvent): Boolean {
+            return selectParagraphAt(e.x, e.y)
         }
     })
 
