@@ -1386,6 +1386,7 @@ private fun FileBrowserAppScreen(
                 prefs.recordRecentRootSwitch(previousRoot, normalized)
                 prefs.setRootUri(normalized)
             }
+            fileBrowserBackStack.clear()
             rootUri = normalized
             initialDirUri = normalized
             currentUri = normalized
@@ -2411,6 +2412,7 @@ private fun FileBrowserAppScreen(
                                         }
                                     }
                                 },
+                                onChangeRoot = { showRootSwitchDialog = true },
                                 onRestoreFromTrash = rootUri?.let { r ->
                                     { model ->
                                         scope.launch {
@@ -2656,7 +2658,6 @@ private fun FileBrowserAppScreen(
                                 onManageKeys = { showKeyManagementDialog = true },
                                 onOpenCacheManagement = { showCacheManagementDialog = true },
                                 onExportConfig = { openExportConfigDialog() },
-                                onChangeRoot = { showRootSwitchDialog = true },
                                 onCreatePlayerShortcut = {
                                     val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
                                     if (playerErr == null) {
@@ -5827,6 +5828,7 @@ internal fun FileBrowserScreen(
     onMovePendingToCurrentDir: () -> Unit = {},
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
+    onChangeRoot: () -> Unit = {},
     onOpenAbout: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
@@ -6117,6 +6119,14 @@ internal fun FileBrowserScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.config_change_root)) },
+                                leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onChangeRoot()
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.main_menu_open_url)) },
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },

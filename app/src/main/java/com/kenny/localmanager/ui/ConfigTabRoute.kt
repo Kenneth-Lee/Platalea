@@ -70,7 +70,6 @@ data class ConfigTabRouteState(
     val onManageKeys: () -> Unit,
     val onOpenCacheManagement: () -> Unit,
     val onExportConfig: () -> Unit,
-    val onChangeRoot: () -> Unit,
     val onCreatePlayerShortcut: () -> Unit,
     val onCreateQuickNoteShortcut: () -> Unit
 )
@@ -94,7 +93,6 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onManageKeys = state.onManageKeys,
         onOpenCacheManagement = state.onOpenCacheManagement,
         onExportConfig = state.onExportConfig,
-        onChangeRoot = state.onChangeRoot,
         onCreatePlayerShortcut = state.onCreatePlayerShortcut,
         onCreateQuickNoteShortcut = state.onCreateQuickNoteShortcut,
         showCloseButton = false,
@@ -120,7 +118,6 @@ private fun ConfigPanel(
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
     onExportConfig: () -> Unit,
-    onChangeRoot: () -> Unit,
     onCreatePlayerShortcut: () -> Unit,
     onCreateQuickNoteShortcut: () -> Unit,
     showCloseButton: Boolean,
@@ -574,13 +571,6 @@ private fun ConfigPanel(
             .padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp)
             .verticalScroll(rememberScrollState())
     ) {
-        OutlinedButton(
-            onClick = onChangeRoot,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(context.getString(R.string.config_change_root))
-        }
-        Spacer(Modifier.height(12.dp))
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -709,7 +699,6 @@ fun ConfigDialog(
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
     onExportConfig: () -> Unit,
-    onChangeRoot: () -> Unit,
     onCreatePlayerShortcut: () -> Unit,
     onCreateQuickNoteShortcut: () -> Unit
 ) {
@@ -736,7 +725,6 @@ fun ConfigDialog(
                 onManageKeys = onManageKeys,
                 onOpenCacheManagement = onOpenCacheManagement,
                 onExportConfig = onExportConfig,
-                onChangeRoot = onChangeRoot,
                 onCreatePlayerShortcut = onCreatePlayerShortcut,
                 onCreateQuickNoteShortcut = onCreateQuickNoteShortcut,
                 showCloseButton = true,
