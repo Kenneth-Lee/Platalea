@@ -64,8 +64,8 @@ data class ConfigTabRouteState(
     val onViewerPreviewBytesChange: (Int) -> Unit,
     val ftpPassword: String,
     val onFtpPasswordChange: (String) -> Unit,
-    val ftpTimeoutMinutes: Int,
-    val onFtpTimeoutMinutesChange: (Int) -> Unit,
+    val networkServiceTimeoutMinutes: Int,
+    val onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     val onOpenGitConfig: () -> Unit,
     val onManageKeys: () -> Unit,
     val onOpenCacheManagement: () -> Unit,
@@ -87,8 +87,8 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onViewerPreviewBytesChange = state.onViewerPreviewBytesChange,
         ftpPassword = state.ftpPassword,
         onFtpPasswordChange = state.onFtpPasswordChange,
-        ftpTimeoutMinutes = state.ftpTimeoutMinutes,
-        onFtpTimeoutMinutesChange = state.onFtpTimeoutMinutesChange,
+        networkServiceTimeoutMinutes = state.networkServiceTimeoutMinutes,
+        onNetworkServiceTimeoutMinutesChange = state.onNetworkServiceTimeoutMinutesChange,
         onOpenGitConfig = state.onOpenGitConfig,
         onManageKeys = state.onManageKeys,
         onOpenCacheManagement = state.onOpenCacheManagement,
@@ -112,8 +112,8 @@ private fun ConfigPanel(
     onViewerPreviewBytesChange: (Int) -> Unit,
     ftpPassword: String,
     onFtpPasswordChange: (String) -> Unit,
-    ftpTimeoutMinutes: Int,
-    onFtpTimeoutMinutesChange: (Int) -> Unit,
+    networkServiceTimeoutMinutes: Int,
+    onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -128,7 +128,7 @@ private fun ConfigPanel(
     val scope = rememberCoroutineScope()
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
-    var localFtpTimeoutMinutes by remember { mutableStateOf(ftpTimeoutMinutes.toString()) }
+    var localNetworkServiceTimeoutMinutes by remember { mutableStateOf(networkServiceTimeoutMinutes.toString()) }
     var showFtpConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsEngineDialog by remember { mutableStateOf(false) }
@@ -160,13 +160,13 @@ private fun ConfigPanel(
         }
     }
 
-    val ftpSummary = remember(localFtpPassword, localFtpTimeoutMinutes, context) {
+    val ftpSummary = remember(localFtpPassword, localNetworkServiceTimeoutMinutes, context) {
         val passwordState = if (localFtpPassword.isBlank()) {
             context.getString(R.string.config_ftp_password_unset)
         } else {
             context.getString(R.string.config_ftp_password_set)
         }
-        val timeoutValue = localFtpTimeoutMinutes.filter { it.isDigit() }.toIntOrNull() ?: ftpTimeoutMinutes
+        val timeoutValue = localNetworkServiceTimeoutMinutes.filter { it.isDigit() }.toIntOrNull() ?: networkServiceTimeoutMinutes
         context.getString(R.string.config_ftp_summary, passwordState, timeoutValue)
     }
     val epubTtsSummary = remember(
@@ -221,10 +221,10 @@ private fun ConfigPanel(
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
-                        value = localFtpTimeoutMinutes,
+                        value = localNetworkServiceTimeoutMinutes,
                         onValueChange = { s ->
-                            localFtpTimeoutMinutes = s
-                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onFtpTimeoutMinutesChange(it) }
+                            localNetworkServiceTimeoutMinutes = s
+                            s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(0, 1440)?.let { onNetworkServiceTimeoutMinutesChange(it) }
                         },
                         modifier = Modifier.fillMaxWidth(),
                         label = { Text(context.getString(R.string.config_ftp_timeout_minutes)) },
@@ -693,8 +693,8 @@ fun ConfigDialog(
     onViewerPreviewBytesChange: (Int) -> Unit,
     ftpPassword: String,
     onFtpPasswordChange: (String) -> Unit,
-    ftpTimeoutMinutes: Int,
-    onFtpTimeoutMinutesChange: (Int) -> Unit,
+    networkServiceTimeoutMinutes: Int,
+    onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -719,8 +719,8 @@ fun ConfigDialog(
                 onViewerPreviewBytesChange = onViewerPreviewBytesChange,
                 ftpPassword = ftpPassword,
                 onFtpPasswordChange = onFtpPasswordChange,
-                ftpTimeoutMinutes = ftpTimeoutMinutes,
-                onFtpTimeoutMinutesChange = onFtpTimeoutMinutesChange,
+                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
+                onNetworkServiceTimeoutMinutesChange = onNetworkServiceTimeoutMinutesChange,
                 onOpenGitConfig = onOpenGitConfig,
                 onManageKeys = onManageKeys,
                 onOpenCacheManagement = onOpenCacheManagement,

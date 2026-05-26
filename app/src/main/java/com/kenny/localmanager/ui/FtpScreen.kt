@@ -205,7 +205,7 @@ fun FtpScreen(
             }
             remainingMinutes?.let { mins ->
                 Text(
-                    stringResource(R.string.ftp_auto_close, mins),
+                    stringResource(R.string.network_service_auto_close, mins),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(top = 8.dp)
@@ -219,7 +219,7 @@ fun FtpScreen(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Icon(Icons.Default.Lock, contentDescription = null, Modifier.height(18.dp), tint = MaterialTheme.colorScheme.primary)
-                Text(stringResource(R.string.ftp_keep_screen_on), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.network_service_keep_screen_on), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Spacer(Modifier.height(12.dp))
             Text(stringResource(R.string.ftp_connection_help), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)

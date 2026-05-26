@@ -154,6 +154,8 @@ class Preferences(private val context: Context) {
         prefs[FTP_TIMEOUT_MINUTES] ?: 0
     }
 
+    val networkServiceTimeoutMinutes: Flow<Int> = ftpTimeoutMinutes
+
     val filterVisible: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[FILTER_VISIBLE] ?: true
     }
@@ -466,6 +468,10 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             prefs[FTP_TIMEOUT_MINUTES] = minutes.coerceIn(0, 1440)
         }
+    }
+
+    suspend fun setNetworkServiceTimeoutMinutes(minutes: Int) {
+        setFtpTimeoutMinutes(minutes)
     }
 
     suspend fun setFilterVisible(visible: Boolean) {

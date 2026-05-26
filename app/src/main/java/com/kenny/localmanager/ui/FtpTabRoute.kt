@@ -15,7 +15,7 @@ data class FtpTabRouteState(
     val ftpManager: FtpServerManager,
     val ftpPort: Int,
     val ftpPassword: String?,
-    val ftpTimeoutMinutes: Int,
+    val networkServiceTimeoutMinutes: Int,
     val onRequestExitApp: () -> Unit
 )
 
@@ -29,7 +29,7 @@ fun FtpTabRoute(state: FtpTabRouteState) {
             currentDirUri = state.displayUri,
             port = state.ftpPort,
             password = state.ftpPassword,
-            timeoutMinutes = state.ftpTimeoutMinutes,
+            timeoutMinutes = state.networkServiceTimeoutMinutes,
             showBackButton = false,
             onDismiss = state.onRequestExitApp
         )

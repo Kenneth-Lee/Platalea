@@ -19,6 +19,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.horizontalScroll
@@ -61,6 +62,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.Sort
@@ -128,6 +130,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
@@ -137,6 +140,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import android.provider.DocumentsContract
@@ -324,6 +328,7 @@ private enum class MainTab(val key: String, val labelRes: Int) {
     RECENT("recent", R.string.main_tab_recent),
     PLAYER("player", R.string.main_tab_player),
     FTP("ftp", R.string.main_tab_ftp),
+    FAMILY_NETWORK("family_network", R.string.main_tab_family_network),
     CONFIG("config", R.string.main_tab_config),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
     GIT_PROJECTS("git_projects", R.string.main_tab_git_projects),
@@ -350,6 +355,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.RECENT -> Icons.Default.List
         MainTab.PLAYER -> Icons.Default.QueueMusic
         MainTab.FTP -> Icons.Default.Wifi
+        MainTab.FAMILY_NETWORK -> Icons.Default.Home
         MainTab.CONFIG -> Icons.Default.Settings
         MainTab.GIT_SHARE -> Icons.Default.Share
         MainTab.GIT_PROJECTS -> Icons.Default.FolderOpen
@@ -803,6 +809,7 @@ private fun ScrollableMainTabBar(
         MainTab.PLAYER,
         MainTab.DICTIONARY,
         MainTab.FTP,
+        MainTab.FAMILY_NETWORK,
         MainTab.GIT_SHARE
     )
     var candidateUsageOrder by remember { mutableStateOf(candidateTabs) }
@@ -952,6 +959,7 @@ private fun MainTabContentHost(
     onClearRecentItems: () -> Unit,
     directoryContent: @Composable () -> Unit,
     ftpContent: @Composable () -> Unit,
+    familyNetworkContent: @Composable () -> Unit,
     configContent: @Composable () -> Unit,
     gitShareContent: @Composable () -> Unit,
     gitProjectsContent: @Composable () -> Unit,
@@ -973,6 +981,7 @@ private fun MainTabContentHost(
             )
         )
         MainTab.FTP -> ftpContent()
+        MainTab.FAMILY_NETWORK -> familyNetworkContent()
         MainTab.CONFIG -> configContent()
         MainTab.GIT_SHARE -> gitShareContent()
         MainTab.GIT_PROJECTS -> gitProjectsContent()
@@ -1485,6 +1494,7 @@ private fun FileBrowserAppScreen(
         }
         var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
         var gpgPassword by remember { mutableStateOf("") }
+        var gpgPasswordConfirm by remember { mutableStateOf("") }
         var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
         var gpgDecryptAutoTried by remember { mutableStateOf(false) }
         var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
@@ -1493,9 +1503,11 @@ private fun FileBrowserAppScreen(
         var showRootSwitchDialog by remember { mutableStateOf(false) }
         var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
         var quickObfuscatePassword by remember { mutableStateOf("") }
+        var quickObfuscatePasswordConfirm by remember { mutableStateOf("") }
         var quickObfuscateInProgress by remember { mutableStateOf(false) }
         var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
         var batchObfuscatePassword by remember { mutableStateOf("") }
+        var batchObfuscatePasswordConfirm by remember { mutableStateOf("") }
         var batchObfuscateInProgress by remember { mutableStateOf(false) }
         var passProtectTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var passProtectInProgress by remember { mutableStateOf(false) }
@@ -1524,9 +1536,10 @@ private fun FileBrowserAppScreen(
             dirCache = emptyMap()
         }
         val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
+        val familyNetworkManager = remember { com.kenny.localmanager.family.FamilyNetworkManager(context) }
         var ftpPort by remember { mutableStateOf(2121) }
         var ftpPassword by remember { mutableStateOf<String?>(null) }
-        var ftpTimeoutMinutes by remember { mutableStateOf(0) }
+        var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -1548,7 +1561,9 @@ private fun FileBrowserAppScreen(
         var zipUnzipPassword by remember { mutableStateOf("") }
         var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var zipCompressPassword by remember { mutableStateOf("") }
+        var zipCompressPasswordConfirm by remember { mutableStateOf("") }
         var sevenZCompressPassword by remember { mutableStateOf("") }
+        var sevenZCompressPasswordConfirm by remember { mutableStateOf("") }
         var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var mdZipPassword by remember { mutableStateOf("") }
@@ -1583,8 +1598,10 @@ private fun FileBrowserAppScreen(
         var showPendingCompressTo7z by remember { mutableStateOf(false) }
         var pendingCompressZipName by remember { mutableStateOf("") }
         var pendingCompressPassword by remember { mutableStateOf("") }
+        var pendingCompressPasswordConfirm by remember { mutableStateOf("") }
         var pendingCompress7zName by remember { mutableStateOf("") }
         var pendingCompress7zPassword by remember { mutableStateOf("") }
+        var pendingCompress7zPasswordConfirm by remember { mutableStateOf("") }
         var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
         var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
         var playlistsLoaded by remember { mutableStateOf(false) }
@@ -2024,7 +2041,7 @@ private fun FileBrowserAppScreen(
             prefs.ftpPassword.collect { ftpPassword = it }
         }
         LaunchedEffect(prefs) {
-            prefs.ftpTimeoutMinutes.collect { ftpTimeoutMinutes = it }
+            prefs.networkServiceTimeoutMinutes.collect { networkServiceTimeoutMinutes = it }
         }
         LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
@@ -2034,11 +2051,16 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
+        DisposableEffect(familyNetworkManager) {
+            onDispose {
+                familyNetworkManager.destroy()
+            }
+        }
         BackHandler {
             when {
                 progressOp != null -> { } // 不响应返回，防止误触
-                batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = "" }
-                quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = "" }
+                batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = ""; batchObfuscatePasswordConfirm = "" }
+                quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = ""; quickObfuscatePasswordConfirm = "" }
                 passProtectTarget != null -> { passProtectTarget = null }
                 passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
                 passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
@@ -2047,6 +2069,7 @@ private fun FileBrowserAppScreen(
                 gpgState != null -> {
                     gpgState = null
                     gpgPassword = ""
+                    gpgPasswordConfirm = ""
                     gpgDecryptMode = null
                     gpgDecryptAutoTried = false
                     gpgEncryptSelectedKeyId = null
@@ -2628,9 +2651,16 @@ private fun FileBrowserAppScreen(
                                 ftpManager = ftpManager,
                                 ftpPort = ftpPort,
                                 ftpPassword = ftpPassword,
-                                ftpTimeoutMinutes = ftpTimeoutMinutes,
+                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
                                 onRequestExitApp = { requestExitApp() }
                             )
+                        )
+                    },
+                    familyNetworkContent = {
+                        FamilyNetworkScreen(
+                            manager = familyNetworkManager,
+                            timeoutMinutes = networkServiceTimeoutMinutes,
+                            onDismiss = { requestExitApp() }
                         )
                     },
                     configContent = {
@@ -2652,8 +2682,8 @@ private fun FileBrowserAppScreen(
                                     ftpPassword = s.ifBlank { null }
                                     scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
                                 },
-                                ftpTimeoutMinutes = ftpTimeoutMinutes,
-                                onFtpTimeoutMinutesChange = { scope.launch { prefs.setFtpTimeoutMinutes(it) } },
+                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
+                                onNetworkServiceTimeoutMinutesChange = { scope.launch { prefs.setNetworkServiceTimeoutMinutes(it) } },
                                 onOpenGitConfig = { showGitConfigDialog = true },
                                 onManageKeys = { showKeyManagementDialog = true },
                                 onOpenCacheManagement = { showCacheManagementDialog = true },
@@ -3410,8 +3440,10 @@ private fun FileBrowserAppScreen(
                 isObfuscate = isObfuscate,
                 fileName = model.name,
                 password = quickObfuscatePassword,
+                confirmPassword = quickObfuscatePasswordConfirm,
                 inProgress = quickObfuscateInProgress,
                 onPasswordChange = { quickObfuscatePassword = it },
+                onConfirmPasswordChange = { quickObfuscatePasswordConfirm = it },
                 onConfirm = { pwd ->
                     quickObfuscateInProgress = true
                     scope.launch {
@@ -3422,6 +3454,7 @@ private fun FileBrowserAppScreen(
                         quickObfuscateInProgress = false
                         quickObfuscateOp = null
                         quickObfuscatePassword = ""
+                        quickObfuscatePasswordConfirm = ""
                         if (ok) {
                             Toast.makeText(context, if (isObfuscate) "已混淆" else "已去混淆", Toast.LENGTH_SHORT).show()
                             refreshTrigger++
@@ -3430,7 +3463,11 @@ private fun FileBrowserAppScreen(
                         }
                     }
                 },
-                onDismiss = { quickObfuscateOp = null; quickObfuscatePassword = "" }
+                onDismiss = {
+                    quickObfuscateOp = null
+                    quickObfuscatePassword = ""
+                    quickObfuscatePasswordConfirm = ""
+                }
             )
         }
         batchObfuscateOp?.let { (list, isObfuscate) ->
@@ -3438,8 +3475,10 @@ private fun FileBrowserAppScreen(
                 isObfuscate = isObfuscate,
                 fileName = "共 ${list.size} 个文件",
                 password = batchObfuscatePassword,
+                confirmPassword = batchObfuscatePasswordConfirm,
                 inProgress = batchObfuscateInProgress,
                 onPasswordChange = { batchObfuscatePassword = it },
+                onConfirmPasswordChange = { batchObfuscatePasswordConfirm = it },
                 onConfirm = { pwd ->
                     batchObfuscateInProgress = true
                     scope.launch {
@@ -3455,13 +3494,18 @@ private fun FileBrowserAppScreen(
                         batchObfuscateInProgress = false
                         batchObfuscateOp = null
                         batchObfuscatePassword = ""
+                        batchObfuscatePasswordConfirm = ""
                         Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
                         pendingList.clear()
                         showPendingList = false
                         refreshTrigger++
                     }
                 },
-                onDismiss = { batchObfuscateOp = null; batchObfuscatePassword = "" }
+                onDismiss = {
+                    batchObfuscateOp = null
+                    batchObfuscatePassword = ""
+                    batchObfuscatePasswordConfirm = ""
+                }
             )
         }
         // ---- 密码保护：加密 md/rst -> .pass ----
@@ -3702,17 +3746,35 @@ private fun FileBrowserAppScreen(
                 text = {
                     Column {
                         Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
-                        if (encrypted == true) {
-                            Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(20.dp)
+                        ) {
+                            when (encrypted) {
+                                true -> Text(
+                                    "该压缩包已加密，请输入密码。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                null -> Text(
+                                    "正在检测是否加密…",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                else -> { }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        if (encrypted != false) {
                             ReliablePasswordInputField(
                                 value = zipUnzipPassword,
                                 onValueChange = { zipUnzipPassword = it },
                                 label = { Text("密码（加密压缩包）") },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = encrypted == true
                             )
-                        } else if (encrypted == null) {
-                            Spacer(Modifier.height(8.dp))
-                            Text("正在检测…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 },
@@ -4369,23 +4431,36 @@ private fun FileBrowserAppScreen(
             val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
             val parentDirUri = Uri.parse(displayUri)
             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val zipCompressPasswordReady = isOptionalPasswordConfirmed(zipCompressPassword, zipCompressPasswordConfirm)
             AlertDialog(
-                onDismissRequest = { zipCompressTarget = null; zipCompressPassword = "" },
+                onDismissRequest = {
+                    zipCompressTarget = null
+                    zipCompressPassword = ""
+                    zipCompressPasswordConfirm = ""
+                },
                 title = { Text("压缩为 ZIP") },
                 text = {
                     Column {
                         Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
-                        ReliablePasswordInputField(
-                            value = zipCompressPassword,
-                            onValueChange = { zipCompressPassword = it },
-                            label = { Text("密码（留空则不加密）") },
-                            modifier = Modifier.fillMaxWidth()
+                        PasswordConfirmationFields(
+                            password = zipCompressPassword,
+                            confirmPassword = zipCompressPasswordConfirm,
+                            onPasswordChange = {
+                                zipCompressPassword = it
+                                if (it.isEmpty()) zipCompressPasswordConfirm = ""
+                            },
+                            onConfirmPasswordChange = { zipCompressPasswordConfirm = it },
+                            passwordLabel = "密码（留空则不加密）",
+                            confirmLabel = "再次输入密码",
+                            enabled = true,
+                            allowBlank = true
                         )
                     }
                 },
                 confirmButton = {
                     Button(
+                        enabled = zipCompressPasswordReady,
                         onClick = {
                             scope.launch {
                                 progressOp = OperationProgress("压缩", 0, 1)
@@ -4407,6 +4482,7 @@ private fun FileBrowserAppScreen(
                                 progressOp = null
                                 zipCompressTarget = null
                                 zipCompressPassword = ""
+                                zipCompressPasswordConfirm = ""
                                 if (ok) {
                                     Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
@@ -4417,30 +4493,49 @@ private fun FileBrowserAppScreen(
                         }
                     ) { Text("压缩") }
                 },
-                dismissButton = { TextButton(onClick = { zipCompressTarget = null; zipCompressPassword = "" }) { Text("取消") } }
+                dismissButton = {
+                    TextButton(onClick = {
+                        zipCompressTarget = null
+                        zipCompressPassword = ""
+                        zipCompressPasswordConfirm = ""
+                    }) { Text("取消") }
+                }
             )
         }
         sevenZCompressTarget?.let { target ->
             val suggested7zName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.7z" else "${target.name}.7z"
             val parentDirUri = Uri.parse(displayUri)
             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val sevenZCompressPasswordReady = isOptionalPasswordConfirmed(sevenZCompressPassword, sevenZCompressPasswordConfirm)
             AlertDialog(
-                onDismissRequest = { sevenZCompressTarget = null; sevenZCompressPassword = "" },
+                onDismissRequest = {
+                    sevenZCompressTarget = null
+                    sevenZCompressPassword = ""
+                    sevenZCompressPasswordConfirm = ""
+                },
                 title = { Text("压缩为 7Z") },
                 text = {
                     Column {
                         Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
-                        ReliablePasswordInputField(
-                            value = sevenZCompressPassword,
-                            onValueChange = { sevenZCompressPassword = it },
-                            label = { Text("密码（留空则不加密）") },
-                            modifier = Modifier.fillMaxWidth()
+                        PasswordConfirmationFields(
+                            password = sevenZCompressPassword,
+                            confirmPassword = sevenZCompressPasswordConfirm,
+                            onPasswordChange = {
+                                sevenZCompressPassword = it
+                                if (it.isEmpty()) sevenZCompressPasswordConfirm = ""
+                            },
+                            onConfirmPasswordChange = { sevenZCompressPasswordConfirm = it },
+                            passwordLabel = "密码（留空则不加密）",
+                            confirmLabel = "再次输入密码",
+                            enabled = true,
+                            allowBlank = true
                         )
                     }
                 },
                 confirmButton = {
                     Button(
+                        enabled = sevenZCompressPasswordReady,
                         onClick = {
                             scope.launch {
                                 progressOp = OperationProgress("压缩", 0, 1)
@@ -4474,6 +4569,7 @@ private fun FileBrowserAppScreen(
                                 progressOp = null
                                 sevenZCompressTarget = null
                                 sevenZCompressPassword = ""
+                                sevenZCompressPasswordConfirm = ""
                                 if (ok) {
                                     Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
@@ -4484,12 +4580,19 @@ private fun FileBrowserAppScreen(
                         }
                     ) { Text("压缩") }
                 },
-                dismissButton = { TextButton(onClick = { sevenZCompressTarget = null; sevenZCompressPassword = "" }) { Text("取消") } }
+                dismissButton = {
+                    TextButton(onClick = {
+                        sevenZCompressTarget = null
+                        sevenZCompressPassword = ""
+                        sevenZCompressPasswordConfirm = ""
+                    }) { Text("取消") }
+                }
             )
         }
         if (showPendingCompressToZip && pendingList.isNotEmpty()) {
             val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
             val currentDirUri = Uri.parse(displayUri)
+            val pendingZipPasswordReady = isOptionalPasswordConfirmed(pendingCompressPassword, pendingCompressPasswordConfirm)
             AlertDialog(
                 onDismissRequest = { showPendingCompressToZip = false },
                 title = { Text("压缩待处理列表为 ZIP") },
@@ -4510,16 +4613,36 @@ private fun FileBrowserAppScreen(
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = pendingCompressPassword,
-                            onValueChange = { pendingCompressPassword = it },
+                            onValueChange = {
+                                pendingCompressPassword = it
+                                if (it.isEmpty()) pendingCompressPasswordConfirm = ""
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("密码（留空则不加密）") },
-                            singleLine = true
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation()
                         )
+                        if (pendingCompressPassword.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = pendingCompressPasswordConfirm,
+                                onValueChange = { pendingCompressPasswordConfirm = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("再次输入密码") },
+                                singleLine = true,
+                                isError = pendingCompressPasswordConfirm.isNotEmpty() && pendingCompressPassword != pendingCompressPasswordConfirm,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+                            if (pendingCompressPasswordConfirm.isNotEmpty() && pendingCompressPassword != pendingCompressPasswordConfirm) {
+                                Spacer(Modifier.height(4.dp))
+                                Text("两次输入的密码不一致", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(
-                        enabled = pendingCompressZipName.isNotBlank(),
+                        enabled = pendingCompressZipName.isNotBlank() && pendingZipPasswordReady,
                         onClick = {
                             val zipName = pendingCompressZipName.trim().let {
                                 if (it.endsWith(".zip", ignoreCase = true)) it else "$it.zip"
@@ -4548,6 +4671,7 @@ private fun FileBrowserAppScreen(
                                 progressOp = null
                                 pendingCompressZipName = ""
                                 pendingCompressPassword = ""
+                                pendingCompressPasswordConfirm = ""
                                 if (ok) {
                                     pendingList.clear()
                                     Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
@@ -4567,6 +4691,7 @@ private fun FileBrowserAppScreen(
         if (showPendingCompressTo7z && pendingList.isNotEmpty()) {
             val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
             val currentDirUri = Uri.parse(displayUri)
+            val pendingSevenZPasswordReady = isOptionalPasswordConfirmed(pendingCompress7zPassword, pendingCompress7zPasswordConfirm)
             AlertDialog(
                 onDismissRequest = { showPendingCompressTo7z = false },
                 title = { Text("压缩待处理列表为 7Z") },
@@ -4587,16 +4712,36 @@ private fun FileBrowserAppScreen(
                         Spacer(Modifier.height(8.dp))
                         OutlinedTextField(
                             value = pendingCompress7zPassword,
-                            onValueChange = { pendingCompress7zPassword = it },
+                            onValueChange = {
+                                pendingCompress7zPassword = it
+                                if (it.isEmpty()) pendingCompress7zPasswordConfirm = ""
+                            },
                             modifier = Modifier.fillMaxWidth(),
                             label = { Text("密码（留空则不加密）") },
-                            singleLine = true
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation()
                         )
+                        if (pendingCompress7zPassword.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = pendingCompress7zPasswordConfirm,
+                                onValueChange = { pendingCompress7zPasswordConfirm = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text("再次输入密码") },
+                                singleLine = true,
+                                isError = pendingCompress7zPasswordConfirm.isNotEmpty() && pendingCompress7zPassword != pendingCompress7zPasswordConfirm,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+                            if (pendingCompress7zPasswordConfirm.isNotEmpty() && pendingCompress7zPassword != pendingCompress7zPasswordConfirm) {
+                                Spacer(Modifier.height(4.dp))
+                                Text("两次输入的密码不一致", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(
-                        enabled = pendingCompress7zName.isNotBlank(),
+                        enabled = pendingCompress7zName.isNotBlank() && pendingSevenZPasswordReady,
                         onClick = {
                             val sevenZName = pendingCompress7zName.trim().let {
                                 if (it.endsWith(".7z", ignoreCase = true)) it else "$it.7z"
@@ -4637,6 +4782,7 @@ private fun FileBrowserAppScreen(
                                 progressOp = null
                                 pendingCompress7zName = ""
                                 pendingCompress7zPassword = ""
+                                pendingCompress7zPasswordConfirm = ""
                                 if (ok) {
                                     pendingList.clear()
                                     showPendingList = false
@@ -4694,6 +4840,7 @@ private fun FileBrowserAppScreen(
             fun resetGpgUiState() {
                 gpgState = null
                 gpgPassword = ""
+                gpgPasswordConfirm = ""
                 gpgDecryptMode = null
                 gpgDecryptAutoTried = false
                 gpgEncryptSelectedKeyId = null
@@ -4824,17 +4971,30 @@ private fun FileBrowserAppScreen(
                     keys = keys,
                     selectedKeyId = gpgEncryptSelectedKeyId,
                     password = gpgPassword,
+                    confirmPassword = gpgPasswordConfirm,
                     inProgress = gpgInProgress || gpgPubEncryptInProgress,
                     onSelectPassword = {
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = null
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
+                            gpgEncryptSelectedKeyId = null
+                            gpgPasswordConfirm = ""
+                        }
                     },
                     onSelectKey = { keyId ->
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) gpgEncryptSelectedKeyId = keyId
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
+                            gpgEncryptSelectedKeyId = keyId
+                            gpgPasswordConfirm = ""
+                        }
                     },
                     onPasswordChange = {
                         if (!gpgInProgress && !gpgPubEncryptInProgress) {
                             gpgPassword = it
+                            gpgPasswordConfirm = ""
                             if (it.isNotEmpty()) gpgEncryptSelectedKeyId = null
+                        }
+                    },
+                    onConfirmPasswordChange = {
+                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
+                            gpgPasswordConfirm = it
                         }
                     },
                     onConfirm = { password, keyId ->
@@ -4881,6 +5041,7 @@ private fun FileBrowserAppScreen(
                                         Toast.makeText(ctx, if (keyId != null) "公钥加密完成" else "加密完成", Toast.LENGTH_SHORT).show()
                                     }
                                     resetGpgUiState()
+                                    gpgPasswordConfirm = ""
                                     refreshTrigger++
                                 } else {
                                     Toast.makeText(ctx, "加密失败", Toast.LENGTH_LONG).show()
@@ -8477,11 +8638,14 @@ fun QuickObfuscatePasswordDialog(
     isObfuscate: Boolean,
     fileName: String,
     password: String,
+    confirmPassword: String,
     inProgress: Boolean = false,
     onPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val passwordConfirmed = !isObfuscate || isRequiredPasswordConfirmed(password, confirmPassword)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -8496,13 +8660,27 @@ fun QuickObfuscatePasswordDialog(
                 )
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
-                ReliablePasswordInputField(
-                    value = password,
-                    onValueChange = onPasswordChange,
-                    label = { Text("密码") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !inProgress
-                )
+                if (isObfuscate) {
+                    Spacer(Modifier.height(12.dp))
+                    PasswordConfirmationFields(
+                        password = password,
+                        confirmPassword = confirmPassword,
+                        onPasswordChange = onPasswordChange,
+                        onConfirmPasswordChange = onConfirmPasswordChange,
+                        passwordLabel = "密码",
+                        confirmLabel = "再次输入密码",
+                        enabled = !inProgress,
+                        allowBlank = false
+                    )
+                } else {
+                    ReliablePasswordInputField(
+                        value = password,
+                        onValueChange = onPasswordChange,
+                        label = { Text("密码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !inProgress
+                    )
+                }
                 if (inProgress) {
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
@@ -8512,8 +8690,69 @@ fun QuickObfuscatePasswordDialog(
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
-                    Button(onClick = { onConfirm(password) }, enabled = !inProgress) { Text("确定") }
+                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed && (!isObfuscate || password.isNotBlank())) { Text("确定") }
                 }
+            }
+        }
+    }
+}
+
+private fun isRequiredPasswordConfirmed(password: String, confirmPassword: String): Boolean {
+    return password.isNotBlank() && password == confirmPassword
+}
+
+private fun isOptionalPasswordConfirmed(password: String, confirmPassword: String): Boolean {
+    return password.isBlank() || password == confirmPassword
+}
+
+@Composable
+private fun PasswordConfirmationFields(
+    password: String,
+    confirmPassword: String,
+    onPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
+    passwordLabel: String,
+    confirmLabel: String,
+    enabled: Boolean,
+    allowBlank: Boolean
+) {
+    val showMismatch = password.isNotEmpty() && confirmPassword.isNotEmpty() && (
+        !password.startsWith(confirmPassword) ||
+            (confirmPassword.length >= password.length && password != confirmPassword)
+        )
+    val showConfirmField = password.isNotEmpty() || !allowBlank
+
+    ReliablePasswordInputField(
+        value = password,
+        onValueChange = onPasswordChange,
+        label = { Text(passwordLabel) },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = enabled
+    )
+    if (showConfirmField) {
+        Spacer(Modifier.height(12.dp))
+        ReliablePasswordInputField(
+            value = confirmPassword,
+            onValueChange = onConfirmPasswordChange,
+            label = { Text(confirmLabel) },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = enabled
+        )
+    }
+
+    if (showConfirmField) {
+        Spacer(Modifier.height(4.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(20.dp)
+        ) {
+            if (showMismatch) {
+                Text(
+                    "两次输入的密码不一致",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
@@ -8555,7 +8794,7 @@ private fun PasswordGridPage(
     onPress: (Char) -> Unit
 ) {
     val rows = keys.chunked(5)
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEach { rowKeys ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -8566,9 +8805,9 @@ private fun PasswordGridPage(
                         onClick = { onPress(key) },
                         enabled = enabled,
                         modifier = Modifier
-                            .padding(horizontal = 2.dp)
-                            .width(54.dp)
-                            .height(34.dp),
+                            .padding(horizontal = 2.dp, vertical = 1.dp)
+                            .width(50.dp)
+                            .height(32.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
                         Text(key.toString(), style = MaterialTheme.typography.bodySmall)
@@ -8589,6 +8828,7 @@ private fun ReliablePasswordInputField(
     supportingText: @Composable (() -> Unit)? = null
 ) {
     val context = LocalContext.current
+    var keyboardVisible by remember { mutableStateOf(false) }
     var category by remember { mutableStateOf(PasswordKeyCategory.DIGIT) }
     var pageIndex by remember { mutableIntStateOf(0) }
     val pages = remember(category) { categoryPages(category) }
@@ -8607,6 +8847,8 @@ private fun ReliablePasswordInputField(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(enabled = enabled) { keyboardVisible = true }
                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
@@ -8617,119 +8859,174 @@ private fun ReliablePasswordInputField(
             )
         }
         supportingText?.invoke()
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            OutlinedButton(
-                onClick = { category = PasswordKeyCategory.DIGIT; pageIndex = 0 },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("数字", style = MaterialTheme.typography.labelSmall) }
-            OutlinedButton(
-                onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("大写", style = MaterialTheme.typography.labelSmall) }
-            OutlinedButton(
-                onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("小写", style = MaterialTheme.typography.labelSmall) }
-            OutlinedButton(
-                onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("符号", style = MaterialTheme.typography.labelSmall) }
-        }
+    }
 
-        if (pages.size > 1) {
-            Spacer(Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+    if (keyboardVisible) {
+        Dialog(
+            onDismissRequest = { keyboardVisible = false },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.BottomCenter
             ) {
-                pages.indices.forEach { idx ->
-                    OutlinedButton(
-                        onClick = { pageIndex = idx },
-                        enabled = enabled,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(430.dp),
+                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                    color = MaterialTheme.colorScheme.surface
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp, vertical = 12.dp)
                     ) {
-                        Text(
-                            text = if (idx == pageIndex) "子类${idx + 1}*" else "子类${idx + 1}",
-                            style = MaterialTheme.typography.labelSmall
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(56.dp)
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .border(0.dp, Color.Transparent, RoundedCornerShape(999.dp))
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .width(56.dp)
+                                    .height(8.dp)
+                                    .clip(RoundedCornerShape(999.dp))
+                                    .background(MaterialTheme.colorScheme.outlineVariant)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier.height(32.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                Text(
+                                    text = if (maskedValue.isEmpty()) "(空)" else maskedValue,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                TextButton(
+                                    onClick = {
+                                        val pasted = readClipboardPassword(context)
+                                        if (pasted == null) {
+                                            Toast.makeText(context, "剪贴板为空，未粘贴", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            onValueChange(pasted)
+                                            Toast.makeText(context, "已从剪贴板粘贴密码", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    enabled = enabled,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                                ) {
+                                    Text("粘贴")
+                                }
+                                TextButton(onClick = { keyboardVisible = false }, enabled = enabled) {
+                                    Text("完成")
+                                }
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { category = PasswordKeyCategory.DIGIT; pageIndex = 0 },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("数字", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("大写", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("小写", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("符号", style = MaterialTheme.typography.labelSmall) }
+                        }
+
+                        if (pages.size > 1) {
+                            Spacer(Modifier.height(2.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                pages.indices.forEach { idx ->
+                                    OutlinedButton(
+                                        onClick = { pageIndex = idx },
+                                        enabled = enabled,
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            text = if (idx == pageIndex) "子类${idx + 1}*" else "子类${idx + 1}",
+                                            style = MaterialTheme.typography.labelSmall
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(Modifier.height(4.dp))
+                        PasswordGridPage(
+                            keys = pageKeys,
+                            enabled = enabled,
+                            onPress = { ch -> onValueChange(value + ch) }
                         )
+
+                        Spacer(Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { onValueChange(value + " ") },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("空格", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
+                                enabled = enabled && value.isNotEmpty(),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("退格", style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { onValueChange("") },
+                                enabled = enabled && value.isNotEmpty(),
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text("清空", style = MaterialTheme.typography.labelSmall) }
+                        }
                     }
                 }
             }
         }
-
-        Spacer(Modifier.height(4.dp))
-        PasswordGridPage(
-            keys = pageKeys,
-            enabled = enabled,
-            onPress = { ch -> onValueChange(value + ch) }
-        )
-
-        Spacer(Modifier.height(6.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            OutlinedButton(
-                onClick = { onValueChange(value + " ") },
-                enabled = enabled,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("空格", style = MaterialTheme.typography.labelSmall) }
-            OutlinedButton(
-                onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
-                enabled = enabled && value.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("退格", style = MaterialTheme.typography.labelSmall) }
-            OutlinedButton(
-                onClick = { onValueChange("") },
-                enabled = enabled && value.isNotEmpty(),
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp)
-            ) { Text("清空", style = MaterialTheme.typography.labelSmall) }
-        }
-
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
-        ) {
-            OutlinedButton(
-                onClick = {
-                    val pasted = readClipboardPassword(context)
-                    if (pasted == null) {
-                        Toast.makeText(context, "剪贴板为空，未粘贴", Toast.LENGTH_SHORT).show()
-                    } else {
-                        onValueChange(pasted)
-                        Toast.makeText(context, "已从剪贴板粘贴密码", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                enabled = enabled,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-            )
-            {
-                Text("从剪贴板粘贴", style = MaterialTheme.typography.labelSmall)
-            }
-        }
-        Text(
-            text = "此处禁用系统输入法，仅支持面板点按与剪贴板粘贴。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 6.dp)
-        )
     }
 }
 
@@ -8797,13 +9094,17 @@ fun GpgEncryptDialog(
     keys: List<Pair<Long, String>>,
     selectedKeyId: Long?,
     password: String,
+    confirmPassword: String,
     inProgress: Boolean = false,
     onSelectPassword: () -> Unit,
     onSelectKey: (Long) -> Unit,
     onPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
     onConfirm: (String, Long?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val useSymmetric = selectedKeyId == null
+    val symmetricPasswordReady = isRequiredPasswordConfirmed(password, confirmPassword)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -8830,13 +9131,27 @@ fun GpgEncryptDialog(
                     )
                     Text("使用密码对称加密", style = MaterialTheme.typography.bodyMedium)
                 }
-                ReliablePasswordInputField(
-                    value = password,
-                    onValueChange = onPasswordChange,
-                    label = { Text("密码") },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !inProgress
-                )
+                if (useSymmetric) {
+                    Spacer(Modifier.height(12.dp))
+                    PasswordConfirmationFields(
+                        password = password,
+                        confirmPassword = confirmPassword,
+                        onPasswordChange = onPasswordChange,
+                        onConfirmPasswordChange = onConfirmPasswordChange,
+                        passwordLabel = "密码",
+                        confirmLabel = "再次输入密码",
+                        enabled = !inProgress,
+                        allowBlank = false
+                    )
+                } else {
+                    ReliablePasswordInputField(
+                        value = password,
+                        onValueChange = onPasswordChange,
+                        label = { Text("密码") },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !inProgress
+                    )
+                }
                 if (keys.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
                     Text("或选择一个公钥进行非对称加密", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -8867,7 +9182,7 @@ fun GpgEncryptDialog(
                     TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
                     Button(
                         onClick = { onConfirm(password, selectedKeyId) },
-                        enabled = !inProgress && (selectedKeyId != null || password.isNotBlank())
+                        enabled = !inProgress && (selectedKeyId != null || symmetricPasswordReady)
                     ) { Text("确定") }
                 }
             }
