@@ -5436,6 +5436,11 @@ private fun FileBrowserAppScreen(
                 uri = pdfUri,
                 fileName = pdfName,
                 prefs = prefs,
+                bookNoteLoadedData = bookNoteController.data,
+                bookNoteEntries = bookNoteController.entriesSnapshot,
+                bookNoteInProgress = bookNoteController.inProgress,
+                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
+                onBookNoteEntriesChanged = bookNoteController.updateEntries,
                 onBack = { pdfViewState = null }
             )
         }

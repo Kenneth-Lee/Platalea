@@ -145,16 +145,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.BottomAppBar
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.foundation.shape.CircleShape
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.getEpubChapterFile
 import com.kenny.localmanager.dict.listImportedStarDicts
@@ -163,12 +168,128 @@ import com.kenny.localmanager.dict.lookupExactWord
 import com.kenny.localmanager.dict.readStarDictExplanation
 import com.kenny.localmanager.dict.StarDictLoaded
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 private const val MAX_MARKDOWN_BYTES = 512 * 1024
 private const val MAX_RST_BYTES = 512 * 1024
 private const val STANDALONE_MD_CACHE_LIMIT = 6
 private const val EPUB_BOOKMARK_QUOTE_MAX_LENGTH = 220
 private const val EPUB_BOOKMARK_TARGET_SELECTOR = "p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, div"
+
+@Composable
+private fun DraggableNextReadButton(
+    contentDescription: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    initialXPercent: Int,
+    initialYPercent: Int,
+    onPositionChangePercent: (xPercent: Int, yPercent: Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val density = LocalDensity.current
+    val buttonSize = 58.dp
+    val margin = 16.dp
+    val buttonSizePx = with(density) { buttonSize.roundToPx().toFloat() }
+    val marginPx = with(density) { margin.roundToPx().toFloat() }
+    var containerSize by remember { mutableStateOf(IntSize.Zero) }
+    var offsetX by remember { mutableStateOf<Float?>(null) }
+    var offsetY by remember { mutableStateOf<Float?>(null) }
+    var hasUserDragged by remember { mutableStateOf(false) }
+    val backgroundColor = if (enabled) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f)
+    }
+    val contentColor = if (enabled) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    fun maxOffsetX(): Float = (containerSize.width - buttonSizePx - marginPx).coerceAtLeast(marginPx)
+    fun maxOffsetY(): Float = (containerSize.height - buttonSizePx - marginPx).coerceAtLeast(marginPx)
+
+    fun ratioToOffset(percent: Int, maxOffset: Float): Float {
+        if (maxOffset <= marginPx) return marginPx
+        val p = percent.coerceIn(0, 100) / 100f
+        return (marginPx + (maxOffset - marginPx) * p).coerceIn(marginPx, maxOffset)
+    }
+
+    fun offsetToRatio(offset: Float, maxOffset: Float): Int {
+        if (maxOffset <= marginPx) return 100
+        val ratio = ((offset - marginPx) / (maxOffset - marginPx)).coerceIn(0f, 1f)
+        return (ratio * 100f).roundToInt()
+    }
+
+    LaunchedEffect(initialXPercent, initialYPercent, containerSize, hasUserDragged) {
+        if (containerSize == IntSize.Zero || hasUserDragged) return@LaunchedEffect
+        val boundedMaxX = maxOffsetX()
+        val boundedMaxY = maxOffsetY()
+        offsetX = ratioToOffset(initialXPercent, boundedMaxX)
+        offsetY = ratioToOffset(initialYPercent, boundedMaxY)
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                containerSize = coordinates.size
+                val boundedMaxX = maxOffsetX()
+                val boundedMaxY = maxOffsetY()
+                offsetX = offsetX?.coerceIn(marginPx, boundedMaxX)
+                    ?: ratioToOffset(initialXPercent, boundedMaxX)
+                offsetY = offsetY?.coerceIn(marginPx, boundedMaxY)
+                    ?: ratioToOffset(initialYPercent, boundedMaxY)
+            }
+    ) {
+        val currentOffsetX = offsetX
+        val currentOffsetY = offsetY
+        if (currentOffsetX != null && currentOffsetY != null) {
+            Surface(
+                onClick = onClick,
+                enabled = enabled,
+                modifier = Modifier
+                    .offset { IntOffset(currentOffsetX.roundToInt(), currentOffsetY.roundToInt()) }
+                    .size(buttonSize)
+                    .pointerInput(enabled, containerSize) {
+                        detectDragGestures(
+                            onDragEnd = {
+                                val boundedMaxX = maxOffsetX()
+                                val boundedMaxY = maxOffsetY()
+                                val finalX = (offsetX ?: boundedMaxX).coerceIn(marginPx, boundedMaxX)
+                                val finalY = (offsetY ?: boundedMaxY).coerceIn(marginPx, boundedMaxY)
+                                hasUserDragged = true
+                                onPositionChangePercent(
+                                    offsetToRatio(finalX, boundedMaxX),
+                                    offsetToRatio(finalY, boundedMaxY)
+                                )
+                            }
+                        ) { change, dragAmount ->
+                            change.consume()
+                            if (containerSize == IntSize.Zero) return@detectDragGestures
+                            val boundedMaxX = maxOffsetX()
+                            val boundedMaxY = maxOffsetY()
+                            offsetX = ((offsetX ?: boundedMaxX) + dragAmount.x).coerceIn(marginPx, boundedMaxX)
+                            offsetY = ((offsetY ?: boundedMaxY) + dragAmount.y).coerceIn(marginPx, boundedMaxY)
+                        }
+                    },
+                shape = CircleShape,
+                color = backgroundColor,
+                contentColor = contentColor,
+                tonalElevation = 6.dp,
+                shadowElevation = 8.dp
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = contentDescription,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            }
+        }
+    }
+}
 
 /** 词典查询结果 */
 data class DictLookupResult(
@@ -4759,6 +4880,9 @@ fun EpubViewerScreen(
     val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
     val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
     val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
+    val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
+    val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
+    val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
     val ttsSession = remember { EpubTtsSession(context) }
 
     // 词典查询状态
@@ -6750,6 +6874,20 @@ fun EpubViewerScreen(
                             }
                         }
                     )
+                    if (!hideReaderFloatingNextButton) {
+                        DraggableNextReadButton(
+                            contentDescription = "下一章",
+                            enabled = currentChapterIndex < chapters.lastIndex,
+                            onClick = { goToNextChapterFirstPage() },
+                            initialXPercent = floatingButtonXPercent,
+                            initialYPercent = floatingButtonYPercent,
+                            onPositionChangePercent = { xPercent, yPercent ->
+                                scope.launch {
+                                    prefs.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
+                                }
+                            }
+                        )
+                    }
                 }
             }
         }
@@ -8393,6 +8531,11 @@ fun PdfViewerScreen(
     uri: String,
     fileName: String,
     prefs: Preferences,
+    bookNoteLoadedData: BookNoteLoadedData?,
+    bookNoteEntries: List<BookNoteEntry>,
+    bookNoteInProgress: Boolean,
+    onRequestOpenBookNotes: () -> Unit,
+    onBookNoteEntriesChanged: (List<BookNoteEntry>) -> Unit,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
@@ -8407,11 +8550,55 @@ fun PdfViewerScreen(
     var pageLoading by remember { mutableStateOf(false) }
     var fitToWidthZoom by remember { mutableStateOf<Float?>(null) } // 自适应宽度的缩放比例
     var zoom by remember { mutableStateOf(1f) } // 用户调整的缩放（相对于自适应）
+    var zoomLoaded by remember(uri) { mutableStateOf(false) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var pageInfo by remember { mutableStateOf<Pair<Int, Int>?>(null) } // 原始页面宽高
+    val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
+    val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
+    val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
+    var showBookmarks by remember { mutableStateOf(false) }
+    var showAddBookmark by remember { mutableStateOf(false) }
+    var showMoreMenu by remember { mutableStateOf(false) }
+    var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
+    var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     // 缓存最近渲染的页面
     val pageCache = remember { mutableMapOf<Int, Bitmap>() }
+    val currentBookTitle = fileName
+    val currentBookBookmarkEntries = remember(bookNoteEntries, currentBookTitle) {
+        bookNoteEntries
+            .filter { it.matchesBookTitle(currentBookTitle) }
+            .sortedByDescending { it.createdAt }
+    }
+
+    fun currentPageLocationLabel(): String = "第${currentPage + 1}页 / 共${pageCount}页"
+
+    fun upsertBookNoteEntry(updatedEntry: BookNoteEntry) {
+        onBookNoteEntriesChanged(
+            if (bookNoteEntries.any { it.id == updatedEntry.id }) {
+                bookNoteEntries.map { entry -> if (entry.id == updatedEntry.id) updatedEntry else entry }
+            } else {
+                bookNoteEntries + updatedEntry
+            }
+        )
+    }
+
+    fun goToBookNote(entry: BookNoteEntry) {
+        val targetPage = entry.chapterIndex
+        if (targetPage == null || targetPage !in 0 until pageCount) {
+            Toast.makeText(context, "这条读书笔记没有可跳转的位置", Toast.LENGTH_SHORT).show()
+            return
+        }
+        currentPage = targetPage
+        showBookmarks = false
+    }
+
+    fun requestAddBookmark() {
+        if (bookNoteLoadedData == null && !bookNoteInProgress) {
+            onRequestOpenBookNotes()
+        }
+        showAddBookmark = true
+    }
 
     // 初始加载：获取页数和第一页尺寸
     LaunchedEffect(uri) {
@@ -8437,6 +8624,9 @@ fun PdfViewerScreen(
                 pageInfo = Pair(result.second, result.third)
                 val savedPage = prefs.getPdfLastPageForUri(uri)?.coerceIn(0, result.first - 1) ?: 0
                 currentPage = savedPage
+                val savedZoom = prefs.getPdfZoomPercentForUri(uri)?.coerceIn(50, 300) ?: 100
+                zoom = (savedZoom / 100f).coerceIn(0.5f, 3f)
+                zoomLoaded = true
                 initialPageLoaded = true
                 // 计算自适应宽度的缩放比例
                 if (result.second > 0 && screenWidthPx > 0) {
@@ -8455,6 +8645,12 @@ fun PdfViewerScreen(
     LaunchedEffect(uri, currentPage, initialPageLoaded) {
         if (initialPageLoaded) {
             prefs.setPdfLastPageForUri(uri, currentPage)
+        }
+    }
+
+    LaunchedEffect(uri, zoom, zoomLoaded) {
+        if (zoomLoaded) {
+            prefs.setPdfZoomPercentForUri(uri, (zoom * 100f).roundToInt())
         }
     }
 
@@ -8526,7 +8722,270 @@ fun PdfViewerScreen(
         }
     }
 
-    BackHandler { onBack() }
+    BackHandler {
+        when {
+            showBookmarks -> showBookmarks = false
+            showAddBookmark -> showAddBookmark = false
+            editingBookNote != null -> editingBookNote = null
+            else -> onBack()
+        }
+    }
+
+    if (showBookmarks) {
+        AlertDialog(
+            onDismissRequest = { showBookmarks = false },
+            title = { Text("收藏夹 - $fileName") },
+            text = {
+                if (bookNoteLoadedData == null && bookNoteInProgress) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(220.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator()
+                    }
+                } else if (currentBookBookmarkEntries.isEmpty()) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Spacer(Modifier.height(24.dp))
+                        Text(
+                            "暂无收藏",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            "点击下方“新增当前位置收藏”可创建定位笔记",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(currentBookBookmarkEntries.size) { index ->
+                            val bookmark = currentBookBookmarkEntries[index]
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                onClick = { goToBookNote(bookmark) }
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = bookmark.chapterIndex?.let { "第${it + 1}页" } ?: "整本书",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Text(
+                                            text = bookmark.formattedTime,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        text = bookmark.chapterInfo ?: "未绑定位置",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (bookmark.content.isNotBlank()) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            text = bookmark.content,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 3,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(top = 8.dp),
+                                        horizontalArrangement = Arrangement.End
+                                    ) {
+                                        TextButton(onClick = {
+                                            editingBookNote = BookNoteEditorState(
+                                                editingId = bookmark.id,
+                                                bookTitle = bookmark.bookTitle,
+                                                chapterInfo = bookmark.chapterInfo.orEmpty(),
+                                                quote = "",
+                                                content = bookmark.content,
+                                                chapterIndex = bookmark.chapterIndex,
+                                                chapterTitle = bookmark.chapterTitle,
+                                                scrollRatio = bookmark.scrollRatio,
+                                                createdAt = bookmark.createdAt
+                                            )
+                                        }) {
+                                            Icon(Icons.Default.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("编辑")
+                                        }
+                                        TextButton(onClick = { deleteBookNoteConfirm = bookmark }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("删除")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { requestAddBookmark() }) { Text("新增当前位置收藏") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBookmarks = false }) { Text("关闭") }
+            }
+        )
+    }
+
+    if (showAddBookmark) {
+        var noteText by remember(showAddBookmark, currentPage) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showAddBookmark = false },
+            title = { Text("添加收藏") },
+            text = {
+                Column {
+                    Text(
+                        "当前位置：${currentPageLocationLabel()}",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = noteText,
+                        onValueChange = { noteText = it },
+                        label = { Text("感想（可选）") },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 3,
+                        maxLines = 6
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val existing = currentBookBookmarkEntries.firstOrNull { it.chapterIndex == currentPage }
+                    if (existing != null) {
+                        editingBookNote = BookNoteEditorState(
+                            editingId = existing.id,
+                            bookTitle = existing.bookTitle,
+                            chapterInfo = currentPageLocationLabel(),
+                            quote = "",
+                            content = if (noteText.isNotBlank()) noteText else existing.content,
+                            chapterIndex = currentPage,
+                            chapterTitle = "第${currentPage + 1}页",
+                            scrollRatio = null,
+                            createdAt = existing.createdAt
+                        )
+                        Toast.makeText(context, "该位置已收藏，已转为编辑", Toast.LENGTH_SHORT).show()
+                    } else {
+                        upsertBookNoteEntry(
+                            BookNoteEntry(
+                                id = (bookNoteEntries.maxOfOrNull { it.id } ?: 0L) + 1L,
+                                bookTitle = currentBookTitle,
+                                chapterInfo = currentPageLocationLabel(),
+                                quote = null,
+                                content = noteText.trimEnd(),
+                                chapterIndex = currentPage,
+                                chapterTitle = "第${currentPage + 1}页",
+                                scrollRatio = null,
+                                createdAt = System.currentTimeMillis()
+                            )
+                        )
+                        Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
+                    }
+                    showAddBookmark = false
+                }) { Text("添加") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddBookmark = false }) { Text("取消") }
+            }
+        )
+    }
+
+    editingBookNote?.let { state ->
+        BookNoteEditorDialog(
+            state = state,
+            inProgress = bookNoteInProgress,
+            onDismiss = { if (!bookNoteInProgress) editingBookNote = null },
+            onReassociateCurrentPosition = {
+                editingBookNote = state.copy(
+                    chapterInfo = currentPageLocationLabel(),
+                    chapterIndex = currentPage,
+                    chapterTitle = "第${currentPage + 1}页",
+                    scrollRatio = null
+                )
+            },
+            onClearLocation = {
+                editingBookNote = state.copy(
+                    chapterInfo = "",
+                    chapterIndex = null,
+                    chapterTitle = null,
+                    scrollRatio = null
+                )
+            },
+            onConfirm = { updated ->
+                val normalizedTitle = updated.bookTitle.trim()
+                val normalizedContent = updated.content.trimEnd()
+                val normalizedChapterInfo = updated.chapterInfo.trim().takeIf { it.isNotEmpty() }
+                if (normalizedTitle.isBlank()) {
+                    Toast.makeText(context, context.getString(R.string.book_note_book_title_required), Toast.LENGTH_SHORT).show()
+                    return@BookNoteEditorDialog
+                }
+                if (normalizedContent.isBlank() && normalizedChapterInfo == null) {
+                    Toast.makeText(context, context.getString(R.string.book_note_content_or_position_required), Toast.LENGTH_SHORT).show()
+                    return@BookNoteEditorDialog
+                }
+                val updatedEntry = BookNoteEntry(
+                    id = updated.editingId ?: ((bookNoteEntries.maxOfOrNull { it.id } ?: 0L) + 1L),
+                    bookTitle = normalizedTitle,
+                    chapterInfo = normalizedChapterInfo,
+                    quote = null,
+                    content = normalizedContent,
+                    chapterIndex = updated.chapterIndex,
+                    chapterTitle = updated.chapterTitle,
+                    scrollRatio = null,
+                    createdAt = updated.createdAt
+                )
+                upsertBookNoteEntry(updatedEntry)
+                Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
+                editingBookNote = null
+            }
+        )
+    }
+
+    deleteBookNoteConfirm?.let { entry ->
+        AlertDialog(
+            onDismissRequest = { deleteBookNoteConfirm = null },
+            title = { Text("删除读书笔记") },
+            text = { Text("确定删除这条读书笔记吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onBookNoteEntriesChanged(bookNoteEntries.filterNot { it.id == entry.id })
+                        deleteBookNoteConfirm = null
+                    },
+                    enabled = !bookNoteInProgress
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteBookNoteConfirm = null }, enabled = !bookNoteInProgress) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -8538,6 +8997,35 @@ fun PdfViewerScreen(
                     }
                 },
                 actions = {
+                    Box {
+                        IconButton(onClick = { showMoreMenu = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                        }
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("添加收藏") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    requestAddBookmark()
+                                },
+                                leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("查看收藏") },
+                                onClick = {
+                                    showMoreMenu = false
+                                    if (bookNoteLoadedData == null && !bookNoteInProgress) {
+                                        onRequestOpenBookNotes()
+                                    }
+                                    showBookmarks = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
+                            )
+                        }
+                    }
                     // 缩放按钮
                     IconButton(onClick = {
                         zoom = (zoom - 0.25f).coerceAtLeast(0.5f)
@@ -8604,8 +9092,6 @@ fun PdfViewerScreen(
                     Text("正在渲染页面...", style = MaterialTheme.typography.bodyLarge)
                 }
                 currentPageBitmap != null -> {
-                    // 使用 Box 包裹并添加点击检测
-                    val boxWidth = with(LocalDensity.current) { currentPageBitmap!!.width.toDp() }
                     var boxSizePx by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
 
                     Box(
@@ -8651,6 +9137,24 @@ fun PdfViewerScreen(
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
                                     .padding(16.dp)
+                            )
+                        }
+                        if (!hideReaderFloatingNextButton) {
+                            DraggableNextReadButton(
+                                contentDescription = "下一页",
+                                enabled = currentPage < pageCount - 1,
+                                onClick = {
+                                    if (currentPage < pageCount - 1) {
+                                        currentPage++
+                                    }
+                                },
+                                initialXPercent = floatingButtonXPercent,
+                                initialYPercent = floatingButtonYPercent,
+                                onPositionChangePercent = { xPercent, yPercent ->
+                                    scope.launch {
+                                        prefs.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
+                                    }
+                                }
                             )
                         }
                     }

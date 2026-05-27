@@ -43,10 +43,14 @@ private val EPUB_DICT_AREA_EXPANDED = booleanPreferencesKey("epub_dict_area_expa
 private val EPUB_DICT_LOOKUP_WORDS_JSON = stringPreferencesKey("epub_dict_lookup_words_json")
 private val EPUB_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("epub_zoom_percent_by_uri_json")
 private val PDF_LAST_PAGE_BY_URI_JSON = stringPreferencesKey("pdf_last_page_by_uri_json")
+private val PDF_ZOOM_PERCENT_BY_URI_JSON = stringPreferencesKey("pdf_zoom_percent_by_uri_json")
 private val EPUB_TTS_ENGINE_PACKAGE = stringPreferencesKey("epub_tts_engine_package")
 private val EPUB_TTS_VOICE_NAME = stringPreferencesKey("epub_tts_voice_name")
 private val EPUB_TTS_SPEED_PERCENT = intPreferencesKey("epub_tts_speed_percent")
 private val EPUB_TTS_AUTO_NEXT_CHAPTER = booleanPreferencesKey("epub_tts_auto_next_chapter")
+private val HIDE_READER_FLOATING_NEXT_BUTTON = booleanPreferencesKey("hide_reader_floating_next_button")
+private val READER_FLOATING_NEXT_BUTTON_X_PERCENT = intPreferencesKey("reader_floating_next_button_x_percent")
+private val READER_FLOATING_NEXT_BUTTON_Y_PERCENT = intPreferencesKey("reader_floating_next_button_y_percent")
 private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
@@ -128,6 +132,18 @@ class Preferences(private val context: Context) {
 
     val epubTtsAutoNextChapter: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[EPUB_TTS_AUTO_NEXT_CHAPTER] ?: true
+    }
+
+    val hideReaderFloatingNextButton: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[HIDE_READER_FLOATING_NEXT_BUTTON] ?: false
+    }
+
+    val readerFloatingNextButtonXPercent: Flow<Int> = context.dataStore.data.map { prefs ->
+        (prefs[READER_FLOATING_NEXT_BUTTON_X_PERCENT] ?: 100).coerceIn(0, 100)
+    }
+
+    val readerFloatingNextButtonYPercent: Flow<Int> = context.dataStore.data.map { prefs ->
+        (prefs[READER_FLOATING_NEXT_BUTTON_Y_PERCENT] ?: 82).coerceIn(0, 100)
     }
 
     val dictQueryHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
@@ -321,6 +337,19 @@ class Preferences(private val context: Context) {
         }
     }
 
+    suspend fun setHideReaderFloatingNextButton(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[HIDE_READER_FLOATING_NEXT_BUTTON] = enabled
+        }
+    }
+
+    suspend fun setReaderFloatingNextButtonPositionPercent(xPercent: Int, yPercent: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[READER_FLOATING_NEXT_BUTTON_X_PERCENT] = xPercent.coerceIn(0, 100)
+            prefs[READER_FLOATING_NEXT_BUTTON_Y_PERCENT] = yPercent.coerceIn(0, 100)
+        }
+    }
+
     suspend fun recordDictQuery(query: String) {
         val normalizedQuery = query.trim()
         if (normalizedQuery.isEmpty()) return
@@ -404,6 +433,38 @@ class Preferences(private val context: Context) {
                 obj.remove(key)
             }
             prefs[PDF_LAST_PAGE_BY_URI_JSON] = obj.toString()
+        }
+    }
+
+    suspend fun getPdfZoomPercentForUri(uri: String): Int? {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return null
+        val json = context.dataStore.data.first()[PDF_ZOOM_PERCENT_BY_URI_JSON] ?: return null
+        return try {
+            val obj = org.json.JSONObject(json)
+            val value = obj.optInt(normalizedUri, -1)
+            if (value in 50..300) value else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun setPdfZoomPercentForUri(uri: String, percent: Int) {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return
+        val clamped = percent.coerceIn(50, 300)
+        context.dataStore.edit { prefs ->
+            val obj = try {
+                org.json.JSONObject(prefs[PDF_ZOOM_PERCENT_BY_URI_JSON] ?: "{}")
+            } catch (_: Exception) {
+                org.json.JSONObject()
+            }
+            obj.put(normalizedUri, clamped)
+            while (obj.length() > 200) {
+                val key = obj.keys().asSequence().firstOrNull() ?: break
+                obj.remove(key)
+            }
+            prefs[PDF_ZOOM_PERCENT_BY_URI_JSON] = obj.toString()
         }
     }
 
