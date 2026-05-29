@@ -1,8 +1,14 @@
 import java.util.Properties
+import org.gradle.api.tasks.Copy
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+val syncAboutReadme by tasks.registering(Copy::class) {
+    from(rootProject.file("README.md"))
+    into(layout.buildDirectory.dir("generated/aboutAssets"))
 }
 
 android {
@@ -53,6 +59,7 @@ android {
     buildFeatures {
         compose = true
     }
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/aboutAssets"))
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
     }
@@ -67,6 +74,10 @@ android {
             pickFirsts += "org/apache/sshd/common/kex/*.prime"
         }
     }
+}
+
+tasks.named("preBuild") {
+    dependsOn(syncAboutReadme)
 }
 
 dependencies {

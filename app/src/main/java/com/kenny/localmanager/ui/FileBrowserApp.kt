@@ -335,7 +335,8 @@ private enum class MainTab(val key: String, val labelRes: Int) {
     BOOK_NOTE("book_note", R.string.main_tab_book_note),
     QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
     QUICK_CRYPTO("quick_crypto", R.string.main_tab_quick_crypto),
-    DICTIONARY("dictionary", R.string.main_tab_dictionary);
+    DICTIONARY("dictionary", R.string.main_tab_dictionary),
+    ABOUT("about", R.string.main_menu_about);
 
     companion object {
         fun fromKey(key: String?): MainTab {
@@ -363,6 +364,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.QUICK_NOTE -> Icons.Default.Edit
         MainTab.QUICK_CRYPTO -> Icons.Default.Lock
         MainTab.DICTIONARY -> Icons.Default.MenuBook
+        MainTab.ABOUT -> Icons.Default.Info
     }
 }
 
@@ -810,7 +812,8 @@ private fun ScrollableMainTabBar(
         MainTab.DICTIONARY,
         MainTab.FTP,
         MainTab.FAMILY_NETWORK,
-        MainTab.GIT_SHARE
+        MainTab.GIT_SHARE,
+        MainTab.ABOUT
     )
     var candidateUsageOrder by remember { mutableStateOf(candidateTabs) }
     var overflowExpanded by remember { mutableStateOf(false) }
@@ -967,7 +970,8 @@ private fun MainTabContentHost(
     bookNoteContent: @Composable () -> Unit,
     quickNoteContent: @Composable () -> Unit,
     quickCryptoContent: @Composable () -> Unit,
-    dictionaryContent: @Composable () -> Unit
+    dictionaryContent: @Composable () -> Unit,
+    aboutContent: @Composable () -> Unit
 ) {
     when (activeMainTab) {
         MainTab.DIRECTORY -> directoryContent()
@@ -990,6 +994,7 @@ private fun MainTabContentHost(
         MainTab.QUICK_NOTE -> quickNoteContent()
         MainTab.QUICK_CRYPTO -> quickCryptoContent()
         MainTab.DICTIONARY -> dictionaryContent()
+        MainTab.ABOUT -> aboutContent()
     }
 }
 
@@ -1460,7 +1465,6 @@ private fun FileBrowserAppScreen(
         var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
         var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
         var showCacheManagementDialog by remember { mutableStateOf(false) }
-        var showAboutDialog by remember { mutableStateOf(false) }
         var showKeyManagementDialog by remember { mutableStateOf(false) }
         LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
         var lastBackPressTime by remember { mutableStateOf(0L) }
@@ -2077,7 +2081,6 @@ private fun FileBrowserAppScreen(
                 showKeyManagementDialog -> showKeyManagementDialog = false
                 showCacheManagementDialog -> showCacheManagementDialog = false
                 showGitConfigDialog -> showGitConfigDialog = false
-                showAboutDialog -> showAboutDialog = false
                 showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                 showPendingList -> showPendingList = false
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
@@ -2500,7 +2503,6 @@ private fun FileBrowserAppScreen(
                                 onMovePendingToCurrentDir = doMoveHere,
                                 onShowPendingList = { showPendingList = it },
                                 onRefresh = { refreshTrigger++ },
-                                onOpenAbout = { showAboutDialog = true },
                                 onCreateQuickNote = {
                                     switchMainTab(MainTab.QUICK_NOTE)
                                     quickNoteController.requestOpenWithCachedPassword(true)
@@ -2749,6 +2751,9 @@ private fun FileBrowserAppScreen(
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
+                    },
+                    aboutContent = {
+                        AboutTabRoute()
                     }
                 )
             }
@@ -2965,9 +2970,6 @@ private fun FileBrowserAppScreen(
                 },
                 dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
             )
-        }
-        if (showAboutDialog) {
-            AboutDialog(onDismiss = { showAboutDialog = false })
         }
         if (showImportCategoryDialog && pendingImportJson != null) {
             AlertDialog(
@@ -5995,7 +5997,6 @@ internal fun FileBrowserScreen(
     onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onChangeRoot: () -> Unit = {},
-    onOpenAbout: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
@@ -6331,14 +6332,6 @@ internal fun FileBrowserScreen(
                                     }
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.main_menu_about)) },
-                                leadingIcon = { Icon(Icons.Default.Info, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onOpenAbout()
-                                }
-                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
