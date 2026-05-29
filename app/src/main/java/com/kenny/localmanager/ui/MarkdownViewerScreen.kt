@@ -75,6 +75,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -4848,6 +4849,7 @@ fun EpubViewerScreen(
     var pendingProgrammaticScrollRatio by remember { mutableStateOf<Float?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var showFullTextSearchDialog by remember { mutableStateOf(false) }
+    var showGoToPositionDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
@@ -5737,6 +5739,54 @@ fun EpubViewerScreen(
         )
     }
 
+    if (showGoToPositionDialog) {
+        var targetPercent by remember(showGoToPositionDialog, currentScrollRatio) {
+            mutableStateOf((currentScrollRatio * 100f).coerceIn(0f, 100f))
+        }
+        AlertDialog(
+            onDismissRequest = { showGoToPositionDialog = false },
+            title = { Text("跳转位置（近似）") },
+            text = {
+                Column {
+                    Text(
+                        text = "仅在当前章节跳转，使用章节内进度%近似定位。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "当前章节：第 ${currentChapterIndex + 1} 章",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "目标进度：${targetPercent.toInt()}%",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Slider(
+                        value = targetPercent,
+                        onValueChange = { targetPercent = it.coerceIn(0f, 100f) },
+                        valueRange = 0f..100f,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val targetRatio = (targetPercent / 100f).coerceIn(0f, 1f)
+                    chapterScrollRatios[currentChapterIndex] = targetRatio
+                    currentScrollRatio = targetRatio
+                    pendingProgrammaticScrollRatio = targetRatio
+                    showGoToPositionDialog = false
+                }) { Text("跳转") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoToPositionDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (showFullTextSearchDialog) {
         EpubFullTextSearchDialog(
             query = fullTextQuery,
@@ -6525,6 +6575,7 @@ fun EpubViewerScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         "${currentChapterIndex + 1} / ${chapters.size} · ${formatEpubChapterProgressCompact(currentScrollRatio)}",
+                                        modifier = Modifier.clickable { showGoToPositionDialog = true },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -6863,8 +6914,10 @@ fun EpubViewerScreen(
                                     // 仅在显式触发（恢复进度/跳转目录/跳转收藏）时才程序化滚动，
                                     // 避免用户手势滚动时被重复拉回导致闪烁。
                                     val ratioToApply = pendingProgrammaticScrollRatio
-                                    if (ratioToApply != null && ratioToApply > 0f) {
-                                        webView.scrollToRatio(ratioToApply)
+                                    if (ratioToApply != null) {
+                                        // 与章节切换后的恢复流程保持一致，避免页面尚未完成布局时跳转失效。
+                                        webView.setPendingScrollRatio(ratioToApply)
+                                        webView.restoreScrollPosition()
                                     }
                                     pendingProgrammaticScrollRatio = null
                                 }
@@ -8488,8 +8541,12 @@ private class GestureWebView(
 
     /** 直接滚动到指定比例（用于恢复进度时内容未变的情况） */
     fun scrollToRatio(ratio: Float) {
-        if (ratio <= 0f) return
-        val js = buildScrollToRatioScript(ratio)
+        val safeRatio = ratio.coerceIn(0f, 1f)
+        if (safeRatio <= 0f) {
+            post { scrollTo(0, 0) }
+            return
+        }
+        val js = buildScrollToRatioScript(safeRatio)
         post { evaluateJavascript(js, null) }
     }
 
@@ -8498,6 +8555,7 @@ private class GestureWebView(
         val ratio = pendingScrollRatio ?: return
         pendingScrollRatio = null
         if (ratio <= 0f) {
+            scrollTo(0, 0)
             alpha = 1f
             return
         }
