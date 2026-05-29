@@ -8559,6 +8559,7 @@ fun PdfViewerScreen(
     val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
     var showBookmarks by remember { mutableStateOf(false) }
     var showAddBookmark by remember { mutableStateOf(false) }
+    var showGoToPage by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
@@ -8849,6 +8850,55 @@ fun PdfViewerScreen(
         )
     }
 
+    if (showGoToPage) {
+        var inputText by remember(showGoToPage) { mutableStateOf("") }
+        var inputError by remember { mutableStateOf<String?>(null) }
+        AlertDialog(
+            onDismissRequest = { showGoToPage = false },
+            title = { Text("跳转到指定页") },
+            text = {
+                Column {
+                    Text(
+                        "当前第 ${currentPage + 1} 页，共 $pageCount 页",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = inputText,
+                        onValueChange = {
+                            inputText = it
+                            inputError = null
+                        },
+                        label = { Text("目标页码（1 - $pageCount）") },
+                        isError = inputError != null,
+                        supportingText = inputError?.let { { Text(it) } },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Number
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = inputText.trim().toIntOrNull()
+                    if (target == null) {
+                        inputError = "请输入有效的数字"
+                    } else if (target < 1 || target > pageCount) {
+                        inputError = "页码范围：1 - $pageCount"
+                    } else {
+                        currentPage = target - 1
+                        showGoToPage = false
+                    }
+                }) { Text("跳转") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showGoToPage = false }) { Text("取消") }
+            }
+        )
+    }
+
     if (showAddBookmark) {
         var noteText by remember(showAddBookmark, currentPage) { mutableStateOf("") }
         AlertDialog(
@@ -9058,7 +9108,9 @@ fun PdfViewerScreen(
                     }
                     Text(
                         "${currentPage + 1} / $pageCount",
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable { showGoToPage = true },
                         style = MaterialTheme.typography.bodyMedium
                     )
                     IconButton(
