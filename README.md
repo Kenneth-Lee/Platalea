@@ -23,7 +23,7 @@
 
 本项目也上传到华为市场了，但只有国际版本，国内版本
 
-最新一个发布版本在这里：[LocalManager-V0.17](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.17/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.18](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.18/app-release.apk)
 
 ## 设计思路
 
@@ -444,7 +444,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.15 支持pdf阅读历史记录，支持大部分Webview显示可以朗读，支持打开独立html和图片文件，好像该目录是.html.zip或者.pic.zip目录一样，支持epub阅读器全文查找，支持文件查找
 * V0.16 支持epub翻页可以跳章，章节目录可以过滤，.llm.zip的章节可以编辑，把收藏夹功能升级为读书笔记功能。增加git功能，支持配置导入导出选择类别。另外，这个版本进行了代码架构重构，把每个功能的绘制，从主程序独立出去，免得主模块变得越来越大。
 * V0.17 pdf允许点击翻页，记住缩放，允许添加笔记标签，pdf和epub阅读器都支持浮动换页按钮。这个版本开始实现的家庭网络共享框架，但功能是不能用的。
-* V0.18 开发中：正在持续开发家庭网络共享功能
+* V0.18 About独立成tab，并包含README进去（以便可以直接看使用文档），优化阅读器的一些使用细节功能，快密功能可以选择公钥。
+* V0.19 开发中：正在持续开发家庭网络共享功能
 
 ### 已知问题
 

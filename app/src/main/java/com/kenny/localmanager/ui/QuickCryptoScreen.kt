@@ -44,6 +44,7 @@ import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import com.kenny.localmanager.gpg.findPublicKeyRing
+import com.kenny.localmanager.gpg.listEncryptionPublicKeyRings
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import kotlinx.coroutines.Dispatchers
@@ -54,6 +55,11 @@ import java.io.ByteArrayInputStream
 private data class QuickCryptoResult(
     val outputText: String,
     val message: String
+)
+
+private data class QuickCryptoRecipientKeyOption(
+    val keyId: Long,
+    val label: String
 )
 
 private enum class QuickCryptoPendingAction {
@@ -76,6 +82,47 @@ fun QuickCryptoScreen() {
     var keyPasswordDialogVisible by remember { mutableStateOf(false) }
     var keyPassword by remember { mutableStateOf("") }
     var pendingOverwriteAction by remember { mutableStateOf<QuickCryptoPendingAction?>(null) }
+    var recipientOptions by remember { mutableStateOf<List<QuickCryptoRecipientKeyOption>>(emptyList()) }
+    var selectedRecipientKeyId by remember { mutableStateOf<Long?>(null) }
+    var showRecipientPicker by remember { mutableStateOf(false) }
+
+    fun formatKeyLabel(label: String, keyId: Long): String {
+        val idHex = keyId.toString(16).takeLast(8)
+        return "$label (0x$idHex)"
+    }
+
+    fun refreshRecipientOptions() {
+        scope.launch {
+            val (options, preferredKeyId) = withContext(Dispatchers.IO) {
+                val publicKeys = loadPublicKeyRings(context)
+                val items = listEncryptionPublicKeyRings(publicKeys)
+                    .map { (keyId, label) ->
+                        QuickCryptoRecipientKeyOption(
+                            keyId = keyId,
+                            label = formatKeyLabel(label, keyId)
+                        )
+                    }
+                val defaultSecretKeyId = loadSecretKeyRings(context)
+                    ?.iterator()
+                    ?.asSequence()
+                    ?.firstOrNull()
+                    ?.publicKey
+                    ?.keyID
+                items to defaultSecretKeyId
+            }
+            recipientOptions = options
+            selectedRecipientKeyId = when {
+                options.isEmpty() -> null
+                selectedRecipientKeyId != null && options.any { it.keyId == selectedRecipientKeyId } -> selectedRecipientKeyId
+                preferredKeyId != null && options.any { it.keyId == preferredKeyId } -> preferredKeyId
+                else -> options.first().keyId
+            }
+        }
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        refreshRecipientOptions()
+    }
 
     fun updateStatus(message: String, isError: Boolean) {
         statusMessage = message
@@ -137,10 +184,14 @@ fun QuickCryptoScreen() {
             updateStatus(context.getString(R.string.quick_crypto_input_required_encrypt), true)
             return
         }
+        if (selectedRecipientKeyId == null) {
+            updateStatus(context.getString(R.string.quick_crypto_recipient_key_empty), true)
+            return
+        }
         inProgress = true
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                encryptQuickCryptoText(context, currentPlainText)
+                encryptQuickCryptoText(context, currentPlainText, selectedRecipientKeyId)
             }
             inProgress = false
             result.onSuccess { value ->
@@ -236,6 +287,27 @@ fun QuickCryptoScreen() {
                 enabled = !inProgress
             )
 
+            Text(
+                text = stringResource(R.string.quick_crypto_recipient_key_label),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    text = recipientOptions.firstOrNull { it.keyId == selectedRecipientKeyId }?.label
+                        ?: stringResource(R.string.quick_crypto_recipient_key_empty),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selectedRecipientKeyId == null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
+                )
+                TextButton(onClick = { showRecipientPicker = true }, enabled = !inProgress) {
+                    Text(stringResource(R.string.quick_crypto_recipient_key_choose))
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -303,7 +375,7 @@ fun QuickCryptoScreen() {
                 TextButton(
                     onClick = {
                         cipherText = ""
-                        if (statusMessage == context.getString(R.string.quick_crypto_encrypt_success)) {
+                        if (statusMessage?.startsWith(context.getString(R.string.quick_crypto_encrypt_success)) == true) {
                             statusMessage = null
                         }
                     },
@@ -384,17 +456,63 @@ fun QuickCryptoScreen() {
             }
         )
     }
+
+    if (showRecipientPicker) {
+        AlertDialog(
+            onDismissRequest = { if (!inProgress) showRecipientPicker = false },
+            title = { Text(stringResource(R.string.quick_crypto_recipient_key_dialog_title)) },
+            text = {
+                if (recipientOptions.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.quick_crypto_recipient_key_empty),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        recipientOptions.forEach { option ->
+                            TextButton(
+                                onClick = {
+                                    selectedRecipientKeyId = option.keyId
+                                    showRecipientPicker = false
+                                },
+                                enabled = !inProgress,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (option.keyId == selectedRecipientKeyId) "${option.label} [已选]" else option.label,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { refreshRecipientOptions() },
+                    enabled = !inProgress
+                ) {
+                    Text(stringResource(R.string.quick_crypto_recipient_key_refresh))
+                }
+                TextButton(onClick = { showRecipientPicker = false }, enabled = !inProgress) {
+                    Text(stringResource(R.string.common_close))
+                }
+            }
+        )
+    }
 }
 
-private fun encryptQuickCryptoText(context: Context, plainText: String): Result<QuickCryptoResult> {
-    val secretKeys = loadSecretKeyRings(context)
-        ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_default_secret_key)))
-    val defaultKeyId = secretKeys.iterator().asSequence().firstOrNull()?.publicKey?.keyID
-        ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_default_key)))
+private fun encryptQuickCryptoText(
+    context: Context,
+    plainText: String,
+    selectedRecipientKeyId: Long?
+): Result<QuickCryptoResult> {
+    val targetKeyId = selectedRecipientKeyId
+        ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_selected_public_key)))
     val publicKeys = loadPublicKeyRings(context)
         ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_default_public_key)))
-    val publicKeyRing = findPublicKeyRing(publicKeys, defaultKeyId)
-        ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_default_public_key)))
+    val publicKeyRing = findPublicKeyRing(publicKeys, targetKeyId)
+        ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_crypto_missing_selected_public_key)))
     val encrypted = GpgHelper.encryptWithPublicKeyBinary(
         plainText.toByteArray(Charsets.UTF_8),
         publicKeyRing,
@@ -403,7 +521,10 @@ private fun encryptQuickCryptoText(context: Context, plainText: String): Result<
     return Result.success(
         QuickCryptoResult(
             outputText = Base64.encodeToString(encrypted, Base64.NO_WRAP),
-            message = context.getString(R.string.quick_crypto_encrypt_success)
+            message = context.getString(
+                R.string.quick_crypto_encrypt_success_target,
+                "0x${targetKeyId.toString(16).takeLast(8)}"
+            )
         )
     )
 }
