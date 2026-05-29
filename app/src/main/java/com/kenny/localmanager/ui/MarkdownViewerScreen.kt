@@ -6876,9 +6876,9 @@ fun EpubViewerScreen(
                     )
                     if (!hideReaderFloatingNextButton) {
                         DraggableNextReadButton(
-                            contentDescription = "下一章",
-                            enabled = currentChapterIndex < chapters.lastIndex,
-                            onClick = { goToNextChapterFirstPage() },
+                            contentDescription = "下一页",
+                            enabled = true,
+                            onClick = { (webViewRef.value as? GestureWebView)?.scrollNextPage() },
                             initialXPercent = floatingButtonXPercent,
                             initialYPercent = floatingButtonYPercent,
                             onPositionChangePercent = { xPercent, yPercent ->
@@ -8457,6 +8457,9 @@ private class GestureWebView(
     }
 
     /** 设置待恢复的滚动位置 */
+    /** 向前翻一页（与右侧点击行为一致），到末尾时触发章节切换回调 */
+    fun scrollNextPage() = jumpByViewport(1)
+
     fun setPendingScrollRatio(ratio: Float) {
         pendingScrollRatio = ratio
         alpha = if (ratio > 0f) 0f else 1f
