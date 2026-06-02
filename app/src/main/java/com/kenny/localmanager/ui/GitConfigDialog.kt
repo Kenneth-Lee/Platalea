@@ -248,7 +248,7 @@ fun GitConfigDialog(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("状态: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                    when (val status = syncStatus) {
+                    when (syncStatus) {
                         is SyncStatus.Idle -> {
                             if (repoUrl.isBlank()) {
                                 Text("未配置", color = MaterialTheme.colorScheme.onSurfaceVariant)

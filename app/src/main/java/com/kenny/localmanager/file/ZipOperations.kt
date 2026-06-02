@@ -422,6 +422,7 @@ private fun copyLocalDirToDocument(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 private fun resolveParentForZip(context: Context, targetParentUri: Uri, treeUri: Uri?): Uri? {
     val s = targetParentUri.toString()
     return when {
@@ -626,7 +627,7 @@ private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, t
     // 必须用树遍历得到的 DocumentFile，否则 SingleDocumentFile.listFiles() 会抛 UnsupportedOperationException
     val doc = getDirectoryViaTree(context, docUri, treeUri) ?: return
     if (!doc.isDirectory) return
-    doc.listFiles()?.orEmpty()?.forEach { child ->
+    doc.listFiles().orEmpty().forEach { child ->
         val name = child.name ?: return@forEach
         val childUri = resolveDocUriWithTree(child.uri, treeUri)
         if (child.isDirectory) {
@@ -1036,6 +1037,7 @@ private fun toDefaultIndexedChapterEntries(files: List<Pair<String, File>>): Lis
 }
 
 /** 生成 index 文件内容，包含所有同类文件的链接。 */
+@Suppress("UNUSED_PARAMETER")
 private fun generateIndexContent(
     files: List<Pair<String, File>>,
     baseDir: File,
@@ -1358,6 +1360,7 @@ fun isPicZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted
  * 解压 .pic.zip：仅建立目录结构并解压前 10 张图到 content。
  * @return 解压结果（imagePaths 可为空），解压失败返回 null
  */
+@Suppress("UNUSED_PARAMETER")
 fun extractPicZipToCache(
     context: Context,
     zipUri: Uri,
@@ -1409,6 +1412,7 @@ fun extractPicZipToCache(
  * 将 .pic.zip 中指定下标范围的图片解压到 content 目录（用于按需加载前后 10 张）。
  * @param password 加密 zip 需传密码，非加密传 null
  */
+@Suppress("UNUSED_PARAMETER")
 fun extractPicZipImageRange(
     context: Context,
     cacheDir: File,
@@ -1559,6 +1563,7 @@ private fun parseEpubContainer(contentDir: File): String? {
 }
 
 /** 解析 OPF 文件获取书籍信息和章节列表。 */
+@Suppress("UNUSED_PARAMETER")
 private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<EpubChapter>>? {
     if (!opfFile.exists()) return null
     val content = opfFile.readText()
@@ -1608,6 +1613,7 @@ private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<E
 }
 
 /** 尝试从 NCX 或 NAV 文件获取章节标题。 */
+@Suppress("UNUSED_PARAMETER")
 private fun parseEpubNavigation(
     context: Context,
     contentDir: File,
@@ -1670,6 +1676,7 @@ private fun parseEpubNavigation(
  * @param onLog 日志回调，用于显示进度
  * @return 解压结果，包含详细错误信息
  */
+@Suppress("UNUSED_PARAMETER")
 fun extractEpubToCache(
     context: Context,
     epubUri: Uri,
@@ -2238,7 +2245,6 @@ fun extractLlmZipToCache(
         sourceFiles.forEachIndexed { index, entry ->
             val chapterId = "chapter_$index"
             val htmlFileName = "$chapterId.html"
-            val relativePath = entry.relativePath
             val sourceFile = entry.sourceFile
             val chapterTitle = entry.title
             val chapterText = readTextWithFallback(sourceFile)

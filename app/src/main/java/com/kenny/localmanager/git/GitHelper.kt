@@ -362,6 +362,7 @@ fun getManagedProjectCurrentBranch(context: Context, repoUrl: String): String? {
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 fun listManagedProjectBranches(
     context: Context,
     repoUrl: String,

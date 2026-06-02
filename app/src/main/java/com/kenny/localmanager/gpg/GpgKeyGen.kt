@@ -28,7 +28,7 @@ fun generateDefaultKey(context: android.content.Context, identity: String, passp
         val keyDir = getGpgKeyDir(context)
         val pwd = if (passphrase.isEmpty()) Passphrase.emptyPassphrase() else Passphrase.fromPassword(String(passphrase))
         val secretKeys: PGPSecretKeyRing = PGPainless.generateKeyRing()
-            .simpleRsaKeyRing(identity.trim(), RsaLength._2048, pwd)
+            .simpleRsaKeyRing(identity.trim(), RsaLength._3072, pwd)
         FileOutputStream(File(keyDir, "secring.gpg")).use { fOut ->
             ArmoredOutputStream(fOut).use { secretKeys.encode(it) }
         }

@@ -298,6 +298,7 @@ private fun parseBookNoteEntry(id: Long, bookTitle: String, rawLines: List<Strin
     var metadataPhase = true
     for (line in lines) {
         val trimmed = line.trim()
+        val metadataJsonText = if (metadataPhase) extractBookNoteMetadataJson(trimmed) else null
         when {
             metadataPhase && trimmed.isBlank() && bodyLines.isEmpty() -> Unit
             metadataPhase && BOOK_NOTE_CHAPTER_REGEX.matches(trimmed) -> {
@@ -306,9 +307,8 @@ private fun parseBookNoteEntry(id: Long, bookTitle: String, rawLines: List<Strin
             metadataPhase && BOOK_NOTE_QUOTE_REGEX.matches(trimmed) -> {
                 quote = BOOK_NOTE_QUOTE_REGEX.matchEntire(trimmed)?.groupValues?.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() }
             }
-            metadataPhase && extractBookNoteMetadataJson(trimmed) != null -> {
-                val jsonText = extractBookNoteMetadataJson(trimmed)
-                runCatching { JSONObject(jsonText) }.getOrNull()?.let { json ->
+            metadataPhase && metadataJsonText != null -> {
+                runCatching { JSONObject(metadataJsonText) }.getOrNull()?.let { json ->
                     if (!json.isNull("chapterIndex")) chapterIndex = json.optInt("chapterIndex")
                     chapterTitle = json.optString("chapterTitle", "").takeIf { it.isNotBlank() }
                     if (!json.isNull("scrollRatio")) {

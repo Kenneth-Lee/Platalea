@@ -22,8 +22,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.MenuBook
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -158,7 +158,7 @@ fun DictionaryScreen(
                         Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.common_refresh))
                     }
                     IconButton(onClick = { showManageDialog = true }, enabled = dictionaries.isNotEmpty()) {
-                        Icon(Icons.Default.MenuBook, contentDescription = stringResource(R.string.dict_manage))
+                        Icon(Icons.AutoMirrored.Filled.MenuBook, contentDescription = stringResource(R.string.dict_manage))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(

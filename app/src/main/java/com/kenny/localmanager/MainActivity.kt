@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         syncPinnedTabShortcuts(this)
         enableEdgeToEdge()
-        intent?.data?.let { uri ->
+        intent?.data?.let { _ ->
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         val launchTarget = intent?.getStringExtra(LAUNCH_TARGET_EXTRA)

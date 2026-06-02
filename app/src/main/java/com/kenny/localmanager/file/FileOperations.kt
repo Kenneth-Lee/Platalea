@@ -481,6 +481,7 @@ fun findChildByName(context: Context, parentUri: Uri, childName: String): Uri? {
 /**
  * 从根 URI（tree URI）得到根文档的 document URI。
  */
+@Suppress("UNUSED_PARAMETER")
 fun getRootDocumentUri(context: Context, rootUri: String): Uri? {
     val treeUri = Uri.parse(rootUri)
     if (!DocumentsContract.isTreeUri(treeUri)) return null

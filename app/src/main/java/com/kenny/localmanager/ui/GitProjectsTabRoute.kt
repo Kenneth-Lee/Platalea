@@ -147,7 +147,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                 return
             }
         }
-        val resolvedRootUri = normalizedRootUri!!
+        val resolvedRootUri = requireNotNull(normalizedRootUri)
         creatingProject = true
         syncState = ManagedGitSyncState.Running("正在创建 Git")
         resetLogs("开始创建 Git：$projectName")
@@ -233,7 +233,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
             return
         }
-        val resolvedRootUri = normalizedRootUri!!
+        val resolvedRootUri = requireNotNull(normalizedRootUri)
         busyProjectId = project.id
         syncState = ManagedGitSyncState.Running("正在下载同步 ${project.projectName}")
         resetLogs("开始下载同步 Git：${project.projectName}")
@@ -303,7 +303,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
             return
         }
-        val resolvedRootUri = normalizedRootUri!!
+        val resolvedRootUri = requireNotNull(normalizedRootUri)
         busyProjectId = project.id
         pendingBranchProject = null
         syncState = ManagedGitSyncState.Running("正在切换分支 ${project.projectName}")

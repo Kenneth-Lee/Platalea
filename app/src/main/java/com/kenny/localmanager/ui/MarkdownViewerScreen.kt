@@ -6499,7 +6499,6 @@ fun EpubViewerScreen(
         },
         bottomBar = {
             val hasDictLoaded = dictLoaded != null
-            val hasDictResult = dictLookupResult != null
             val hasMultipleChapters = chapters.size > 1
             // 只有在有词典或多章节时才显示底部栏
             if (hasDictLoaded || hasMultipleChapters) {

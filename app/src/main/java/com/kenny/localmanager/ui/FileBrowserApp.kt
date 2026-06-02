@@ -13,7 +13,7 @@ import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -49,11 +49,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.filled.PlaylistAdd
+import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
@@ -61,23 +61,23 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.DriveFileMove
+import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
-import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.QueueMusic
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Article
-import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
@@ -353,17 +353,17 @@ private enum class MainTab(val key: String, val labelRes: Int) {
 private fun mainTabIcon(tab: MainTab): ImageVector {
     return when (tab) {
         MainTab.DIRECTORY -> Icons.Default.Folder
-        MainTab.RECENT -> Icons.Default.List
-        MainTab.PLAYER -> Icons.Default.QueueMusic
+        MainTab.RECENT -> Icons.AutoMirrored.Filled.List
+        MainTab.PLAYER -> Icons.AutoMirrored.Filled.QueueMusic
         MainTab.FTP -> Icons.Default.Wifi
         MainTab.FAMILY_NETWORK -> Icons.Default.Home
         MainTab.CONFIG -> Icons.Default.Settings
         MainTab.GIT_SHARE -> Icons.Default.Share
         MainTab.GIT_PROJECTS -> Icons.Default.FolderOpen
-        MainTab.BOOK_NOTE -> Icons.Default.Article
+        MainTab.BOOK_NOTE -> Icons.AutoMirrored.Filled.Article
         MainTab.QUICK_NOTE -> Icons.Default.Edit
         MainTab.QUICK_CRYPTO -> Icons.Default.Lock
-        MainTab.DICTIONARY -> Icons.Default.MenuBook
+        MainTab.DICTIONARY -> Icons.AutoMirrored.Filled.MenuBook
         MainTab.ABOUT -> Icons.Default.Info
     }
 }
@@ -2459,7 +2459,7 @@ private fun FileBrowserAppScreen(
                                 hideDotFiles = hideDotFiles,
                                 isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
                                 preferredExternalPackages = preferredExternalPackages,
-                                onOpenFile = { uri, name, isEncrypted ->
+                                onOpenFile = { uri, name, _ ->
                                     viewingFile = Triple(uri, name, false)
                                 },
                                 onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
@@ -2929,7 +2929,7 @@ private fun FileBrowserAppScreen(
                         toDelete.forEach { item ->
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Icon(
-                                    if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                                    if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
                                     contentDescription = null,
                                     Modifier.size(20.dp),
                                     tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
@@ -4256,7 +4256,7 @@ private fun FileBrowserAppScreen(
             }
         }
         // ---- EPUB 错误对话框（独立于epubTarget） ----
-        epubLoadError?.let { error ->
+        epubLoadError?.let { _ ->
             if (epubTarget == null) {
                 AlertDialog(
                     onDismissRequest = { epubLoadError = null; epubLog = "" },
@@ -6245,7 +6245,7 @@ internal fun FileBrowserScreen(
                     navigationIcon = {
                         if (canGoBack) {
                             IconButton(onClick = onBack) {
-                                Icon(Icons.Default.ArrowBack, contentDescription = context.getString(R.string.common_back))
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = context.getString(R.string.common_back))
                             }
                         }
                     },
@@ -6255,7 +6255,7 @@ internal fun FileBrowserScreen(
                         }
                         Box {
                             IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.Default.Sort, contentDescription = "排序")
+                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "排序")
                             }
                             DropdownMenu(
                                 expanded = showSortMenu,
@@ -6314,7 +6314,7 @@ internal fun FileBrowserScreen(
                             )
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.main_menu_add_filtered_to_pending)) },
-                                leadingIcon = { Icon(Icons.Default.PlaylistAdd, contentDescription = null) },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
                                     val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
@@ -6369,7 +6369,7 @@ internal fun FileBrowserScreen(
                             .clickable { onOpenPlaybackScreen() },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(Icons.Default.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(8.dp))
                         Text(
                             context.getString(R.string.directory_now_playing, state.trackName, state.trackIndex + 1, state.totalTracks),
@@ -6401,14 +6401,14 @@ internal fun FileBrowserScreen(
                             containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onSecondary
                         ) {
-                            Icon(Icons.Default.DriveFileMove, contentDescription = context.getString(R.string.fab_move_to_current))
+                            Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = context.getString(R.string.fab_move_to_current))
                         }
                         FloatingActionButton(
                             onClick = { onShowPendingList(true) },
                             containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onTertiary
                         ) {
-                            Icon(Icons.Default.List, contentDescription = context.getString(R.string.fab_pending_list))
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = context.getString(R.string.fab_pending_list))
                         }
                     }
                     FloatingActionButton(
@@ -7463,14 +7463,14 @@ fun FileItem(
         model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
         model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
-        isCompressedMarkdown(model.name) -> Icons.Default.Article
-        isCompressedHtml(model.name) -> Icons.Default.Article
-        isEpubFile(model.name) || isTxtFile(model.name) || isLlmFile(model.name) -> Icons.Default.MenuBook
+        isCompressedMarkdown(model.name) -> Icons.AutoMirrored.Filled.Article
+        isCompressedHtml(model.name) -> Icons.AutoMirrored.Filled.Article
+        isEpubFile(model.name) || isTxtFile(model.name) || isLlmFile(model.name) -> Icons.AutoMirrored.Filled.MenuBook
         isPdfFile(model.name) -> Icons.Default.PictureAsPdf
         isPicZip(model.name) -> Icons.Default.Archive
         isExtractableArchive(model.name) -> Icons.Default.Archive
         model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
-        else -> Icons.Default.InsertDriveFile
+        else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     val iconTint = when {
         model.isDirectory -> MaterialTheme.colorScheme.primary
@@ -7546,7 +7546,7 @@ fun FileItem(
             if (isInPendingList) {
                 Spacer(Modifier.size(8.dp))
                 Icon(
-                    Icons.Default.PlaylistAdd,
+                    Icons.AutoMirrored.Filled.PlaylistAdd,
                     contentDescription = "已在待处理列表",
                     Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.primary
@@ -7589,7 +7589,7 @@ fun PendingListScreen(
                 title = { Text("待处理列表 (${pendingList.size})") },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
@@ -7655,7 +7655,7 @@ fun PendingListScreen(
                         Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到当前目录")
                     }
                     IconButton(onClick = onMoveHere) {
-                        Icon(Icons.Default.DriveFileMove, contentDescription = "移动到当前目录")
+                        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "移动到当前目录")
                     }
                     IconButton(onClick = onRequestDelete) {
                         Icon(
@@ -7677,7 +7677,7 @@ fun PendingListScreen(
                             }
                         }
                     ) {
-                        Icon(Icons.Default.QueueMusic, contentDescription = "加入播放")
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "加入播放")
                     }
                 }
                 Row(
@@ -7720,7 +7720,7 @@ fun PendingListScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(
-                            if (item.isDirectory) Icons.Default.Folder else Icons.Default.InsertDriveFile,
+                            if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
                             contentDescription = null,
                             Modifier.size(24.dp),
                             tint = if (item.isDirectory) MaterialTheme.colorScheme.primary
@@ -7768,7 +7768,7 @@ fun PendingListScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.DriveFileMove, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
                         Text("移动：将列表中所有项移动到当前目录（原位置删除）", style = MaterialTheme.typography.bodyMedium)
                     }
@@ -7816,7 +7816,7 @@ fun PendingListScreen(
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.size(8.dp))
                         Text("加入播放：可选择新建播放列表，或把当前列表中的 MP3/OGG 追加到已有播放列表；新建列表会立即开始播放，追加到已有列表时会保留当前播放状态。", style = MaterialTheme.typography.bodyMedium)
                     }
@@ -7964,7 +7964,7 @@ fun PlaybackScreen(
                             if (selectedPlaylist != null) selectedPlaylistId = null
                             else onDismiss()
                         }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = context.getString(R.string.common_back))
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = context.getString(R.string.common_back))
                         }
                     }
                 } else {
@@ -8146,7 +8146,7 @@ fun PlaybackScreen(
                     ) {
                         items(pl.uris.size) { i ->
                             val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
-                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState?.trackIndex == i
+                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState.trackIndex == i
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -9211,7 +9211,7 @@ fun PassEditScreen(
                 title = { Text(fileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { if (!saveInProgress) onBack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
@@ -9726,8 +9726,10 @@ fun GenerateKeyDialog(
 ) {
     var identity by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
+    var confirmPassphrase by remember { mutableStateOf("") }
     var confirmKeyRisk by remember { mutableStateOf(false) }
     var generatingInProgress by remember { mutableStateOf(false) }
+    val passphraseConfirmed = isOptionalPasswordConfirmed(passphrase, confirmPassphrase)
     val scope = rememberCoroutineScope()
     Dialog(onDismissRequest = { if (!generatingInProgress) onDismiss() }) {
         Surface(
@@ -9747,12 +9749,15 @@ fun GenerateKeyDialog(
                     enabled = !generatingInProgress
                 )
                 Spacer(Modifier.height(8.dp))
-                ReliablePasswordInputField(
-                    value = passphrase,
-                    onValueChange = { if (!generatingInProgress) passphrase = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("密钥保护密码（可留空表示无密码）") },
-                    enabled = !generatingInProgress
+                PasswordConfirmationFields(
+                    password = passphrase,
+                    confirmPassword = confirmPassphrase,
+                    onPasswordChange = { if (!generatingInProgress) passphrase = it },
+                    onConfirmPasswordChange = { if (!generatingInProgress) confirmPassphrase = it },
+                    passwordLabel = "密钥保护密码（可留空表示无密码）",
+                    confirmLabel = "再次输入密钥保护密码",
+                    enabled = !generatingInProgress,
+                    allowBlank = true
                 )
                 if (hasExistingKeys) {
                     Spacer(Modifier.height(12.dp))
@@ -9803,7 +9808,7 @@ fun GenerateKeyDialog(
                                 }
                             }
                         },
-                        enabled = !generatingInProgress && (!hasExistingKeys || confirmKeyRisk)
+                        enabled = !generatingInProgress && passphraseConfirmed && (!hasExistingKeys || confirmKeyRisk)
                     ) { Text("生成") }
                 }
             }

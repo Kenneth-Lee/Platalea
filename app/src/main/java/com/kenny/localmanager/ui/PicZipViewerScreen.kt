@@ -23,8 +23,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.List
-import androidx.compose.material.icons.filled.RotateRight
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.RotateRight
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.AlertDialog
@@ -278,10 +278,10 @@ fun PicZipViewerScreen(
                                 .clickable { jumpToInput = "${currentIndex + 1}"; showJumpToDialog = true }
                         )
                         IconButton(onClick = { showDirectory = true }) {
-                            Icon(Icons.Filled.List, contentDescription = "目录")
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "目录")
                         }
                         IconButton(onClick = { rotationDegrees = (rotationDegrees + 90f) % 360f }) {
-                            Icon(Icons.Filled.RotateRight, contentDescription = "旋转")
+                            Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = "旋转")
                         }
                     }
                 }

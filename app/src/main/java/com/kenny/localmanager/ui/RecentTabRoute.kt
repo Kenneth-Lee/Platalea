@@ -15,13 +15,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Article
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.QueueMusic
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -68,12 +68,12 @@ fun RecentTabRoute(state: RecentTabRouteState) {
     fun recentItemIcon(item: RecentOpenItem): ImageVector {
         val lower = item.title.lowercase(Locale.getDefault())
         return when {
-            item.type == RECENT_TYPE_PLAYLIST -> Icons.Default.QueueMusic
+            item.type == RECENT_TYPE_PLAYLIST -> Icons.AutoMirrored.Filled.QueueMusic
             item.type == RECENT_TYPE_EXTERNAL_OPEN && (lower.endsWith(".mp4") || lower.endsWith(".mkv") || lower.endsWith(".avi")) -> Icons.Default.PlayArrow
             lower.endsWith(".md.zip") || lower.endsWith(".rst.zip") || lower.endsWith(".html.zip") || lower.endsWith(".llm.zip") || lower.endsWith(".zip") -> Icons.Default.Archive
-            lower.endsWith(".epub") || lower.endsWith(".txt") || lower.endsWith(".llm") -> Icons.Default.Article
+            lower.endsWith(".epub") || lower.endsWith(".txt") || lower.endsWith(".llm") -> Icons.AutoMirrored.Filled.Article
             lower.endsWith(".pdf") -> Icons.Default.PictureAsPdf
-            else -> Icons.Default.InsertDriveFile
+            else -> Icons.AutoMirrored.Filled.InsertDriveFile
         }
     }
 

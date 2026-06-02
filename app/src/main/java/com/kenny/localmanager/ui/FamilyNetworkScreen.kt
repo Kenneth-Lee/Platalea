@@ -26,10 +26,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Send
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.Button
@@ -118,7 +118,7 @@ fun FamilyNetworkScreen(
                 navigationIcon = if (selectedService != null) {
                     {
                         IconButton(onClick = { selectedConversationKey = null }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.common_back))
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     }
                 } else {
@@ -362,7 +362,6 @@ private fun FamilyConversationPage(
         }
         FamilyConversationPane(
             modifier = Modifier.weight(1f),
-            service = service,
             messages = messages,
             draftMessage = draftMessage,
             onDraftChange = onDraftChange,
@@ -529,7 +528,6 @@ private fun FamilyNetworkServiceCard(
 @Composable
 private fun FamilyConversationPane(
     modifier: Modifier,
-    service: FamilyDiscoveredService,
     messages: List<FamilyChatMessage>,
     draftMessage: String,
     onDraftChange: (String) -> Unit,
@@ -607,7 +605,7 @@ private fun FamilyConversationPane(
                     enabled = draftMessage.trim().isNotEmpty(),
                     modifier = Modifier.align(Alignment.CenterVertically)
                 ) {
-                    Icon(Icons.Default.Send, contentDescription = null)
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
                 }
             }
         }

@@ -41,6 +41,7 @@ class FtpServerManager(private val context: Context) {
      * @param currentDirUri 当前浏览目录 URI；若与 treeRootUri 相同或解析失败则 FTP 初始工作目录为树根。
      * @param passiveExternalIp 被动模式时向客户端宣告的 IP（如本机 LAN IP），若为空则使用默认；LIST/ls 常用被动模式，不设可能导致无响应。
      */
+    @Suppress("UNUSED_PARAMETER")
     fun start(port: Int, treeRootUri: String?, currentDirUri: String?, password: String?, passiveExternalIp: String?, onLog: (String) -> Unit): Boolean {
         if (treeRootUri.isNullOrBlank()) return false
         val treeUri = Uri.parse(treeRootUri)
