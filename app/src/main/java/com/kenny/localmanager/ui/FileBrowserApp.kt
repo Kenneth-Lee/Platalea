@@ -240,6 +240,7 @@ import com.kenny.localmanager.ui.PicZipViewerScreen
 import com.kenny.localmanager.ui.PdfViewerScreen
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
+import com.kenny.localmanager.player.TrackMetadata
 import com.kenny.localmanager.player.ACTION_NEXT
 import com.kenny.localmanager.player.ACTION_PAUSE
 import com.kenny.localmanager.player.ACTION_PLAY
@@ -1045,6 +1046,19 @@ private fun formatPlaybackTime(ms: Int): String {
     } else {
         String.format(Locale.getDefault(), "%02d:%02d", minutes, seconds)
     }
+}
+
+private fun formatTrackMetadata(metadata: TrackMetadata): String {
+    val parts = buildList {
+        metadata.artist?.takeIf { it.isNotBlank() }?.let { add("艺术家：$it") }
+        metadata.album?.takeIf { it.isNotBlank() }?.let { add("专辑：$it") }
+        metadata.albumArtist
+            ?.takeIf { it.isNotBlank() && it != metadata.artist }
+            ?.let { add("专辑艺术家：$it") }
+        metadata.year?.takeIf { it.isNotBlank() }?.let { add(it) }
+        metadata.genre?.takeIf { it.isNotBlank() }?.let { add(it) }
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable
@@ -8070,16 +8084,21 @@ fun PlaybackScreen(
                 ) {
                     Column(Modifier.padding(12.dp)) {
                         Text(
-                            state.playlistName ?: context.getString(R.string.player_current_playback),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Text(
                             "${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        val metadataText = formatTrackMetadata(state.metadata)
+                        if (metadataText.isNotEmpty()) {
+                            Text(
+                                metadataText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                         if (state.durationMs > 0) {
                             Spacer(Modifier.height(4.dp))
                             Slider(
@@ -8155,12 +8174,6 @@ fun PlaybackScreen(
                     val target = state.trackIndex.coerceIn(0, maxOf(0, pl.uris.lastIndex))
                     selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
                 }
-                Text(
-                    pl.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = if (pl.isDirectorySource) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                )
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()

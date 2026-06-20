@@ -17,6 +17,7 @@ import android.media.AudioAttributes
 import android.media.AudioManager
 import android.media.AudioFocusRequest
 import android.media.MediaMetadata
+import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState as PlatformPlaybackState
@@ -73,6 +74,7 @@ class PlaybackService : Service() {
     private var mediaPlayer: MediaPlayer? = null
     private var playlistUris: List<String> = emptyList()
     private var playlistNames: List<String> = emptyList()
+    private var currentTrackMetadata: TrackMetadata = TrackMetadata()
     private var dirUri: String = ""
     private var playlistId: String? = null
     private var playlistName: String? = null
@@ -421,6 +423,7 @@ class PlaybackService : Service() {
 
         val uri = Uri.parse(playlistUris[index])
         val name = playlistNames.getOrElse(index) { uri.lastPathSegment ?: "?" }
+        currentTrackMetadata = readTrackMetadata(uri)
 
         try {
             val mp = MediaPlayer().apply {
@@ -513,7 +516,8 @@ class PlaybackService : Service() {
             durationMs = durationMs,
             isPlaying = isPlaying,
             playlistId = playlistId,
-            playlistName = playlistName
+            playlistName = playlistName,
+            metadata = currentTrackMetadata
         )
         updateMediaSessionPlaybackState(
             isPlaying = isPlaying,
@@ -524,9 +528,32 @@ class PlaybackService : Service() {
             trackName = trackName,
             trackIndex = trackIndex,
             totalTracks = playlistUris.size,
-            durationMs = durationMs
+            durationMs = durationMs,
+            metadata = currentTrackMetadata
         )
     }
+
+    private fun readTrackMetadata(uri: Uri): TrackMetadata {
+        return try {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(applicationContext, uri)
+                TrackMetadata(
+                    title = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),
+                    artist = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
+                    album = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM),
+                    albumArtist = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
+                    genre = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE),
+                    year = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read audio metadata from uri=$uri", e)
+            TrackMetadata()
+        }
+    }
+
+    private fun MediaMetadataRetriever.extractTrimmedMetadata(keyCode: Int): String? =
+        extractMetadata(keyCode)?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun playNext() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
@@ -611,6 +638,7 @@ class PlaybackService : Service() {
         mediaPlayer = null
         playlistUris = emptyList()
         playlistNames = emptyList()
+        currentTrackMetadata = TrackMetadata()
         dirUri = ""
         playlistId = null
         playlistName = null
@@ -689,23 +717,31 @@ class PlaybackService : Service() {
         trackName: String,
         trackIndex: Int,
         totalTracks: Int,
-        durationMs: Int
+        durationMs: Int,
+        metadata: TrackMetadata
     ) {
-        val safeTrackName = trackName.ifBlank { getString(R.string.playback_notification_title) }
+        val safeTrackName = metadata.title?.ifBlank { null }
+            ?: trackName.ifBlank { getString(R.string.playback_notification_title) }
         val safeTrackNumber = (trackIndex + 1).coerceAtLeast(1).toLong()
         val safeTotal = totalTracks.coerceAtLeast(0).toLong()
         val safeDuration = durationMs.coerceAtLeast(0).toLong()
-        val albumName = playlistName?.ifBlank { null } ?: getString(R.string.app_name)
-        val metadata = MediaMetadata.Builder()
+        val artistName = metadata.artist?.ifBlank { null }
+            ?: metadata.albumArtist?.ifBlank { null }
+            ?: playlistName?.ifBlank { null }
+            ?: getString(R.string.app_name)
+        val albumName = metadata.album?.ifBlank { null }
+            ?: playlistName?.ifBlank { null }
+            ?: getString(R.string.app_name)
+        val sessionMetadata = MediaMetadata.Builder()
             .putString(MediaMetadata.METADATA_KEY_TITLE, safeTrackName)
             .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, safeTrackName)
-            .putString(MediaMetadata.METADATA_KEY_ARTIST, albumName)
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, artistName)
             .putString(MediaMetadata.METADATA_KEY_ALBUM, albumName)
             .putLong(MediaMetadata.METADATA_KEY_TRACK_NUMBER, safeTrackNumber)
             .putLong(MediaMetadata.METADATA_KEY_NUM_TRACKS, safeTotal)
             .putLong(MediaMetadata.METADATA_KEY_DURATION, safeDuration)
             .build()
-        mediaSession?.setMetadata(metadata)
+        mediaSession?.setMetadata(sessionMetadata)
     }
 
     private fun updateMediaSessionPlaybackState(isPlaying: Boolean, positionMs: Int, durationMs: Int) {

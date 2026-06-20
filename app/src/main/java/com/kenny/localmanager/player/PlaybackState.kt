@@ -13,5 +13,15 @@ data class PlaybackState(
     val durationMs: Int,
     val isPlaying: Boolean,
     val playlistId: String? = null,
-    val playlistName: String? = null
+    val playlistName: String? = null,
+    val metadata: TrackMetadata = TrackMetadata()
+)
+
+data class TrackMetadata(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val albumArtist: String? = null,
+    val genre: String? = null,
+    val year: String? = null
 )
