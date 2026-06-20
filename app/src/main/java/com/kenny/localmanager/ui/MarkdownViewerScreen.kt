@@ -8441,13 +8441,14 @@ private class GestureWebView(
                 var targetY = currentY + ($signedDirection * viewHeight);
                 var reachedStart = false;
                 var reachedEnd = false;
+                var edgeTolerance = 2;
                 if (targetY < 0) {
                     targetY = 0;
-                    reachedStart = true;
+                    reachedStart = currentY <= edgeTolerance;
                 }
                 if (targetY > maxScroll) {
                     targetY = maxScroll;
-                    reachedEnd = true;
+                    reachedEnd = currentY >= maxScroll - edgeTolerance;
                 }
                 window.scrollTo(0, targetY);
                 return JSON.stringify({

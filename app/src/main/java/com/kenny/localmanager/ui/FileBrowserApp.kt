@@ -1061,6 +1061,12 @@ private fun formatTrackMetadata(metadata: TrackMetadata): String {
     return parts.joinToString(" · ")
 }
 
+private data class PlaylistTrackTransfer(
+    val source: Playlist,
+    val trackIndex: Int,
+    val move: Boolean
+)
+
 @Composable
 private fun PlaybackBottomControlBar(
     isPlaying: Boolean,
@@ -2928,7 +2934,8 @@ private fun FileBrowserAppScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
-                        playlists.forEach { playlist ->
+                        val manualPlaylists = playlists.filterNot { it.isDirectorySource }
+                        manualPlaylists.forEach { playlist ->
                             OutlinedButton(
                                 onClick = {
                                     scope.launch { appendToPlaybackPlaylist(playlist, pendingPlaybackAudioList) }
@@ -2945,6 +2952,13 @@ private fun FileBrowserAppScreen(
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
+                        }
+                        if (manualPlaylists.isEmpty()) {
+                            Text(
+                                "没有可移入的普通播放列表。目录列表不能作为加入目标，请新建普通播放列表。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 },
@@ -7956,6 +7970,10 @@ fun PlaybackScreen(
     var bookmarkPendingTrackName by remember { mutableStateOf("") }
     var editingBookmarkId by remember { mutableStateOf<String?>(null) }
     var editingBookmarkNote by remember { mutableStateOf("") }
+    var showCreatePlaylistDialog by remember { mutableStateOf(false) }
+    var newPlaylistName by remember { mutableStateOf("") }
+    var trackActionMenuIndex by remember { mutableStateOf<Int?>(null) }
+    var pendingTrackTransfer by remember { mutableStateOf<PlaylistTrackTransfer?>(null) }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -8013,6 +8031,74 @@ fun PlaybackScreen(
             action = ACTION_RESUME
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    }
+
+    suspend fun createEmptyPlaylist(name: String) {
+        val fallbackName = context.getString(
+            R.string.player_playlist_default_name,
+            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+        )
+        val playlist = Playlist(
+            id = java.util.UUID.randomUUID().toString(),
+            name = name.trim().ifBlank { fallbackName },
+            uris = emptyList(),
+            names = emptyList()
+        )
+        prefs.addPlaylist(playlist)
+        selectedPlaylistId = playlist.id
+        showCreatePlaylistDialog = false
+        newPlaylistName = ""
+        Toast.makeText(context, "已创建空播放列表", Toast.LENGTH_SHORT).show()
+    }
+
+    suspend fun removeTrackEntryAfterMove(source: Playlist, trackIndex: Int) {
+        if (trackIndex !in source.uris.indices) return
+        val updatedUris = source.uris.toMutableList().apply { removeAt(trackIndex) }
+        val updatedNames = source.names.toMutableList().apply {
+            if (trackIndex in indices) removeAt(trackIndex)
+        }
+        val currentState = playbackState
+        val isCurrentPlaylist = currentState?.playlistId == source.id
+        val currentTrackIndex = currentState?.trackIndex ?: -1
+        if (updatedUris.isEmpty()) {
+            if (isCurrentPlaylist) onStopPlayback()
+            prefs.removePlaylist(source.id)
+            if (selectedPlaylistId == source.id) selectedPlaylistId = null
+            return
+        }
+        if (isCurrentPlaylist) {
+            val nextResumeIndex = when {
+                currentTrackIndex < 0 -> 0
+                trackIndex < currentTrackIndex -> currentTrackIndex - 1
+                trackIndex == currentTrackIndex -> currentTrackIndex.coerceAtMost(updatedUris.lastIndex)
+                else -> currentTrackIndex
+            }.coerceIn(0, updatedUris.lastIndex)
+            onStopPlayback()
+            prefs.setPlayerLastStateForPlaylist(source.id, nextResumeIndex, 0L)
+        }
+        prefs.updatePlaylist(source.copy(uris = updatedUris, names = updatedNames))
+    }
+
+    suspend fun transferTrackToPlaylist(transfer: PlaylistTrackTransfer, target: Playlist) {
+        if (target.isDirectorySource) {
+            Toast.makeText(context, "目录列表不能作为移入目标", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (target.id == transfer.source.id) return
+        val trackUri = transfer.source.uris.getOrNull(transfer.trackIndex) ?: return
+        val trackName = transfer.source.names.getOrElse(transfer.trackIndex) { trackUri.substringAfterLast('/') }
+        val result = prefs.appendTracksToPlaylist(target.id, listOf(trackUri), listOf(trackName))
+        if (!result.found) {
+            Toast.makeText(context, "目标播放列表已不存在", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (transfer.move) {
+            removeTrackEntryAfterMove(transfer.source, transfer.trackIndex)
+        }
+        pendingTrackTransfer = null
+        val action = if (transfer.move) "移动" else "复制"
+        val duplicateHint = if (result.skippedCount > 0) "，目标列表已存在同一首" else ""
+        Toast.makeText(context, "已${action}到「${target.name}」$duplicateHint", Toast.LENGTH_SHORT).show()
     }
 
     fun promptSaveCurrentBookmark() {
@@ -8324,6 +8410,36 @@ fun PlaybackScreen(
                                         modifier = Modifier.size(20.dp)
                                     )
                                 }
+                                Box {
+                                    IconButton(onClick = { trackActionMenuIndex = i }) {
+                                        Icon(
+                                            Icons.Default.MoreVert,
+                                            contentDescription = context.getString(R.string.main_menu),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                    DropdownMenu(
+                                        expanded = trackActionMenuIndex == i,
+                                        onDismissRequest = { trackActionMenuIndex = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("复制到列表") },
+                                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
+                                            onClick = {
+                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = false)
+                                                trackActionMenuIndex = null
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text("移动到列表") },
+                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
+                                            onClick = {
+                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = true)
+                                                trackActionMenuIndex = null
+                                            }
+                                        )
+                                    }
+                                }
                                 IconButton(
                                     onClick = {
                                         scope.launch {
@@ -8374,11 +8490,21 @@ fun PlaybackScreen(
                     }
                 }
             } else {
-                Text(
-                    context.getString(R.string.player_playlist_section),
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
-                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        context.getString(R.string.player_playlist_section),
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(onClick = { showCreatePlaylistDialog = true }) {
+                        Text(context.getString(R.string.player_new_list))
+                    }
+                }
                 if (playlists.isEmpty()) {
                     Box(
                         Modifier
@@ -8508,6 +8634,77 @@ fun PlaybackScreen(
                 },
                 onNext = {
                     if (playbackState != null) onPlayNext()
+                }
+            )
+        }
+        if (showCreatePlaylistDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    showCreatePlaylistDialog = false
+                    newPlaylistName = ""
+                },
+                title = { Text("新建空播放列表") },
+                text = {
+                    OutlinedTextField(
+                        value = newPlaylistName,
+                        onValueChange = { newPlaylistName = it },
+                        label = { Text("列表名称") },
+                        singleLine = true
+                    )
+                },
+                confirmButton = {
+                    Button(onClick = { scope.launch { createEmptyPlaylist(newPlaylistName) } }) {
+                        Text(context.getString(R.string.common_ok))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showCreatePlaylistDialog = false
+                        newPlaylistName = ""
+                    }) { Text(context.getString(R.string.common_cancel)) }
+                }
+            )
+        }
+        pendingTrackTransfer?.let { transfer ->
+            val targetPlaylists = playlists.filter { it.id != transfer.source.id && !it.isDirectorySource }
+            AlertDialog(
+                onDismissRequest = { pendingTrackTransfer = null },
+                title = { Text(if (transfer.move) "移动到播放列表" else "复制到播放列表") },
+                text = {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (targetPlaylists.isEmpty()) {
+                            Text(
+                                "没有可移入的普通播放列表。目录列表不能作为目标，请先新建普通播放列表。",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            targetPlaylists.forEach { playlist ->
+                                OutlinedButton(
+                                    onClick = { scope.launch { transferTrackToPlaylist(transfer, playlist) } },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(Modifier.fillMaxWidth()) {
+                                        Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
+                                        Text(
+                                            context.getString(R.string.player_track_count, playlist.trackCount),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { pendingTrackTransfer = null }) {
+                        Text(context.getString(R.string.common_cancel))
+                    }
                 }
             )
         }
