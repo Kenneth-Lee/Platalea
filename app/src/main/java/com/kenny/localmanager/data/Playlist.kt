@@ -12,9 +12,12 @@ data class Playlist(
     val name: String,
     val note: String = "",
     val uris: List<String>,
-    val names: List<String>
+    val names: List<String>,
+    val sourceType: String = SOURCE_TYPE_MANUAL,
+    val sourceUri: String? = null
 ) {
     val trackCount: Int get() = uris.size
+    val isDirectorySource: Boolean get() = sourceType == SOURCE_TYPE_DIRECTORY && !sourceUri.isNullOrBlank()
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -22,15 +25,22 @@ data class Playlist(
         put("note", note)
         put("uris", JSONArray(uris))
         put("names", JSONArray(names))
+        put("sourceType", sourceType)
+        put("sourceUri", sourceUri ?: "")
     }
 
     companion object {
+        const val SOURCE_TYPE_MANUAL = "manual"
+        const val SOURCE_TYPE_DIRECTORY = "directory"
+
         fun fromJson(obj: JSONObject): Playlist = Playlist(
             id = obj.optString("id", UUID.randomUUID().toString()),
             name = obj.optString("name", ""),
             note = obj.optString("note", ""),
             uris = jsonArrayToList(obj.optJSONArray("uris")),
-            names = jsonArrayToList(obj.optJSONArray("names"))
+            names = jsonArrayToList(obj.optJSONArray("names")),
+            sourceType = obj.optString("sourceType", SOURCE_TYPE_MANUAL).ifBlank { SOURCE_TYPE_MANUAL },
+            sourceUri = obj.optString("sourceUri").trim().ifBlank { null }
         )
 
         private fun jsonArrayToList(arr: JSONArray?): List<String> {

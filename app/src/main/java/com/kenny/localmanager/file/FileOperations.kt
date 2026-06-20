@@ -13,6 +13,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
+import java.util.Locale
 
 private const val TAG = "FileOperations"
 
@@ -45,6 +46,24 @@ data class RecursiveFileSearchHit(
     val model: DocumentFileModel,
     val relativePath: String
 )
+
+private val MUSIC_FILE_EXTENSIONS = setOf(
+    "mp3",
+    "ogg",
+    "oga",
+    "opus",
+    "flac",
+    "m4a",
+    "aac",
+    "wav",
+    "wma",
+    "ape"
+)
+
+fun isMusicFileName(name: String): Boolean {
+    val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    return extension in MUSIC_FILE_EXTENSIONS
+}
 
 fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileModel> {
     val treeUri = Uri.parse(treeUriStr)
@@ -142,6 +161,11 @@ fun searchFilesRecursively(
     }
     return results
 }
+
+fun collectMusicFilesRecursively(context: Context, rootUriStr: String): List<RecursiveFileSearchHit> =
+    searchFilesRecursively(context, rootUriStr, RecursiveFileSearchCriteria())
+        .filter { isMusicFileName(it.model.name) }
+        .sortedBy { it.relativePath.lowercase(Locale.ROOT) }
 
 fun ContentResolver.getDisplayName(uri: Uri): String? =
     try {

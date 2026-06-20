@@ -229,7 +229,9 @@ import com.kenny.localmanager.file.cleanPicZipCache
 import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
+import com.kenny.localmanager.file.isMusicFileName
 import com.kenny.localmanager.file.formatSize
+import com.kenny.localmanager.file.collectMusicFilesRecursively
 import com.kenny.localmanager.file.RecursiveFileSearchCriteria
 import com.kenny.localmanager.file.RecursiveFileSearchHit
 import com.kenny.localmanager.file.searchFilesRecursively
@@ -662,17 +664,22 @@ private suspend fun runWithUiProgress(
 private suspend fun createNewPlaybackPlaylistAndStart(
     context: Context,
     prefs: Preferences,
-    audioList: List<DocumentFileModel>
+    audioList: List<DocumentFileModel>,
+    playlistName: String? = null,
+    sourceType: String = Playlist.SOURCE_TYPE_MANUAL,
+    sourceUri: String? = null
 ): Playlist? {
     if (audioList.isEmpty()) return null
     val playlist = Playlist(
         id = java.util.UUID.randomUUID().toString(),
-        name = context.getString(
+        name = playlistName ?: context.getString(
             R.string.player_playlist_default_name,
             java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
         ),
         uris = audioList.map { it.uri.toString() },
-        names = audioList.map { it.name }
+        names = audioList.map { it.name },
+        sourceType = sourceType,
+        sourceUri = sourceUri
     )
     withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
     val intent = Intent(context, PlaybackService::class.java).apply {
@@ -681,6 +688,31 @@ private suspend fun createNewPlaybackPlaylistAndStart(
     }
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     return playlist
+}
+
+private suspend fun createDirectoryPlaybackPlaylistAndStart(
+    context: Context,
+    prefs: Preferences,
+    directoryUri: String,
+    directoryName: String
+): Playlist? {
+    val audioList = withContext(Dispatchers.IO) {
+        collectMusicFilesRecursively(context, directoryUri).map { it.model }
+    }
+    if (audioList.isEmpty()) return null
+    return createNewPlaybackPlaylistAndStart(
+        context = context,
+        prefs = prefs,
+        audioList = audioList,
+        playlistName = directoryName.ifBlank {
+            context.getString(
+                R.string.player_playlist_default_name,
+                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            )
+        },
+        sourceType = Playlist.SOURCE_TYPE_DIRECTORY,
+        sourceUri = directoryUri
+    )
 }
 
 private suspend fun appendToPlaybackPlaylistAndStart(
@@ -2506,6 +2538,25 @@ private fun FileBrowserAppScreen(
                                 onCreateQuickNote = {
                                     switchMainTab(MainTab.QUICK_NOTE)
                                     quickNoteController.requestOpenWithCachedPassword(true)
+                                },
+                                onCreateMusicPlaylist = { uri, name ->
+                                    scope.launch {
+                                        val playlist = withContext(Dispatchers.IO) {
+                                            createDirectoryPlaybackPlaylistAndStart(context, prefs, uri, name)
+                                        }
+                                        if (playlist == null) {
+                                            Toast.makeText(context, "目录中没有可播放的音乐文件", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            recordRecentOpen(
+                                                type = RECENT_TYPE_PLAYLIST,
+                                                key = playlist.id,
+                                                title = playlist.name,
+                                                playlistId = playlist.id
+                                            )
+                                            switchMainTab(MainTab.PLAYER)
+                                            Toast.makeText(context, "已从目录生成播放列表并开始播放", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
                                 },
                                 onRequestGpgDecrypt = { fileModel, dirUri ->
                                     gpgPassword = ""
@@ -5998,6 +6049,7 @@ internal fun FileBrowserScreen(
     onRefresh: () -> Unit,
     onChangeRoot: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
+    onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
@@ -6081,6 +6133,12 @@ internal fun FileBrowserScreen(
         val scheme = parsed.scheme?.lowercase()
         val host = parsed.host?.trim().orEmpty()
         return if ((scheme == "http" || scheme == "https") && host.isNotEmpty()) normalized else null
+    }
+
+    val currentDirectoryName = remember(currentUri) {
+        val uri = Uri.parse(currentUri)
+        val doc = DocumentFile.fromTreeUri(context, uri) ?: DocumentFile.fromSingleUri(context, uri)
+        doc?.name ?: context.getString(R.string.directory_root_name)
     }
 
     fun clearFileSearchInputs() {
@@ -6301,6 +6359,14 @@ internal fun FileBrowserScreen(
                                     showOverflowMenu = false
                                     showOpenUrlDialog = true
                                     openUrlError = null
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("生成当前目录音乐列表") },
+                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    onCreateMusicPlaylist(currentUri, currentDirectoryName)
                                 }
                             )
                             DropdownMenuItem(
@@ -6759,6 +6825,14 @@ internal fun FileBrowserScreen(
                                 }
                             ) { Text(context.getString(R.string.context_import_stardict), color = MaterialTheme.colorScheme.onSurface) }
                         }
+                    } else {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onCreateMusicPlaylist(menuTarget.uri.toString(), menuTarget.name)
+                                contextMenuTarget = null
+                            }
+                        ) { Text("生成音乐列表", color = MaterialTheme.colorScheme.onSurface) }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
                         TextButton(
@@ -7667,11 +7741,11 @@ fun PendingListScreen(
                     IconButton(onClick = { onClearFilteredList(filteredPendingItems) }) {
                         Icon(Icons.Default.Clear, contentDescription = "清空当前过滤结果")
                     }
-                    val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && (it.name.endsWith(".mp3", ignoreCase = true) || it.name.endsWith(".ogg", ignoreCase = true)) }
+                    val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
                     IconButton(
                         onClick = {
                             if (audioFromFiltered.isEmpty()) {
-                                Toast.makeText(context, "当前列表没有 MP3 或 OGG 文件", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "当前列表没有可播放的音频文件", Toast.LENGTH_SHORT).show()
                             } else {
                                 onAddToPlayback(audioFromFiltered)
                             }
@@ -8084,13 +8158,16 @@ fun PlaybackScreen(
                 Text(
                     pl.name,
                     style = MaterialTheme.typography.titleMedium,
+                    color = if (pl.isDirectorySource) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                 )
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    colors = CardDefaults.cardColors(
+                        containerColor = if (pl.isDirectorySource) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer
+                    )
                 ) {
                 Row(
                     Modifier
@@ -8108,7 +8185,7 @@ fun PlaybackScreen(
                             Text(
                                 pl.note,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -8116,7 +8193,15 @@ fun PlaybackScreen(
                             Text(
                                 context.getString(R.string.player_add_note),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (pl.isDirectorySource) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "目录列表 · 删除曲目会同步删除源文件",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
                             )
                         }
                     }
@@ -8234,6 +8319,13 @@ fun PlaybackScreen(
                                             val currentState = playbackState
                                             val isCurrentPlaylist = currentState?.playlistId == pl.id
                                             val currentTrackIndex = currentState?.trackIndex ?: -1
+                                            if (pl.isDirectorySource) {
+                                                val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[i]))
+                                                if (!deleted) {
+                                                    Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
+                                                    return@launch
+                                                }
+                                            }
                                             if (uris.isEmpty()) {
                                                 if (isCurrentPlaylist) {
                                                     onStopPlayback()
@@ -8296,10 +8388,16 @@ fun PlaybackScreen(
                         items(playlists.size) { i ->
                             val pl = playlists[i]
                             val isCurrent = playbackState?.playlistId == pl.id
+                            val isDangerousPlaylist = pl.isDirectorySource
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+                                    containerColor = when {
+                                        isDangerousPlaylist && isCurrent -> MaterialTheme.colorScheme.errorContainer
+                                        isDangerousPlaylist -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.82f)
+                                        isCurrent -> MaterialTheme.colorScheme.primaryContainer
+                                        else -> MaterialTheme.colorScheme.surfaceVariant
+                                    }
                                 )
                             ) {
                             Row(
@@ -8324,14 +8422,22 @@ fun PlaybackScreen(
                                         if (pl.note.isNotBlank()) pl.note else pl.name,
                                         style = MaterialTheme.typography.bodyLarge,
                                         maxLines = if (pl.note.isNotBlank()) 2 else 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        overflow = TextOverflow.Ellipsis,
+                                        color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface
                                     )
                                     val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
                                     Text(
                                         "${pl.trackCount} 首 · 书签 $bookmarkCount",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    if (isDangerousPlaylist) {
+                                        Text(
+                                            "目录列表 · 删除曲目会同步删除源文件",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
                                 }
                                 IconButton(
                                     onClick = {
