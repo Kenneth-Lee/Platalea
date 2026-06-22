@@ -91,6 +91,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("org.bouncycastle:bcpg-jdk18on:1.77")
     implementation("org.bouncycastle:bcutil-jdk18on:1.77")
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")

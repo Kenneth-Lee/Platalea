@@ -83,6 +83,7 @@ data class PlayerResumeState(
 )
 
 const val PLAYER_AUDIO_ENGINE_MEDIA_PLAYER = "media_player"
+const val PLAYER_AUDIO_ENGINE_EXO_PLAYER = "exo_player"
 const val PLAYER_AUDIO_PRESET_FLAT = "flat"
 const val PLAYER_AUDIO_PRESET_VOCAL = "vocal"
 const val PLAYER_AUDIO_PRESET_BASS = "bass"
@@ -251,8 +252,7 @@ class Preferences(private val context: Context) {
 
     val playerAudioSettings: Flow<PlayerAudioSettings> = context.dataStore.data.map { prefs ->
         PlayerAudioSettings(
-            engine = prefs[PLAYER_AUDIO_ENGINE]?.takeIf { it == PLAYER_AUDIO_ENGINE_MEDIA_PLAYER }
-                ?: PLAYER_AUDIO_ENGINE_MEDIA_PLAYER,
+            engine = normalizePlayerAudioEngine(prefs[PLAYER_AUDIO_ENGINE]),
             keepAwake = prefs[PLAYER_KEEP_AWAKE] ?: false,
             audioEffectsEnabled = prefs[PLAYER_AUDIO_EFFECTS_ENABLED] ?: false,
             effectPreset = normalizePlayerAudioPreset(prefs[PLAYER_AUDIO_EFFECT_PRESET]),
@@ -736,7 +736,7 @@ class Preferences(private val context: Context) {
 
     suspend fun setPlayerAudioSettings(settings: PlayerAudioSettings) {
         context.dataStore.edit { prefs ->
-            prefs[PLAYER_AUDIO_ENGINE] = PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
+            prefs[PLAYER_AUDIO_ENGINE] = normalizePlayerAudioEngine(settings.engine)
             prefs[PLAYER_KEEP_AWAKE] = settings.keepAwake
             prefs[PLAYER_AUDIO_EFFECTS_ENABLED] = settings.audioEffectsEnabled
             prefs[PLAYER_AUDIO_EFFECT_PRESET] = normalizePlayerAudioPreset(settings.effectPreset)
@@ -747,15 +747,14 @@ class Preferences(private val context: Context) {
     suspend fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
         context.dataStore.edit { prefs ->
             val current = PlayerAudioSettings(
-                engine = prefs[PLAYER_AUDIO_ENGINE]?.takeIf { it == PLAYER_AUDIO_ENGINE_MEDIA_PLAYER }
-                    ?: PLAYER_AUDIO_ENGINE_MEDIA_PLAYER,
+                engine = normalizePlayerAudioEngine(prefs[PLAYER_AUDIO_ENGINE]),
                 keepAwake = prefs[PLAYER_KEEP_AWAKE] ?: false,
                 audioEffectsEnabled = prefs[PLAYER_AUDIO_EFFECTS_ENABLED] ?: false,
                 effectPreset = normalizePlayerAudioPreset(prefs[PLAYER_AUDIO_EFFECT_PRESET]),
                 highQualityOutput = prefs[PLAYER_HIGH_QUALITY_OUTPUT] ?: false
             )
             val updated = transform(current)
-            prefs[PLAYER_AUDIO_ENGINE] = PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
+            prefs[PLAYER_AUDIO_ENGINE] = normalizePlayerAudioEngine(updated.engine)
             prefs[PLAYER_KEEP_AWAKE] = updated.keepAwake
             prefs[PLAYER_AUDIO_EFFECTS_ENABLED] = updated.audioEffectsEnabled
             prefs[PLAYER_AUDIO_EFFECT_PRESET] = normalizePlayerAudioPreset(updated.effectPreset)
@@ -1073,6 +1072,11 @@ class Preferences(private val context: Context) {
         PLAYER_AUDIO_PRESET_CAR,
         PLAYER_AUDIO_PRESET_HEADPHONE -> value
         else -> PLAYER_AUDIO_PRESET_FLAT
+    }
+
+    private fun normalizePlayerAudioEngine(value: String?): String = when (value) {
+        PLAYER_AUDIO_ENGINE_EXO_PLAYER -> PLAYER_AUDIO_ENGINE_EXO_PLAYER
+        else -> PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
     }
 
     private fun playerResumeStatesToJson(states: Map<String, PlayerResumeState>): String {

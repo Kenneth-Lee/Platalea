@@ -152,6 +152,7 @@ import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_CAR
@@ -8129,6 +8130,10 @@ fun PlaybackScreen(
     }
 
     if (showPlayerAudioSettingsDialog) {
+        val engines = listOf(
+            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER to "系统 MediaPlayer",
+            PLAYER_AUDIO_ENGINE_EXO_PLAYER to "Media3 ExoPlayer"
+        )
         val presets = listOf(
             PLAYER_AUDIO_PRESET_FLAT to "原始",
             PLAYER_AUDIO_PRESET_VOCAL to "人声清晰",
@@ -8147,14 +8152,22 @@ fun PlaybackScreen(
                     Text("这些配置只保存在本机，用来对比不同手机上的播放效果。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(12.dp))
                     Text("播放内核", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        when (playerAudioSettings.engine) {
-                            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER -> "系统 MediaPlayer（当前）"
-                            else -> playerAudioSettings.engine
-                        },
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Text("Media3 ExoPlayer 将作为下一阶段可切换内核接入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    engines.forEach { (value, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { updatePlayerAudioSettings { it.copy(engine = value) } }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = playerAudioSettings.engine == value,
+                                onCheckedChange = { updatePlayerAudioSettings { it.copy(engine = value) } }
+                            )
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Text("切换内核后从下一首或重新开始播放时生效。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
@@ -8198,7 +8211,7 @@ fun PlaybackScreen(
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text("高品质输出偏好", style = MaterialTheme.typography.bodyLarge)
-                            Text("先记录偏好；后续 Media3 内核会用于尝试音频 offload/更稳的输出策略。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("ExoPlayer 下启用音频 offload 偏好和更大的缓冲；是否真正无损直出取决于手机系统。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = playerAudioSettings.highQualityOutput,

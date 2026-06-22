@@ -31,8 +31,18 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.media3.common.C
+import androidx.media3.common.AudioAttributes as Media3AudioAttributes
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.common.TrackSelectionParameters
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.ExoPlayer
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_CAR
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_FLAT
@@ -72,6 +82,7 @@ const val EXTRA_START_INDEX = "start_index"
 const val EXTRA_POSITION_MS = "position_ms"
 const val EXTRA_START_POSITION_MS = "start_position_ms"
 
+@UnstableApi
 class PlaybackService : Service() {
 
     companion object {
@@ -83,6 +94,7 @@ class PlaybackService : Service() {
     private lateinit var prefs: Preferences
 
     private var mediaPlayer: MediaPlayer? = null
+    private var exoPlayer: ExoPlayer? = null
     private var playlistUris: List<String> = emptyList()
     private var playlistNames: List<String> = emptyList()
     private var currentTrackMetadata: TrackMetadata = TrackMetadata()
@@ -102,6 +114,7 @@ class PlaybackService : Service() {
     private var lastPauseOrigin: PauseOrigin = PauseOrigin.OTHER
     private var playerAudioSettings: PlayerAudioSettings = PlayerAudioSettings()
     private var playerAudioSettingsJob: Job? = null
+    private var exoAutoStartWhenReady: Boolean = false
     private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
@@ -134,7 +147,7 @@ class PlaybackService : Service() {
             AudioManager.AUDIOFOCUS_LOSS,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT,
             AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> {
-                if (mediaPlayer?.isPlaying == true) {
+                if (isCurrentPlayerPlaying()) {
                     resumeWhenAudioFocusGained = true
                     pausePlayback(PauseOrigin.AUDIO_FOCUS)
                 } else if (lastPauseOrigin == PauseOrigin.AUDIO_FOCUS) {
@@ -148,8 +161,7 @@ class PlaybackService : Service() {
     private val noisyReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == AudioManager.ACTION_AUDIO_BECOMING_NOISY) {
-                val mp = mediaPlayer ?: return
-                if (!mp.isPlaying) return
+                if (!isCurrentPlayerPlaying()) return
                 // 仅在蓝牙输出路径断开导致暂停时，才允许重连后自动续播。
                 pausedByBluetoothDisconnect = bluetoothOutputConnected
                 pausePlayback(PauseOrigin.NOISY)
@@ -169,7 +181,7 @@ class PlaybackService : Service() {
                             tryResumeAfterBluetoothReconnect()
                         }
                         BluetoothProfile.STATE_DISCONNECTED -> {
-                            val wasPlaying = mediaPlayer?.isPlaying == true
+                            val wasPlaying = isCurrentPlayerPlaying()
                             refreshBluetoothOutputState()
                             if (wasPlaying) {
                                 pausedByBluetoothDisconnect = true
@@ -279,7 +291,7 @@ class PlaybackService : Service() {
             ACTION_NEXT -> playNext()
             ACTION_PAUSE -> pausePlayback(PauseOrigin.USER)
             ACTION_RESUME -> {
-                if (mediaPlayer != null) {
+                if (hasActivePlayer()) {
                     resumePlayback()
                 } else {
                     scope.launch {
@@ -311,11 +323,10 @@ class PlaybackService : Service() {
             }
             ACTION_SEEK -> {
                 val posMs = intent.getIntExtra(EXTRA_POSITION_MS, 0)
-                mediaPlayer?.let { mp ->
-                    val target = posMs.coerceIn(0, mp.duration)
-                    mp.seekTo(target)
-                    updateState(positionMs = target)
-                }
+                val durationMs = currentPlayerDurationMs()
+                val target = if (durationMs > 0) posMs.coerceIn(0, durationMs) else posMs.coerceAtLeast(0)
+                seekCurrentPlayerTo(target)
+                updateState(positionMs = target)
             }
         }
         return START_STICKY
@@ -333,13 +344,63 @@ class PlaybackService : Service() {
     }
 
     private fun currentPlaybackPositionMsSafe(): Int {
-        val mp = mediaPlayer ?: return 0
-        return try {
-            mp.currentPosition
-        } catch (e: IllegalStateException) {
-            Log.w(TAG, "Failed to read current playback position safely", e)
-            0
+        return currentPlayerPositionMs()
+    }
+
+    private fun hasActivePlayer(): Boolean = mediaPlayer != null || exoPlayer != null
+
+    private fun isCurrentPlayerPlaying(): Boolean = mediaPlayer?.isPlaying ?: (exoPlayer?.isPlaying ?: false)
+
+    private fun currentPlayerPositionMs(): Int {
+        mediaPlayer?.let { mp ->
+            return try {
+                mp.currentPosition
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "Failed to read MediaPlayer current position", e)
+                0
+            }
         }
+        return exoPlayer?.currentPosition?.coerceAtLeast(0L)?.coerceAtMost(Int.MAX_VALUE.toLong())?.toInt() ?: 0
+    }
+
+    private fun currentPlayerDurationMs(): Int {
+        mediaPlayer?.let { mp ->
+            return try {
+                mp.duration.coerceAtLeast(0)
+            } catch (e: IllegalStateException) {
+                Log.w(TAG, "Failed to read MediaPlayer duration", e)
+                0
+            }
+        }
+        val duration = exoPlayer?.duration ?: return 0
+        return if (duration == C.TIME_UNSET || duration < 0) 0 else duration.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    private fun currentAudioSessionId(): Int = mediaPlayer?.audioSessionId ?: (exoPlayer?.audioSessionId ?: 0)
+
+    private fun seekCurrentPlayerTo(positionMs: Int) {
+        mediaPlayer?.seekTo(positionMs)
+        exoPlayer?.seekTo(positionMs.toLong())
+    }
+
+    private fun startCurrentPlayer() {
+        mediaPlayer?.start()
+        exoPlayer?.play()
+    }
+
+    private fun pauseCurrentPlayer() {
+        mediaPlayer?.pause()
+        exoPlayer?.pause()
+    }
+
+    private fun releaseCurrentPlayer() {
+        releaseAudioEffects()
+        mediaPlayer?.release()
+        mediaPlayer = null
+        exoPlayer?.release()
+        exoPlayer = null
+        isPlayerPrepared = false
+        exoAutoStartWhenReady = false
     }
 
     private fun persistPlaybackState(positionMsOverride: Long? = null) {
@@ -439,15 +500,30 @@ class PlaybackService : Service() {
         pausedByBluetoothDisconnect = false
         resumeWhenAudioFocusGained = false
         lastPauseOrigin = PauseOrigin.OTHER
-        releaseAudioEffects()
-        mediaPlayer?.release()
-        mediaPlayer = null
-        isPlayerPrepared = false
+        releaseCurrentPlayer()
 
         val uri = Uri.parse(playlistUris[index])
         val name = playlistNames.getOrElse(index) { uri.lastPathSegment ?: "?" }
         currentTrackMetadata = readTrackMetadata(uri)
 
+        currentIndex.set(index)
+        updateState(
+            trackIndex = index,
+            trackName = name,
+            positionMs = seekToMs,
+            durationMs = 0,
+            isPlaying = false
+        )
+        updateNotification()
+
+        if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) {
+            startExoPlayerTrack(index, uri, name, seekToMs)
+        } else {
+            startMediaPlayerTrack(index, uri, name, seekToMs)
+        }
+    }
+
+    private fun startMediaPlayerTrack(index: Int, uri: Uri, name: String, seekToMs: Int) {
         try {
             val mp = MediaPlayer().apply {
                 setAudioAttributes(playbackAudioAttributes)
@@ -486,17 +562,107 @@ class PlaybackService : Service() {
                 prepareAsync()
             }
             mediaPlayer = mp
-            currentIndex.set(index)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start track index=$index, track=$name, uri=$uri", e)
             updateState(
                 trackIndex = index,
                 trackName = name,
-                positionMs = seekToMs,
+                positionMs = 0,
                 durationMs = 0,
                 isPlaying = false
             )
-            updateNotification()
+            playNext()
+        }
+    }
+
+    private fun startExoPlayerTrack(index: Int, uri: Uri, name: String, seekToMs: Int) {
+        try {
+            val loadControl = DefaultLoadControl.Builder()
+                .setBufferDurationsMs(
+                    if (playerAudioSettings.highQualityOutput) 30_000 else 15_000,
+                    if (playerAudioSettings.highQualityOutput) 120_000 else 50_000,
+                    1_500,
+                    3_000
+                )
+                .setPrioritizeTimeOverSizeThresholds(true)
+                .build()
+            val exoAudioAttributes = Media3AudioAttributes.Builder()
+                .setUsage(C.USAGE_MEDIA)
+                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                .build()
+            val player = ExoPlayer.Builder(applicationContext)
+                .setAudioAttributes(exoAudioAttributes, false)
+                .setHandleAudioBecomingNoisy(false)
+                .setLoadControl(loadControl)
+                .setWakeMode(if (playerAudioSettings.keepAwake) C.WAKE_MODE_LOCAL else C.WAKE_MODE_NONE)
+                .build()
+            player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                .setAudioOffloadPreferences(
+                    TrackSelectionParameters.AudioOffloadPreferences.Builder()
+                        .setAudioOffloadMode(
+                            if (playerAudioSettings.highQualityOutput) {
+                                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_ENABLED
+                            } else {
+                                TrackSelectionParameters.AudioOffloadPreferences.AUDIO_OFFLOAD_MODE_DISABLED
+                            }
+                        )
+                        .setIsGaplessSupportRequired(playerAudioSettings.highQualityOutput)
+                        .build()
+                )
+                .build()
+            player.addListener(object : Player.Listener {
+                override fun onPlaybackStateChanged(playbackState: Int) {
+                    when (playbackState) {
+                        Player.STATE_READY -> {
+                            isPlayerPrepared = true
+                            applyAudioEffectsToCurrentPlayer()
+                            if (!exoAutoStartWhenReady) {
+                                updateState(
+                                    trackIndex = index,
+                                    trackName = name,
+                                    positionMs = currentPlayerPositionMs(),
+                                    durationMs = currentPlayerDurationMs(),
+                                    isPlaying = isCurrentPlayerPlaying()
+                                )
+                                updateNotification()
+                                return
+                            }
+                            exoAutoStartWhenReady = false
+                            if (!requestAudioFocusForPlayback()) {
+                                updateState(
+                                    trackIndex = index,
+                                    trackName = name,
+                                    positionMs = currentPlayerPositionMs(),
+                                    durationMs = currentPlayerDurationMs(),
+                                    isPlaying = false
+                                )
+                                updateNotification()
+                                return
+                            }
+                            player.play()
+                            updateState(isPlaying = true)
+                            updateNotification()
+                            startProgressUpdates()
+                        }
+                        Player.STATE_ENDED -> {
+                            progressUpdateRunnable?.let(handler::removeCallbacks)
+                            playNext()
+                        }
+                    }
+                }
+
+                override fun onPlayerError(error: PlaybackException) {
+                    Log.e(TAG, "ExoPlayer error, code=${error.errorCode}, track=$name, uri=$uri", error)
+                    playNext()
+                }
+            })
+            exoPlayer = player
+            exoAutoStartWhenReady = true
+            player.setMediaItem(MediaItem.fromUri(uri))
+            if (seekToMs > 0) player.seekTo(seekToMs.toLong())
+            player.prepare()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start track index=$index, track=$name, uri=$uri", e)
+            Log.e(TAG, "Failed to start ExoPlayer track index=$index, track=$name, uri=$uri", e)
             updateState(
                 trackIndex = index,
                 trackName = name,
@@ -512,11 +678,10 @@ class PlaybackService : Service() {
         progressUpdateRunnable?.let { handler.removeCallbacks(it) }
         progressUpdateRunnable = object : Runnable {
             override fun run() {
-                val mp = mediaPlayer ?: return
-                if (mp.isPlaying) {
+                if (isCurrentPlayerPlaying()) {
                     updateState(
-                        positionMs = mp.currentPosition,
-                        durationMs = mp.duration,
+                        positionMs = currentPlayerPositionMs(),
+                        durationMs = currentPlayerDurationMs(),
                         isPlaying = true
                     )
                     updateNotification()
@@ -530,9 +695,9 @@ class PlaybackService : Service() {
     private fun updateState(
         trackIndex: Int = currentIndex.get(),
         trackName: String = playlistNames.getOrElse(trackIndex) { "" },
-        positionMs: Int = mediaPlayer?.currentPosition ?: 0,
-        durationMs: Int = mediaPlayer?.duration ?: 0,
-        isPlaying: Boolean = mediaPlayer?.isPlaying ?: false
+        positionMs: Int = currentPlayerPositionMs(),
+        durationMs: Int = currentPlayerDurationMs(),
+        isPlaying: Boolean = isCurrentPlayerPlaying()
     ) {
         PlaybackService._playbackState.value = PlaybackState(
             dirUri = dirUri,
@@ -584,9 +749,8 @@ class PlaybackService : Service() {
 
     private fun applyAudioEffectsToCurrentPlayer() {
         releaseAudioEffects()
-        val mp = mediaPlayer ?: return
         if (!isPlayerPrepared || !playerAudioSettings.audioEffectsEnabled) return
-        val sessionId = mp.audioSessionId
+        val sessionId = currentAudioSessionId()
         if (sessionId <= 0) return
         try {
             equalizer = Equalizer(0, sessionId).apply {
@@ -684,15 +848,14 @@ class PlaybackService : Service() {
     private fun playPrev() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
         savePosition()
-        val mp = mediaPlayer
-        if (mp != null && mp.currentPosition > 3000) {
-            mp.seekTo(0)
-            updateState(positionMs = 0, isPlaying = mp.isPlaying)
+        if (hasActivePlayer() && currentPlayerPositionMs() > 3000) {
+            seekCurrentPlayerTo(0)
+            updateState(positionMs = 0, isPlaying = isCurrentPlayerPlaying())
             return
         }
         val prev = currentIndex.get() - 1
         if (prev < 0) {
-            mediaPlayer?.seekTo(0)
+            seekCurrentPlayerTo(0)
             updateState(positionMs = 0)
             return
         }
@@ -700,9 +863,8 @@ class PlaybackService : Service() {
     }
 
     private fun pausePlayback(origin: PauseOrigin = PauseOrigin.USER) {
-        val mp = mediaPlayer ?: return
-        if (mp.isPlaying) {
-            mp.pause()
+        if (isCurrentPlayerPlaying()) {
+            pauseCurrentPlayer()
             val pausedPositionMs = currentPlaybackPositionMsSafe().toLong()
             lastPauseOrigin = origin
             if (origin != PauseOrigin.AUDIO_FOCUS) {
@@ -722,7 +884,7 @@ class PlaybackService : Service() {
     }
 
     private fun resumePlayback(skipAudioFocusRequest: Boolean = false, origin: PauseOrigin = PauseOrigin.OTHER) {
-        val mp = mediaPlayer ?: return
+        if (!hasActivePlayer()) return
         if (!skipAudioFocusRequest && !requestAudioFocusForPlayback()) {
             return
         }
@@ -730,8 +892,8 @@ class PlaybackService : Service() {
             resumeWhenAudioFocusGained = true
             return
         }
-        if (!mp.isPlaying) {
-            mp.start()
+        if (!isCurrentPlayerPlaying()) {
+            startCurrentPlayer()
             pausedByBluetoothDisconnect = false
             resumeWhenAudioFocusGained = false
             lastPauseOrigin = origin
@@ -749,9 +911,7 @@ class PlaybackService : Service() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
         val lastPositionMs = currentPlaybackPositionMsSafe().toLong()
         persistPlaybackState(positionMsOverride = lastPositionMs)
-        releaseAudioEffects()
-        mediaPlayer?.release()
-        mediaPlayer = null
+        releaseCurrentPlayer()
         playlistUris = emptyList()
         playlistNames = emptyList()
         currentTrackMetadata = TrackMetadata()
@@ -760,7 +920,6 @@ class PlaybackService : Service() {
         playlistName = null
         pausedByBluetoothDisconnect = false
         resumeWhenAudioFocusGained = false
-        isPlayerPrepared = false
         lastPauseOrigin = PauseOrigin.OTHER
         PlaybackService._playbackState.value = null
         updateMediaSessionPlaybackState(isPlaying = false, positionMs = 0, durationMs = 0)
