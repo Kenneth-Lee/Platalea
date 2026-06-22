@@ -35,6 +35,11 @@ private val PLAYER_LAST_PLAYLIST_ID = stringPreferencesKey("player_last_playlist
 private val PLAYER_PLAYLISTS_JSON = stringPreferencesKey("player_playlists_json")
 private val PLAYER_PLAYLIST_RESUME_JSON = stringPreferencesKey("player_playlist_resume_json")
 private val PLAYER_LIST_BOOKMARKS_JSON = stringPreferencesKey("player_list_bookmarks_json")
+private val PLAYER_AUDIO_ENGINE = stringPreferencesKey("player_audio_engine")
+private val PLAYER_KEEP_AWAKE = booleanPreferencesKey("player_keep_awake")
+private val PLAYER_AUDIO_EFFECTS_ENABLED = booleanPreferencesKey("player_audio_effects_enabled")
+private val PLAYER_AUDIO_EFFECT_PRESET = stringPreferencesKey("player_audio_effect_preset")
+private val PLAYER_HIGH_QUALITY_OUTPUT = booleanPreferencesKey("player_high_quality_output")
 private val LAST_MAIN_TAB = stringPreferencesKey("last_main_tab")
 private val RECENT_OPEN_ITEMS_JSON = stringPreferencesKey("recent_open_items_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
@@ -75,6 +80,21 @@ data class PlayerListBookmark(
 data class PlayerResumeState(
     val trackIndex: Int,
     val positionMs: Long
+)
+
+const val PLAYER_AUDIO_ENGINE_MEDIA_PLAYER = "media_player"
+const val PLAYER_AUDIO_PRESET_FLAT = "flat"
+const val PLAYER_AUDIO_PRESET_VOCAL = "vocal"
+const val PLAYER_AUDIO_PRESET_BASS = "bass"
+const val PLAYER_AUDIO_PRESET_CAR = "car"
+const val PLAYER_AUDIO_PRESET_HEADPHONE = "headphone"
+
+data class PlayerAudioSettings(
+    val engine: String = PLAYER_AUDIO_ENGINE_MEDIA_PLAYER,
+    val keepAwake: Boolean = false,
+    val audioEffectsEnabled: Boolean = false,
+    val effectPreset: String = PLAYER_AUDIO_PRESET_FLAT,
+    val highQualityOutput: Boolean = false
 )
 
 data class RecentOpenItem(
@@ -227,6 +247,17 @@ class Preferences(private val context: Context) {
 
     val playerPlaylistResumeStates: Flow<Map<String, PlayerResumeState>> = context.dataStore.data.map { prefs ->
         parsePlayerResumeStates(prefs[PLAYER_PLAYLIST_RESUME_JSON])
+    }
+
+    val playerAudioSettings: Flow<PlayerAudioSettings> = context.dataStore.data.map { prefs ->
+        PlayerAudioSettings(
+            engine = prefs[PLAYER_AUDIO_ENGINE]?.takeIf { it == PLAYER_AUDIO_ENGINE_MEDIA_PLAYER }
+                ?: PLAYER_AUDIO_ENGINE_MEDIA_PLAYER,
+            keepAwake = prefs[PLAYER_KEEP_AWAKE] ?: false,
+            audioEffectsEnabled = prefs[PLAYER_AUDIO_EFFECTS_ENABLED] ?: false,
+            effectPreset = normalizePlayerAudioPreset(prefs[PLAYER_AUDIO_EFFECT_PRESET]),
+            highQualityOutput = prefs[PLAYER_HIGH_QUALITY_OUTPUT] ?: false
+        )
     }
 
     /** 最后一次播放的列表 ID（用于停止后「恢复播放」）。 */
@@ -703,6 +734,35 @@ class Preferences(private val context: Context) {
         }
     }
 
+    suspend fun setPlayerAudioSettings(settings: PlayerAudioSettings) {
+        context.dataStore.edit { prefs ->
+            prefs[PLAYER_AUDIO_ENGINE] = PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
+            prefs[PLAYER_KEEP_AWAKE] = settings.keepAwake
+            prefs[PLAYER_AUDIO_EFFECTS_ENABLED] = settings.audioEffectsEnabled
+            prefs[PLAYER_AUDIO_EFFECT_PRESET] = normalizePlayerAudioPreset(settings.effectPreset)
+            prefs[PLAYER_HIGH_QUALITY_OUTPUT] = settings.highQualityOutput
+        }
+    }
+
+    suspend fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
+        context.dataStore.edit { prefs ->
+            val current = PlayerAudioSettings(
+                engine = prefs[PLAYER_AUDIO_ENGINE]?.takeIf { it == PLAYER_AUDIO_ENGINE_MEDIA_PLAYER }
+                    ?: PLAYER_AUDIO_ENGINE_MEDIA_PLAYER,
+                keepAwake = prefs[PLAYER_KEEP_AWAKE] ?: false,
+                audioEffectsEnabled = prefs[PLAYER_AUDIO_EFFECTS_ENABLED] ?: false,
+                effectPreset = normalizePlayerAudioPreset(prefs[PLAYER_AUDIO_EFFECT_PRESET]),
+                highQualityOutput = prefs[PLAYER_HIGH_QUALITY_OUTPUT] ?: false
+            )
+            val updated = transform(current)
+            prefs[PLAYER_AUDIO_ENGINE] = PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
+            prefs[PLAYER_KEEP_AWAKE] = updated.keepAwake
+            prefs[PLAYER_AUDIO_EFFECTS_ENABLED] = updated.audioEffectsEnabled
+            prefs[PLAYER_AUDIO_EFFECT_PRESET] = normalizePlayerAudioPreset(updated.effectPreset)
+            prefs[PLAYER_HIGH_QUALITY_OUTPUT] = updated.highQualityOutput
+        }
+    }
+
     val playlists: Flow<List<Playlist>> = context.dataStore.data.map { prefs ->
         Playlist.listFromJson(prefs[PLAYER_PLAYLISTS_JSON] ?: "")
     }
@@ -1005,6 +1065,14 @@ class Preferences(private val context: Context) {
         } catch (_: Exception) {
             emptyMap()
         }
+    }
+
+    private fun normalizePlayerAudioPreset(value: String?): String = when (value) {
+        PLAYER_AUDIO_PRESET_VOCAL,
+        PLAYER_AUDIO_PRESET_BASS,
+        PLAYER_AUDIO_PRESET_CAR,
+        PLAYER_AUDIO_PRESET_HEADPHONE -> value
+        else -> PLAYER_AUDIO_PRESET_FLAT
     }
 
     private fun playerResumeStatesToJson(states: Map<String, PlayerResumeState>): String {

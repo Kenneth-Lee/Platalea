@@ -19,19 +19,30 @@ import android.media.AudioFocusRequest
 import android.media.MediaMetadata
 import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
+import android.media.audiofx.BassBoost
+import android.media.audiofx.Equalizer
+import android.media.audiofx.LoudnessEnhancer
 import android.media.session.MediaSession
 import android.media.session.PlaybackState as PlatformPlaybackState
 import android.net.Uri
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_CAR
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_FLAT
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_HEADPHONE
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_VOCAL
+import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -89,6 +100,11 @@ class PlaybackService : Service() {
     private var resumeWhenAudioFocusGained: Boolean = false
     private var isPlayerPrepared: Boolean = false
     private var lastPauseOrigin: PauseOrigin = PauseOrigin.OTHER
+    private var playerAudioSettings: PlayerAudioSettings = PlayerAudioSettings()
+    private var playerAudioSettingsJob: Job? = null
+    private var equalizer: Equalizer? = null
+    private var bassBoost: BassBoost? = null
+    private var loudnessEnhancer: LoudnessEnhancer? = null
     private val playbackAudioAttributes: AudioAttributes by lazy {
         AudioAttributes.Builder()
             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -199,6 +215,12 @@ class PlaybackService : Service() {
         super.onCreate()
         prefs = Preferences(applicationContext)
         audioManager = getSystemService(AUDIO_SERVICE) as? AudioManager
+        playerAudioSettingsJob = scope.launch {
+            prefs.playerAudioSettings.collect { settings ->
+                playerAudioSettings = settings
+                applyAudioEffectsToCurrentPlayer()
+            }
+        }
         createChannel()
         initMediaSession()
         refreshBluetoothOutputState()
@@ -417,6 +439,7 @@ class PlaybackService : Service() {
         pausedByBluetoothDisconnect = false
         resumeWhenAudioFocusGained = false
         lastPauseOrigin = PauseOrigin.OTHER
+        releaseAudioEffects()
         mediaPlayer?.release()
         mediaPlayer = null
         isPlayerPrepared = false
@@ -428,9 +451,13 @@ class PlaybackService : Service() {
         try {
             val mp = MediaPlayer().apply {
                 setAudioAttributes(playbackAudioAttributes)
+                if (playerAudioSettings.keepAwake) {
+                    setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
+                }
                 setDataSource(applicationContext, uri)
                 setOnPreparedListener {
                     isPlayerPrepared = true
+                    applyAudioEffectsToCurrentPlayer()
                     if (seekToMs > 0) it.seekTo(seekToMs.coerceAtMost(it.duration))
                     if (!requestAudioFocusForPlayback()) {
                         updateState(
@@ -555,6 +582,94 @@ class PlaybackService : Service() {
     private fun MediaMetadataRetriever.extractTrimmedMetadata(keyCode: Int): String? =
         extractMetadata(keyCode)?.trim()?.takeIf { it.isNotEmpty() }
 
+    private fun applyAudioEffectsToCurrentPlayer() {
+        releaseAudioEffects()
+        val mp = mediaPlayer ?: return
+        if (!isPlayerPrepared || !playerAudioSettings.audioEffectsEnabled) return
+        val sessionId = mp.audioSessionId
+        if (sessionId <= 0) return
+        try {
+            equalizer = Equalizer(0, sessionId).apply {
+                configureEqualizerPreset(this, playerAudioSettings.effectPreset)
+                enabled = true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to enable equalizer for session=$sessionId", e)
+        }
+        try {
+            val bassStrength = when (playerAudioSettings.effectPreset) {
+                PLAYER_AUDIO_PRESET_BASS -> 650
+                PLAYER_AUDIO_PRESET_CAR -> 450
+                PLAYER_AUDIO_PRESET_HEADPHONE -> 300
+                else -> 0
+            }.toShort()
+            bassBoost = BassBoost(0, sessionId).apply {
+                if (strengthSupported) setStrength(bassStrength)
+                enabled = bassStrength > 0
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to enable bass boost for session=$sessionId", e)
+        }
+        try {
+            val targetGainMb = when (playerAudioSettings.effectPreset) {
+                PLAYER_AUDIO_PRESET_VOCAL -> 250
+                PLAYER_AUDIO_PRESET_CAR -> 350
+                PLAYER_AUDIO_PRESET_HEADPHONE -> 150
+                else -> 0
+            }
+            loudnessEnhancer = LoudnessEnhancer(sessionId).apply {
+                setTargetGain(targetGainMb)
+                enabled = targetGainMb > 0
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to enable loudness enhancer for session=$sessionId", e)
+        }
+    }
+
+    private fun configureEqualizerPreset(equalizer: Equalizer, preset: String) {
+        val bandCount = equalizer.numberOfBands.toInt()
+        if (bandCount <= 0) return
+        val range = equalizer.bandLevelRange
+        val minLevel = range[0]
+        val maxLevel = range[1]
+        for (band in 0 until bandCount) {
+            val normalized = if (bandCount == 1) 0f else band.toFloat() / (bandCount - 1).toFloat()
+            val level = when (preset) {
+                PLAYER_AUDIO_PRESET_VOCAL -> when {
+                    normalized < 0.25f -> -250
+                    normalized < 0.75f -> 450
+                    else -> 100
+                }
+                PLAYER_AUDIO_PRESET_BASS -> when {
+                    normalized < 0.35f -> 550
+                    normalized > 0.8f -> 150
+                    else -> 0
+                }
+                PLAYER_AUDIO_PRESET_CAR -> when {
+                    normalized < 0.25f -> 450
+                    normalized < 0.7f -> 200
+                    else -> 350
+                }
+                PLAYER_AUDIO_PRESET_HEADPHONE -> when {
+                    normalized < 0.25f -> 250
+                    normalized < 0.75f -> 150
+                    else -> 300
+                }
+                else -> 0
+            }.coerceIn(minLevel.toInt(), maxLevel.toInt()).toShort()
+            equalizer.setBandLevel(band.toShort(), level)
+        }
+    }
+
+    private fun releaseAudioEffects() {
+        equalizer?.release()
+        equalizer = null
+        bassBoost?.release()
+        bassBoost = null
+        loudnessEnhancer?.release()
+        loudnessEnhancer = null
+    }
+
     private fun playNext() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
         savePosition()
@@ -634,6 +749,7 @@ class PlaybackService : Service() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
         val lastPositionMs = currentPlaybackPositionMsSafe().toLong()
         persistPlaybackState(positionMsOverride = lastPositionMs)
+        releaseAudioEffects()
         mediaPlayer?.release()
         mediaPlayer = null
         playlistUris = emptyList()
@@ -835,6 +951,8 @@ class PlaybackService : Service() {
 
     override fun onDestroy() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
+        playerAudioSettingsJob?.cancel()
+        playerAudioSettingsJob = null
         if (playlistUris.isNotEmpty()) {
             persistPlaybackState(positionMsOverride = currentPlaybackPositionMsSafe().toLong())
         }
@@ -850,6 +968,7 @@ class PlaybackService : Service() {
         }
         mediaSession = null
         abandonAudioFocus()
+        releaseAudioEffects()
         mediaPlayer?.release()
         mediaPlayer = null
         isPlayerPrepared = false

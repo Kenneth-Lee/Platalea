@@ -152,6 +152,13 @@ import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_CAR
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_FLAT
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_HEADPHONE
+import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_VOCAL
+import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.configJsonCategories
@@ -7974,6 +7981,8 @@ fun PlaybackScreen(
     var newPlaylistName by remember { mutableStateOf("") }
     var trackActionMenuIndex by remember { mutableStateOf<Int?>(null) }
     var pendingTrackTransfer by remember { mutableStateOf<PlaylistTrackTransfer?>(null) }
+    var playerAudioSettings by remember { mutableStateOf(PlayerAudioSettings()) }
+    var showPlayerAudioSettingsDialog by remember { mutableStateOf(false) }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -7982,6 +7991,9 @@ fun PlaybackScreen(
     }
     LaunchedEffect(prefs) {
         prefs.playerListBookmarks.collect { playerBookmarks = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.playerAudioSettings.collect { playerAudioSettings = it }
     }
     val playlistById = remember(playlists) { playlists.associateBy { it.id } }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
@@ -8116,6 +8128,91 @@ fun PlaybackScreen(
         showAddBookmarkDialog = true
     }
 
+    if (showPlayerAudioSettingsDialog) {
+        val presets = listOf(
+            PLAYER_AUDIO_PRESET_FLAT to "原始",
+            PLAYER_AUDIO_PRESET_VOCAL to "人声清晰",
+            PLAYER_AUDIO_PRESET_BASS to "低频增强",
+            PLAYER_AUDIO_PRESET_CAR to "车载",
+            PLAYER_AUDIO_PRESET_HEADPHONE to "耳机"
+        )
+        fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
+            scope.launch { prefs.updatePlayerAudioSettings(transform) }
+        }
+        AlertDialog(
+            onDismissRequest = { showPlayerAudioSettingsDialog = false },
+            title = { Text("播放器配置") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text("这些配置只保存在本机，用来对比不同手机上的播放效果。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Text("播放内核", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        when (playerAudioSettings.engine) {
+                            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER -> "系统 MediaPlayer（当前）"
+                            else -> playerAudioSettings.engine
+                        },
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text("Media3 ExoPlayer 将作为下一阶段可切换内核接入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("稳定播放保持唤醒", style = MaterialTheme.typography.bodyLarge)
+                            Text("播放时请求 PARTIAL_WAKE_LOCK，减少息屏后卡顿或中断。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = playerAudioSettings.keepAwake,
+                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(keepAwake = enabled) } }
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("本 App 音效", style = MaterialTheme.typography.bodyLarge)
+                            Text("使用 Android Equalizer/BassBoost/LoudnessEnhancer，只影响当前播放器。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = playerAudioSettings.audioEffectsEnabled,
+                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(audioEffectsEnabled = enabled) } }
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text("音效预设", style = MaterialTheme.typography.titleSmall)
+                    presets.forEach { (value, label) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { updatePlayerAudioSettings { it.copy(effectPreset = value, audioEffectsEnabled = true) } }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(
+                                checked = playerAudioSettings.effectPreset == value,
+                                onCheckedChange = { updatePlayerAudioSettings { it.copy(effectPreset = value, audioEffectsEnabled = true) } }
+                            )
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("高品质输出偏好", style = MaterialTheme.typography.bodyLarge)
+                            Text("先记录偏好；后续 Media3 内核会用于尝试音频 offload/更稳的输出策略。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = playerAudioSettings.highQualityOutput,
+                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(highQualityOutput = enabled) } }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showPlayerAudioSettingsDialog = false }) { Text("关闭") }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -8130,6 +8227,9 @@ fun PlaybackScreen(
                     }
                     TextButton(onClick = { showBookmarkManagerDialog = true }) {
                         Text(context.getString(R.string.player_bookmarks_action))
+                    }
+                    IconButton(onClick = { showPlayerAudioSettingsDialog = true }) {
+                        Icon(Icons.Default.Settings, contentDescription = "播放器配置")
                     }
                 },
                 navigationIcon = if (showBackButton) {
