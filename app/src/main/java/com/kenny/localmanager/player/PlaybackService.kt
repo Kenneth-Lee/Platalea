@@ -14,6 +14,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioFocusRequest
 import android.media.MediaMetadata
@@ -115,6 +116,13 @@ class PlaybackService : Service() {
     private var playerAudioSettings: PlayerAudioSettings = PlayerAudioSettings()
     private var playerAudioSettingsJob: Job? = null
     private var exoAutoStartWhenReady: Boolean = false
+    private var currentPlaybackSourceUri: Uri? = null
+    private var currentPlaybackUri: Uri? = null
+    private var currentPlaybackSource: String = "direct"
+    private var currentDiagnosticsMetadata: PlaybackDiagnostics = PlaybackDiagnostics()
+    private var bufferEventCount: Int = 0
+    private var playerErrorCount: Int = 0
+    private var lastPlayerError: String? = null
     private var equalizer: Equalizer? = null
     private var bassBoost: BassBoost? = null
     private var loudnessEnhancer: LoudnessEnhancer? = null
@@ -403,6 +411,21 @@ class PlaybackService : Service() {
         exoAutoStartWhenReady = false
     }
 
+    private fun resetPlaybackDiagnostics(sourceUri: Uri) {
+        currentPlaybackSourceUri = sourceUri
+        currentPlaybackUri = sourceUri
+        currentPlaybackSource = "direct"
+        currentDiagnosticsMetadata = readPlaybackDiagnosticsMetadata(sourceUri)
+        bufferEventCount = 0
+        playerErrorCount = 0
+        lastPlayerError = null
+    }
+
+    private fun recordPlayerError(message: String) {
+        playerErrorCount++
+        lastPlayerError = message
+    }
+
     private fun persistPlaybackState(positionMsOverride: Long? = null) {
         val currentPlaylistId = playlistId
         val currentDirUri = dirUri
@@ -505,6 +528,7 @@ class PlaybackService : Service() {
         val uri = Uri.parse(playlistUris[index])
         val name = playlistNames.getOrElse(index) { uri.lastPathSegment ?: "?" }
         currentTrackMetadata = readTrackMetadata(uri)
+        resetPlaybackDiagnostics(uri)
 
         currentIndex.set(index)
         updateState(
@@ -517,20 +541,20 @@ class PlaybackService : Service() {
         updateNotification()
 
         if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) {
-            startExoPlayerTrack(index, uri, name, seekToMs)
+            startExoPlayerTrack(index, uri, uri, name, seekToMs)
         } else {
-            startMediaPlayerTrack(index, uri, name, seekToMs)
+            startMediaPlayerTrack(index, uri, uri, name, seekToMs)
         }
     }
 
-    private fun startMediaPlayerTrack(index: Int, uri: Uri, name: String, seekToMs: Int) {
+    private fun startMediaPlayerTrack(index: Int, sourceUri: Uri, playbackUri: Uri, name: String, seekToMs: Int) {
         try {
             val mp = MediaPlayer().apply {
                 setAudioAttributes(playbackAudioAttributes)
                 if (playerAudioSettings.keepAwake) {
                     setWakeMode(applicationContext, PowerManager.PARTIAL_WAKE_LOCK)
                 }
-                setDataSource(applicationContext, uri)
+                setDataSource(applicationContext, playbackUri)
                 setOnPreparedListener {
                     isPlayerPrepared = true
                     applyAudioEffectsToCurrentPlayer()
@@ -556,14 +580,16 @@ class PlaybackService : Service() {
                     playNext()
                 }
                 setOnErrorListener { _, what, extra ->
-                    Log.e(TAG, "MediaPlayer error, what=$what, extra=$extra, track=$name, uri=$uri")
+                    recordPlayerError("MediaPlayer what=$what extra=$extra")
+                    Log.e(TAG, "MediaPlayer error, what=$what, extra=$extra, track=$name, uri=$sourceUri, playbackUri=$playbackUri")
                     true
                 }
                 prepareAsync()
             }
             mediaPlayer = mp
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start track index=$index, track=$name, uri=$uri", e)
+            recordPlayerError(e.message ?: e.javaClass.simpleName)
+            Log.e(TAG, "Failed to start track index=$index, track=$name, uri=$sourceUri, playbackUri=$playbackUri", e)
             updateState(
                 trackIndex = index,
                 trackName = name,
@@ -575,7 +601,7 @@ class PlaybackService : Service() {
         }
     }
 
-    private fun startExoPlayerTrack(index: Int, uri: Uri, name: String, seekToMs: Int) {
+    private fun startExoPlayerTrack(index: Int, sourceUri: Uri, playbackUri: Uri, name: String, seekToMs: Int) {
         try {
             val loadControl = DefaultLoadControl.Builder()
                 .setBufferDurationsMs(
@@ -651,18 +677,25 @@ class PlaybackService : Service() {
                     }
                 }
 
+                override fun onIsLoadingChanged(isLoading: Boolean) {
+                    if (isLoading) bufferEventCount++
+                    updateState()
+                }
+
                 override fun onPlayerError(error: PlaybackException) {
-                    Log.e(TAG, "ExoPlayer error, code=${error.errorCode}, track=$name, uri=$uri", error)
+                    recordPlayerError("ExoPlayer ${error.errorCodeName}")
+                    Log.e(TAG, "ExoPlayer error, code=${error.errorCode}, track=$name, uri=$sourceUri, playbackUri=$playbackUri", error)
                     playNext()
                 }
             })
             exoPlayer = player
             exoAutoStartWhenReady = true
-            player.setMediaItem(MediaItem.fromUri(uri))
+            player.setMediaItem(MediaItem.fromUri(playbackUri))
             if (seekToMs > 0) player.seekTo(seekToMs.toLong())
             player.prepare()
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start ExoPlayer track index=$index, track=$name, uri=$uri", e)
+            recordPlayerError(e.message ?: e.javaClass.simpleName)
+            Log.e(TAG, "Failed to start ExoPlayer track index=$index, track=$name, uri=$sourceUri, playbackUri=$playbackUri", e)
             updateState(
                 trackIndex = index,
                 trackName = name,
@@ -709,7 +742,8 @@ class PlaybackService : Service() {
             isPlaying = isPlaying,
             playlistId = playlistId,
             playlistName = playlistName,
-            metadata = currentTrackMetadata
+            metadata = currentTrackMetadata,
+            diagnostics = buildPlaybackDiagnostics()
         )
         updateMediaSessionPlaybackState(
             isPlaying = isPlaying,
@@ -746,6 +780,130 @@ class PlaybackService : Service() {
 
     private fun MediaMetadataRetriever.extractTrimmedMetadata(keyCode: Int): String? =
         extractMetadata(keyCode)?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun readPlaybackDiagnosticsMetadata(uri: Uri): PlaybackDiagnostics {
+        return try {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(applicationContext, uri)
+                PlaybackDiagnostics(
+                    mimeType = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE),
+                    bitrate = retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE),
+                    sampleRate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)
+                    } else {
+                        null
+                    },
+                    bitsPerSample = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                        retriever.extractTrimmedMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE)
+                    } else {
+                        null
+                    }
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read playback diagnostics metadata from uri=$uri", e)
+            PlaybackDiagnostics()
+        }
+    }
+
+    private fun buildPlaybackDiagnostics(): PlaybackDiagnostics {
+        val outputDevice = describeCurrentOutputDevice()
+        return currentDiagnosticsMetadata.copy(
+            engine = if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) "Media3 ExoPlayer" else "系统 MediaPlayer",
+            sourceUri = currentPlaybackSourceUri?.toString().orEmpty(),
+            playbackUri = currentPlaybackUri?.toString().orEmpty(),
+            playbackSource = currentPlaybackSource,
+            outputDevice = outputDevice.first,
+            outputDeviceSource = outputDevice.second,
+            exoOffloadActive = exoPlayer?.isSleepingForOffload == true,
+            bufferEvents = bufferEventCount,
+            playerErrors = playerErrorCount,
+            lastError = lastPlayerError,
+            sourceQuality = describeSourceQuality(currentDiagnosticsMetadata.mimeType),
+            audioEffects = describeAudioEffects(),
+            highQualityOutput = if (playerAudioSettings.highQualityOutput) "开启" else "关闭"
+        )
+    }
+
+    private fun describeCurrentOutputDevice(): Pair<String, String> {
+        val manager = audioManager ?: return "未知输出" to "AudioManager 不可用"
+        return try {
+            val mediaRouteDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val mediaAttributes = AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+                manager.getAudioDevicesForAttributes(mediaAttributes)
+            } else {
+                emptyList()
+            }
+            if (mediaRouteDevices.isNotEmpty()) {
+                return describeAudioDevice(mediaRouteDevices.first()) to "媒体音频路由"
+            }
+            val outputDevices = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                .sortedWith(compareBy { audioDeviceFallbackPriority(it.type) })
+            outputDevices.firstOrNull()?.let { describeAudioDevice(it) to "可用输出优先级" }
+                ?: ("未知输出" to "未发现可用输出设备")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to describe current audio output device", e)
+            "未知输出" to "查询失败：${e.javaClass.simpleName}"
+        }
+    }
+
+    private fun describeSourceQuality(mimeType: String?): String? = when (mimeType?.lowercase()) {
+        "audio/mpeg" -> "有损压缩（MP3）"
+        "audio/aac", "audio/aac-adts", "audio/mp4", "audio/x-m4a" -> "有损压缩（AAC/MP4）"
+        "audio/ogg", "audio/vorbis", "audio/opus" -> "有损压缩（Ogg/Opus）"
+        "audio/flac" -> "无损压缩（FLAC）"
+        "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave" -> "PCM/无压缩"
+        else -> null
+    }
+
+    private fun describeAudioEffects(): String {
+        if (!playerAudioSettings.audioEffectsEnabled) return "关闭"
+        return "开启：${audioEffectPresetLabel(playerAudioSettings.effectPreset)}"
+    }
+
+    private fun audioEffectPresetLabel(preset: String): String = when (preset) {
+        PLAYER_AUDIO_PRESET_VOCAL -> "人声"
+        PLAYER_AUDIO_PRESET_BASS -> "低音"
+        PLAYER_AUDIO_PRESET_CAR -> "车载"
+        PLAYER_AUDIO_PRESET_HEADPHONE -> "耳机"
+        else -> "平直"
+    }
+
+    private fun describeAudioDevice(device: AudioDeviceInfo): String {
+        val name = device.productName?.toString()?.takeIf { it.isNotBlank() }
+        return if (name == null) audioDeviceTypeLabel(device.type) else "${audioDeviceTypeLabel(device.type)}：$name"
+    }
+
+    private fun audioDeviceFallbackPriority(type: Int): Int = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_BLE_HEADSET,
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> 0
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET -> 1
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> 2
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> 3
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> 4
+        else -> 5
+    }
+
+    private fun audioDeviceTypeLabel(type: Int): String = when (type) {
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "听筒"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "扬声器"
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "有线耳机"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "蓝牙 A2DP"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "蓝牙通话"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "蓝牙 LE 耳机"
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "蓝牙 LE 音箱"
+        AudioDeviceInfo.TYPE_USB_DEVICE,
+        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB 音频"
+        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
+        else -> "输出$type"
+    }
 
     private fun applyAudioEffectsToCurrentPlayer() {
         releaseAudioEffects()
@@ -1055,10 +1213,9 @@ class PlaybackService : Service() {
     }
 
     private fun tryResumeAfterBluetoothReconnect() {
-        val mp = mediaPlayer ?: return
         if (!pausedByBluetoothDisconnect) return
         if (!bluetoothOutputConnected) return
-        if (mp.isPlaying) {
+        if (isCurrentPlayerPlaying()) {
             pausedByBluetoothDisconnect = false
             return
         }

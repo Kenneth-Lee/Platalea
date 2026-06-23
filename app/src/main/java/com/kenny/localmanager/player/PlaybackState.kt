@@ -14,7 +14,8 @@ data class PlaybackState(
     val isPlaying: Boolean,
     val playlistId: String? = null,
     val playlistName: String? = null,
-    val metadata: TrackMetadata = TrackMetadata()
+    val metadata: TrackMetadata = TrackMetadata(),
+    val diagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
 )
 
 data class TrackMetadata(
@@ -24,4 +25,24 @@ data class TrackMetadata(
     val albumArtist: String? = null,
     val genre: String? = null,
     val year: String? = null
+)
+
+data class PlaybackDiagnostics(
+    val engine: String = "",
+    val sourceUri: String = "",
+    val playbackUri: String = "",
+    val playbackSource: String = "direct",
+    val outputDevice: String = "",
+    val outputDeviceSource: String = "",
+    val exoOffloadActive: Boolean = false,
+    val bufferEvents: Int = 0,
+    val playerErrors: Int = 0,
+    val lastError: String? = null,
+    val mimeType: String? = null,
+    val sourceQuality: String? = null,
+    val bitrate: String? = null,
+    val sampleRate: String? = null,
+    val bitsPerSample: String? = null,
+    val audioEffects: String = "",
+    val highQualityOutput: String = ""
 )

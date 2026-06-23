@@ -18,8 +18,8 @@ android {
         applicationId = "personal.kenny.platalea"
         minSdk = 24
         targetSdk = 34
-        versionCode = 19
-        versionName = "0.19"
+        versionCode = 20
+        versionName = "0.20-preview"
     }
     signingConfigs {
         create("release") {

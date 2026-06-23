@@ -7984,6 +7984,7 @@ fun PlaybackScreen(
     var pendingTrackTransfer by remember { mutableStateOf<PlaylistTrackTransfer?>(null) }
     var playerAudioSettings by remember { mutableStateOf(PlayerAudioSettings()) }
     var showPlayerAudioSettingsDialog by remember { mutableStateOf(false) }
+    var showPlaybackDiagnostics by remember { mutableStateOf(false) }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -8330,6 +8331,35 @@ fun PlaybackScreen(
                                 if (state.durationMs > 0) formatPlaybackTime(state.durationMs) else "--:--",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        val diagnostics = state.diagnostics
+                        TextButton(onClick = { showPlaybackDiagnostics = !showPlaybackDiagnostics }) {
+                            Text(if (showPlaybackDiagnostics) "隐藏诊断" else "播放诊断")
+                        }
+                        if (showPlaybackDiagnostics) {
+                            val diagLines = listOfNotNull(
+                                "内核：${diagnostics.engine.ifBlank { "未知" }}",
+                                "来源：${if (diagnostics.playbackSource == "direct") "直接播放" else diagnostics.playbackSource}",
+                                "输出：${diagnostics.outputDevice.ifBlank { "未知" }}",
+                                diagnostics.outputDeviceSource.takeIf { it.isNotBlank() }?.let { "输出依据：$it" },
+                                "Offload：${if (diagnostics.exoOffloadActive) "已进入" else "未进入/不适用"}",
+                                "高品质输出偏好：${diagnostics.highQualityOutput.ifBlank { "未知" }}",
+                                "音效：${diagnostics.audioEffects.ifBlank { "未知" }}",
+                                "加载切换：${diagnostics.bufferEvents}",
+                                "错误次数：${diagnostics.playerErrors}",
+                                diagnostics.lastError?.let { "最后错误：$it" },
+                                diagnostics.mimeType?.let { "类型：$it" },
+                                diagnostics.sourceQuality?.let { "音源性质：$it" },
+                                diagnostics.bitrate?.let { "码率：$it bps" },
+                                diagnostics.sampleRate?.let { "采样率：$it Hz" },
+                                diagnostics.bitsPerSample?.let { "位深：$it bit" }
+                            )
+                            Text(
+                                diagLines.joinToString("\n"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
                             )
                         }
                     }
