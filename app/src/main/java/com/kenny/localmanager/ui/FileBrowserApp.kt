@@ -246,6 +246,9 @@ import com.kenny.localmanager.file.searchFilesRecursively
 import com.kenny.localmanager.ui.EpubViewerScreen
 import com.kenny.localmanager.ui.PicZipViewerScreen
 import com.kenny.localmanager.ui.PdfViewerScreen
+import com.kenny.localmanager.player.PlaylistSortOrder
+import com.kenny.localmanager.player.PlaylistTrackSortField
+import com.kenny.localmanager.player.PlaylistTrackSorter
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.TrackMetadata
@@ -748,6 +751,37 @@ private suspend fun rescanDirectoryPlaylist(
         uris = deduped.map { it.uri.toString() },
         names = deduped.map { it.name }
     )
+    prefs.updatePlaylist(updated)
+    val state = playbackState
+    if (state?.playlistId == pl.id) {
+        if (updated.uris.isEmpty()) {
+            onStopPlayback()
+        } else {
+            val currentUri = pl.uris.getOrNull(state.trackIndex)
+            val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
+            if (newIndex >= 0) {
+                notifyPlaybackPlaylistReloaded(context, pl.id, newIndex, state.positionMs)
+            } else {
+                notifyPlaybackPlaylistReloaded(context, pl.id, 0, 0)
+            }
+        }
+    }
+    return updated
+}
+
+private suspend fun resortPlaylistTracks(
+    context: Context,
+    prefs: Preferences,
+    pl: Playlist,
+    field: PlaylistTrackSortField,
+    order: PlaylistSortOrder,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit
+): Playlist {
+    if (pl.uris.size < 2) return pl
+    val updated = withContext(Dispatchers.IO) {
+        PlaylistTrackSorter.sortTracks(context, pl, field, order)
+    }
     prefs.updatePlaylist(updated)
     val state = playbackState
     if (state?.playlistId == pl.id) {
@@ -8061,6 +8095,11 @@ fun PlaybackScreen(
     var showRenamePlaylistDialog by remember { mutableStateOf(false) }
     var playlistRenameTarget by remember { mutableStateOf<Playlist?>(null) }
     var playlistRenameText by remember { mutableStateOf("") }
+    var showSortPlaylistDialog by remember { mutableStateOf(false) }
+    var playlistSortTarget by remember { mutableStateOf<Playlist?>(null) }
+    var playlistSortField by remember { mutableStateOf(PlaylistTrackSortField.ARTIST) }
+    var playlistSortOrder by remember { mutableStateOf(PlaylistSortOrder.ASCENDING) }
+    var playlistSortInProgress by remember { mutableStateOf(false) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var showBookmarkManagerDialog by remember { mutableStateOf(false) }
     var bookmarkNoteInput by remember { mutableStateOf("") }
@@ -8103,6 +8142,13 @@ fun PlaybackScreen(
         playlistRenameTarget = pl
         playlistRenameText = pl.displayName(context.getString(R.string.player_unnamed_playlist))
         showRenamePlaylistDialog = true
+    }
+
+    fun openSortPlaylistDialog(pl: Playlist) {
+        playlistSortTarget = pl
+        playlistSortField = PlaylistTrackSortField.ARTIST
+        playlistSortOrder = PlaylistSortOrder.ASCENDING
+        showSortPlaylistDialog = true
     }
 
     fun recordPlayedPlaylist(pl: Playlist) {
@@ -8552,6 +8598,16 @@ fun PlaybackScreen(
                             Text(context.getString(R.string.player_rescan_directory))
                         }
                     }
+                    if (pl.uris.size >= 2) {
+                        IconButton(onClick = { openSortPlaylistDialog(pl) }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.Sort,
+                                contentDescription = context.getString(R.string.player_resort_playlist),
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     Icon(
                         Icons.Filled.Edit,
                         contentDescription = context.getString(R.string.player_rename_playlist),
@@ -8841,6 +8897,15 @@ fun PlaybackScreen(
                                                 openRenamePlaylistDialog(pl)
                                             }
                                         )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_resort_playlist)) },
+                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
+                                            enabled = pl.uris.size >= 2,
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                openSortPlaylistDialog(pl)
+                                            }
+                                        )
                                         if (pl.isDirectorySource) {
                                             DropdownMenuItem(
                                                 text = { Text(context.getString(R.string.player_rescan_directory)) },
@@ -9018,6 +9083,123 @@ fun PlaybackScreen(
                         playlistRenameTarget = null
                         playlistRenameText = ""
                     }) { Text(context.getString(R.string.common_cancel)) }
+                }
+            )
+        }
+        if (showSortPlaylistDialog) {
+            val sortTarget = playlistSortTarget
+            val sortFieldOptions = listOf(
+                PlaylistTrackSortField.ARTIST to R.string.player_resort_field_artist,
+                PlaylistTrackSortField.ALBUM to R.string.player_resort_field_album,
+                PlaylistTrackSortField.YEAR to R.string.player_resort_field_year,
+                PlaylistTrackSortField.DIRECTORY to R.string.player_resort_field_directory,
+                PlaylistTrackSortField.RANDOM to R.string.player_resort_field_random
+            )
+            AlertDialog(
+                onDismissRequest = {
+                    if (!playlistSortInProgress) {
+                        showSortPlaylistDialog = false
+                        playlistSortTarget = null
+                    }
+                },
+                title = { Text(context.getString(R.string.player_resort_playlist_title)) },
+                text = {
+                    if (playlistSortInProgress) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(12.dp))
+                            Text(context.getString(R.string.player_resort_in_progress))
+                        }
+                    } else {
+                        Column {
+                            sortFieldOptions.forEach { (field, labelRes) ->
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clickable { playlistSortField = field }
+                                        .padding(vertical = 2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    androidx.compose.material3.RadioButton(
+                                        selected = playlistSortField == field,
+                                        onClick = { playlistSortField = field }
+                                    )
+                                    Text(context.getString(labelRes))
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { playlistSortOrder = PlaylistSortOrder.ASCENDING }
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.RadioButton(
+                                    selected = playlistSortOrder == PlaylistSortOrder.ASCENDING,
+                                    onClick = { playlistSortOrder = PlaylistSortOrder.ASCENDING }
+                                )
+                                Text(context.getString(R.string.player_resort_order_asc))
+                            }
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable { playlistSortOrder = PlaylistSortOrder.DESCENDING }
+                                    .padding(vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.RadioButton(
+                                    selected = playlistSortOrder == PlaylistSortOrder.DESCENDING,
+                                    onClick = { playlistSortOrder = PlaylistSortOrder.DESCENDING }
+                                )
+                                Text(context.getString(R.string.player_resort_order_desc))
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = !playlistSortInProgress && (sortTarget?.uris?.size ?: 0) >= 2,
+                        onClick = {
+                            val pl = sortTarget ?: return@Button
+                            if (pl.uris.size < 2) {
+                                Toast.makeText(context, context.getString(R.string.player_resort_too_few), Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            playlistSortInProgress = true
+                            scope.launch {
+                                try {
+                                    val updated = resortPlaylistTracks(
+                                        context = context,
+                                        prefs = prefs,
+                                        pl = pl,
+                                        field = playlistSortField,
+                                        order = playlistSortOrder,
+                                        playbackState = playbackState,
+                                        onStopPlayback = onStopPlayback
+                                    )
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.player_resort_done, updated.trackCount),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } finally {
+                                    playlistSortInProgress = false
+                                    showSortPlaylistDialog = false
+                                    playlistSortTarget = null
+                                }
+                            }
+                        }
+                    ) { Text(context.getString(R.string.common_ok)) }
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !playlistSortInProgress,
+                        onClick = {
+                            showSortPlaylistDialog = false
+                            playlistSortTarget = null
+                        }
+                    ) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
         }
