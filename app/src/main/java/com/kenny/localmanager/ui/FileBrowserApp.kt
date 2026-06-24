@@ -735,38 +735,44 @@ private suspend fun removePlaylistTrackAt(
     }
 }
 
-private suspend fun rescanDirectoryPlaylist(
+private suspend fun refreshDirectoryPlaylistFromSource(
     context: Context,
-    prefs: Preferences,
-    pl: Playlist,
-    playbackState: PlaybackState?,
-    onStopPlayback: () -> Unit
+    pl: Playlist
 ): Playlist? {
     val sourceUri = pl.sourceUri ?: return null
     val audioList = withContext(Dispatchers.IO) {
         collectMusicFilesRecursively(context, sourceUri).map { it.model }
     }
     val deduped = dedupeAudioList(audioList)
-    val updated = pl.copy(
+    return pl.copy(
         uris = deduped.map { it.uri.toString() },
         names = deduped.map { it.name }
     )
-    prefs.updatePlaylist(updated)
-    val state = playbackState
-    if (state?.playlistId == pl.id) {
-        if (updated.uris.isEmpty()) {
-            onStopPlayback()
-        } else {
-            val currentUri = pl.uris.getOrNull(state.trackIndex)
-            val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
-            if (newIndex >= 0) {
-                notifyPlaybackPlaylistReloaded(context, pl.id, newIndex, state.positionMs)
-            } else {
-                notifyPlaybackPlaylistReloaded(context, pl.id, 0, 0)
-            }
-        }
+}
+
+private fun syncPlaybackAfterPlaylistUpdate(
+    context: Context,
+    playlistId: String,
+    previousUris: List<String>,
+    previousTrackIndex: Int,
+    previousPositionMs: Int,
+    updated: Playlist,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit
+) {
+    val state = playbackState ?: return
+    if (state.playlistId != playlistId) return
+    if (updated.uris.isEmpty()) {
+        onStopPlayback()
+        return
     }
-    return updated
+    val currentUri = previousUris.getOrNull(previousTrackIndex)
+    val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
+    if (newIndex >= 0) {
+        notifyPlaybackPlaylistReloaded(context, playlistId, newIndex, previousPositionMs)
+    } else {
+        notifyPlaybackPlaylistReloaded(context, playlistId, 0, 0)
+    }
 }
 
 private suspend fun resortPlaylistTracks(
@@ -778,25 +784,35 @@ private suspend fun resortPlaylistTracks(
     playbackState: PlaybackState?,
     onStopPlayback: () -> Unit
 ): Playlist {
-    if (pl.uris.size < 2) return pl
-    val updated = withContext(Dispatchers.IO) {
-        PlaylistTrackSorter.sortTracks(context, pl, field, order)
+    val previousUris = pl.uris
+    val previousTrackIndex = playbackState?.takeIf { it.playlistId == pl.id }?.trackIndex ?: 0
+    val previousPositionMs = playbackState?.takeIf { it.playlistId == pl.id }?.positionMs ?: 0
+
+    var working = pl
+    if (pl.isDirectorySource) {
+        working = refreshDirectoryPlaylistFromSource(context, pl) ?: return pl
+    } else if (pl.uris.size < 2) {
+        return pl
+    }
+
+    val updated = if (working.uris.size >= 2) {
+        withContext(Dispatchers.IO) {
+            PlaylistTrackSorter.sortTracks(context, working, field, order)
+        }
+    } else {
+        working
     }
     prefs.updatePlaylist(updated)
-    val state = playbackState
-    if (state?.playlistId == pl.id) {
-        if (updated.uris.isEmpty()) {
-            onStopPlayback()
-        } else {
-            val currentUri = pl.uris.getOrNull(state.trackIndex)
-            val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
-            if (newIndex >= 0) {
-                notifyPlaybackPlaylistReloaded(context, pl.id, newIndex, state.positionMs)
-            } else {
-                notifyPlaybackPlaylistReloaded(context, pl.id, 0, 0)
-            }
-        }
-    }
+    syncPlaybackAfterPlaylistUpdate(
+        context = context,
+        playlistId = pl.id,
+        previousUris = previousUris,
+        previousTrackIndex = previousTrackIndex,
+        previousPositionMs = previousPositionMs,
+        updated = updated,
+        playbackState = playbackState,
+        onStopPlayback = onStopPlayback
+    )
     return updated
 }
 
@@ -8562,43 +8578,13 @@ fun PlaybackScreen(
                         if (pl.isDirectorySource) {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "目录列表 · 删除曲目会同步删除源文件",
+                                "目录列表 · 重新排序时从源目录刷新 · 删除曲目会同步删除源文件",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
                         }
                     }
-                    if (pl.isDirectorySource) {
-                        TextButton(
-                            onClick = {
-                                scope.launch {
-                                    val updated = rescanDirectoryPlaylist(
-                                        context = context,
-                                        prefs = prefs,
-                                        pl = pl,
-                                        playbackState = playbackState,
-                                        onStopPlayback = onStopPlayback
-                                    )
-                                    if (updated != null) {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.player_rescan_done, updated.trackCount),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    } else {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.player_rescan_no_directory),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                }
-                            }
-                        ) {
-                            Text(context.getString(R.string.player_rescan_directory))
-                        }
-                    }
-                    if (pl.uris.size >= 2) {
+                    if (pl.isDirectorySource || pl.uris.size >= 2) {
                         IconButton(onClick = { openSortPlaylistDialog(pl) }) {
                             Icon(
                                 Icons.AutoMirrored.Filled.Sort,
@@ -8900,37 +8886,12 @@ fun PlaybackScreen(
                                         DropdownMenuItem(
                                             text = { Text(context.getString(R.string.player_resort_playlist)) },
                                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
-                                            enabled = pl.uris.size >= 2,
+                                            enabled = pl.isDirectorySource || pl.uris.size >= 2,
                                             onClick = {
                                                 playlistActionMenuIndex = null
                                                 openSortPlaylistDialog(pl)
                                             }
                                         )
-                                        if (pl.isDirectorySource) {
-                                            DropdownMenuItem(
-                                                text = { Text(context.getString(R.string.player_rescan_directory)) },
-                                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-                                                onClick = {
-                                                    playlistActionMenuIndex = null
-                                                    scope.launch {
-                                                        val updated = rescanDirectoryPlaylist(
-                                                            context = context,
-                                                            prefs = prefs,
-                                                            pl = pl,
-                                                            playbackState = playbackState,
-                                                            onStopPlayback = onStopPlayback
-                                                        )
-                                                        if (updated != null) {
-                                                            Toast.makeText(
-                                                                context,
-                                                                context.getString(R.string.player_rescan_done, updated.trackCount),
-                                                                Toast.LENGTH_SHORT
-                                                            ).show()
-                                                        }
-                                                    }
-                                                }
-                                            )
-                                        }
                                         DropdownMenuItem(
                                             text = { Text(context.getString(R.string.common_delete)) },
                                             leadingIcon = {
@@ -9112,6 +9073,14 @@ fun PlaybackScreen(
                         }
                     } else {
                         Column {
+                            if (sortTarget?.isDirectorySource == true) {
+                                Text(
+                                    context.getString(R.string.player_resort_directory_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(8.dp))
+                            }
                             sortFieldOptions.forEach { (field, labelRes) ->
                                 Row(
                                     Modifier
@@ -9158,11 +9127,12 @@ fun PlaybackScreen(
                     }
                 },
                 confirmButton = {
+                    val canResort = sortTarget != null && (sortTarget.isDirectorySource || sortTarget.uris.size >= 2)
                     Button(
-                        enabled = !playlistSortInProgress && (sortTarget?.uris?.size ?: 0) >= 2,
+                        enabled = !playlistSortInProgress && canResort,
                         onClick = {
                             val pl = sortTarget ?: return@Button
-                            if (pl.uris.size < 2) {
+                            if (!pl.isDirectorySource && pl.uris.size < 2) {
                                 Toast.makeText(context, context.getString(R.string.player_resort_too_few), Toast.LENGTH_SHORT).show()
                                 return@Button
                             }

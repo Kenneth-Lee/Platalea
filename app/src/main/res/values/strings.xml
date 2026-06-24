@@ -90,9 +90,7 @@
     <string name="player_add_to_playback_prompt">请选择要把 %1$d 首音频加入到哪里。</string>
     <string name="player_track_count">%1$d 首</string>
     <string name="player_new_list">新建列表</string>
-    <string name="player_rescan_directory">重新扫描</string>
-    <string name="player_rescan_done">已重新扫描，共 %1$d 首</string>
-    <string name="player_rescan_no_directory">该列表不是目录列表，无法重新扫描</string>
+    <string name="player_resort_directory_hint">目录列表会先从源目录刷新曲目，再按所选方式排序。</string>
     <string name="player_resort_playlist">重新排序</string>
     <string name="player_resort_playlist_title">重新排序曲目</string>
     <string name="player_resort_field_artist">艺术家</string>
@@ -104,7 +102,7 @@
     <string name="player_resort_order_desc">逆序</string>
     <string name="player_resort_done">已重新排序 %1$d 首曲目</string>
     <string name="player_resort_too_few">曲目不足，无需排序</string>
-    <string name="player_resort_in_progress">正在读取元数据并排序…</string>
+    <string name="player_resort_in_progress">正在刷新目录并读取元数据…</string>
     <string name="player_save_playback_bookmark_title">保存播放书签</string>
     <string name="player_bookmark_note_label">书签备注</string>
     <string name="player_bookmark_note_placeholder">例如：副歌开始 / 重点段落</string>

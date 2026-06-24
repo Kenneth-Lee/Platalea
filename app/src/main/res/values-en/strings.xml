@@ -86,9 +86,7 @@
     <string name="player_add_to_playback_prompt">Choose where to add %1$d audio track(s).</string>
     <string name="player_track_count">%1$d track(s)</string>
     <string name="player_new_list">New Playlist</string>
-    <string name="player_rescan_directory">Rescan Directory</string>
-    <string name="player_rescan_done">Rescanned, %1$d track(s) total</string>
-    <string name="player_rescan_no_directory">This is not a directory playlist and cannot be rescanned.</string>
+    <string name="player_resort_directory_hint">Directory playlists are refreshed from the source folder first, then reordered.</string>
     <string name="player_resort_playlist">Reorder Tracks</string>
     <string name="player_resort_playlist_title">Reorder Tracks</string>
     <string name="player_resort_field_artist">Artist</string>
@@ -100,7 +98,7 @@
     <string name="player_resort_order_desc">Descending</string>
     <string name="player_resort_done">Reordered %1$d track(s)</string>
     <string name="player_resort_too_few">Not enough tracks to reorder.</string>
-    <string name="player_resort_in_progress">Reading metadata and reordering…</string>
+    <string name="player_resort_in_progress">Refreshing directory and reading metadata…</string>
     <string name="player_save_playback_bookmark_title">Save Playback Bookmark</string>
     <string name="player_bookmark_note_label">Bookmark Note</string>
     <string name="player_bookmark_note_placeholder">For example: chorus start / key passage</string>
