@@ -325,6 +325,7 @@
     <string name="epub_action_book_notes">本书笔记</string>
     <string name="epub_action_zoom_in">放大</string>
     <string name="epub_action_zoom_out">缩小</string>
+    <string name="epub_action_fullscreen">全屏</string>
     <string name="book_note_title">读书笔记</string>
     <string name="book_note_file_encrypted">%1$s · 已加密</string>
     <string name="book_note_missing_default_secret_key">未找到默认私钥，请先生成密钥对</string>

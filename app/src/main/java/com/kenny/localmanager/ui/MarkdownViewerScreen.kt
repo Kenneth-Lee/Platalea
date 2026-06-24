@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.Bookmarks
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
@@ -4959,9 +4960,6 @@ fun EpubViewerScreen(
     var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
     var dictLookupHistoryRestored by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = isFullscreen) {
-        isFullscreen = false
-    }
     ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
         isFullscreen = false
     }
@@ -5742,6 +5740,7 @@ fun EpubViewerScreen(
 
     BackHandler {
         when {
+            isFullscreen -> isFullscreen = false
             showToc -> showToc = false
             showBookmarks -> showBookmarks = false
             showAddBookmark -> showAddBookmark = false
@@ -6558,6 +6557,14 @@ fun EpubViewerScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Default.ZoomOut, contentDescription = null) }
                             )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.epub_action_fullscreen)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    isFullscreen = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
+                            )
                         }
                     }
                 },
@@ -6772,8 +6779,7 @@ fun EpubViewerScreen(
                                             if (currentChapterIndex < chapters.size - 1) {
                                                 goToNextChapter()
                                             }
-                                        },
-                                        onDoubleClick = { isFullscreen = true }
+                                        }
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -7002,7 +7008,7 @@ fun EpubViewerScreen(
                             }
                         }
                     )
-                    if (!hideReaderFloatingNextButton || isFullscreen) {
+                    if (!hideReaderFloatingNextButton) {
                         DraggableNextReadButton(
                             contentDescription = "下一页",
                             enabled = true,
@@ -8740,9 +8746,6 @@ fun PdfViewerScreen(
         showAddBookmark = true
     }
 
-    BackHandler(enabled = isFullscreen) {
-        isFullscreen = false
-    }
     ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
         isFullscreen = false
     }
@@ -8871,6 +8874,7 @@ fun PdfViewerScreen(
 
     BackHandler {
         when {
+            isFullscreen -> isFullscreen = false
             showBookmarks -> showBookmarks = false
             showAddBookmark -> showAddBookmark = false
             editingBookNote != null -> editingBookNote = null
@@ -9221,6 +9225,14 @@ fun PdfViewerScreen(
                                     },
                                     leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
                                 )
+                                DropdownMenuItem(
+                                    text = { Text("全屏") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        isFullscreen = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
+                                )
                             }
                         }
                         // 缩放按钮
@@ -9264,10 +9276,9 @@ fun PdfViewerScreen(
                     Box(
                         modifier = Modifier
                             .size(48.dp)
-                            .combinedClickable(
-                                onClick = { if (currentPage < pageCount - 1) currentPage++ },
-                                onDoubleClick = { isFullscreen = true }
-                            ),
+                            .clickable {
+                                if (currentPage < pageCount - 1) currentPage++
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
@@ -9351,7 +9362,7 @@ fun PdfViewerScreen(
                                     .padding(16.dp)
                             )
                         }
-                        if (!hideReaderFloatingNextButton || isFullscreen) {
+                        if (!hideReaderFloatingNextButton) {
                             DraggableNextReadButton(
                                 contentDescription = "下一页",
                                 enabled = true,
