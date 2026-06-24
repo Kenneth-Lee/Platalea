@@ -842,13 +842,13 @@ private suspend fun appendToPlaybackPlaylistAndStart(
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     return when {
         result.appendedCount > 0 && result.skippedCount > 0 ->
-            context.getString(R.string.player_append_started_with_skips, result.appendedCount, target.name, result.skippedCount)
+            context.getString(R.string.player_append_started_with_skips, result.appendedCount, target.displayName(context.getString(R.string.player_unnamed_playlist)), result.skippedCount)
         result.appendedCount > 0 ->
-            context.getString(R.string.player_append_started, result.appendedCount, target.name)
+            context.getString(R.string.player_append_started, result.appendedCount, target.displayName(context.getString(R.string.player_unnamed_playlist)))
         result.skippedCount > 0 ->
-            context.getString(R.string.player_already_exists_started, target.name)
+            context.getString(R.string.player_already_exists_started, target.displayName(context.getString(R.string.player_unnamed_playlist)))
         else ->
-            context.getString(R.string.player_started_playlist, target.name)
+            context.getString(R.string.player_started_playlist, target.displayName(context.getString(R.string.player_unnamed_playlist)))
     }
 }
 
@@ -1094,7 +1094,6 @@ private fun ScrollableMainTabBar(
 private fun MainTabContentHost(
     activeMainTab: MainTab,
     recentOpenItems: List<RecentOpenItem>,
-    playlistNoteById: Map<String, String>,
     onOpenRecentItem: (RecentOpenItem) -> Unit,
     onDeleteRecentItem: (RecentOpenItem) -> Unit,
     onClearRecentItems: () -> Unit,
@@ -1116,7 +1115,6 @@ private fun MainTabContentHost(
         MainTab.RECENT -> RecentTabRoute(
             RecentTabRouteState(
                 items = recentOpenItems.take(30),
-                playlistNoteById = playlistNoteById,
                 onOpenRecentItem = onOpenRecentItem,
                 onDeleteRecentItem = onDeleteRecentItem,
                 onClearRecentItems = onClearRecentItems
@@ -2301,7 +2299,7 @@ private fun FileBrowserAppScreen(
             recordRecentOpen(
                 type = RECENT_TYPE_PLAYLIST,
                 key = playlist.id,
-                title = playlist.name,
+                title = playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
                 playlistId = playlist.id
             )
             pendingList.clear()
@@ -2494,11 +2492,9 @@ private fun FileBrowserAppScreen(
             }
             progressOp?.let { OperationProgressDialog(it) }
             Box(Modifier.weight(1f)) {
-                val playlistNoteById = playlists.associate { it.id to it.note }
                 MainTabContentHost(
                     activeMainTab = activeMainTab,
                     recentOpenItems = recentOpenItems,
-                    playlistNoteById = playlistNoteById,
                     onOpenRecentItem = { item ->
                         openRecentItemByType(
                             context = context,
@@ -2675,7 +2671,7 @@ private fun FileBrowserAppScreen(
                                             recordRecentOpen(
                                                 type = RECENT_TYPE_PLAYLIST,
                                                 key = playlist.id,
-                                                title = playlist.name,
+                                                title = playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
                                                 playlistId = playlist.id
                                             )
                                             switchMainTab(MainTab.PLAYER)
@@ -3048,7 +3044,7 @@ private fun FileBrowserAppScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Column(Modifier.fillMaxWidth()) {
-                                    Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(playlist.displayName(), color = MaterialTheme.colorScheme.onSurface)
                                     Text(
                                         context.getString(R.string.player_track_count, playlist.trackCount),
                                         style = MaterialTheme.typography.bodySmall,
@@ -8062,9 +8058,9 @@ fun PlaybackScreen(
     var lastPlaylistId by remember { mutableStateOf<String?>(null) }
     var playerBookmarks by remember { mutableStateOf<List<PlayerListBookmark>>(emptyList()) }
     var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
-    var showPlaylistNoteDialog by remember { mutableStateOf(false) }
-    var playlistNoteEditTarget by remember { mutableStateOf<Playlist?>(null) }
-    var playlistNoteEditText by remember { mutableStateOf("") }
+    var showRenamePlaylistDialog by remember { mutableStateOf(false) }
+    var playlistRenameTarget by remember { mutableStateOf<Playlist?>(null) }
+    var playlistRenameText by remember { mutableStateOf("") }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var showBookmarkManagerDialog by remember { mutableStateOf(false) }
     var bookmarkNoteInput by remember { mutableStateOf("") }
@@ -8103,12 +8099,18 @@ fun PlaybackScreen(
         selectedPlaylistId = null
     }
 
+    fun openRenamePlaylistDialog(pl: Playlist) {
+        playlistRenameTarget = pl
+        playlistRenameText = pl.displayName(context.getString(R.string.player_unnamed_playlist))
+        showRenamePlaylistDialog = true
+    }
+
     fun recordPlayedPlaylist(pl: Playlist) {
         scope.launch {
             prefs.addRecentOpenItem(
                 type = RECENT_TYPE_PLAYLIST,
                 key = pl.id,
-                title = pl.name.ifBlank { context.getString(R.string.player_unnamed_playlist) },
+                title = pl.displayName(context.getString(R.string.player_unnamed_playlist)),
                 playlistId = pl.id
             )
         }
@@ -8313,7 +8315,10 @@ fun PlaybackScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(selectedPlaylist?.name ?: context.getString(R.string.player_screen_title))
+                    Text(
+                        selectedPlaylist?.displayName(context.getString(R.string.player_unnamed_playlist))
+                            ?: context.getString(R.string.player_screen_title)
+                    )
                 },
                 actions = {
                     if (playbackState?.playlistId != null) {
@@ -8461,7 +8466,7 @@ fun PlaybackScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            if (restorePlaylist != null) context.getString(R.string.player_resume_hint, restorePlaylist.name) else context.getString(R.string.player_select_playlist_hint),
+                            if (restorePlaylist != null) context.getString(R.string.player_resume_hint, restorePlaylist.displayName()) else context.getString(R.string.player_select_playlist_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 2,
@@ -8496,30 +8501,18 @@ fun PlaybackScreen(
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .clickable {
-                            playlistNoteEditTarget = pl
-                            playlistNoteEditText = pl.note
-                            showPlaylistNoteDialog = true
-                        }
+                        .clickable { openRenamePlaylistDialog(pl) }
                         .padding(horizontal = 8.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
-                        if (pl.note.isNotBlank()) {
-                            Text(
-                                pl.note,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 3,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        } else {
-                            Text(
-                                context.getString(R.string.player_add_note),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Text(
+                            pl.displayName(context.getString(R.string.player_unnamed_playlist)),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         if (pl.isDirectorySource) {
                             Spacer(Modifier.height(4.dp))
                             Text(
@@ -8561,7 +8554,7 @@ fun PlaybackScreen(
                     }
                     Icon(
                         Icons.Filled.Edit,
-                        contentDescription = context.getString(R.string.player_edit_note),
+                        contentDescription = context.getString(R.string.player_rename_playlist),
                         modifier = Modifier.size(20.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -8765,7 +8758,7 @@ fun PlaybackScreen(
                             ) {
                                 Column(Modifier.weight(1f)) {
                                     Text(
-                                        if (pl.note.isNotBlank()) pl.note else pl.name,
+                                        pl.displayName(context.getString(R.string.player_unnamed_playlist)),
                                         style = MaterialTheme.typography.bodySmall,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
@@ -8838,6 +8831,14 @@ fun PlaybackScreen(
                                                     ids.add(i + 1, pl.id)
                                                     prefs.updatePlaylistOrder(ids)
                                                 }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_rename_playlist)) },
+                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                openRenamePlaylistDialog(pl)
                                             }
                                         )
                                         if (pl.isDirectorySource) {
@@ -8957,7 +8958,7 @@ fun PlaybackScreen(
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
                                     Column(Modifier.fillMaxWidth()) {
-                                        Text(playlist.name, color = MaterialTheme.colorScheme.onSurface)
+                                        Text(playlist.displayName(), color = MaterialTheme.colorScheme.onSurface)
                                         Text(
                                             context.getString(R.string.player_track_count, playlist.trackCount),
                                             style = MaterialTheme.typography.bodySmall,
@@ -8977,29 +8978,47 @@ fun PlaybackScreen(
                 }
             )
         }
-        playlistNoteEditTarget?.let { target ->
+        if (showRenamePlaylistDialog) {
+            val target = playlistRenameTarget
             AlertDialog(
-                onDismissRequest = { playlistNoteEditTarget = null },
-                title = { Text(context.getString(R.string.player_playlist_note_title)) },
+                onDismissRequest = {
+                    showRenamePlaylistDialog = false
+                    playlistRenameTarget = null
+                    playlistRenameText = ""
+                },
+                title = { Text(context.getString(R.string.player_rename_playlist_title)) },
                 text = {
                     OutlinedTextField(
-                        value = playlistNoteEditText,
-                        onValueChange = { playlistNoteEditText = it },
+                        value = playlistRenameText,
+                        onValueChange = { playlistRenameText = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text(context.getString(R.string.common_note)) },
-                        minLines = 2,
-                        maxLines = 4
+                        label = { Text(context.getString(R.string.player_playlist_name_label)) },
+                        singleLine = true
                     )
                 },
                 confirmButton = {
                     Button(onClick = {
+                        val newName = playlistRenameText.trim()
+                        if (newName.isEmpty()) {
+                            Toast.makeText(context, context.getString(R.string.player_playlist_name_required), Toast.LENGTH_SHORT).show()
+                            return@Button
+                        }
+                        val renameTarget = target ?: return@Button
                         scope.launch {
-                            prefs.updatePlaylist(target.copy(note = playlistNoteEditText.trim()))
-                            playlistNoteEditTarget = null
+                            prefs.updatePlaylist(renameTarget.copy(name = newName, note = ""))
+                            showRenamePlaylistDialog = false
+                            playlistRenameTarget = null
+                            playlistRenameText = ""
                         }
                     }) { Text(context.getString(R.string.common_save)) }
                 },
-                dismissButton = { TextButton(onClick = { playlistNoteEditTarget = null }) { Text(context.getString(R.string.common_cancel)) } }
+                dismissButton = {
+                    TextButton(onClick = {
+                        showRenamePlaylistDialog = false
+                        playlistRenameTarget = null
+                        playlistRenameText = ""
+                    }) { Text(context.getString(R.string.common_cancel)) }
+                }
             )
         }
         if (showAddBookmarkDialog) {

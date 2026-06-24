@@ -32,7 +32,6 @@
     <string name="recent_type_external_open">External App</string>
     <string name="recent_empty">No recent items.</string>
     <string name="recent_clear">Clear Recent</string>
-    <string name="recent_note_prefix">Note: %1$s</string>
     <string name="recent_delete_item">Delete recent item</string>
     <string name="recent_invalid_missing_playlist_id">Invalid item: missing playlist ID.</string>
     <string name="recent_invalid_missing_uri">Invalid item: missing file URI.</string>
@@ -62,8 +61,10 @@
     <string name="player_edit_bookmark_note">Edit bookmark note</string>
     <string name="player_delete_bookmark">Delete bookmark</string>
     <string name="player_jump">Jump</string>
-    <string name="player_add_note">Tap to add a note</string>
-    <string name="player_edit_note">Edit note</string>
+    <string name="player_rename_playlist">Rename Playlist</string>
+    <string name="player_rename_playlist_title">Rename Playlist</string>
+    <string name="player_playlist_name_label">Playlist name</string>
+    <string name="player_playlist_name_required">Playlist name cannot be empty</string>
     <string name="player_now_playing_badge">Playing</string>
     <string name="player_play_from_here">Play from here</string>
     <string name="player_move_up">Move up</string>
@@ -85,7 +86,6 @@
     <string name="player_add_to_playback_prompt">Choose where to add %1$d audio track(s).</string>
     <string name="player_track_count">%1$d track(s)</string>
     <string name="player_new_list">New Playlist</string>
-    <string name="player_playlist_note_title">Playlist Note</string>
     <string name="player_save_playback_bookmark_title">Save Playback Bookmark</string>
     <string name="player_bookmark_note_label">Bookmark Note</string>
     <string name="player_bookmark_note_placeholder">For example: chorus start / key passage</string>

@@ -36,7 +36,6 @@
     <string name="recent_type_external_open">外部打开</string>
     <string name="recent_empty">暂无最近打开条目</string>
     <string name="recent_clear">清空最近</string>
-    <string name="recent_note_prefix">备注: %1$s</string>
     <string name="recent_delete_item">删除最近条目</string>
     <string name="recent_invalid_missing_playlist_id">条目无效：缺少播放列表 ID</string>
     <string name="recent_invalid_missing_uri">条目无效：缺少文件 URI</string>
@@ -66,8 +65,10 @@
     <string name="player_edit_bookmark_note">编辑书签备注</string>
     <string name="player_delete_bookmark">删除书签</string>
     <string name="player_jump">跳转</string>
-    <string name="player_add_note">点击添加备注</string>
-    <string name="player_edit_note">编辑备注</string>
+    <string name="player_rename_playlist">重命名列表</string>
+    <string name="player_rename_playlist_title">重命名播放列表</string>
+    <string name="player_playlist_name_label">列表名称</string>
+    <string name="player_playlist_name_required">列表名称不能为空</string>
     <string name="player_now_playing_badge">正在播放</string>
     <string name="player_play_from_here">从此处播放</string>
     <string name="player_move_up">上移</string>
@@ -92,7 +93,6 @@
     <string name="player_rescan_directory">重新扫描</string>
     <string name="player_rescan_done">已重新扫描，共 %1$d 首</string>
     <string name="player_rescan_no_directory">该列表不是目录列表，无法重新扫描</string>
-    <string name="player_playlist_note_title">播放列表备注</string>
     <string name="player_save_playback_bookmark_title">保存播放书签</string>
     <string name="player_bookmark_note_label">书签备注</string>
     <string name="player_bookmark_note_placeholder">例如：副歌开始 / 重点段落</string>

@@ -44,7 +44,6 @@ import java.util.Locale
 
 data class RecentTabRouteState(
     val items: List<RecentOpenItem>,
-    val playlistNoteById: Map<String, String>,
     val onOpenRecentItem: (RecentOpenItem) -> Unit,
     val onDeleteRecentItem: (RecentOpenItem) -> Unit,
     val onClearRecentItems: () -> Unit
@@ -134,18 +133,6 @@ fun RecentTabRoute(state: RecentTabRouteState) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            if (item.type == RECENT_TYPE_PLAYLIST) {
-                                val note = item.playlistId?.let { state.playlistNoteById[it] }?.trim().orEmpty()
-                                if (note.isNotEmpty()) {
-                                    Text(
-                                        context.getString(R.string.recent_note_prefix, note),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
                         }
                         IconButton(onClick = { state.onDeleteRecentItem(item) }) {
                             Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.recent_delete_item))

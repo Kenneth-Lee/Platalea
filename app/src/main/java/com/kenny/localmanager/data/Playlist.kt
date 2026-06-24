@@ -5,7 +5,8 @@ import org.json.JSONObject
 import java.util.UUID
 
 /**
- * 播放列表：名称 + 备注（可选）+ 曲目（uri + 显示名），用于持久化与恢复播放进度。
+ * 播放列表：名称 + 曲目（uri + 显示名），用于持久化与恢复播放进度。
+ * [note] 字段仅用于兼容旧版本备注数据，新数据应写入 [name]。
  */
 data class Playlist(
     val id: String,
@@ -18,6 +19,10 @@ data class Playlist(
 ) {
     val trackCount: Int get() = uris.size
     val isDirectorySource: Boolean get() = sourceType == SOURCE_TYPE_DIRECTORY && !sourceUri.isNullOrBlank()
+
+    /** 展示用名称：优先 name，兼容旧数据中的 note。 */
+    fun displayName(fallback: String = ""): String =
+        name.trim().ifBlank { note.trim() }.ifBlank { fallback }
 
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
