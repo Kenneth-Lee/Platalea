@@ -7981,6 +7981,7 @@ fun PlaybackScreen(
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var newPlaylistName by remember { mutableStateOf("") }
     var trackActionMenuIndex by remember { mutableStateOf<Int?>(null) }
+    var playlistActionMenuIndex by remember { mutableStateOf<Int?>(null) }
     var pendingTrackTransfer by remember { mutableStateOf<PlaylistTrackTransfer?>(null) }
     var playerAudioSettings by remember { mutableStateOf(PlayerAudioSettings()) }
     var showPlayerAudioSettingsDialog by remember { mutableStateOf(false) }
@@ -8419,14 +8420,14 @@ fun PlaybackScreen(
                             playlistNoteEditText = pl.note
                             showPlaylistNoteDialog = true
                         }
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                        .padding(horizontal = 8.dp, vertical = 3.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column(Modifier.weight(1f)) {
                         if (pl.note.isNotBlank()) {
                             Text(
                                 pl.note,
-                                style = MaterialTheme.typography.bodyMedium,
+                                style = MaterialTheme.typography.bodySmall,
                                 color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 3,
                                 overflow = TextOverflow.Ellipsis
@@ -8468,103 +8469,90 @@ fun PlaybackScreen(
                     LazyColumn(
                         modifier = Modifier.weight(1f),
                         state = selectedPlaylistTrackListState,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
                         items(pl.uris.size) { i ->
                             val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
                             val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState.trackIndex == i
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surface
-                                )
-                            ) {
                             Row(
                                 Modifier
                                     .fillMaxWidth()
+                                    .background(
+                                        if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer
+                                        else MaterialTheme.colorScheme.surface
+                                    )
                                     .clickable { startPlaylistFromIndex(pl, i) }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(start = 6.dp, end = 2.dp, top = 3.dp, bottom = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
                                     "${i + 1}.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier.width(28.dp)
+                                    style = MaterialTheme.typography.labelSmall,
+                                    modifier = Modifier.width(22.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Text(
                                     name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f),
                                     color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
                                 )
-                                if (isCurrentTrack) {
-                                    Text(
-                                        context.getString(R.string.player_now_playing_badge),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.padding(horizontal = 4.dp)
-                                    )
-                                    IconButton(onClick = { startPlaylistFromIndex(pl, i) }) {
-                                        Icon(
-                                            Icons.Default.PlayArrow,
-                                            contentDescription = context.getString(R.string.player_play_from_here),
-                                            modifier = Modifier.size(24.dp)
-                                        )
-                                    }
-                                } else {
-                                    Spacer(Modifier.size(48.dp))
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (i > 0) scope.launch {
-                                            val uris = pl.uris.toMutableList()
-                                            val names = pl.names.toMutableList()
-                                            uris.add(i - 1, uris.removeAt(i))
-                                            names.add(i - 1, names.removeAt(i))
-                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                        }
-                                    },
-                                    enabled = i > 0
-                                ) {
-                                    Icon(
-                                        Icons.Default.ArrowUpward,
-                                        contentDescription = context.getString(R.string.player_move_up),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (i < pl.uris.size - 1) scope.launch {
-                                            val uris = pl.uris.toMutableList()
-                                            val names = pl.names.toMutableList()
-                                            uris.add(i + 1, uris.removeAt(i))
-                                            names.add(i + 1, names.removeAt(i))
-                                            prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                        }
-                                    },
-                                    enabled = i < pl.uris.size - 1
-                                ) {
-                                    Icon(
-                                        Icons.Default.ArrowDownward,
-                                        contentDescription = context.getString(R.string.player_move_down),
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
                                 Box {
-                                    IconButton(onClick = { trackActionMenuIndex = i }) {
+                                    IconButton(
+                                        onClick = { trackActionMenuIndex = i },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
                                         Icon(
                                             Icons.Default.MoreVert,
                                             contentDescription = context.getString(R.string.main_menu),
-                                            modifier = Modifier.size(20.dp)
+                                            modifier = Modifier.size(18.dp)
                                         )
                                     }
                                     DropdownMenu(
                                         expanded = trackActionMenuIndex == i,
                                         onDismissRequest = { trackActionMenuIndex = null }
                                     ) {
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_play_from_here)) },
+                                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                                            onClick = {
+                                                trackActionMenuIndex = null
+                                                startPlaylistFromIndex(pl, i)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_move_up)) },
+                                            leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
+                                            enabled = i > 0,
+                                            onClick = {
+                                                trackActionMenuIndex = null
+                                                if (i > 0) scope.launch {
+                                                    val uris = pl.uris.toMutableList()
+                                                    val names = pl.names.toMutableList()
+                                                    uris.add(i - 1, uris.removeAt(i))
+                                                    names.add(i - 1, names.removeAt(i))
+                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_move_down)) },
+                                            leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
+                                            enabled = i < pl.uris.size - 1,
+                                            onClick = {
+                                                trackActionMenuIndex = null
+                                                if (i < pl.uris.size - 1) scope.launch {
+                                                    val uris = pl.uris.toMutableList()
+                                                    val names = pl.names.toMutableList()
+                                                    uris.add(i + 1, uris.removeAt(i))
+                                                    names.add(i + 1, names.removeAt(i))
+                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                                }
+                                            }
+                                        )
                                         DropdownMenuItem(
                                             text = { Text("复制到列表") },
                                             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
@@ -8581,53 +8569,54 @@ fun PlaybackScreen(
                                                 trackActionMenuIndex = null
                                             }
                                         )
-                                    }
-                                }
-                                IconButton(
-                                    onClick = {
-                                        scope.launch {
-                                            val uris = pl.uris.toMutableList().apply { removeAt(i) }
-                                            val names = pl.names.toMutableList().apply { removeAt(i) }
-                                            val currentState = playbackState
-                                            val isCurrentPlaylist = currentState?.playlistId == pl.id
-                                            val currentTrackIndex = currentState?.trackIndex ?: -1
-                                            if (pl.isDirectorySource) {
-                                                val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[i]))
-                                                if (!deleted) {
-                                                    Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
-                                                    return@launch
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.common_delete)) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                trackActionMenuIndex = null
+                                                scope.launch {
+                                                    val uris = pl.uris.toMutableList().apply { removeAt(i) }
+                                                    val names = pl.names.toMutableList().apply { removeAt(i) }
+                                                    val currentState = playbackState
+                                                    val isCurrentPlaylist = currentState?.playlistId == pl.id
+                                                    val currentTrackIndex = currentState?.trackIndex ?: -1
+                                                    if (pl.isDirectorySource) {
+                                                        val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[i]))
+                                                        if (!deleted) {
+                                                            Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
+                                                            return@launch
+                                                        }
+                                                    }
+                                                    if (uris.isEmpty()) {
+                                                        if (isCurrentPlaylist) {
+                                                            onStopPlayback()
+                                                        }
+                                                        prefs.removePlaylist(pl.id)
+                                                        selectedPlaylistId = null
+                                                    } else {
+                                                        if (isCurrentPlaylist) {
+                                                            val nextResumeIndex = when {
+                                                                currentTrackIndex < 0 -> 0
+                                                                i < currentTrackIndex -> currentTrackIndex - 1
+                                                                i == currentTrackIndex -> currentTrackIndex.coerceAtMost(uris.lastIndex)
+                                                                else -> currentTrackIndex
+                                                            }.coerceIn(0, uris.lastIndex)
+                                                            onStopPlayback()
+                                                            prefs.setPlayerLastStateForPlaylist(pl.id, nextResumeIndex, 0L)
+                                                        }
+                                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                                    }
                                                 }
                                             }
-                                            if (uris.isEmpty()) {
-                                                if (isCurrentPlaylist) {
-                                                    onStopPlayback()
-                                                }
-                                                prefs.removePlaylist(pl.id)
-                                                selectedPlaylistId = null
-                                            } else {
-                                                if (isCurrentPlaylist) {
-                                                    val nextResumeIndex = when {
-                                                        currentTrackIndex < 0 -> 0
-                                                        i < currentTrackIndex -> currentTrackIndex - 1
-                                                        i == currentTrackIndex -> currentTrackIndex.coerceAtMost(uris.lastIndex)
-                                                        else -> currentTrackIndex
-                                                    }.coerceIn(0, uris.lastIndex)
-                                                    onStopPlayback()
-                                                    prefs.setPlayerLastStateForPlaylist(pl.id, nextResumeIndex, 0L)
-                                                }
-                                                prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                            }
-                                        }
+                                        )
                                     }
-                                ) {
-                                    Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = context.getString(R.string.common_delete),
-                                        modifier = Modifier.size(20.dp),
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
                                 }
-                            }
                             }
                         }
                     }
@@ -8664,102 +8653,125 @@ fun PlaybackScreen(
                 } else {
                     LazyColumn(
                         Modifier.weight(1f),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
                         items(playlists.size) { i ->
                             val pl = playlists[i]
                             val isCurrent = playbackState?.playlistId == pl.id
                             val isDangerousPlaylist = pl.isDirectorySource
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = when {
-                                        isDangerousPlaylist && isCurrent -> MaterialTheme.colorScheme.errorContainer
-                                        isDangerousPlaylist -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.82f)
-                                        isCurrent -> MaterialTheme.colorScheme.primaryContainer
-                                        else -> MaterialTheme.colorScheme.surfaceVariant
-                                    }
-                                )
-                            ) {
+                            val rowBackground = when {
+                                isDangerousPlaylist && isCurrent -> MaterialTheme.colorScheme.errorContainer
+                                isDangerousPlaylist -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.82f)
+                                isCurrent -> MaterialTheme.colorScheme.primaryContainer
+                                else -> MaterialTheme.colorScheme.surface
+                            }
                             Row(
                                 Modifier
                                     .fillMaxWidth()
+                                    .background(rowBackground)
                                     .clickable { selectedPlaylistId = pl.id }
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                                    .padding(start = 6.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                IconButton(
-                                    onClick = { startPlaylist(pl) },
-                                    modifier = Modifier.size(40.dp)
-                                ) {
-                                    Icon(
-                                        Icons.Default.PlayArrow,
-                                        contentDescription = context.getString(R.string.player_play_desc),
-                                        tint = if (isCurrent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
                                 Column(Modifier.weight(1f)) {
                                     Text(
                                         if (pl.note.isNotBlank()) pl.note else pl.name,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        maxLines = if (pl.note.isNotBlank()) 2 else 1,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
                                         color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface
                                     )
                                     val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
                                     Text(
                                         "${pl.trackCount} 首 · 书签 $bookmarkCount",
-                                        style = MaterialTheme.typography.bodySmall,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
                                         color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     if (isDangerousPlaylist) {
                                         Text(
                                             "目录列表 · 删除曲目会同步删除源文件",
                                             style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
                                             color = MaterialTheme.colorScheme.onErrorContainer
                                         )
                                     }
                                 }
-                                IconButton(
-                                    onClick = {
-                                        if (i > 0) scope.launch {
-                                            val ids = playlists.map { it.id }.toMutableList()
-                                            ids.removeAt(i)
-                                            ids.add(i - 1, pl.id)
-                                            prefs.updatePlaylistOrder(ids)
-                                        }
-                                    },
-                                    enabled = i > 0
-                                ) {
-                                    Icon(Icons.Default.ArrowUpward, contentDescription = context.getString(R.string.player_move_up))
-                                }
-                                IconButton(
-                                    onClick = {
-                                        if (i < playlists.size - 1) scope.launch {
-                                            val ids = playlists.map { it.id }.toMutableList()
-                                            ids.removeAt(i)
-                                            ids.add(i + 1, pl.id)
-                                            prefs.updatePlaylistOrder(ids)
-                                        }
-                                    },
-                                    enabled = i < playlists.size - 1
-                                ) {
-                                    Icon(Icons.Default.ArrowDownward, contentDescription = context.getString(R.string.player_move_down))
-                                }
-                                IconButton(
-                                    onClick = {
-                                        scope.launch {
-                                            if (playbackState?.playlistId == pl.id) {
-                                                onStopPlayback()
-                                            }
-                                            prefs.removePlaylist(pl.id)
-                                        }
+                                Box {
+                                    IconButton(
+                                        onClick = { playlistActionMenuIndex = i },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.MoreVert,
+                                            contentDescription = context.getString(R.string.main_menu),
+                                            modifier = Modifier.size(18.dp)
+                                        )
                                     }
-                                ) {
-                                    Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.common_delete), tint = MaterialTheme.colorScheme.error)
+                                    DropdownMenu(
+                                        expanded = playlistActionMenuIndex == i,
+                                        onDismissRequest = { playlistActionMenuIndex = null }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_play_desc)) },
+                                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                startPlaylist(pl)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_move_up)) },
+                                            leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
+                                            enabled = i > 0,
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                if (i > 0) scope.launch {
+                                                    val ids = playlists.map { it.id }.toMutableList()
+                                                    ids.removeAt(i)
+                                                    ids.add(i - 1, pl.id)
+                                                    prefs.updatePlaylistOrder(ids)
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_move_down)) },
+                                            leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
+                                            enabled = i < playlists.size - 1,
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                if (i < playlists.size - 1) scope.launch {
+                                                    val ids = playlists.map { it.id }.toMutableList()
+                                                    ids.removeAt(i)
+                                                    ids.add(i + 1, pl.id)
+                                                    prefs.updatePlaylistOrder(ids)
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.common_delete)) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Default.Delete,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                scope.launch {
+                                                    if (playbackState?.playlistId == pl.id) {
+                                                        onStopPlayback()
+                                                    }
+                                                    prefs.removePlaylist(pl.id)
+                                                }
+                                            }
+                                        )
+                                    }
                                 }
-                            }
                             }
                         }
                     }
