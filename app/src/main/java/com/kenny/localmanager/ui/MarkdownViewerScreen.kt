@@ -2,6 +2,7 @@ package com.kenny.localmanager.ui
 
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -10,6 +11,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
+import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.speech.tts.TextToSpeech
@@ -28,6 +30,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -96,11 +100,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.text.HtmlCompat
@@ -182,6 +190,7 @@ private fun DraggableNextReadButton(
     contentDescription: String,
     enabled: Boolean,
     onClick: () -> Unit,
+    onDoubleClick: (() -> Unit)? = null,
     initialXPercent: Int,
     initialYPercent: Int,
     onPositionChangePercent: (xPercent: Int, yPercent: Int) -> Unit,
@@ -247,11 +256,19 @@ private fun DraggableNextReadButton(
         val currentOffsetY = offsetY
         if (currentOffsetX != null && currentOffsetY != null) {
             Surface(
-                onClick = onClick,
-                enabled = enabled,
                 modifier = Modifier
                     .offset { IntOffset(currentOffsetX.roundToInt(), currentOffsetY.roundToInt()) }
                     .size(buttonSize)
+                    .pointerInput(enabled, onClick, onDoubleClick) {
+                        detectTapGestures(
+                            onTap = {
+                                if (enabled) onClick()
+                            },
+                            onDoubleTap = {
+                                if (enabled) (onDoubleClick ?: onClick)()
+                            }
+                        )
+                    }
                     .pointerInput(enabled, containerSize) {
                         detectDragGestures(
                             onDragEnd = {
@@ -2909,6 +2926,50 @@ private fun KeepScreenOnEffect(enabled: Boolean = true) {
     }
 }
 
+@Composable
+private fun ImmersiveReaderFullscreenEffect(
+    enabled: Boolean,
+    onExitFullscreen: () -> Unit
+) {
+    val view = LocalView.current
+    val activity = view.context as? Activity
+    val latestOnExitFullscreen by rememberUpdatedState(onExitFullscreen)
+
+    DisposableEffect(activity, view, enabled) {
+        if (activity == null || !enabled) {
+            return@DisposableEffect onDispose { }
+        }
+
+        val window = activity.window
+        val controller = WindowCompat.getInsetsController(window, view)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        controller.hide(WindowInsetsCompat.Type.systemBars())
+
+        val callbacks = object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityStopped(stoppedActivity: Activity) {
+                if (stoppedActivity == activity) {
+                    latestOnExitFullscreen()
+                }
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityStarted(activity: Activity) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        }
+        activity.application.registerActivityLifecycleCallbacks(callbacks)
+
+        onDispose {
+            activity.application.unregisterActivityLifecycleCallbacks(callbacks)
+            controller.show(WindowInsetsCompat.Type.systemBars())
+            WindowCompat.setDecorFitsSystemWindows(window, true)
+        }
+    }
+}
+
 /** 密码保护文件查看器：从内存中的解密字节直接渲染 md/rst，不产生本地文件。退出时清除 WebView 缓存。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -4817,7 +4878,7 @@ private fun HtmlZipNoIndexScreen(
 private const val EPUB_DEBUG = "EpubViewer"
 
 /** EPUB 电子书查看器：支持章节导航、目录、缩放、收藏夹。 */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun EpubViewerScreen(
     extractResult: EpubExtractResult,
@@ -4851,6 +4912,7 @@ fun EpubViewerScreen(
     var showFullTextSearchDialog by remember { mutableStateOf(false) }
     var showGoToPositionDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var isFullscreen by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     var regexQuery by remember { mutableStateOf("") }
@@ -4896,6 +4958,13 @@ fun EpubViewerScreen(
     // 词典查询历史记录（用于回退）
     var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
     var dictLookupHistoryRestored by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = isFullscreen) {
+        isFullscreen = false
+    }
+    ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
+        isFullscreen = false
+    }
 
     // 加载词典（只加载一次）
     LaunchedEffect(Unit) {
@@ -6335,7 +6404,8 @@ fun EpubViewerScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
+            if (!isFullscreen) {
+                TopAppBar(
                 title = {
                     Column {
                         Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -6495,13 +6565,14 @@ fun EpubViewerScreen(
                     containerColor = MaterialTheme.colorScheme.surface,
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
-            )
+                )
+            }
         },
         bottomBar = {
             val hasDictLoaded = dictLoaded != null
             val hasMultipleChapters = chapters.size > 1
             // 只有在有词典或多章节时才显示底部栏
-            if (hasDictLoaded || hasMultipleChapters) {
+            if (!isFullscreen && (hasDictLoaded || hasMultipleChapters)) {
                 // 展开时使用更大的高度，收起时使用较小高度
                 val barHeight = when {
                     !dictAreaExpanded -> 56.dp
@@ -6696,9 +6767,14 @@ fun EpubViewerScreen(
                                 modifier = Modifier
                                     .width(60.dp)
                                     .fillMaxHeight()
-                                    .clickable(enabled = currentChapterIndex < chapters.size - 1) {
-                                        goToNextChapter()
-                                    },
+                                    .combinedClickable(
+                                        onClick = {
+                                            if (currentChapterIndex < chapters.size - 1) {
+                                                goToNextChapter()
+                                            }
+                                        },
+                                        onDoubleClick = { isFullscreen = true }
+                                    ),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Column(
@@ -6926,11 +7002,12 @@ fun EpubViewerScreen(
                             }
                         }
                     )
-                    if (!hideReaderFloatingNextButton) {
+                    if (!hideReaderFloatingNextButton || isFullscreen) {
                         DraggableNextReadButton(
                             contentDescription = "下一页",
                             enabled = true,
                             onClick = { (webViewRef.value as? GestureWebView)?.scrollNextPage() },
+                            onDoubleClick = { isFullscreen = !isFullscreen },
                             initialXPercent = floatingButtonXPercent,
                             initialYPercent = floatingButtonYPercent,
                             onPositionChangePercent = { xPercent, yPercent ->
@@ -8586,7 +8663,7 @@ data class PdfPageData(
  * 按需加载页面，支持大文件
  * 支持左右点击翻页，自适应屏幕宽度
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun PdfViewerScreen(
     uri: String,
@@ -8622,6 +8699,7 @@ fun PdfViewerScreen(
     var showAddBookmark by remember { mutableStateOf(false) }
     var showGoToPage by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var isFullscreen by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     // 缓存最近渲染的页面
@@ -8660,6 +8738,13 @@ fun PdfViewerScreen(
             onRequestOpenBookNotes()
         }
         showAddBookmark = true
+    }
+
+    BackHandler(enabled = isFullscreen) {
+        isFullscreen = false
+    }
+    ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
+        isFullscreen = false
     }
 
     // 初始加载：获取页数和第一页尺寸
@@ -9100,64 +9185,66 @@ fun PdfViewerScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    Box {
-                        IconButton(onClick = { showMoreMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "更多")
+            if (!isFullscreen) {
+                TopAppBar(
+                    title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
-                        DropdownMenu(
-                            expanded = showMoreMenu,
-                            onDismissRequest = { showMoreMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("添加收藏") },
-                                onClick = {
-                                    showMoreMenu = false
-                                    requestAddBookmark()
-                                },
-                                leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("查看收藏") },
-                                onClick = {
-                                    showMoreMenu = false
-                                    if (bookNoteLoadedData == null && !bookNoteInProgress) {
-                                        onRequestOpenBookNotes()
-                                    }
-                                    showBookmarks = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
-                            )
+                    },
+                    actions = {
+                        Box {
+                            IconButton(onClick = { showMoreMenu = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                            }
+                            DropdownMenu(
+                                expanded = showMoreMenu,
+                                onDismissRequest = { showMoreMenu = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("添加收藏") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        requestAddBookmark()
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("查看收藏") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        if (bookNoteLoadedData == null && !bookNoteInProgress) {
+                                            onRequestOpenBookNotes()
+                                        }
+                                        showBookmarks = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
+                                )
+                            }
                         }
-                    }
-                    // 缩放按钮
-                    IconButton(onClick = {
-                        zoom = (zoom - 0.25f).coerceAtLeast(0.5f)
-                    }) {
-                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
-                    }
-                    Text("${(zoom * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
-                    IconButton(onClick = {
-                        zoom = (zoom + 0.25f).coerceAtMost(3f)
-                    }) {
-                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
+                        // 缩放按钮
+                        IconButton(onClick = {
+                            zoom = (zoom - 0.25f).coerceAtLeast(0.5f)
+                        }) {
+                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                        }
+                        Text("${(zoom * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
+                        IconButton(onClick = {
+                            zoom = (zoom + 0.25f).coerceAtMost(3f)
+                        }) {
+                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface
+                    )
                 )
-            )
+            }
         },
         bottomBar = {
-            if (pageCount > 0) {
+            if (!isFullscreen && pageCount > 0) {
                 BottomAppBar(
                     containerColor = MaterialTheme.colorScheme.surface
                 ) {
@@ -9174,11 +9261,23 @@ fun PdfViewerScreen(
                             .clickable { showGoToPage = true },
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    IconButton(
-                        onClick = { if (currentPage < pageCount - 1) currentPage++ },
-                        enabled = currentPage < pageCount - 1
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .combinedClickable(
+                                onClick = { if (currentPage < pageCount - 1) currentPage++ },
+                                onDoubleClick = { isFullscreen = true }
+                            ),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "下一页")
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = "下一页",
+                            tint = if (currentPage < pageCount - 1)
+                                MaterialTheme.colorScheme.primary
+                            else
+                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        )
                     }
                 }
             }
@@ -9252,15 +9351,16 @@ fun PdfViewerScreen(
                                     .padding(16.dp)
                             )
                         }
-                        if (!hideReaderFloatingNextButton) {
+                        if (!hideReaderFloatingNextButton || isFullscreen) {
                             DraggableNextReadButton(
                                 contentDescription = "下一页",
-                                enabled = currentPage < pageCount - 1,
+                                enabled = true,
                                 onClick = {
                                     if (currentPage < pageCount - 1) {
                                         currentPage++
                                     }
                                 },
+                                onDoubleClick = { isFullscreen = !isFullscreen },
                                 initialXPercent = floatingButtonXPercent,
                                 initialYPercent = floatingButtonYPercent,
                                 onPositionChangePercent = { xPercent, yPercent ->
