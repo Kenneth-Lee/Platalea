@@ -89,6 +89,9 @@
     <string name="player_add_to_playback_prompt">请选择要把 %1$d 首音频加入到哪里。</string>
     <string name="player_track_count">%1$d 首</string>
     <string name="player_new_list">新建列表</string>
+    <string name="player_rescan_directory">重新扫描</string>
+    <string name="player_rescan_done">已重新扫描，共 %1$d 首</string>
+    <string name="player_rescan_no_directory">该列表不是目录列表，无法重新扫描</string>
     <string name="player_playlist_note_title">播放列表备注</string>
     <string name="player_save_playback_bookmark_title">保存播放书签</string>
     <string name="player_bookmark_note_label">书签备注</string>

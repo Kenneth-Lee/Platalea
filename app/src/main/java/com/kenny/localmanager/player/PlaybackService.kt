@@ -74,6 +74,8 @@ const val ACTION_NEXT = "com.kenny.localmanager.player.NEXT"
 const val ACTION_SEEK = "com.kenny.localmanager.player.SEEK"
 const val ACTION_PAUSE = "com.kenny.localmanager.player.PAUSE"
 const val ACTION_RESUME = "com.kenny.localmanager.player.RESUME"
+const val ACTION_REMOVE_PLAYLIST_TRACK = "com.kenny.localmanager.player.REMOVE_PLAYLIST_TRACK"
+const val ACTION_RELOAD_PLAYLIST = "com.kenny.localmanager.player.RELOAD_PLAYLIST"
 
 const val EXTRA_URIS = "uris"
 const val EXTRA_NAMES = "names"
@@ -336,6 +338,17 @@ class PlaybackService : Service() {
                 seekCurrentPlayerTo(target)
                 updateState(positionMs = target)
             }
+            ACTION_REMOVE_PLAYLIST_TRACK -> {
+                val plId = intent.getStringExtra(EXTRA_PLAYLIST_ID) ?: return START_NOT_STICKY
+                val removedIndex = intent.getIntExtra(EXTRA_START_INDEX, -1)
+                scope.launch { applyPlaylistTrackRemoval(plId, removedIndex) }
+            }
+            ACTION_RELOAD_PLAYLIST -> {
+                val plId = intent.getStringExtra(EXTRA_PLAYLIST_ID) ?: return START_NOT_STICKY
+                val startIndexHint = intent.getIntExtra(EXTRA_START_INDEX, -1)
+                val startPositionHintMs = intent.getIntExtra(EXTRA_START_POSITION_MS, -1)
+                scope.launch { reloadPlaylistFromStorage(plId, startIndexHint, startPositionHintMs) }
+            }
         }
         return START_STICKY
     }
@@ -582,6 +595,7 @@ class PlaybackService : Service() {
                 setOnErrorListener { _, what, extra ->
                     recordPlayerError("MediaPlayer what=$what extra=$extra")
                     Log.e(TAG, "MediaPlayer error, what=$what, extra=$extra, track=$name, uri=$sourceUri, playbackUri=$playbackUri")
+                    removeCurrentTrackFromPlaylistAndAdvance()
                     true
                 }
                 prepareAsync()
@@ -597,7 +611,7 @@ class PlaybackService : Service() {
                 durationMs = 0,
                 isPlaying = false
             )
-            playNext()
+            removeCurrentTrackFromPlaylistAndAdvance()
         }
     }
 
@@ -685,7 +699,7 @@ class PlaybackService : Service() {
                 override fun onPlayerError(error: PlaybackException) {
                     recordPlayerError("ExoPlayer ${error.errorCodeName}")
                     Log.e(TAG, "ExoPlayer error, code=${error.errorCode}, track=$name, uri=$sourceUri, playbackUri=$playbackUri", error)
-                    playNext()
+                    removeCurrentTrackFromPlaylistAndAdvance()
                 }
             })
             exoPlayer = player
@@ -703,7 +717,101 @@ class PlaybackService : Service() {
                 durationMs = 0,
                 isPlaying = false
             )
+            removeCurrentTrackFromPlaylistAndAdvance()
+        }
+    }
+
+    private suspend fun applyPlaylistTrackRemoval(plId: String, removedIndex: Int) {
+        if (plId != playlistId) return
+        val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) }
+        if (pl == null) {
+            stopPlayback()
+            return
+        }
+        playlistUris = pl.uris
+        playlistNames = pl.names
+        if (pl.uris.isEmpty()) {
+            stopPlayback()
+            return
+        }
+        val cur = currentIndex.get()
+        when {
+            removedIndex < 0 -> updateState()
+            removedIndex < cur -> {
+                val newCur = cur - 1
+                currentIndex.set(newCur)
+                updateState(
+                    trackIndex = newCur,
+                    trackName = playlistNames.getOrElse(newCur) { "" }
+                )
+                persistPlaybackState()
+            }
+            removedIndex == cur -> {
+                val newIndex = removedIndex.coerceAtMost(pl.uris.lastIndex)
+                playTrackAtIndex(newIndex, 0)
+            }
+            else -> updateState()
+        }
+    }
+
+    private suspend fun reloadPlaylistFromStorage(
+        plId: String,
+        startIndexHint: Int,
+        startPositionHintMs: Int
+    ) {
+        val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) } ?: return
+        if (plId != playlistId) return
+        playlistUris = pl.uris
+        playlistNames = pl.names
+        if (pl.uris.isEmpty()) {
+            stopPlayback()
+            return
+        }
+        val index = when {
+            startIndexHint in pl.uris.indices -> startIndexHint
+            else -> currentIndex.get().coerceIn(0, pl.uris.lastIndex)
+        }
+        val positionMs = if (startIndexHint in pl.uris.indices) {
+            startPositionHintMs.coerceAtLeast(0)
+        } else {
+            0
+        }
+        playTrackAtIndex(index, positionMs)
+    }
+
+    private fun removeCurrentTrackFromPlaylistAndAdvance() {
+        progressUpdateRunnable?.let(handler::removeCallbacks)
+        savePosition()
+        val idx = currentIndex.get()
+        val plId = playlistId
+        if (plId == null) {
             playNext()
+            return
+        }
+        scope.launch {
+            val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) }
+            if (pl == null || idx !in pl.uris.indices) {
+                playNext()
+                return@launch
+            }
+            val newUris = pl.uris.toMutableList().apply { removeAt(idx) }
+            val newNames = pl.names.toMutableList().apply {
+                if (idx in indices) removeAt(idx)
+            }
+            if (newUris.isEmpty()) {
+                val updated = pl.copy(uris = emptyList(), names = emptyList())
+                withContext(Dispatchers.IO) { prefs.updatePlaylist(updated) }
+                playlistUris = emptyList()
+                playlistNames = emptyList()
+                stopPlayback()
+                return@launch
+            }
+            val updated = pl.copy(uris = newUris, names = newNames)
+            withContext(Dispatchers.IO) { prefs.updatePlaylist(updated) }
+            playlistUris = newUris
+            playlistNames = newNames
+            val newIndex = idx.coerceAtMost(newUris.lastIndex)
+            playTrackAtIndex(newIndex, 0)
         }
     }
 

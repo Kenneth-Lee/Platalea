@@ -253,6 +253,8 @@ import com.kenny.localmanager.player.ACTION_NEXT
 import com.kenny.localmanager.player.ACTION_PAUSE
 import com.kenny.localmanager.player.ACTION_PLAY
 import com.kenny.localmanager.player.ACTION_PREV
+import com.kenny.localmanager.player.ACTION_REMOVE_PLAYLIST_TRACK
+import com.kenny.localmanager.player.ACTION_RELOAD_PLAYLIST
 import com.kenny.localmanager.player.ACTION_RESUME
 import com.kenny.localmanager.player.ACTION_STOP
 import com.kenny.localmanager.player.EXTRA_DIR_URI
@@ -670,6 +672,100 @@ private suspend fun runWithUiProgress(
     }
 }
 
+private fun dedupeAudioList(audioList: List<DocumentFileModel>): List<DocumentFileModel> {
+    val seen = LinkedHashSet<String>()
+    return audioList.filter { seen.add(it.uri.toString()) }
+}
+
+private fun notifyPlaybackTrackRemoved(context: Context, playlistId: String, removedIndex: Int) {
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_REMOVE_PLAYLIST_TRACK
+        putExtra(EXTRA_PLAYLIST_ID, playlistId)
+        putExtra(EXTRA_START_INDEX, removedIndex)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+}
+
+private fun notifyPlaybackPlaylistReloaded(
+    context: Context,
+    playlistId: String,
+    startIndex: Int,
+    startPositionMs: Int
+) {
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_RELOAD_PLAYLIST
+        putExtra(EXTRA_PLAYLIST_ID, playlistId)
+        putExtra(EXTRA_START_INDEX, startIndex)
+        putExtra(EXTRA_START_POSITION_MS, startPositionMs)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+}
+
+private suspend fun removePlaylistTrackAt(
+    context: Context,
+    prefs: Preferences,
+    pl: Playlist,
+    trackIndex: Int,
+    playbackState: PlaybackState?,
+    deleteSourceFile: Boolean,
+    onStopPlayback: () -> Unit
+) {
+    if (trackIndex !in pl.uris.indices) return
+    if (deleteSourceFile && pl.isDirectorySource) {
+        val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[trackIndex]))
+        if (!deleted) {
+            Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
+            return
+        }
+    }
+    val uris = pl.uris.toMutableList().apply { removeAt(trackIndex) }
+    val names = pl.names.toMutableList().apply {
+        if (trackIndex in indices) removeAt(trackIndex)
+    }
+    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+    if (playbackState?.playlistId == pl.id) {
+        if (uris.isEmpty()) {
+            onStopPlayback()
+        } else {
+            notifyPlaybackTrackRemoved(context, pl.id, trackIndex)
+        }
+    }
+}
+
+private suspend fun rescanDirectoryPlaylist(
+    context: Context,
+    prefs: Preferences,
+    pl: Playlist,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit
+): Playlist? {
+    val sourceUri = pl.sourceUri ?: return null
+    val audioList = withContext(Dispatchers.IO) {
+        collectMusicFilesRecursively(context, sourceUri).map { it.model }
+    }
+    val deduped = dedupeAudioList(audioList)
+    val updated = pl.copy(
+        uris = deduped.map { it.uri.toString() },
+        names = deduped.map { it.name }
+    )
+    prefs.updatePlaylist(updated)
+    val state = playbackState
+    if (state?.playlistId == pl.id) {
+        if (updated.uris.isEmpty()) {
+            onStopPlayback()
+        } else {
+            val currentUri = pl.uris.getOrNull(state.trackIndex)
+            val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
+            if (newIndex >= 0) {
+                notifyPlaybackPlaylistReloaded(context, pl.id, newIndex, state.positionMs)
+            } else {
+                notifyPlaybackPlaylistReloaded(context, pl.id, 0, 0)
+            }
+        }
+    }
+    return updated
+}
+
 private suspend fun createNewPlaybackPlaylistAndStart(
     context: Context,
     prefs: Preferences,
@@ -678,15 +774,16 @@ private suspend fun createNewPlaybackPlaylistAndStart(
     sourceType: String = Playlist.SOURCE_TYPE_MANUAL,
     sourceUri: String? = null
 ): Playlist? {
-    if (audioList.isEmpty()) return null
+    val uniqueAudioList = dedupeAudioList(audioList)
+    if (uniqueAudioList.isEmpty()) return null
     val playlist = Playlist(
         id = java.util.UUID.randomUUID().toString(),
         name = playlistName ?: context.getString(
             R.string.player_playlist_default_name,
             java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
         ),
-        uris = audioList.map { it.uri.toString() },
-        names = audioList.map { it.name },
+        uris = uniqueAudioList.map { it.uri.toString() },
+        names = uniqueAudioList.map { it.name },
         sourceType = sourceType,
         sourceUri = sourceUri
     )
@@ -8067,31 +8164,15 @@ fun PlaybackScreen(
     }
 
     suspend fun removeTrackEntryAfterMove(source: Playlist, trackIndex: Int) {
-        if (trackIndex !in source.uris.indices) return
-        val updatedUris = source.uris.toMutableList().apply { removeAt(trackIndex) }
-        val updatedNames = source.names.toMutableList().apply {
-            if (trackIndex in indices) removeAt(trackIndex)
-        }
-        val currentState = playbackState
-        val isCurrentPlaylist = currentState?.playlistId == source.id
-        val currentTrackIndex = currentState?.trackIndex ?: -1
-        if (updatedUris.isEmpty()) {
-            if (isCurrentPlaylist) onStopPlayback()
-            prefs.removePlaylist(source.id)
-            if (selectedPlaylistId == source.id) selectedPlaylistId = null
-            return
-        }
-        if (isCurrentPlaylist) {
-            val nextResumeIndex = when {
-                currentTrackIndex < 0 -> 0
-                trackIndex < currentTrackIndex -> currentTrackIndex - 1
-                trackIndex == currentTrackIndex -> currentTrackIndex.coerceAtMost(updatedUris.lastIndex)
-                else -> currentTrackIndex
-            }.coerceIn(0, updatedUris.lastIndex)
-            onStopPlayback()
-            prefs.setPlayerLastStateForPlaylist(source.id, nextResumeIndex, 0L)
-        }
-        prefs.updatePlaylist(source.copy(uris = updatedUris, names = updatedNames))
+        removePlaylistTrackAt(
+            context = context,
+            prefs = prefs,
+            pl = source,
+            trackIndex = trackIndex,
+            playbackState = playbackState,
+            deleteSourceFile = false,
+            onStopPlayback = onStopPlayback
+        )
     }
 
     suspend fun transferTrackToPlaylist(transfer: PlaylistTrackTransfer, target: Playlist) {
@@ -8448,6 +8529,36 @@ fun PlaybackScreen(
                             )
                         }
                     }
+                    if (pl.isDirectorySource) {
+                        TextButton(
+                            onClick = {
+                                scope.launch {
+                                    val updated = rescanDirectoryPlaylist(
+                                        context = context,
+                                        prefs = prefs,
+                                        pl = pl,
+                                        playbackState = playbackState,
+                                        onStopPlayback = onStopPlayback
+                                    )
+                                    if (updated != null) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.player_rescan_done, updated.trackCount),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.player_rescan_no_directory),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(context.getString(R.string.player_rescan_directory))
+                        }
+                    }
                     Icon(
                         Icons.Filled.Edit,
                         contentDescription = context.getString(R.string.player_edit_note),
@@ -8581,37 +8692,15 @@ fun PlaybackScreen(
                                             onClick = {
                                                 trackActionMenuIndex = null
                                                 scope.launch {
-                                                    val uris = pl.uris.toMutableList().apply { removeAt(i) }
-                                                    val names = pl.names.toMutableList().apply { removeAt(i) }
-                                                    val currentState = playbackState
-                                                    val isCurrentPlaylist = currentState?.playlistId == pl.id
-                                                    val currentTrackIndex = currentState?.trackIndex ?: -1
-                                                    if (pl.isDirectorySource) {
-                                                        val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[i]))
-                                                        if (!deleted) {
-                                                            Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
-                                                            return@launch
-                                                        }
-                                                    }
-                                                    if (uris.isEmpty()) {
-                                                        if (isCurrentPlaylist) {
-                                                            onStopPlayback()
-                                                        }
-                                                        prefs.removePlaylist(pl.id)
-                                                        selectedPlaylistId = null
-                                                    } else {
-                                                        if (isCurrentPlaylist) {
-                                                            val nextResumeIndex = when {
-                                                                currentTrackIndex < 0 -> 0
-                                                                i < currentTrackIndex -> currentTrackIndex - 1
-                                                                i == currentTrackIndex -> currentTrackIndex.coerceAtMost(uris.lastIndex)
-                                                                else -> currentTrackIndex
-                                                            }.coerceIn(0, uris.lastIndex)
-                                                            onStopPlayback()
-                                                            prefs.setPlayerLastStateForPlaylist(pl.id, nextResumeIndex, 0L)
-                                                        }
-                                                        prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                                    }
+                                                    removePlaylistTrackAt(
+                                                        context = context,
+                                                        prefs = prefs,
+                                                        pl = pl,
+                                                        trackIndex = i,
+                                                        playbackState = playbackState,
+                                                        deleteSourceFile = pl.isDirectorySource,
+                                                        onStopPlayback = onStopPlayback
+                                                    )
                                                 }
                                             }
                                         )
@@ -8751,6 +8840,31 @@ fun PlaybackScreen(
                                                 }
                                             }
                                         )
+                                        if (pl.isDirectorySource) {
+                                            DropdownMenuItem(
+                                                text = { Text(context.getString(R.string.player_rescan_directory)) },
+                                                leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                                                onClick = {
+                                                    playlistActionMenuIndex = null
+                                                    scope.launch {
+                                                        val updated = rescanDirectoryPlaylist(
+                                                            context = context,
+                                                            prefs = prefs,
+                                                            pl = pl,
+                                                            playbackState = playbackState,
+                                                            onStopPlayback = onStopPlayback
+                                                        )
+                                                        if (updated != null) {
+                                                            Toast.makeText(
+                                                                context,
+                                                                context.getString(R.string.player_rescan_done, updated.trackCount),
+                                                                Toast.LENGTH_SHORT
+                                                            ).show()
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        }
                                         DropdownMenuItem(
                                             text = { Text(context.getString(R.string.common_delete)) },
                                             leadingIcon = {
