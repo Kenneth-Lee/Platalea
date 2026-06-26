@@ -59,7 +59,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -81,6 +83,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinAttachmentKind
+import com.kenny.localmanager.family.BulletinAttachmentDownloadConflict
+import com.kenny.localmanager.family.BulletinAttachmentDownloader
+import com.kenny.localmanager.family.BulletinAttachmentDownloadProgress
 import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
 import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
@@ -353,6 +358,7 @@ fun FamilyNetworkScreen(
                 session = boardSession,
                 manager = manager,
                 attachmentUpload = state.attachmentUpload,
+                attachmentDownload = state.attachmentDownload,
                 rootUri = rootUri,
                 hideDotFiles = hideDotFiles,
                 onRefresh = { manager.refreshOpenBoard() },
@@ -562,6 +568,7 @@ private fun BulletinBoardPage(
     session: BulletinBoardOpenSession,
     manager: FamilyNetworkManager,
     attachmentUpload: BulletinAttachmentUploadProgress?,
+    attachmentDownload: BulletinAttachmentDownloadProgress?,
     rootUri: String?,
     hideDotFiles: Boolean,
     onRefresh: () -> Unit,
@@ -575,6 +582,8 @@ private fun BulletinBoardPage(
     var editingText by remember { mutableStateOf("") }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var showAttachmentPickDialog by remember { mutableStateOf(false) }
+    var pendingDownloadConflict by remember { mutableStateOf<BulletinAttachmentRef?>(null) }
+    val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var previousMessageCount by remember(session.service.deviceKey) { mutableIntStateOf(0) }
 
@@ -654,6 +663,70 @@ private fun BulletinBoardPage(
     }
 
     val uploadInProgress = attachmentUpload != null
+    val downloadInProgress = attachmentDownload != null
+    val transferInProgress = uploadInProgress || downloadInProgress
+
+    fun requestAttachmentDownload(attachment: BulletinAttachmentRef) {
+        if (rootUri.isNullOrBlank()) {
+            Toast.makeText(context, context.getString(R.string.attachment_upload_no_root), Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (transferInProgress) return
+        scope.launch {
+            val exists = withContext(Dispatchers.IO) {
+                BulletinAttachmentDownloader.targetExists(context, rootUri, attachment)
+            }
+            if (exists) {
+                pendingDownloadConflict = attachment
+            } else {
+                manager.downloadBoardAttachment(rootUri, attachment)
+            }
+        }
+    }
+
+    pendingDownloadConflict?.let { attachment ->
+        AlertDialog(
+            onDismissRequest = { pendingDownloadConflict = null },
+            title = { Text(stringResource(R.string.attachment_download_conflict_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.attachment_download_conflict_message,
+                        attachment.name
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    manager.downloadBoardAttachment(
+                        rootUri!!,
+                        attachment,
+                        BulletinAttachmentDownloadConflict.OVERWRITE
+                    )
+                    pendingDownloadConflict = null
+                }) {
+                    Text(stringResource(R.string.attachment_download_conflict_overwrite))
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        manager.downloadBoardAttachment(
+                            rootUri!!,
+                            attachment,
+                            BulletinAttachmentDownloadConflict.RENAME
+                        )
+                        pendingDownloadConflict = null
+                    }) {
+                        Text(stringResource(R.string.attachment_download_conflict_rename))
+                    }
+                    TextButton(onClick = { pendingDownloadConflict = null }) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                }
+            }
+        )
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -734,11 +807,13 @@ private fun BulletinBoardPage(
                     BulletinMessageRow(
                         message = message,
                         canManage = session.canManageBoard,
+                        activeDownloadId = attachmentDownload?.attachmentId,
                         onEdit = {
                             editingMessage = message
                             editingText = message.content
                         },
-                        onDelete = { deletingMessage = message }
+                        onDelete = { deletingMessage = message },
+                        onAttachmentClick = { attachment -> requestAttachmentDownload(attachment) }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 }
@@ -750,6 +825,12 @@ private fun BulletinBoardPage(
             AttachmentUploadProgressBar(
                 progress = attachmentUpload!!,
                 onCancel = { manager.cancelAttachmentUpload() }
+            )
+        }
+        if (downloadInProgress) {
+            AttachmentDownloadProgressBar(
+                progress = attachmentDownload!!,
+                onCancel = { manager.cancelAttachmentDownload() }
             )
         }
         Row(
@@ -769,7 +850,7 @@ private fun BulletinBoardPage(
                         showAttachmentPickDialog = true
                     }
                 },
-                enabled = !uploadInProgress,
+                enabled = !transferInProgress,
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(
@@ -795,7 +876,7 @@ private fun BulletinBoardPage(
                     onPost(draftMessage)
                     draftMessage = ""
                 },
-                enabled = draftMessage.trim().isNotEmpty() && !uploadInProgress,
+                enabled = draftMessage.trim().isNotEmpty() && !transferInProgress,
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
@@ -808,9 +889,12 @@ private fun BulletinBoardPage(
 private fun BulletinMessageRow(
     message: BulletinMessage,
     canManage: Boolean,
+    activeDownloadId: String?,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onAttachmentClick: (BulletinAttachmentRef) -> Unit
 ) {
+    val context = LocalContext.current
     val timeLabel = remember(message.updatedAt) {
         SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(message.updatedAt))
     }
@@ -840,8 +924,16 @@ private fun BulletinMessageRow(
                 message.attachments.forEach { attachment ->
                     val sizeLabel = formatAttachmentSize(attachment)
                     val prefix = if (attachment.kind == BulletinAttachmentKind.DIRECTORY) "📁 " else "📄 "
+                    val statusSuffix = if (activeDownloadId == attachment.id) {
+                        " · ${context.getString(R.string.attachment_downloading)}"
+                    } else {
+                        ""
+                    }
                     Text(
-                        "$prefix${attachment.name}$sizeLabel",
+                        "$prefix${attachment.name}$sizeLabel$statusSuffix",
+                        modifier = Modifier
+                            .clickable { onAttachmentClick(attachment) }
+                            .padding(vertical = 2.dp),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -874,6 +966,47 @@ private fun formatByteCount(bytes: Long): String {
         bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)} KB"
         bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024))} MB"
         else -> "${"%.2f".format(bytes / (1024.0 * 1024 * 1024))} GB"
+    }
+}
+
+@Composable
+private fun AttachmentDownloadProgressBar(
+    progress: BulletinAttachmentDownloadProgress,
+    onCancel: () -> Unit
+) {
+    val context = LocalContext.current
+    val fraction = (progress.downloadedBytes.toFloat() / progress.totalBytes.toFloat()).coerceIn(0f, 1f)
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            context.getString(R.string.attachment_download_progress, progress.itemName),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${formatByteCount(progress.downloadedBytes)} / ${formatByteCount(progress.totalBytes)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.attachment_download_cancel))
+            }
+        }
     }
 }
 

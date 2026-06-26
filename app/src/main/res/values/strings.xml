@@ -145,6 +145,13 @@
     <string name="attachment_upload_progress">正在上传 %1$s</string>
     <string name="attachment_upload_posting">正在发布留言…</string>
     <string name="attachment_upload_cancel">取消上传</string>
+    <string name="attachment_download_progress">正在下载 %1$s</string>
+    <string name="attachment_download_cancel">取消下载</string>
+    <string name="attachment_downloading">下载中</string>
+    <string name="attachment_download_conflict_title">文件已存在</string>
+    <string name="attachment_download_conflict_message">「留言板附件/%1$s」已存在，如何处理？</string>
+    <string name="attachment_download_conflict_overwrite">覆盖</string>
+    <string name="attachment_download_conflict_rename">改名保存</string>
     <string name="attachment_upload_no_root">未设置根目录，无法选择附件</string>
     <string name="fab_pending_list">待处理列表</string>
     <string name="fab_new">新建</string>

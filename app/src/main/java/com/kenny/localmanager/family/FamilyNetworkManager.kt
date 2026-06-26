@@ -73,6 +73,13 @@ data class BulletinAttachmentUploadProgress(
     val phase: BulletinAttachmentUploadPhase = BulletinAttachmentUploadPhase.UPLOADING
 )
 
+data class BulletinAttachmentDownloadProgress(
+    val attachmentId: String,
+    val itemName: String,
+    val downloadedBytes: Long,
+    val totalBytes: Long
+)
+
 data class FamilyNetworkState(
     val isRunning: Boolean = false,
     val isRegistered: Boolean = false,
@@ -85,6 +92,7 @@ data class FamilyNetworkState(
     val localServiceEnabled: Boolean = true,
     val openBoardSession: BulletinBoardOpenSession? = null,
     val attachmentUpload: BulletinAttachmentUploadProgress? = null,
+    val attachmentDownload: BulletinAttachmentDownloadProgress? = null,
     val logLines: List<String> = emptyList(),
     val lastError: String? = null
 )
@@ -107,6 +115,7 @@ class FamilyNetworkManager(context: Context) {
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var serverJob: Job? = null
     private var attachmentUploadJob: Job? = null
+    private var attachmentDownloadJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
     private var networkPassword: String? = null
@@ -360,6 +369,101 @@ class FamilyNetworkManager(context: Context) {
         }
         scope.launch {
             postBoardMessageInternal(session, trimmed, attachments)
+        }
+    }
+
+    fun cancelAttachmentDownload() {
+        attachmentDownloadJob?.cancel()
+    }
+
+    fun downloadBoardAttachment(
+        rootUri: String,
+        ref: BulletinAttachmentRef,
+        conflict: BulletinAttachmentDownloadConflict = BulletinAttachmentDownloadConflict.OVERWRITE
+    ) {
+        val session = _state.value.openBoardSession ?: return
+        if (rootUri.isBlank()) {
+            appendError("下载失败：未设置根目录。")
+            return
+        }
+        attachmentDownloadJob?.cancel()
+        attachmentDownloadJob = scope.launch {
+            val totalBytes = when (ref.kind) {
+                BulletinAttachmentKind.FILE -> ref.size.coerceAtLeast(1L)
+                BulletinAttachmentKind.DIRECTORY -> ref.totalSize.coerceAtLeast(ref.size).coerceAtLeast(1L)
+            }
+            try {
+                _state.update {
+                    it.copy(
+                        attachmentDownload = BulletinAttachmentDownloadProgress(
+                            attachmentId = ref.id,
+                            itemName = ref.name,
+                            downloadedBytes = 0L,
+                            totalBytes = totalBytes
+                        )
+                    )
+                }
+                val transport = buildDownloadTransport(session)
+                val result = withContext(Dispatchers.IO) {
+                    BulletinAttachmentDownloader.downloadAttachment(
+                        context = appContext,
+                        rootUri = rootUri,
+                        boardId = session.boardId,
+                        ref = ref,
+                        transport = transport,
+                        conflict = conflict,
+                        onProgress = { downloaded, total ->
+                            _state.update { state ->
+                                state.copy(
+                                    attachmentDownload = BulletinAttachmentDownloadProgress(
+                                        attachmentId = ref.id,
+                                        itemName = ref.name,
+                                        downloadedBytes = downloaded,
+                                        totalBytes = total.coerceAtLeast(1L)
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+                result.onSuccess { saved ->
+                    appendLog("已保存到 ${saved.savedPath}")
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    appendError("下载附件失败：${error.message ?: error.javaClass.simpleName}")
+                }
+            } catch (_: CancellationException) {
+                appendLog("附件下载已取消")
+            } finally {
+                _state.update { it.copy(attachmentDownload = null) }
+                attachmentDownloadJob = null
+            }
+        }
+    }
+
+    private fun buildDownloadTransport(session: BulletinBoardOpenSession): BulletinAttachmentDownloadTransport {
+        return if (session.isHost) {
+            LocalBulletinAttachmentDownloadTransport(boardStore)
+        } else {
+            RemoteBulletinAttachmentDownloadTransport(
+                downloadBlobRequest = { path, rangeStart, rangeEnd ->
+                    boardApiBlobDownload(session.service, path, rangeStart, rangeEnd, session.accessPassword)
+                },
+                fetchMeta = { boardId, attachmentId ->
+                    boardApiRequest(
+                        service = session.service,
+                        method = "GET",
+                        path = "/boards/$boardId/attachments/$attachmentId",
+                        accessPassword = session.accessPassword
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.has("id")) {
+                            throw IllegalStateException(json.optString("message", "读取附件元数据失败"))
+                        }
+                        json
+                    }
+                }
+            )
         }
     }
 
@@ -986,6 +1090,57 @@ class FamilyNetworkManager(context: Context) {
                 connection.disconnect()
             }
         }
+    }
+
+    private fun boardApiBlobDownload(
+        service: FamilyDiscoveredService,
+        path: String,
+        rangeStart: Long,
+        rangeEndInclusive: Long,
+        accessPassword: String? = null
+    ): Result<BlobDownloadResult> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 120000
+                setRequestProperty("Accept", "application/octet-stream")
+                setRequestProperty("Range", "bytes=$rangeStart-$rangeEndInclusive")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            try {
+                val status = connection.responseCode
+                if (status !in listOf(200, 206)) {
+                    val detail = connection.errorStream?.use { readResponseText(it) }.orEmpty()
+                    throw IllegalStateException(detail.ifBlank { "HTTP $status" })
+                }
+                val bytes = connection.inputStream.use { it.readBytes() }
+                val contentRange = connection.getHeaderField("Content-Range")
+                val totalSize = parseTotalSizeFromContentRange(contentRange)
+                    ?: connection.contentLengthLong.takeIf { it > 0 }
+                    ?: (rangeEndInclusive + 1)
+                BlobDownloadResult(status, bytes, totalSize, contentRange)
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+    private fun parseTotalSizeFromContentRange(header: String?): Long? {
+        if (header.isNullOrBlank()) return null
+        val total = header.substringAfter('/', "").toLongOrNull()
+        return total?.takeIf { it > 0 }
     }
 
     private fun boardApiBinaryRequest(
