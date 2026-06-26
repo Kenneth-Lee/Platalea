@@ -180,11 +180,14 @@ class FamilyNetworkManager(context: Context) {
         _state.update { it.copy(openBoardSession = null) }
     }
 
-    fun refreshOpenBoard() {
+    fun refreshOpenBoard(showLoadingIndicator: Boolean = false) {
         val session = _state.value.openBoardSession ?: return
         scope.launch {
-            _state.update { current ->
-                current.copy(openBoardSession = current.openBoardSession?.copy(loading = true, lastError = null))
+            val shouldShowLoading = showLoadingIndicator && session.messages.isEmpty()
+            if (shouldShowLoading) {
+                _state.update { current ->
+                    current.copy(openBoardSession = current.openBoardSession?.copy(loading = true, lastError = null))
+                }
             }
             val result = withContext(Dispatchers.IO) {
                 fetchBoardSnapshot(session.service, session.boardId)
@@ -192,15 +195,25 @@ class FamilyNetworkManager(context: Context) {
             result.onSuccess { snapshot ->
                 _state.update { current ->
                     val open = current.openBoardSession ?: return@update current
-                    current.copy(
-                        openBoardSession = open.copy(
-                            boardName = snapshot.boardName,
-                            revision = snapshot.revision,
-                            messages = snapshot.messages,
-                            loading = false,
-                            lastError = null
+                    val unchanged = open.revision == snapshot.revision &&
+                        bulletinMessagesEqual(open.messages, snapshot.messages)
+                    if (unchanged) {
+                        if (open.loading) {
+                            current.copy(openBoardSession = open.copy(loading = false))
+                        } else {
+                            current
+                        }
+                    } else {
+                        current.copy(
+                            openBoardSession = open.copy(
+                                boardName = snapshot.boardName,
+                                revision = snapshot.revision,
+                                messages = snapshot.messages,
+                                loading = false,
+                                lastError = null
+                            )
                         )
-                    )
+                    }
                 }
             }.onFailure { error ->
                 val detail = error.message ?: error.javaClass.simpleName
@@ -683,6 +696,19 @@ class FamilyNetworkManager(context: Context) {
     private fun buildServiceName(): String {
         val model = Build.MODEL?.trim()?.replace(Regex("\\s+"), "-")?.takeIf { it.isNotEmpty() } ?: "Android"
         return "LocalManager-$model"
+    }
+
+    private fun bulletinMessagesEqual(a: List<BulletinMessage>, b: List<BulletinMessage>): Boolean {
+        if (a.size != b.size) return false
+        return a.indices.all { index ->
+            val left = a[index]
+            val right = b[index]
+            left.id == right.id &&
+                left.seq == right.seq &&
+                left.content == right.content &&
+                left.updatedAt == right.updatedAt &&
+                left.authorLabel == right.authorLabel
+        }
     }
 
     private fun decodeAttributes(info: NsdServiceInfo): Map<String, String> {

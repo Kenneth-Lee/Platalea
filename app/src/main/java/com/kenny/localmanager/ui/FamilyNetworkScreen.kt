@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -31,6 +32,8 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
@@ -40,6 +43,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +51,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -54,6 +60,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -62,6 +69,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinBoardOpenSession
@@ -136,7 +144,9 @@ fun FamilyNetworkScreen(
                 },
                 actions = {
                     if (boardSession != null) {
-                        IconButton(onClick = { manager.refreshOpenBoard() }) {
+                        IconButton(onClick = {
+                            manager.refreshOpenBoard(showLoadingIndicator = boardSession.messages.isEmpty())
+                        }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
                     } else {
@@ -157,7 +167,7 @@ fun FamilyNetworkScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-                    .padding(16.dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
                     .navigationBarsPadding(),
                 state = state,
                 remainingMinutes = remainingMinutes,
@@ -168,10 +178,7 @@ fun FamilyNetworkScreen(
             BulletinBoardPage(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(padding)
-                    .padding(16.dp)
-                    .navigationBarsPadding()
-                    .imePadding(),
+                    .padding(padding),
                 session = boardSession,
                 onRefresh = { manager.refreshOpenBoard() },
                 onPost = { manager.postBoardMessage(it) },
@@ -192,111 +199,20 @@ private fun FamilyPeerListPane(
 ) {
     LazyColumn(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.Wifi, contentDescription = null)
-                            Text(
-                                stringResource(R.string.family_network_local_service),
-                                style = MaterialTheme.typography.titleMedium
-                            )
-                        }
-                        Text(
-                            if (state.isRunning) stringResource(R.string.family_network_running) else stringResource(R.string.family_network_stopped),
-                            color = if (state.isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                    Text(stringResource(R.string.family_network_bulletin_hint))
-                    Text(stringResource(R.string.family_network_service_type, state.serviceType))
-                    if (state.serviceName.isNotBlank()) {
-                        Text(stringResource(R.string.family_network_service_name, state.serviceName))
-                    }
-                    if (state.port > 0) {
-                        Text(
-                            stringResource(R.string.family_network_port, state.port),
-                            fontFamily = FontFamily.Monospace
-                        )
-                    }
-                    Text(
-                        state.localIp?.let { stringResource(R.string.family_network_local_ip, it) }
-                            ?: stringResource(R.string.family_network_local_ip_unknown),
-                        fontFamily = FontFamily.Monospace
-                    )
-                    Text(
-                        if (state.isRegistered) {
-                            stringResource(R.string.family_network_registered)
-                        } else {
-                            stringResource(R.string.family_network_not_registered)
-                        }
-                    )
-                    Text(
-                        if (state.isDiscovering) {
-                            stringResource(R.string.family_network_discovery_active)
-                        } else {
-                            stringResource(R.string.family_network_discovery_idle)
-                        }
-                    )
-                    state.lastError?.takeIf { it.isNotBlank() }?.let { error ->
-                        Text(
-                            stringResource(R.string.family_network_last_error, error),
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    remainingMinutes?.let { mins ->
-                        Text(
-                            stringResource(R.string.network_service_auto_close, mins),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.height(18.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            stringResource(R.string.network_service_keep_screen_on),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Button(onClick = onRefresh) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text(stringResource(R.string.family_network_refresh))
-                    }
-                }
-            }
+            CollapsibleLocalServiceCard(
+                state = state,
+                remainingMinutes = remainingMinutes,
+                onRefresh = onRefresh
+            )
         }
 
         item {
             Text(
                 stringResource(R.string.family_network_discovered_services_count, state.discoveredServices.size),
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleSmall
             )
         }
 
@@ -305,11 +221,12 @@ private fun FamilyPeerListPane(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 12.dp),
+                        .padding(vertical = 8.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
                         stringResource(R.string.family_network_empty_hint),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
@@ -330,6 +247,123 @@ private fun FamilyPeerListPane(
 }
 
 @Composable
+private fun CollapsibleLocalServiceCard(
+    state: FamilyNetworkState,
+    remainingMinutes: Int?,
+    onRefresh: () -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val statusLabel = if (state.isRunning) {
+        stringResource(R.string.family_network_running)
+    } else {
+        stringResource(R.string.family_network_stopped)
+    }
+    val summary = buildString {
+        append(statusLabel)
+        if (state.port > 0) append(" · ${state.port}")
+        state.localIp?.takeIf { it.isNotBlank() }?.let { append(" · $it") }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.Wifi, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Column {
+                        Text(
+                            stringResource(R.string.family_network_local_service),
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        Text(
+                            summary,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+                        )
+                    }
+                }
+                IconButton(onClick = { expanded = !expanded }) {
+                    Icon(
+                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = stringResource(
+                            if (expanded) R.string.family_network_collapse else R.string.family_network_expand
+                        )
+                    )
+                }
+            }
+
+            if (expanded) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    stringResource(R.string.family_network_bulletin_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f)
+                )
+                Text(stringResource(R.string.family_network_service_type, state.serviceType), style = MaterialTheme.typography.bodySmall)
+                if (state.serviceName.isNotBlank()) {
+                    Text(stringResource(R.string.family_network_service_name, state.serviceName), style = MaterialTheme.typography.bodySmall)
+                }
+                Text(
+                    if (state.isRegistered) stringResource(R.string.family_network_registered)
+                    else stringResource(R.string.family_network_not_registered),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    if (state.isDiscovering) stringResource(R.string.family_network_discovery_active)
+                    else stringResource(R.string.family_network_discovery_idle),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                state.lastError?.takeIf { it.isNotBlank() }?.let { error ->
+                    Text(
+                        stringResource(R.string.family_network_last_error, error),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                remainingMinutes?.let { mins ->
+                    Text(
+                        stringResource(R.string.network_service_auto_close, mins),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Text(
+                        stringResource(R.string.network_service_keep_screen_on),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                TextButton(onClick = onRefresh) {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.family_network_refresh))
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun BulletinBoardPage(
     modifier: Modifier,
     session: BulletinBoardOpenSession,
@@ -342,12 +376,21 @@ private fun BulletinBoardPage(
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
+    val listState = rememberLazyListState()
+    var previousMessageCount by remember(session.service.deviceKey) { mutableIntStateOf(0) }
 
     LaunchedEffect(session.service.deviceKey, session.boardId) {
         while (true) {
             delay(3000)
             onRefresh()
         }
+    }
+
+    LaunchedEffect(session.messages.size) {
+        if (session.messages.isNotEmpty() && session.messages.size >= previousMessageCount) {
+            listState.animateScrollToItem(session.messages.lastIndex)
+        }
+        previousMessageCount = session.messages.size
     }
 
     if (editingMessage != null) {
@@ -398,43 +441,49 @@ private fun BulletinBoardPage(
         )
     }
 
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+    Column(modifier = modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    session.service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Text(
-                    stringResource(R.string.family_network_service_host_port, session.service.host, session.service.port),
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    if (session.isHost) {
-                        stringResource(R.string.family_board_role_host)
-                    } else {
-                        stringResource(R.string.family_board_role_guest)
-                    },
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Text(
-                    stringResource(R.string.family_board_revision, session.revision),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                session.lastError?.let { error ->
-                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            Text(
+                buildString {
+                    append(
+                        if (session.isHost) {
+                            stringResource(R.string.family_board_role_host)
+                        } else {
+                            stringResource(R.string.family_board_role_guest)
+                        }
+                    )
+                    append(" · ")
+                    append(session.service.host)
+                    append(':')
+                    append(session.service.port)
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                stringResource(R.string.family_board_revision, session.revision),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
+        session.lastError?.let { error ->
+            Text(
+                error,
+                modifier = Modifier.padding(horizontal = 10.dp),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.labelSmall
+            )
+        }
+        HorizontalDivider()
 
         if (session.loading && session.messages.isEmpty()) {
             Box(
@@ -443,7 +492,7 @@ private fun BulletinBoardPage(
                     .weight(1f),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
             }
         } else if (session.messages.isEmpty()) {
             Box(
@@ -454,16 +503,21 @@ private fun BulletinBoardPage(
             ) {
                 Text(
                     stringResource(R.string.family_board_no_messages),
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         } else {
             LazyColumn(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                state = listState
             ) {
-                items(session.messages, key = { it.id }) { message ->
-                    BulletinMessageCard(
+                items(
+                    items = session.messages,
+                    key = { it.id },
+                    contentType = { "bulletin_message" }
+                ) { message ->
+                    BulletinMessageRow(
                         message = message,
                         isHost = session.isHost,
                         onEdit = {
@@ -472,47 +526,50 @@ private fun BulletinBoardPage(
                         },
                         onDelete = { deletingMessage = message }
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 }
             }
         }
 
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        HorizontalDivider()
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .imePadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                OutlinedTextField(
-                    value = draftMessage,
-                    onValueChange = { draftMessage = it },
-                    modifier = Modifier.weight(1f),
-                    label = { Text(stringResource(R.string.family_board_message_label)) },
-                    placeholder = { Text(stringResource(R.string.family_board_message_placeholder)) },
-                    minLines = 2,
-                    maxLines = 5
+            TextField(
+                value = draftMessage,
+                onValueChange = { draftMessage = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text(stringResource(R.string.family_board_message_placeholder)) },
+                singleLine = false,
+                maxLines = 3,
+                textStyle = MaterialTheme.typography.bodySmall,
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
                 )
-                Button(
-                    onClick = {
-                        onPost(draftMessage)
-                        draftMessage = ""
-                    },
-                    enabled = draftMessage.trim().isNotEmpty(),
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-                }
+            )
+            IconButton(
+                onClick = {
+                    onPost(draftMessage)
+                    draftMessage = ""
+                },
+                enabled = draftMessage.trim().isNotEmpty(),
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
             }
         }
     }
 }
 
 @Composable
-private fun BulletinMessageCard(
+private fun BulletinMessageRow(
     message: BulletinMessage,
     isHost: Boolean,
     onEdit: () -> Unit,
@@ -521,35 +578,41 @@ private fun BulletinMessageCard(
     val timeLabel = remember(message.updatedAt) {
         SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(message.updatedAt))
     }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.Top
     ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(message.authorLabel, style = MaterialTheme.typography.labelMedium)
-                    Text(timeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (isHost) {
-                    Row {
-                        IconButton(onClick = onEdit) {
-                            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.family_board_edit_title))
-                        }
-                        IconButton(onClick = onDelete) {
-                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.common_delete))
-                        }
-                    }
-                }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                "${message.authorLabel} · $timeLabel",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                message.content,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+        if (isHost) {
+            IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = stringResource(R.string.family_board_edit_title),
+                    modifier = Modifier.size(16.dp)
+                )
             }
-            Text(message.content, style = MaterialTheme.typography.bodyMedium)
+            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.common_delete),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
         }
     }
 }
@@ -557,53 +620,64 @@ private fun BulletinMessageCard(
 @Composable
 private fun FamilyWorkLogPane(logLines: List<String>) {
     val context = LocalContext.current
+    var expanded by remember { mutableStateOf(false) }
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded },
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
             stringResource(R.string.family_network_work_log),
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        IconButton(
-            onClick = {
-                val content = logLines.joinToString("\n")
-                if (content.isNotEmpty()) {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                    clipboard?.setPrimaryClip(
-                        ClipData.newPlainText(
-                            context.getString(R.string.family_network_log_clip_label),
-                            content
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(
+                onClick = {
+                    val content = logLines.joinToString("\n")
+                    if (content.isNotEmpty()) {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                        clipboard?.setPrimaryClip(
+                            ClipData.newPlainText(
+                                context.getString(R.string.family_network_log_clip_label),
+                                content
+                            )
                         )
-                    )
+                    }
                 }
+            ) {
+                Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.family_network_copy_log), modifier = Modifier.size(18.dp))
             }
-        ) {
-            Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.family_network_copy_log))
+            Icon(
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp)
+            )
         }
     }
-    Spacer(Modifier.height(4.dp))
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(160.dp)
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-    ) {
-        val scrollState = rememberScrollState()
-        Column(
+    if (expanded) {
+        Box(
             modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(8.dp)
+                .fillMaxWidth()
+                .height(120.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
         ) {
-            logLines.forEach { line ->
-                Text(
-                    line,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace
-                )
+            val scrollState = rememberScrollState()
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState)
+                    .padding(6.dp)
+            ) {
+                logLines.forEach { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
     }
@@ -630,63 +704,38 @@ private fun FamilyNetworkServiceCard(
                 MaterialTheme.colorScheme.secondaryContainer
             } else {
                 MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-            },
-            contentColor = if (service.isSelf) {
-                MaterialTheme.colorScheme.onSecondaryContainer
-            } else {
-                MaterialTheme.colorScheme.onSurface
             }
         )
     ) {
-        val primaryTextColor = if (service.isSelf) {
-            MaterialTheme.colorScheme.onSecondaryContainer
-        } else {
-            MaterialTheme.colorScheme.onSurface
-        }
-        val secondaryTextColor = if (service.isSelf) {
-            MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
-        } else {
-            MaterialTheme.colorScheme.onSurfaceVariant
-        }
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
-                        style = MaterialTheme.typography.titleSmall,
-                        color = primaryTextColor
-                    )
-                    Text(
-                        stringResource(R.string.family_network_service_host_port, service.host.ifBlank { "?" }, service.port),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = primaryTextColor
-                    )
-                }
-                Spacer(Modifier.width(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    if (service.isSelf) {
-                        stringResource(R.string.family_network_open_self_board)
-                    } else {
-                        stringResource(R.string.family_network_open_board)
-                    },
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelMedium
+                    service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    stringResource(R.string.family_network_service_host_port, service.host.ifBlank { "?" }, service.port),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
             Text(
-                stringResource(R.string.family_network_service_type_line, service.serviceType),
-                color = secondaryTextColor
+                if (service.isSelf) {
+                    stringResource(R.string.family_network_open_self_board)
+                } else {
+                    stringResource(R.string.family_network_open_board)
+                },
+                color = MaterialTheme.colorScheme.primary,
+                style = MaterialTheme.typography.labelSmall
             )
         }
     }

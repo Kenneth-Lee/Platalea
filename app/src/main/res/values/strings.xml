@@ -256,6 +256,9 @@
     <string name="family_board_edit_title">修改留言</string>
     <string name="family_board_delete_title">删除留言</string>
     <string name="family_board_delete_confirm">确定删除这条留言吗？</string>
+    <string name="family_board_send">发送</string>
+    <string name="family_network_expand">展开</string>
+    <string name="family_network_collapse">收起</string>
     <string name="family_network_unknown_service_name">未命名服务</string>
     <string name="family_network_chat_hint">当前消息仅保存在内存中，退出页面后会清空。</string>
     <string name="family_network_no_messages">还没有消息。发送一条试试，或让对端发一条到本机。</string>
