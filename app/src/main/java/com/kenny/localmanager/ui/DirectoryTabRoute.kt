@@ -63,7 +63,12 @@ internal data class DirectoryTabRouteState(
     val onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     val onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     val playbackState: PlaybackState? = null,
-    val onOpenPlaybackScreen: () -> Unit
+    val onOpenPlaybackScreen: () -> Unit,
+    val directoryMode: DirectoryMode = DirectoryMode.NORMAL,
+    val pickPolicy: DirectoryPickPolicy? = null,
+    val pickPurposeTitle: String? = null,
+    val onPickComplete: (() -> Unit)? = null,
+    val onPickCancel: (() -> Unit)? = null
 )
 
 @Composable
@@ -125,6 +130,11 @@ internal fun DirectoryTabRoute(state: DirectoryTabRouteState) {
         onRequestImportConfig = state.onRequestImportConfig,
         onRequestImportStarDict = state.onRequestImportStarDict,
         playbackState = state.playbackState,
-        onOpenPlaybackScreen = state.onOpenPlaybackScreen
+        onOpenPlaybackScreen = state.onOpenPlaybackScreen,
+        directoryMode = state.directoryMode,
+        pickPolicy = state.pickPolicy,
+        pickPurposeTitle = state.pickPurposeTitle,
+        onPickComplete = state.onPickComplete,
+        onPickCancel = state.onPickCancel
     )
 }

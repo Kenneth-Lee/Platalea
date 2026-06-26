@@ -31,6 +31,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -97,7 +98,8 @@ fun FamilyNetworkScreen(
     familyNetworkUserName: String = "",
     familyNetworkHostPassword: String = "",
     timeoutMinutes: Int = 0,
-    onDismiss: (() -> Unit)? = null
+    onDismiss: (() -> Unit)? = null,
+    onRequestAttachmentPick: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -152,8 +154,6 @@ fun FamilyNetworkScreen(
         manager.start()
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            manager.closeBulletinBoard()
-            manager.stop()
         }
     }
 
@@ -348,7 +348,8 @@ fun FamilyNetworkScreen(
                 onRefresh = { manager.refreshOpenBoard() },
                 onPost = { manager.postBoardMessage(it) },
                 onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
-                onDelete = { manager.deleteBoardMessage(it) }
+                onDelete = { manager.deleteBoardMessage(it) },
+                onRequestAttachmentPick = onRequestAttachmentPick
             )
         }
     }
@@ -553,7 +554,8 @@ private fun BulletinBoardPage(
     onRefresh: () -> Unit,
     onPost: (String) -> Unit,
     onUpdate: (String, String) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onRequestAttachmentPick: (() -> Unit)? = null
 ) {
     var draftMessage by remember(session.service.deviceKey) { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
@@ -724,6 +726,17 @@ private fun BulletinBoardPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            if (onRequestAttachmentPick != null) {
+                IconButton(
+                    onClick = onRequestAttachmentPick,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Attachment,
+                        contentDescription = stringResource(R.string.family_board_add_attachment)
+                    )
+                }
+            }
             TextField(
                 value = draftMessage,
                 onValueChange = { draftMessage = it },

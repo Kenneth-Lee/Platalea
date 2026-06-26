@@ -339,7 +339,7 @@ private typealias RunProgressBlock = suspend (
     block: suspend ((Int) -> Unit) -> Unit
 ) -> Unit
 
-private enum class MainTab(val key: String, val labelRes: Int) {
+internal enum class MainTab(val key: String, val labelRes: Int) {
     DIRECTORY("directory", R.string.main_tab_directory),
     RECENT("recent", R.string.main_tab_recent),
     PLAYER("player", R.string.main_tab_player),
@@ -365,6 +365,13 @@ private enum class MainTab(val key: String, val labelRes: Int) {
         }
     }
 }
+
+internal data class ActiveDirectoryPick(
+    val requestId: String,
+    val purpose: DirectoryPickPurpose,
+    val returnTab: MainTab,
+    val policy: DirectoryPickPolicy
+)
 
 private fun mainTabIcon(tab: MainTab): ImageVector {
     return when (tab) {
@@ -986,9 +993,18 @@ private suspend fun encryptGpgFileToDir(
 @Composable
 private fun ScrollableMainTabBar(
     activeMainTab: MainTab,
-    onSwitchMainTab: (MainTab) -> Unit
+    onSwitchMainTab: (MainTab) -> Unit,
+    directoryPickActive: Boolean = false,
+    onBlockedTabSwitch: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    fun trySwitchTab(tab: MainTab) {
+        if (directoryPickActive && tab != MainTab.DIRECTORY) {
+            onBlockedTabSwitch()
+            return
+        }
+        onSwitchMainTab(tab)
+    }
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
         MainTab.CONFIG,
@@ -1041,7 +1057,7 @@ private fun ScrollableMainTabBar(
                 val selected = activeMainTab == tab
                 val label = context.getString(tab.labelRes)
                 OutlinedButton(
-                    onClick = { onSwitchMainTab(tab) },
+                    onClick = { trySwitchTab(tab) },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(4.dp),
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
@@ -1067,7 +1083,7 @@ private fun ScrollableMainTabBar(
                 val selected = activeMainTab == tab
                 val label = context.getString(tab.labelRes)
                 OutlinedButton(
-                    onClick = { onSwitchMainTab(tab) },
+                    onClick = { trySwitchTab(tab) },
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(4.dp),
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
@@ -1130,7 +1146,7 @@ private fun ScrollableMainTabBar(
                             onClick = {
                                 overflowExpanded = false
                                 pendingOverflowPromotion = tab
-                                onSwitchMainTab(tab)
+                                trySwitchTab(tab)
                             }
                         )
                     }
@@ -1658,6 +1674,87 @@ private fun FileBrowserAppScreen(
         val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
         val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
         var showPendingList by remember { mutableStateOf(false) }
+        val pickList = remember { mutableStateListOf<DocumentFileModel>() }
+        var activeDirectoryPick by remember { mutableStateOf<ActiveDirectoryPick?>(null) }
+        var directoryPickOnComplete by remember { mutableStateOf<((DirectoryPickResult) -> Unit)?>(null) }
+        var directoryPickOnCancel by remember { mutableStateOf<(() -> Unit)?>(null) }
+        var showPickList by remember { mutableStateOf(false) }
+
+        fun togglePickItem(item: DocumentFileModel) {
+            val policy = activeDirectoryPick?.policy ?: return
+            if (!item.matchesDirectoryPickPolicy(policy)) {
+                Toast.makeText(context, context.getString(R.string.directory_pick_item_not_allowed), Toast.LENGTH_SHORT).show()
+                return
+            }
+            val existing = pickList.indexOfFirst { it.uri == item.uri }
+            if (existing >= 0) {
+                pickList.removeAt(existing)
+                return
+            }
+            if (!policy.multiSelect && pickList.isNotEmpty()) {
+                pickList.clear()
+            }
+            policy.maxItems?.let { max ->
+                if (pickList.size >= max) {
+                    Toast.makeText(context, context.getString(R.string.directory_pick_max_items, max), Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
+            pickList.add(item)
+        }
+
+        fun startDirectoryPick(
+            purpose: DirectoryPickPurpose,
+            returnTab: MainTab,
+            policy: DirectoryPickPolicy = purpose.defaultPolicy(),
+            onComplete: (DirectoryPickResult) -> Unit,
+            onCancel: () -> Unit = {}
+        ) {
+            if (activeDirectoryPick != null) {
+                Toast.makeText(context, context.getString(R.string.directory_pick_already_active), Toast.LENGTH_SHORT).show()
+                return
+            }
+            pickList.clear()
+            showPickList = false
+            activeDirectoryPick = ActiveDirectoryPick(
+                requestId = java.util.UUID.randomUUID().toString(),
+                purpose = purpose,
+                returnTab = returnTab,
+                policy = policy
+            )
+            directoryPickOnComplete = onComplete
+            directoryPickOnCancel = onCancel
+            switchMainTab(MainTab.DIRECTORY)
+        }
+
+        fun completeDirectoryPick() {
+            val session = activeDirectoryPick ?: return
+            if (pickList.isEmpty()) return
+            val onComplete = directoryPickOnComplete
+            val returnTab = session.returnTab
+            val result = DirectoryPickResult(session.requestId, pickList.toList(), session.purpose)
+            activeDirectoryPick = null
+            directoryPickOnComplete = null
+            directoryPickOnCancel = null
+            pickList.clear()
+            showPickList = false
+            switchMainTab(returnTab)
+            onComplete?.invoke(result)
+        }
+
+        fun cancelDirectoryPick() {
+            val session = activeDirectoryPick ?: return
+            val returnTab = session.returnTab
+            val onCancel = directoryPickOnCancel
+            activeDirectoryPick = null
+            directoryPickOnComplete = null
+            directoryPickOnCancel = null
+            pickList.clear()
+            showPickList = false
+            switchMainTab(returnTab)
+            onCancel?.invoke()
+        }
+
         var showPendingDeleteConfirm by remember { mutableStateOf(false) }
         var showPlaybackTargetDialog by remember { mutableStateOf(false) }
         var showImportCategoryDialog by remember { mutableStateOf(false) }
@@ -2280,6 +2377,18 @@ private fun FileBrowserAppScreen(
                 familyNetworkHostPassword.ifBlank { null }
             )
         }
+        val familyNetworkUiState by familyNetworkManager.state.collectAsState()
+        LaunchedEffect(activeMainTab, familyNetworkUiState.openBoardSession, activeDirectoryPick) {
+            val pickingForFamilyNetwork = activeDirectoryPick?.returnTab == MainTab.FAMILY_NETWORK
+            val keepRunning = activeMainTab == MainTab.FAMILY_NETWORK ||
+                familyNetworkUiState.openBoardSession != null ||
+                pickingForFamilyNetwork
+            if (keepRunning) {
+                familyNetworkManager.start()
+            } else {
+                familyNetworkManager.stop()
+            }
+        }
         DisposableEffect(familyNetworkManager) {
             onDispose {
                 familyNetworkManager.destroy()
@@ -2308,6 +2417,8 @@ private fun FileBrowserAppScreen(
                 showGitConfigDialog -> showGitConfigDialog = false
                 showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                 showPendingList -> showPendingList = false
+                showPickList -> showPickList = false
+                activeDirectoryPick != null -> cancelDirectoryPick()
                 familyNetworkManager.state.value.openBoardSession != null -> familyNetworkManager.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 zipUnzipTarget != null -> zipUnzipTarget = null
@@ -2633,7 +2744,7 @@ private fun FileBrowserAppScreen(
                                 refreshTrigger = refreshTrigger,
                                 dirCache = dirCache,
                                 onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
-                                pendingList = pendingList,
+                                pendingList = if (activeDirectoryPick != null) pickList else pendingList,
                                 rootUri = rootUri,
                                 listState = fileListLazyState,
                                 onNavigate = { uri ->
@@ -2721,11 +2832,21 @@ private fun FileBrowserAppScreen(
                                 onOpenMarkdownView = { uri, name, encrypted ->
                                     markdownViewFile = Triple(uri, name, encrypted)
                                 },
-                                onAddToPendingList = { pendingList.add(it) },
-                                onRemoveFromPendingList = { pendingList.remove(it) },
+                                onAddToPendingList = { item ->
+                                    if (activeDirectoryPick != null) togglePickItem(item) else pendingList.add(item)
+                                },
+                                onRemoveFromPendingList = { item ->
+                                    if (activeDirectoryPick != null) {
+                                        pickList.removeAll { it.uri == item.uri }
+                                    } else {
+                                        pendingList.remove(item)
+                                    }
+                                },
                                 onCopyPendingToCurrentDir = doCopyHere,
                                 onMovePendingToCurrentDir = doMoveHere,
-                                onShowPendingList = { showPendingList = it },
+                                onShowPendingList = { show ->
+                                    if (activeDirectoryPick != null) showPickList = show else showPendingList = show
+                                },
                                 onRefresh = { refreshTrigger++ },
                                 onCreateQuickNote = {
                                     switchMainTab(MainTab.QUICK_NOTE)
@@ -2884,7 +3005,12 @@ private fun FileBrowserAppScreen(
                                     }
                                 },
                                 playbackState = playbackState,
-                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) },
+                                directoryMode = if (activeDirectoryPick != null) DirectoryMode.PICK else DirectoryMode.NORMAL,
+                                pickPolicy = activeDirectoryPick?.policy,
+                                pickPurposeTitle = activeDirectoryPick?.purpose?.let { context.getString(it.titleRes) },
+                                onPickComplete = if (activeDirectoryPick != null) ({ completeDirectoryPick() }) else null,
+                                onPickCancel = if (activeDirectoryPick != null) ({ cancelDirectoryPick() }) else null
                             )
                         )
                     },
@@ -2909,7 +3035,30 @@ private fun FileBrowserAppScreen(
                             familyNetworkUserName = familyNetworkUserName,
                             familyNetworkHostPassword = familyNetworkHostPassword,
                             timeoutMinutes = networkServiceTimeoutMinutes,
-                            onDismiss = { requestExitApp() }
+                            onDismiss = { requestExitApp() },
+                            onRequestAttachmentPick = {
+                                startDirectoryPick(
+                                    purpose = DirectoryPickPurpose.BULLETIN_ATTACHMENT,
+                                    returnTab = MainTab.FAMILY_NETWORK,
+                                    onComplete = { result ->
+                                        val lines = result.items.map { item ->
+                                            if (item.isDirectory) "📁 ${item.name}/" else "📄 ${item.name}"
+                                        }
+                                        val body = buildString {
+                                            append(context.getString(R.string.directory_pick_bulletin_message_header))
+                                            append('\n')
+                                            lines.forEach { append(it).append('\n') }
+                                            append(
+                                                context.getString(
+                                                    R.string.directory_pick_bulletin_message_footer,
+                                                    result.items.size
+                                                )
+                                            )
+                                        }
+                                        familyNetworkManager.postBoardMessage(body)
+                                    }
+                                )
+                            }
                         )
                     },
                     configContent = {
@@ -3046,7 +3195,20 @@ private fun FileBrowserAppScreen(
 
             ScrollableMainTabBar(
                 activeMainTab = activeMainTab,
-                onSwitchMainTab = { switchMainTab(it) }
+                onSwitchMainTab = { switchMainTab(it) },
+                directoryPickActive = activeDirectoryPick != null,
+                onBlockedTabSwitch = {
+                    Toast.makeText(context, context.getString(R.string.directory_pick_tab_locked), Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+        if (showPickList && activeDirectoryPick != null) {
+            PendingListScreen(
+                pendingList = pickList,
+                mode = PendingListMode.DIRECTORY_PICK,
+                title = context.getString(R.string.directory_pick_list_title, pickList.size),
+                onRemove = { pickList.remove(it) },
+                onDismiss = { showPickList = false }
             )
         }
         if (showPendingList) {
@@ -6320,10 +6482,16 @@ internal fun FileBrowserScreen(
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     playbackState: PlaybackState? = null,
-    onOpenPlaybackScreen: () -> Unit = {}
+    onOpenPlaybackScreen: () -> Unit = {},
+    directoryMode: DirectoryMode = DirectoryMode.NORMAL,
+    pickPolicy: DirectoryPickPolicy? = null,
+    pickPurposeTitle: String? = null,
+    onPickComplete: (() -> Unit)? = null,
+    onPickCancel: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val isPickMode = directoryMode == DirectoryMode.PICK
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
     var loading by remember(currentUri) { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -6525,6 +6693,28 @@ internal fun FileBrowserScreen(
         }
     }
 
+    fun togglePickSelection(item: DocumentFileModel) {
+        val policy = pickPolicy ?: return
+        if (!item.matchesDirectoryPickPolicy(policy)) {
+            Toast.makeText(context, context.getString(R.string.directory_pick_item_not_allowed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (pendingList.any { it.uri == item.uri }) {
+            onRemoveFromPendingList(item)
+            return
+        }
+        if (!policy.multiSelect && pendingList.isNotEmpty()) {
+            pendingList.toList().forEach { onRemoveFromPendingList(it) }
+        }
+        policy.maxItems?.let { max ->
+            if (pendingList.size >= max) {
+                Toast.makeText(context, context.getString(R.string.directory_pick_max_items, max), Toast.LENGTH_SHORT).show()
+                return
+            }
+        }
+        onAddToPendingList(item)
+    }
+
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showQuickCopyConfirm by remember { mutableStateOf(false) }
@@ -6587,6 +6777,7 @@ internal fun FileBrowserScreen(
                             expanded = showOverflowMenu,
                             onDismissRequest = { showOverflowMenu = false }
                         ) {
+                            if (!isPickMode) {
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.config_change_root)) },
                                 leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
@@ -6641,6 +6832,7 @@ internal fun FileBrowserScreen(
                                     }
                                 )
                             }
+                            }
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -6648,6 +6840,41 @@ internal fun FileBrowserScreen(
                         titleContentColor = MaterialTheme.colorScheme.onSurface
                     )
                 )
+                if (isPickMode) {
+                    Surface(color = MaterialTheme.colorScheme.primaryContainer) {
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    pickPurposeTitle ?: context.getString(R.string.directory_pick_purpose_generic),
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    context.getString(R.string.directory_pick_selected_count, pendingList.size),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                            TextButton(
+                                onClick = { onPickComplete?.invoke() },
+                                enabled = pendingList.isNotEmpty()
+                            ) {
+                                Text(context.getString(R.string.directory_pick_complete))
+                            }
+                            TextButton(onClick = { onPickCancel?.invoke() }) {
+                                Text(context.getString(R.string.directory_pick_cancel))
+                            }
+                        }
+                    }
+                }
                 if (filterVisible) {
                     Row(
                         Modifier
@@ -6671,6 +6898,7 @@ internal fun FileBrowserScreen(
                     }
                 }
                 playbackState?.let { state ->
+                    if (!isPickMode) {
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -6688,6 +6916,7 @@ internal fun FileBrowserScreen(
                             overflow = TextOverflow.Ellipsis
                         )
                     }
+                    }
                 }
             }
         },
@@ -6697,6 +6926,15 @@ internal fun FileBrowserScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     horizontalAlignment = Alignment.End
                 ) {
+                    if (isPickMode) {
+                        FloatingActionButton(
+                            onClick = { onShowPendingList(true) },
+                            containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
+                            contentColor = MaterialTheme.colorScheme.onTertiary
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = context.getString(R.string.directory_pick_show_list))
+                        }
+                    } else {
                     if (pendingList.isNotEmpty()) {
                         FloatingActionButton(
                             onClick = { showQuickCopyConfirm = true },
@@ -6726,6 +6964,7 @@ internal fun FileBrowserScreen(
                         contentColor = MaterialTheme.colorScheme.onPrimary
                     ) {
                         Icon(Icons.Default.Add, contentDescription = context.getString(R.string.fab_new))
+                    }
                     }
                 }
             }
@@ -6765,7 +7004,11 @@ internal fun FileBrowserScreen(
                                 hasPreferredExternalApp = fileExtensionKey(item.name)?.let { preferredExternalPackages.containsKey(it) } == true,
                                 isInPendingList = pendingList.any { it.uri == item.uri },
                                 onClick = {
-                                    if (item.isDirectory) {
+                                    if (isPickMode) {
+                                        if (item.isDirectory) {
+                                            onNavigate(item.uri.toString())
+                                        }
+                                    } else if (item.isDirectory) {
                                         onNavigate(item.uri.toString())
                                     } else {
                                         when {
@@ -6814,7 +7057,9 @@ internal fun FileBrowserScreen(
                                     showContextMenu = true
                                 },
                                 onDoubleClick = {
-                                    if (pendingList.any { it.uri == item.uri }) onRemoveFromPendingList(item)
+                                    if (isPickMode) {
+                                        togglePickSelection(item)
+                                    } else if (pendingList.any { it.uri == item.uri }) onRemoveFromPendingList(item)
                                     else onAddToPendingList(item)
                                 }
                             )
@@ -6951,7 +7196,39 @@ internal fun FileBrowserScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Spacer(Modifier.height(16.dp))
-                    if (!menuTarget.isDirectory) {
+                    if (isPickMode) {
+                        val inList = pendingList.any { it.uri == menuTarget.uri }
+                        if (menuTarget.isDirectory && pickPolicy?.allowDirectories != true) {
+                            Text(
+                                context.getString(R.string.directory_pick_item_not_allowed),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else if (!menuTarget.isDirectory && pickPolicy?.allowFiles != true) {
+                            Text(
+                                context.getString(R.string.directory_pick_item_not_allowed),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    if (inList) onRemoveFromPendingList(menuTarget) else togglePickSelection(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) {
+                                Text(
+                                    if (inList) context.getString(R.string.context_remove_from_pending)
+                                    else context.getString(R.string.context_add_to_pending),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                        TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
+                            Text("取消", color = MaterialTheme.colorScheme.onSurface)
+                        }
+                    } else if (!menuTarget.isDirectory) {
                         TextButton(
                             onClick = {
                                 showContextMenu = false
@@ -7077,6 +7354,7 @@ internal fun FileBrowserScreen(
                             }
                         ) { Text("生成音乐列表", color = MaterialTheme.colorScheme.onSurface) }
                     }
+                    if (!isPickMode) {
                     if (isViewingTrash && onRestoreFromTrash != null) {
                         TextButton(
                             onClick = {
@@ -7161,6 +7439,7 @@ internal fun FileBrowserScreen(
                     ) { Text("删除", color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
                         Text("取消", color = MaterialTheme.colorScheme.onSurface)
+                    }
                     }
                 }
             }
@@ -7879,6 +8158,10 @@ fun PendingListScreen(
     pendingList: List<DocumentFileModel>,
     currentDirPath: String = "",
     rootUri: String? = null,
+    mode: PendingListMode = PendingListMode.NORMAL,
+    title: String? = null,
+    confirmLabel: String? = null,
+    onConfirm: (() -> Unit)? = null,
     onRemove: (DocumentFileModel) -> Unit,
     onCopyHere: () -> Unit = {},
     onMoveHere: () -> Unit = {},
@@ -7894,24 +8177,32 @@ fun PendingListScreen(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val isPickMode = mode == PendingListMode.DIRECTORY_PICK
     var showHelpDialog by remember { mutableStateOf(false) }
     var filterText by remember { mutableStateOf("") }
     val filteredPendingItems = if (filterText.isBlank()) pendingList
     else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
         pendingList.filter { regex.containsMatchIn(it.name) }
     } ?: pendingList
+    val screenTitle = title ?: if (isPickMode) {
+        context.getString(R.string.directory_pick_list_title, pendingList.size)
+    } else {
+        "待处理列表 (${pendingList.size})"
+    }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("待处理列表 (${pendingList.size})") },
+                title = { Text(screenTitle) },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
+                    if (!isPickMode) {
                     IconButton(onClick = { showHelpDialog = true }) {
                         Icon(Icons.Default.Info, contentDescription = "说明")
+                    }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -7933,6 +8224,7 @@ fun PendingListScreen(
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding)) {
+                if (!isPickMode) {
                 Text(
                     "当前目录：$currentDirPath",
                     style = MaterialTheme.typography.bodyMedium,
@@ -7941,6 +8233,7 @@ fun PendingListScreen(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
+                }
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -7961,6 +8254,7 @@ fun PendingListScreen(
                         }
                     }
                 }
+                if (!isPickMode) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -8023,6 +8317,7 @@ fun PendingListScreen(
                         Icon(Icons.Default.Archive, contentDescription = "压缩为 7Z", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
+                }
             LazyColumn(
                 Modifier.weight(1f),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
@@ -8069,10 +8364,32 @@ fun PendingListScreen(
                     }
                 }
             }
+            if (isPickMode && onConfirm != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text(context.getString(R.string.directory_pick_cancel))
+                    }
+                    Button(
+                        onClick = onConfirm,
+                        modifier = Modifier.weight(1f),
+                        enabled = pendingList.isNotEmpty()
+                    ) {
+                        Text(confirmLabel ?: context.getString(R.string.directory_pick_confirm_generic))
+                    }
+                }
+            }
             }
         }
     }
-    if (showHelpDialog) {
+    if (showHelpDialog && !isPickMode) {
         AlertDialog(
             onDismissRequest = { showHelpDialog = false },
             title = { Text("操作说明") },
