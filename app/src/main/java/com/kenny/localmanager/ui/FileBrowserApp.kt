@@ -2378,11 +2378,15 @@ private fun FileBrowserAppScreen(
             )
         }
         val familyNetworkUiState by familyNetworkManager.state.collectAsState()
-        LaunchedEffect(activeMainTab, familyNetworkUiState.openBoardSession, activeDirectoryPick) {
+        LaunchedEffect(activeMainTab, activeDirectoryPick) {
             val pickingForFamilyNetwork = activeDirectoryPick?.returnTab == MainTab.FAMILY_NETWORK
-            val keepRunning = activeMainTab == MainTab.FAMILY_NETWORK ||
-                familyNetworkUiState.openBoardSession != null ||
-                pickingForFamilyNetwork
+            // 切到其他 Tab 时退出留言板内页（目录拣选附件时除外）
+            if (activeMainTab != MainTab.FAMILY_NETWORK && !pickingForFamilyNetwork) {
+                if (familyNetworkUiState.openBoardSession != null) {
+                    familyNetworkManager.closeBulletinBoard()
+                }
+            }
+            val keepRunning = activeMainTab == MainTab.FAMILY_NETWORK || pickingForFamilyNetwork
             if (keepRunning) {
                 familyNetworkManager.start()
             } else {
