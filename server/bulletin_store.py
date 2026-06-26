@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 
+from bulletin_attachment_store import BulletinAttachmentStore
+
 DEFAULT_BOARD_ID = "default"
 DEFAULT_BOARD_NAME = "默认留言板"
 
@@ -31,6 +33,7 @@ class BulletinMessage:
     updated_at: int
     deleted: bool = False
     author_device: str | None = None
+    attachments: list[dict[str, Any]] | None = None
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -44,10 +47,13 @@ class BulletinMessage:
         }
         if self.author_device:
             payload["author_device"] = self.author_device
+        if self.attachments:
+            payload["attachments"] = self.attachments
         return payload
 
     @classmethod
     def from_json(cls, obj: dict[str, Any]) -> BulletinMessage:
+        attachments = obj.get("attachments")
         return cls(
             id=str(obj["id"]),
             seq=int(obj.get("seq", 0)),
@@ -57,6 +63,7 @@ class BulletinMessage:
             updated_at=int(obj.get("updated_at", 0)),
             deleted=bool(obj.get("deleted", False)),
             author_device=str(obj.get("author_device", "")).strip() or None,
+            attachments=attachments if isinstance(attachments, list) else None,
         )
 
 
@@ -84,6 +91,7 @@ class BulletinBoardStore:
         self._root_dir = Path(root_dir)
         self._lock = threading.RLock()
         self._root_dir.mkdir(parents=True, exist_ok=True)
+        self.attachments = BulletinAttachmentStore(self._root_dir)
         self.ensure_default_board()
 
     @property
@@ -159,11 +167,17 @@ class BulletinBoardStore:
         author_label: str,
         content: str,
         author_device: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> BulletinMessage | None:
         trimmed = content.strip()
-        if not trimmed:
+        attachment_list = attachments or []
+        if not trimmed and not attachment_list:
             return None
         with self._lock:
+            for item in attachment_list:
+                attachment_id = str(item.get("id", ""))
+                if not attachment_id or not self.attachments.is_attachment_ready(board_id, attachment_id):
+                    return None
             meta = self._read_meta(board_id)
             if meta is None:
                 return None
@@ -178,6 +192,7 @@ class BulletinBoardStore:
                 created_at=now,
                 updated_at=now,
                 author_device=author_device.strip() if author_device else None,
+                attachments=attachment_list or None,
             )
             messages.append(message)
             self._write_messages(board_id, messages)

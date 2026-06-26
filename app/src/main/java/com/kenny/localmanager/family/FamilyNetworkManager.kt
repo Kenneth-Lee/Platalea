@@ -335,41 +335,103 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    fun postBoardMessage(content: String) {
+    fun postBoardMessage(content: String, attachments: List<BulletinAttachmentRef> = emptyList()) {
         val session = _state.value.openBoardSession ?: return
         val trimmed = content.trim()
-        if (trimmed.isEmpty()) {
-            appendError("发送消息失败：消息内容不能为空。")
+        if (trimmed.isEmpty() && attachments.isEmpty()) {
+            appendError("发送消息失败：消息内容与附件不能同时为空。")
             return
         }
-        val (authorLabel, authorDevice) = buildAuthorIdentity()
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (session.isHost) {
-                    runCatching {
-                        boardStore.appendMessage(session.boardId, authorLabel, trimmed, authorDevice)
-                            ?: throw IllegalStateException("消息内容不能为空或留言板不存在")
-                    }.map { }
-                } else {
-                    boardApiRequest(
-                        service = session.service,
-                        method = "POST",
-                        path = "/boards/${session.boardId}/messages",
-                        body = JSONObject().apply {
-                            put("content", trimmed)
-                            put("author_label", authorLabel)
-                            put("author_device", authorDevice)
-                        }.toString(),
-                        accessPassword = session.accessPassword
-                    )
-                }
+            postBoardMessageInternal(session, trimmed, attachments)
+        }
+    }
+
+    fun uploadPickedAttachmentsAndPost(
+        items: List<com.kenny.localmanager.file.DocumentFileModel>,
+        textContent: String = ""
+    ) {
+        val session = _state.value.openBoardSession ?: return
+        if (items.isEmpty()) {
+            appendError("上传失败：未选择任何文件或目录。")
+            return
+        }
+        scope.launch {
+            appendLog("开始上传 ${items.size} 个附件到 ${session.service.serviceName}…")
+            val (_, device) = buildAuthorIdentity()
+            val transport: BulletinAttachmentTransport = if (session.isHost) {
+                LocalBulletinAttachmentTransport(boardStore)
+            } else {
+                RemoteBulletinAttachmentTransport(
+                    service = session.service,
+                    accessPassword = session.accessPassword,
+                    requestJson = { method, path, body ->
+                        boardApiRequest(session.service, method, path, body, session.accessPassword)
+                    },
+                    requestBinary = { method, path, bytes ->
+                        boardApiBinaryRequest(session.service, method, path, bytes, session.accessPassword)
+                    }
+                )
             }
-            result.onSuccess {
-                appendLog("留言已发布到 ${session.service.serviceName}/${session.boardId}")
-                refreshOpenBoard()
+            val uploadResult = withContext(Dispatchers.IO) {
+                BulletinAttachmentUploader.uploadItems(
+                    context = appContext,
+                    transport = transport,
+                    boardId = session.boardId,
+                    items = items,
+                    uploaderDevice = device
+                )
+            }
+            uploadResult.onSuccess { refs ->
+                val body = textContent.trim().ifBlank { "[${refs.size} 个附件]" }
+                postBoardMessageInternal(session, body, refs)
             }.onFailure { error ->
-                appendError("发布留言失败：${error.message ?: error.javaClass.simpleName}")
+                appendError("上传附件失败：${error.message ?: error.javaClass.simpleName}")
             }
+        }
+    }
+
+    private suspend fun postBoardMessageInternal(
+        session: BulletinBoardOpenSession,
+        content: String,
+        attachments: List<BulletinAttachmentRef>
+    ) {
+        val (authorLabel, authorDevice) = buildAuthorIdentity()
+        val result = withContext(Dispatchers.IO) {
+            if (session.isHost) {
+                runCatching {
+                    boardStore.appendMessage(
+                        session.boardId,
+                        authorLabel,
+                        content,
+                        authorDevice,
+                        attachments
+                    ) ?: throw IllegalStateException(
+                        if (attachments.isNotEmpty()) "消息无效或附件未就绪" else "消息内容不能为空或留言板不存在"
+                    )
+                }.map { }
+            } else {
+                boardApiRequest(
+                    service = session.service,
+                    method = "POST",
+                    path = "/boards/${session.boardId}/messages",
+                    body = JSONObject().apply {
+                        put("content", content)
+                        put("author_label", authorLabel)
+                        put("author_device", authorDevice)
+                        if (attachments.isNotEmpty()) {
+                            put("attachments", JSONArray(attachments.map { it.toJson() }))
+                        }
+                    }.toString(),
+                    accessPassword = session.accessPassword
+                )
+            }
+        }
+        result.onSuccess {
+            appendLog("留言已发布到 ${session.service.serviceName}/${session.boardId}")
+            refreshOpenBoard()
+        }.onFailure { error ->
+            appendError("发布留言失败：${error.message ?: error.javaClass.simpleName}")
         }
     }
 
@@ -686,7 +748,7 @@ class FamilyNetworkManager(context: Context) {
     private fun handleHttpRequest(
         method: String,
         path: String,
-        body: String,
+        bodyBytes: ByteArray,
         remoteAddress: String,
         headers: Map<String, String>
     ): FamilyHttpResponse {
@@ -700,7 +762,7 @@ class FamilyNetworkManager(context: Context) {
                         put("message", "需要正确的网络服务密码")
                     }.toString()
                 )
-            return boardHttpHandler.handle(method, path, body, authLevel)
+            return boardHttpHandler.handle(method, path, bodyBytes, authLevel, headers)
         }
         if (method == "GET" && (path == "/" || path.isEmpty())) {
             val boards = boardStore.listBoards()
@@ -812,20 +874,61 @@ class FamilyNetworkManager(context: Context) {
                         output.write(body.toByteArray(StandardCharsets.UTF_8))
                     }
                 }
-                val status = connection.responseCode
-                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
-                val responseText = stream?.use { readResponseText(it) }.orEmpty()
-                if (status !in 200..299) {
-                    val detail = runCatching { JSONObject(responseText).optString("message") }.getOrNull()
-                        ?.takeIf { it.isNotBlank() }
-                        ?: responseText.ifBlank { "HTTP $status" }
-                    throw IllegalStateException(detail)
-                }
-                responseText
+                readApiResponse(connection)
             } finally {
                 connection.disconnect()
             }
         }
+    }
+
+    private fun boardApiBinaryRequest(
+        service: FamilyDiscoveredService,
+        method: String,
+        path: String,
+        body: ByteArray,
+        accessPassword: String? = null
+    ): Result<Unit> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = method
+                connectTimeout = 15000
+                readTimeout = 15000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/octet-stream")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            try {
+                connection.outputStream.use { output -> output.write(body) }
+                readApiResponse(connection)
+                Unit
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+    private fun readApiResponse(connection: HttpURLConnection): String {
+        val status = connection.responseCode
+        val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+        val responseText = stream?.use { readResponseText(it) }.orEmpty()
+        if (status !in 200..299) {
+            val detail = runCatching { JSONObject(responseText).optString("message") }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: responseText.ifBlank { "HTTP $status" }
+            throw IllegalStateException(detail)
+        }
+        return responseText
     }
 
     private fun stopDiscoveryInternal() {
@@ -956,7 +1059,7 @@ private class EmbeddedHttpServer(
     preferredPort: Int,
     sslContext: SSLContext,
     private val log: (String) -> Unit,
-    private val handleRequest: (String, String, String, String, Map<String, String>) -> FamilyHttpResponse
+    private val handleRequest: (String, String, ByteArray, String, Map<String, String>) -> FamilyHttpResponse
 ) {
     private val running = AtomicBoolean(false)
     private val serverSocket: SSLServerSocket = (sslContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
@@ -1039,23 +1142,25 @@ private class EmbeddedHttpServer(
                     handleRequest(
                         method,
                         path,
-                        bodyBytes.toString(StandardCharsets.UTF_8),
+                        bodyBytes,
                         client.inetAddress?.hostAddress ?: "",
                         headers
                     )
                 }
                 else -> FamilyHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}")
             }
-            val responseBody = response.body.toByteArray(StandardCharsets.UTF_8)
             val responseHead = buildString {
                 append("HTTP/1.1 ${response.statusCode} ${httpStatusText(response.statusCode)}\r\n")
                 append("Content-Type: ${response.contentType}\r\n")
-                append("Content-Length: ${responseBody.size}\r\n")
+                append("Content-Length: ${response.bodyBytes.size}\r\n")
+                response.extraHeaders.forEach { (name, value) ->
+                    append("$name: $value\r\n")
+                }
                 append("Connection: close\r\n")
                 append("\r\n")
             }.toByteArray(StandardCharsets.ISO_8859_1)
             output.write(responseHead)
-            output.write(responseBody)
+            output.write(response.bodyBytes)
             output.flush()
         }
     }

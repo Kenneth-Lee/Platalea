@@ -36,7 +36,8 @@ data class BulletinMessage(
     val createdAt: Long,
     val updatedAt: Long,
     val deleted: Boolean = false,
-    val authorDevice: String? = null
+    val authorDevice: String? = null,
+    val attachments: List<BulletinAttachmentRef> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -47,19 +48,31 @@ data class BulletinMessage(
         put("updated_at", updatedAt)
         put("deleted", deleted)
         authorDevice?.takeIf { it.isNotBlank() }?.let { put("author_device", it) }
+        if (attachments.isNotEmpty()) {
+            put("attachments", JSONArray(attachments.map { it.toJson() }))
+        }
     }
 
     companion object {
-        fun fromJson(obj: JSONObject): BulletinMessage = BulletinMessage(
-            id = obj.getString("id"),
-            seq = obj.optLong("seq"),
-            authorLabel = obj.optString("author_label", ""),
-            content = obj.optString("content", ""),
-            createdAt = obj.optLong("created_at"),
-            updatedAt = obj.optLong("updated_at"),
-            deleted = obj.optBoolean("deleted", false),
-            authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() }
-        )
+        fun fromJson(obj: JSONObject): BulletinMessage {
+            val attachmentList = buildList {
+                val arr = obj.optJSONArray("attachments") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    add(BulletinAttachmentRef.fromJson(arr.getJSONObject(i)))
+                }
+            }
+            return BulletinMessage(
+                id = obj.getString("id"),
+                seq = obj.optLong("seq"),
+                authorLabel = obj.optString("author_label", ""),
+                content = obj.optString("content", ""),
+                createdAt = obj.optLong("created_at"),
+                updatedAt = obj.optLong("updated_at"),
+                deleted = obj.optBoolean("deleted", false),
+                authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() },
+                attachments = attachmentList
+            )
+        }
     }
 }
 

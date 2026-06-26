@@ -79,6 +79,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
+import com.kenny.localmanager.family.BulletinAttachmentKind
+import com.kenny.localmanager.family.BulletinAttachmentRef
 import com.kenny.localmanager.family.BulletinBoardOpenSession
 import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
@@ -99,7 +101,7 @@ fun FamilyNetworkScreen(
     familyNetworkHostPassword: String = "",
     timeoutMinutes: Int = 0,
     onDismiss: (() -> Unit)? = null,
-    onRequestAttachmentPick: (() -> Unit)? = null
+    onRequestAttachmentPick: ((draftText: String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -555,7 +557,7 @@ private fun BulletinBoardPage(
     onPost: (String) -> Unit,
     onUpdate: (String, String) -> Unit,
     onDelete: (String) -> Unit,
-    onRequestAttachmentPick: (() -> Unit)? = null
+    onRequestAttachmentPick: ((draftText: String) -> Unit)? = null
 ) {
     var draftMessage by remember(session.service.deviceKey) { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
@@ -728,7 +730,7 @@ private fun BulletinBoardPage(
         ) {
             if (onRequestAttachmentPick != null) {
                 IconButton(
-                    onClick = onRequestAttachmentPick,
+                    onClick = { onRequestAttachmentPick(draftMessage) },
                     modifier = Modifier.size(40.dp)
                 ) {
                     Icon(
@@ -788,11 +790,25 @@ private fun BulletinMessageRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            Text(
-                message.content,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface
-            )
+            if (message.content.isNotBlank()) {
+                Text(
+                    message.content,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            }
+            if (message.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                message.attachments.forEach { attachment ->
+                    val sizeLabel = formatAttachmentSize(attachment)
+                    val prefix = if (attachment.kind == BulletinAttachmentKind.DIRECTORY) "📁 " else "📄 "
+                    Text(
+                        "$prefix${attachment.name}$sizeLabel",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
         }
         if (canManage) {
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
@@ -810,6 +826,19 @@ private fun BulletinMessageRow(
                 )
             }
         }
+    }
+}
+
+private fun formatAttachmentSize(attachment: BulletinAttachmentRef): String {
+    val bytes = when (attachment.kind) {
+        BulletinAttachmentKind.FILE -> attachment.size
+        BulletinAttachmentKind.DIRECTORY -> attachment.totalSize
+    }
+    if (bytes <= 0) return ""
+    return when {
+        bytes < 1024 -> " ($bytes B)"
+        bytes < 1024 * 1024 -> " (${"%.1f".format(bytes / 1024.0)} KB)"
+        else -> " (${"%.1f".format(bytes / (1024.0 * 1024))} MB)"
     }
 }
 

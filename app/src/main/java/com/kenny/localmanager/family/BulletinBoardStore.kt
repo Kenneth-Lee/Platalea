@@ -12,6 +12,7 @@ import kotlin.concurrent.write
 class BulletinBoardStore(context: Context) {
     private val rootDir = File(context.filesDir, "family_boards")
     private val lock = ReentrantReadWriteLock()
+    val attachments = BulletinAttachmentStore(rootDir)
 
     init {
         ensureDefaultBoard()
@@ -66,10 +67,14 @@ class BulletinBoardStore(context: Context) {
         boardId: String,
         authorLabel: String,
         content: String,
-        authorDevice: String? = null
+        authorDevice: String? = null,
+        attachments: List<BulletinAttachmentRef> = emptyList()
     ): BulletinMessage? = lock.write {
         val trimmed = content.trim()
-        if (trimmed.isEmpty()) return@write null
+        if (trimmed.isEmpty() && attachments.isEmpty()) return@write null
+        attachments.forEach { ref ->
+            if (!this.attachments.isAttachmentReady(boardId, ref.id)) return@write null
+        }
         val meta = readMeta(boardId) ?: return@write null
         val messages = readMessages(boardId)
         val nextSeq = (messages.maxOfOrNull { it.seq } ?: 0L) + 1L
@@ -81,7 +86,8 @@ class BulletinBoardStore(context: Context) {
             content = trimmed,
             createdAt = now,
             updatedAt = now,
-            authorDevice = authorDevice?.trim()?.takeIf { it.isNotEmpty() }
+            authorDevice = authorDevice?.trim()?.takeIf { it.isNotEmpty() },
+            attachments = attachments
         )
         messages += message
         writeMessages(boardId, messages)

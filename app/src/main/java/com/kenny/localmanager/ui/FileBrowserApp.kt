@@ -3036,26 +3036,15 @@ private fun FileBrowserAppScreen(
                             familyNetworkHostPassword = familyNetworkHostPassword,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             onDismiss = { requestExitApp() },
-                            onRequestAttachmentPick = {
+                            onRequestAttachmentPick = { draftText ->
                                 startDirectoryPick(
                                     purpose = DirectoryPickPurpose.BULLETIN_ATTACHMENT,
                                     returnTab = MainTab.FAMILY_NETWORK,
                                     onComplete = { result ->
-                                        val lines = result.items.map { item ->
-                                            if (item.isDirectory) "📁 ${item.name}/" else "📄 ${item.name}"
-                                        }
-                                        val body = buildString {
-                                            append(context.getString(R.string.directory_pick_bulletin_message_header))
-                                            append('\n')
-                                            lines.forEach { append(it).append('\n') }
-                                            append(
-                                                context.getString(
-                                                    R.string.directory_pick_bulletin_message_footer,
-                                                    result.items.size
-                                                )
-                                            )
-                                        }
-                                        familyNetworkManager.postBoardMessage(body)
+                                        familyNetworkManager.uploadPickedAttachmentsAndPost(
+                                            items = result.items,
+                                            textContent = draftText
+                                        )
                                     }
                                 )
                             }

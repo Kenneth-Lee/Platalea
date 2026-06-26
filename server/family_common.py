@@ -228,6 +228,23 @@ def start_https_server(
     return https_server, thread, fingerprint
 
 
+def binary_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    data: bytes,
+    content_type: str = "application/octet-stream",
+    extra_headers: dict[str, str] | None = None,
+) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(data)))
+    handler.send_header("Accept-Ranges", "bytes")
+    for key, value in (extra_headers or {}).items():
+        handler.send_header(key, value)
+    handler.end_headers()
+    handler.wfile.write(data)
+
+
 def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
     import json
 

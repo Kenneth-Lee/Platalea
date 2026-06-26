@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import argparse
+import re
 import json
 import logging
 import socket
@@ -16,11 +16,13 @@ from typing import Any
 
 from zeroconf import Zeroconf
 
+from bulletin_attachment_store import DirectoryEntry
 from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
 from family_common import (
     FAMILY_SERVICE_TYPE,
     FAMILY_VERSION,
     PASSWORD_HEADER,
+    binary_response,
     build_service_info,
     json_response,
     load_or_create_instance_id,
@@ -160,20 +162,39 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            if method in {"PUT", "DELETE"} and auth_level not in {AuthLevel.HOST, AuthLevel.OPEN}:
+            if requires_host_auth(method, normalized_path) and auth_level not in {
+                AuthLevel.HOST,
+                AuthLevel.OPEN,
+            }:
                 json_response(
                     self,
                     HTTPStatus.FORBIDDEN,
                     {
                         "ok": False,
                         "error": "forbidden",
-                        "message": "修改或删除留言需要宿主密码",
+                        "message": "修改或删除需要宿主密码",
                     },
                 )
                 return
-            body = read_request_body(self).decode("utf-8") if method in {"POST", "PUT"} else ""
-            response = handle_board_request(self.store, method, normalized_path, body, auth_level)
-            json_response(self, response["status"], response["body"])
+            body_bytes = read_request_body(self) if method in {"POST", "PUT"} else b""
+            response = handle_board_request(
+                self.store,
+                method,
+                normalized_path,
+                body_bytes,
+                auth_level,
+                self._header_map(),
+            )
+            if response.get("binary") is not None:
+                binary_response(
+                    self,
+                    int(response["status"]),
+                    response["binary"],
+                    content_type=response.get("content_type", "application/octet-stream"),
+                    extra_headers=response.get("extra_headers"),
+                )
+            else:
+                json_response(self, response["status"], response["body"])
             return
 
         if method == "GET" and normalized_path in {"/", ""}:
@@ -202,12 +223,21 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
         LOGGER.debug("HTTP %s - %s", self.address_string(), fmt % args)
 
 
+def requires_host_auth(method: str, path: str) -> bool:
+    if method == "DELETE" and "/attachments/" in path:
+        return True
+    if method in {"PUT", "DELETE"} and "/messages" in path:
+        return True
+    return False
+
+
 def handle_board_request(
     store: BulletinBoardStore,
     method: str,
     path: str,
-    body_text: str,
+    body_bytes: bytes,
     auth_level: AuthLevel,
+    headers: dict[str, str],
 ) -> dict[str, Any]:
     if method == "GET" and path == "/boards":
         boards = store.list_boards()
@@ -253,15 +283,25 @@ def handle_board_request(
 
     if method == "POST" and path.startswith("/boards/") and path.endswith("/messages"):
         board_id = path.removeprefix("/boards/").removesuffix("/messages")
+        body_text = body_bytes.decode("utf-8")
         payload = _parse_json(body_text)
         if payload is None:
             return _bad_request("invalid_json", "请求体不是合法 JSON")
         content = str(payload.get("content", ""))
         author_label = str(payload.get("author_label", "访客"))
         author_device = str(payload.get("author_device", "")).strip() or None
-        message = store.append_message(board_id, author_label, content, author_device)
+        attachments = payload.get("attachments")
+        attachment_list = attachments if isinstance(attachments, list) else None
+        message = store.append_message(
+            board_id, author_label, content, author_device, attachment_list
+        )
         if message is None:
-            return _bad_request("invalid_message", "消息内容不能为空或留言板不存在")
+            detail = (
+                "消息无效或附件未就绪"
+                if attachment_list
+                else "消息内容不能为空或留言板不存在"
+            )
+            return _bad_request("invalid_message", detail)
         snapshot = store.snapshot(board_id)
         return {
             "status": HTTPStatus.OK,
@@ -272,12 +312,67 @@ def handle_board_request(
             },
         }
 
+    if method == "POST" and path.endswith("/attachments/init"):
+        board_id = path.removeprefix("/boards/").removesuffix("/attachments/init")
+        return _init_attachment(store, board_id, body_bytes.decode("utf-8"))
+
+    if method == "PUT" and "/attachments/" in path and "/chunks/" in path:
+        return _put_attachment_chunk(store, path, body_bytes)
+
+    if method == "POST" and path.endswith("/complete") and "/attachments/" in path:
+        match = re.match(r"/boards/([^/]+)/attachments/([^/]+)/complete", path)
+        if not match:
+            return _not_found()
+        board_id, attachment_id = match.groups()
+        return _complete_attachment(store, board_id, attachment_id)
+
+    if method == "GET" and path.endswith("/blob") and "/attachments/" in path:
+        return _get_attachment_blob(store, path, headers.get("Range") or headers.get("range"))
+
+    if (
+        method == "GET"
+        and "/attachments/" in path
+        and not path.endswith("/blob")
+        and not path.endswith("/complete")
+    ):
+        parts = path.removeprefix("/boards/").split("/attachments/", 1)
+        if len(parts) != 2:
+            return _not_found()
+        board_id, attachment_id = parts
+        meta = store.attachments.get_attachment_meta(board_id, attachment_id)
+        if meta is None:
+            return {
+                "status": HTTPStatus.NOT_FOUND,
+                "body": {
+                    "ok": False,
+                    "error": "attachment_not_found",
+                    "message": f"附件不存在：{attachment_id}",
+                },
+            }
+        return {"status": HTTPStatus.OK, "body": {"ok": True, **meta}}
+
+    if method == "DELETE" and "/attachments/" in path:
+        parts = path.removeprefix("/boards/").split("/attachments/", 1)
+        if len(parts) != 2:
+            return _not_found()
+        board_id, attachment_id = parts
+        if not store.attachments.delete_attachment(board_id, attachment_id):
+            return {
+                "status": HTTPStatus.NOT_FOUND,
+                "body": {
+                    "ok": False,
+                    "error": "attachment_not_found",
+                    "message": "附件不存在",
+                },
+            }
+        return {"status": HTTPStatus.OK, "body": {"ok": True}}
+
     if method == "PUT" and path.startswith("/boards/") and "/messages/" in path:
         parts = path.removeprefix("/boards/").split("/messages/", 1)
         if len(parts) != 2:
             return _not_found()
         board_id, message_id = parts
-        payload = _parse_json(body_text)
+        payload = _parse_json(body_bytes.decode("utf-8"))
         if payload is None:
             return _bad_request("invalid_json", "请求体不是合法 JSON")
         content = str(payload.get("content", ""))
@@ -350,6 +445,139 @@ def _not_found() -> dict[str, Any]:
     return {
         "status": HTTPStatus.NOT_FOUND,
         "body": {"ok": False, "error": "not_found", "message": "接口不存在"},
+    }
+
+
+def _init_attachment(store: BulletinBoardStore, board_id: str, body_text: str) -> dict[str, Any]:
+    payload = _parse_json(body_text)
+    if payload is None:
+        return _bad_request("invalid_json", "请求体不是合法 JSON")
+    kind = str(payload.get("kind", "file"))
+    uploader_device = str(payload.get("uploader_device", "")).strip() or None
+    if kind == "file":
+        name = str(payload.get("name", ""))
+        size = int(payload.get("size", -1))
+        if not name.strip() or size < 0:
+            return _bad_request("invalid_attachment", "单文件附件需要 name 与 size")
+        result = store.attachments.init_file_upload(
+            board_id,
+            name,
+            size,
+            sha256=str(payload.get("sha256", "")).strip() or None,
+            mime=str(payload.get("mime", "")).strip() or None,
+            uploader_device=uploader_device,
+        )
+    elif kind == "directory":
+        name = str(payload.get("name", ""))
+        entries_raw = payload.get("entries")
+        if not name.strip() or not isinstance(entries_raw, list):
+            return _bad_request("invalid_attachment", "目录附件需要 name 与 entries")
+        entries = [
+            DirectoryEntry(
+                path=str(item.get("path", "")),
+                size=int(item.get("size", -1)),
+                sha256=str(item.get("sha256", "")).strip() or None,
+            )
+            for item in entries_raw
+            if isinstance(item, dict) and str(item.get("path", "")).strip()
+        ]
+        if not entries:
+            return _bad_request("invalid_attachment", "目录附件 entries 无效")
+        result = store.attachments.init_directory_upload(board_id, name, entries, uploader_device)
+    else:
+        return _bad_request("invalid_attachment", "kind 无效")
+    if result is None:
+        return _bad_request("invalid_attachment", "初始化附件失败")
+    body: dict[str, Any] = {
+        "ok": True,
+        "attachment_id": result.attachment_id,
+        "chunk_size": result.chunk_size,
+        "status": "uploading",
+    }
+    if result.directory_files:
+        body["files"] = [
+            {"file_id": slot.file_id, "path": slot.path, "size": slot.size}
+            for slot in result.directory_files
+        ]
+    return {"status": HTTPStatus.OK, "body": body}
+
+
+def _put_attachment_chunk(
+    store: BulletinBoardStore, path: str, body_bytes: bytes
+) -> dict[str, Any]:
+    file_match = re.match(
+        r"/boards/([^/]+)/attachments/([^/]+)/files/([^/]+)/chunks/(\d+)", path
+    )
+    if file_match:
+        board_id, attachment_id, file_id, chunk_index_text = file_match.groups()
+        chunk_index = int(chunk_index_text)
+        result = store.attachments.write_directory_file_chunk(
+            board_id, attachment_id, file_id, chunk_index, body_bytes
+        )
+        if result is None:
+            return _bad_request("invalid_attachment", "目录附件分块写入失败")
+        return {
+            "status": HTTPStatus.OK,
+            "body": {"ok": True, **result},
+        }
+    file_only = re.match(r"/boards/([^/]+)/attachments/([^/]+)/chunks/(\d+)", path)
+    if not file_only:
+        return _not_found()
+    board_id, attachment_id, chunk_index_text = file_only.groups()
+    result = store.attachments.write_file_chunk(
+        board_id, attachment_id, int(chunk_index_text), body_bytes
+    )
+    if result is None:
+        return _bad_request("invalid_attachment", "附件分块写入失败")
+    return {"status": HTTPStatus.OK, "body": {"ok": True, **result}}
+
+
+def _complete_attachment(
+    store: BulletinBoardStore, board_id: str, attachment_id: str
+) -> dict[str, Any]:
+    meta = store.attachments.complete_upload(board_id, attachment_id)
+    if meta is None:
+        return _bad_request("incomplete_upload", "附件未完成上传或校验失败")
+    return {
+        "status": HTTPStatus.OK,
+        "body": {"ok": True, "attachment_id": attachment_id, "status": "ready"},
+    }
+
+
+def _get_attachment_blob(
+    store: BulletinBoardStore, path: str, range_header: str | None
+) -> dict[str, Any]:
+    dir_match = re.match(
+        r"/boards/([^/]+)/attachments/([^/]+)/files/([^/]+)/blob", path
+    )
+    if dir_match:
+        board_id, attachment_id, file_id = dir_match.groups()
+        result = store.attachments.read_directory_file_blob(
+            board_id, attachment_id, file_id, range_header
+        )
+    else:
+        file_match = re.match(r"/boards/([^/]+)/attachments/([^/]+)/blob", path)
+        if not file_match:
+            return _not_found()
+        board_id, attachment_id = file_match.groups()
+        result = store.attachments.read_file_blob(board_id, attachment_id, range_header)
+    if result is None:
+        return {
+            "status": HTTPStatus.NOT_FOUND,
+            "body": {
+                "ok": False,
+                "error": "attachment_not_found",
+                "message": "附件不存在或未就绪",
+            },
+        }
+    extra_headers: dict[str, str] = {}
+    if result.content_range:
+        extra_headers["Content-Range"] = result.content_range
+    return {
+        "status": result.status,
+        "binary": result.data,
+        "content_type": "application/octet-stream",
+        "extra_headers": extra_headers,
     }
 
 
