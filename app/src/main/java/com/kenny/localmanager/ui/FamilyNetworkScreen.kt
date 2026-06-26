@@ -29,12 +29,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +46,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -53,16 +58,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.family.FamilyChatMessage
+import com.kenny.localmanager.family.BulletinBoardOpenSession
+import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
 import com.kenny.localmanager.family.FamilyNetworkManager
+import com.kenny.localmanager.family.FamilyNetworkState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -75,13 +84,10 @@ fun FamilyNetworkScreen(
     val context = LocalContext.current
     val activity = context as? Activity
     val state by manager.state.collectAsState()
-    var selectedConversationKey by remember { mutableStateOf<String?>(null) }
-    var draftMessage by remember(selectedConversationKey) { mutableStateOf("") }
     var remainingMinutes by remember(timeoutMinutes) {
         mutableStateOf(if (timeoutMinutes > 0) timeoutMinutes else null)
     }
-    val remoteServices = state.discoveredServices.filterNot { it.isSelf }
-    val selectedService = remoteServices.firstOrNull { it.conversationKey == selectedConversationKey }
+    val boardSession = state.openBoardSession
 
     LaunchedEffect(timeoutMinutes, onDismiss) {
         remainingMinutes = if (timeoutMinutes > 0) timeoutMinutes else null
@@ -98,11 +104,11 @@ fun FamilyNetworkScreen(
     }
 
     DisposableEffect(manager, activity) {
-        selectedConversationKey = null
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         manager.start()
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            manager.closeBulletinBoard()
             manager.stop()
         }
     }
@@ -112,12 +118,16 @@ fun FamilyNetworkScreen(
             TopAppBar(
                 title = {
                     Text(
-                        if (selectedService != null) selectedService.serviceName else stringResource(R.string.family_network_title)
+                        if (boardSession != null) {
+                            boardSession.boardName
+                        } else {
+                            stringResource(R.string.family_network_title)
+                        }
                     )
                 },
-                navigationIcon = if (selectedService != null) {
+                navigationIcon = if (boardSession != null) {
                     {
-                        IconButton(onClick = { selectedConversationKey = null }) {
+                        IconButton(onClick = { manager.closeBulletinBoard() }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     }
@@ -125,11 +135,14 @@ fun FamilyNetworkScreen(
                     { }
                 },
                 actions = {
-                    IconButton(onClick = { manager.refresh() }) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = stringResource(R.string.family_network_refresh)
-                        )
+                    if (boardSession != null) {
+                        IconButton(onClick = { manager.refreshOpenBoard() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                        }
+                    } else {
+                        IconButton(onClick = { manager.refresh() }) {
+                            Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -139,7 +152,7 @@ fun FamilyNetworkScreen(
             )
         }
     ) { padding ->
-        if (selectedService == null) {
+        if (boardSession == null) {
             FamilyPeerListPane(
                 modifier = Modifier
                     .fillMaxSize()
@@ -148,26 +161,22 @@ fun FamilyNetworkScreen(
                     .navigationBarsPadding(),
                 state = state,
                 remainingMinutes = remainingMinutes,
-                remoteServices = remoteServices,
                 onRefresh = { manager.refresh() },
-                onOpenService = { service -> selectedConversationKey = service.conversationKey }
+                onOpenBoard = { service -> manager.openBulletinBoard(service) }
             )
         } else {
-            FamilyConversationPage(
+            BulletinBoardPage(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
                     .padding(16.dp)
                     .navigationBarsPadding()
                     .imePadding(),
-                service = selectedService,
-                messages = manager.getMessages(selectedService.conversationKey),
-                draftMessage = draftMessage,
-                onDraftChange = { draftMessage = it },
-                onSend = {
-                    manager.sendMessage(selectedService, draftMessage)
-                    draftMessage = ""
-                }
+                session = boardSession,
+                onRefresh = { manager.refreshOpenBoard() },
+                onPost = { manager.postBoardMessage(it) },
+                onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
+                onDelete = { manager.deleteBoardMessage(it) }
             )
         }
     }
@@ -176,11 +185,10 @@ fun FamilyNetworkScreen(
 @Composable
 private fun FamilyPeerListPane(
     modifier: Modifier,
-    state: com.kenny.localmanager.family.FamilyNetworkState,
+    state: FamilyNetworkState,
     remainingMinutes: Int?,
-    remoteServices: List<FamilyDiscoveredService>,
     onRefresh: () -> Unit,
-    onOpenService: (FamilyDiscoveredService) -> Unit
+    onOpenBoard: (FamilyDiscoveredService) -> Unit
 ) {
     LazyColumn(
         modifier = modifier,
@@ -216,6 +224,7 @@ private fun FamilyPeerListPane(
                             style = MaterialTheme.typography.labelLarge
                         )
                     }
+                    Text(stringResource(R.string.family_network_bulletin_hint))
                     Text(stringResource(R.string.family_network_service_type, state.serviceType))
                     if (state.serviceName.isNotBlank()) {
                         Text(stringResource(R.string.family_network_service_name, state.serviceName))
@@ -286,12 +295,12 @@ private fun FamilyPeerListPane(
 
         item {
             Text(
-                stringResource(R.string.family_network_discovered_services_count, remoteServices.size),
+                stringResource(R.string.family_network_discovered_services_count, state.discoveredServices.size),
                 style = MaterialTheme.typography.titleMedium
             )
         }
 
-        if (remoteServices.isEmpty()) {
+        if (state.discoveredServices.isEmpty()) {
             item {
                 Box(
                     modifier = Modifier
@@ -306,10 +315,10 @@ private fun FamilyPeerListPane(
                 }
             }
         } else {
-            items(remoteServices, key = { it.conversationKey }) { service ->
+            items(state.discoveredServices, key = { it.deviceKey }) { service ->
                 FamilyNetworkServiceCard(
                     service = service,
-                    onClick = { onOpenService(service) }
+                    onClick = { onOpenBoard(service) }
                 )
             }
         }
@@ -321,18 +330,75 @@ private fun FamilyPeerListPane(
 }
 
 @Composable
-private fun FamilyConversationPage(
+private fun BulletinBoardPage(
     modifier: Modifier,
-    service: FamilyDiscoveredService,
-    messages: List<FamilyChatMessage>,
-    draftMessage: String,
-    onDraftChange: (String) -> Unit,
-    onSend: () -> Unit
+    session: BulletinBoardOpenSession,
+    onRefresh: () -> Unit,
+    onPost: (String) -> Unit,
+    onUpdate: (String, String) -> Unit,
+    onDelete: (String) -> Unit
 ) {
-    Column(
-        modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    var draftMessage by remember(session.service.deviceKey) { mutableStateOf("") }
+    var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
+    var editingText by remember { mutableStateOf("") }
+    var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
+
+    LaunchedEffect(session.service.deviceKey, session.boardId) {
+        while (true) {
+            delay(3000)
+            onRefresh()
+        }
+    }
+
+    if (editingMessage != null) {
+        AlertDialog(
+            onDismissRequest = { editingMessage = null },
+            title = { Text(stringResource(R.string.family_board_edit_title)) },
+            text = {
+                OutlinedTextField(
+                    value = editingText,
+                    onValueChange = { editingText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 2,
+                    maxLines = 6
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val target = editingMessage ?: return@Button
+                    onUpdate(target.id, editingText)
+                    editingMessage = null
+                }) { Text(stringResource(R.string.common_save)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMessage = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    if (deletingMessage != null) {
+        AlertDialog(
+            onDismissRequest = { deletingMessage = null },
+            title = { Text(stringResource(R.string.family_board_delete_title)) },
+            text = { Text(stringResource(R.string.family_board_delete_confirm)) },
+            confirmButton = {
+                Button(onClick = {
+                    val target = deletingMessage ?: return@Button
+                    onDelete(target.id)
+                    deletingMessage = null
+                }) { Text(stringResource(R.string.common_delete)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingMessage = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
@@ -342,31 +408,149 @@ private fun FamilyConversationPage(
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    stringResource(R.string.family_network_target_peer),
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
+                    session.service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
                     style = MaterialTheme.typography.titleSmall
                 )
                 Text(
-                    stringResource(R.string.family_network_service_host_port, service.host.ifBlank { "?" }, service.port),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace
+                    stringResource(R.string.family_network_service_host_port, session.service.host, session.service.port),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    stringResource(R.string.family_network_service_type_line, service.serviceType),
+                    if (session.isHost) {
+                        stringResource(R.string.family_board_role_host)
+                    } else {
+                        stringResource(R.string.family_board_role_guest)
+                    },
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Text(
+                    stringResource(R.string.family_board_revision, session.revision),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                session.lastError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        if (session.loading && session.messages.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        } else if (session.messages.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    stringResource(R.string.family_board_no_messages),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        } else {
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(session.messages, key = { it.id }) { message ->
+                    BulletinMessageCard(
+                        message = message,
+                        isHost = session.isHost,
+                        onEdit = {
+                            editingMessage = message
+                            editingText = message.content
+                        },
+                        onDelete = { deletingMessage = message }
+                    )
+                }
+            }
         }
-        FamilyConversationPane(
-            modifier = Modifier.weight(1f),
-            messages = messages,
-            draftMessage = draftMessage,
-            onDraftChange = onDraftChange,
-            onSend = onSend
-        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                OutlinedTextField(
+                    value = draftMessage,
+                    onValueChange = { draftMessage = it },
+                    modifier = Modifier.weight(1f),
+                    label = { Text(stringResource(R.string.family_board_message_label)) },
+                    placeholder = { Text(stringResource(R.string.family_board_message_placeholder)) },
+                    minLines = 2,
+                    maxLines = 5
+                )
+                Button(
+                    onClick = {
+                        onPost(draftMessage)
+                        draftMessage = ""
+                    },
+                    enabled = draftMessage.trim().isNotEmpty(),
+                    modifier = Modifier.align(Alignment.CenterVertically)
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BulletinMessageCard(
+    message: BulletinMessage,
+    isHost: Boolean,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val timeLabel = remember(message.updatedAt) {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(message.updatedAt))
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(message.authorLabel, style = MaterialTheme.typography.labelMedium)
+                    Text(timeLabel, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (isHost) {
+                    Row {
+                        IconButton(onClick = onEdit) {
+                            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.family_board_edit_title))
+                        }
+                        IconButton(onClick = onDelete) {
+                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.common_delete))
+                        }
+                    }
+                }
+            }
+            Text(message.content, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 
@@ -492,9 +676,9 @@ private fun FamilyNetworkServiceCard(
                 Spacer(Modifier.width(8.dp))
                 Text(
                     if (service.isSelf) {
-                        stringResource(R.string.family_network_self_badge)
+                        stringResource(R.string.family_network_open_self_board)
                     } else {
-                        stringResource(R.string.family_network_open_conversation)
+                        stringResource(R.string.family_network_open_board)
                     },
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.labelMedium
@@ -504,146 +688,6 @@ private fun FamilyNetworkServiceCard(
                 stringResource(R.string.family_network_service_type_line, service.serviceType),
                 color = secondaryTextColor
             )
-            if (service.attributes.isNotEmpty()) {
-                Text(
-                    stringResource(
-                        R.string.family_network_service_attr_line,
-                        service.attributes.entries.joinToString(", ") { (key, value) -> "$key=$value" }
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = secondaryTextColor
-                )
-            }
-            if (!service.isSelf) {
-                Text(
-                    stringResource(R.string.family_network_service_card_hint),
-                    color = secondaryTextColor,
-                    style = MaterialTheme.typography.bodySmall
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FamilyConversationPane(
-    modifier: Modifier,
-    messages: List<FamilyChatMessage>,
-    draftMessage: String,
-    onDraftChange: (String) -> Unit,
-    onSend: () -> Unit
-) {
-    val latestOutgoingFailure = messages.lastOrNull { !it.incoming && it.deliveryError != null }?.deliveryError
-    Column(modifier = modifier) {
-        Text(
-            stringResource(R.string.family_network_chat_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        latestOutgoingFailure?.let { error ->
-            Spacer(Modifier.height(8.dp))
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)
-            ) {
-                Text(
-                    stringResource(R.string.family_network_send_failed, error),
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-
-        if (messages.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    stringResource(R.string.family_network_no_messages),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(messages, key = { it.id }) { message ->
-                    FamilyChatMessageBubble(message)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                OutlinedTextField(
-                    value = draftMessage,
-                    onValueChange = onDraftChange,
-                    modifier = Modifier.weight(1f),
-                    label = { Text(stringResource(R.string.family_network_message_label)) },
-                    placeholder = { Text(stringResource(R.string.family_network_message_placeholder)) },
-                    minLines = 2,
-                    maxLines = 5
-                )
-                Button(
-                    onClick = onSend,
-                    enabled = draftMessage.trim().isNotEmpty(),
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = null)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FamilyChatMessageBubble(message: FamilyChatMessage) {
-    val containerColor = when {
-        message.deliveryError != null -> MaterialTheme.colorScheme.errorContainer
-        message.incoming -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        else -> MaterialTheme.colorScheme.secondaryContainer
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = containerColor)
-    ) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text(
-                if (message.incoming) {
-                    stringResource(R.string.family_network_incoming_from, message.senderName)
-                } else {
-                    stringResource(R.string.family_network_outgoing_to, message.senderName)
-                },
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(message.content, style = MaterialTheme.typography.bodyMedium)
-            message.deliveryError?.let { error ->
-                Text(
-                    stringResource(R.string.family_network_send_failed, error),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
         }
     }
 }

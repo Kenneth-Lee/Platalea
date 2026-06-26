@@ -30,11 +30,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 
 private const val TAG = "FamilyNetworkManager"
 private const val FAMILY_SERVICE_TYPE = "_localmanager._tcp."
-private const val FAMILY_VERSION = "0.1"
+private const val FAMILY_VERSION = "0.2"
 private const val FAMILY_PREFERRED_PORT = 8765
 private const val FAMILY_LOG_LIMIT = 200
 
@@ -46,21 +47,10 @@ data class FamilyDiscoveredService(
     val attributes: Map<String, String>,
     val isSelf: Boolean
 ) {
-    val conversationKey: String
+    val deviceKey: String
         get() = attributes["instance_id"]?.takeIf { it.isNotBlank() }
             ?: "$serviceName@$host:$port"
 }
-
-data class FamilyChatMessage(
-    val id: String,
-    val conversationKey: String,
-    val senderName: String,
-    val senderInstanceId: String?,
-    val content: String,
-    val timestamp: Long,
-    val incoming: Boolean,
-    val deliveryError: String? = null
-)
 
 data class FamilyNetworkState(
     val isRunning: Boolean = false,
@@ -71,7 +61,7 @@ data class FamilyNetworkState(
     val port: Int = 0,
     val localIp: String? = null,
     val discoveredServices: List<FamilyDiscoveredService> = emptyList(),
-    val messagesByConversation: Map<String, List<FamilyChatMessage>> = emptyMap(),
+    val openBoardSession: BulletinBoardOpenSession? = null,
     val logLines: List<String> = emptyList(),
     val lastError: String? = null
 )
@@ -81,6 +71,8 @@ class FamilyNetworkManager(context: Context) {
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val tlsManager = FamilyTlsManager(appContext)
+    private val boardStore = BulletinBoardStore(appContext)
+    private val boardHttpHandler = BulletinBoardHttpHandler(boardStore)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val logBuffer = CopyOnWriteArrayList<String>()
     private val _state = MutableStateFlow(FamilyNetworkState())
@@ -119,8 +111,8 @@ class FamilyNetworkManager(context: Context) {
                 preferredPort = FAMILY_PREFERRED_PORT,
                 sslContext = localIdentity.sslContext,
                 log = { appendLog(it) },
-                handleMessage = { payloadText, remoteAddress ->
-                    handleIncomingMessage(payloadText, remoteAddress)
+                handleRequest = { method, path, body, remoteAddress ->
+                    handleHttpRequest(method, path, body, remoteAddress)
                 }
             )
             server.start()
@@ -146,7 +138,8 @@ class FamilyNetworkManager(context: Context) {
                 instanceId = instanceId,
                 tlsFingerprint = localIdentity.fingerprintSha256
             )
-            startDiscovery(clearDiscovered = true)
+            publishLocalSelfService(localIp, server.port, instanceId, localIdentity.fingerprintSha256)
+            startDiscovery(clearDiscovered = false)
         } catch (e: Throwable) {
             appendError("启动家庭网络服务失败：${e.message ?: e.javaClass.simpleName}")
             Log.e(TAG, "start failed", e)
@@ -164,61 +157,147 @@ class FamilyNetworkManager(context: Context) {
         startDiscovery(clearDiscovered = true)
     }
 
-    fun sendMessage(service: FamilyDiscoveredService, message: String) {
-        val trimmed = message.trim()
-        if (trimmed.isEmpty()) {
-            appendError("发送消息失败：消息内容不能为空。")
-            return
-        }
-        val senderName = _state.value.serviceName.ifBlank { buildServiceName() }
-        val senderInstanceId = currentInstanceId
-        val conversationKey = service.conversationKey
-        val outgoingMessageId = UUID.randomUUID().toString()
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                postMessage(
+    fun openBulletinBoard(
+        service: FamilyDiscoveredService,
+        boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID
+    ) {
+        val isHost = service.isSelf
+        _state.update {
+            it.copy(
+                openBoardSession = BulletinBoardOpenSession(
                     service = service,
-                    senderName = senderName,
-                    senderInstanceId = senderInstanceId,
-                    content = trimmed,
-                    messageId = outgoingMessageId
+                    boardId = boardId,
+                    boardName = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
+                    isHost = isHost,
+                    loading = true
                 )
+            )
+        }
+        scope.launch { refreshOpenBoard() }
+    }
+
+    fun closeBulletinBoard() {
+        _state.update { it.copy(openBoardSession = null) }
+    }
+
+    fun refreshOpenBoard() {
+        val session = _state.value.openBoardSession ?: return
+        scope.launch {
+            _state.update { current ->
+                current.copy(openBoardSession = current.openBoardSession?.copy(loading = true, lastError = null))
             }
-            val timestamp = System.currentTimeMillis()
-            result.onSuccess {
-                appendConversationMessage(
-                    FamilyChatMessage(
-                        id = outgoingMessageId,
-                        conversationKey = conversationKey,
-                        senderName = senderName,
-                        senderInstanceId = senderInstanceId,
-                        content = trimmed,
-                        timestamp = timestamp,
-                        incoming = false
+            val result = withContext(Dispatchers.IO) {
+                fetchBoardSnapshot(session.service, session.boardId)
+            }
+            result.onSuccess { snapshot ->
+                _state.update { current ->
+                    val open = current.openBoardSession ?: return@update current
+                    current.copy(
+                        openBoardSession = open.copy(
+                            boardName = snapshot.boardName,
+                            revision = snapshot.revision,
+                            messages = snapshot.messages,
+                            loading = false,
+                            lastError = null
+                        )
                     )
-                )
-                appendLog("消息已收到对端回执：${service.serviceName} ${service.host}:${service.port} message_id=$outgoingMessageId")
+                }
             }.onFailure { error ->
                 val detail = error.message ?: error.javaClass.simpleName
-                appendConversationMessage(
-                    FamilyChatMessage(
-                        id = outgoingMessageId,
-                        conversationKey = conversationKey,
-                        senderName = senderName,
-                        senderInstanceId = senderInstanceId,
-                        content = trimmed,
-                        timestamp = timestamp,
-                        incoming = false,
-                        deliveryError = detail
+                _state.update { current ->
+                    val open = current.openBoardSession ?: return@update current
+                    current.copy(
+                        openBoardSession = open.copy(loading = false, lastError = detail)
                     )
-                )
-                appendError("发送消息到 ${service.serviceName} 失败：$detail")
+                }
+                appendError("同步留言板失败：$detail")
             }
         }
     }
 
-    fun getMessages(conversationKey: String): List<FamilyChatMessage> {
-        return _state.value.messagesByConversation[conversationKey].orEmpty()
+    fun postBoardMessage(content: String) {
+        val session = _state.value.openBoardSession ?: return
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) {
+            appendError("发送消息失败：消息内容不能为空。")
+            return
+        }
+        val authorLabel = if (session.isHost) {
+            _state.value.serviceName.ifBlank { buildServiceName() }
+        } else {
+            "访客"
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                boardApiRequest(
+                    service = session.service,
+                    method = "POST",
+                    path = "/boards/${session.boardId}/messages",
+                    body = JSONObject().apply {
+                        put("content", trimmed)
+                        put("author_label", authorLabel)
+                    }.toString()
+                )
+            }
+            result.onSuccess {
+                appendLog("留言已发布到 ${session.service.serviceName}/${session.boardId}")
+                refreshOpenBoard()
+            }.onFailure { error ->
+                appendError("发布留言失败：${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
+    fun updateBoardMessage(messageId: String, content: String) {
+        val session = _state.value.openBoardSession ?: return
+        if (!session.isHost) {
+            appendError("只有宿主可以修改留言。")
+            return
+        }
+        val trimmed = content.trim()
+        if (trimmed.isEmpty()) {
+            appendError("修改留言失败：内容不能为空。")
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                boardApiRequest(
+                    service = session.service,
+                    method = "PUT",
+                    path = "/boards/${session.boardId}/messages/$messageId",
+                    body = JSONObject().apply { put("content", trimmed) }.toString()
+                )
+            }
+            result.onSuccess {
+                appendLog("留言已更新：$messageId")
+                refreshOpenBoard()
+            }.onFailure { error ->
+                appendError("修改留言失败：${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
+    fun deleteBoardMessage(messageId: String) {
+        val session = _state.value.openBoardSession ?: return
+        if (!session.isHost) {
+            appendError("只有宿主可以删除留言。")
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                boardApiRequest(
+                    service = session.service,
+                    method = "DELETE",
+                    path = "/boards/${session.boardId}/messages/$messageId"
+                )
+            }
+            result.onSuccess {
+                appendLog("留言已删除：$messageId")
+                refreshOpenBoard()
+            }.onFailure { error ->
+                appendError("删除留言失败：${error.message ?: error.javaClass.simpleName}")
+            }
+        }
     }
 
     fun stop() {
@@ -240,7 +319,7 @@ class FamilyNetworkManager(context: Context) {
                 isDiscovering = false,
                 serviceName = "",
                 port = 0,
-                messagesByConversation = emptyMap()
+                openBoardSession = null
             )
         }
     }
@@ -280,6 +359,12 @@ class FamilyNetworkManager(context: Context) {
                         lastError = null
                     )
                 }
+                publishLocalSelfService(
+                    host = _state.value.localIp,
+                    port = info.port.takeIf { value -> value > 0 } ?: port,
+                    instanceId = instanceId,
+                    tlsFingerprint = tlsFingerprint
+                )
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
@@ -378,19 +463,143 @@ class FamilyNetworkManager(context: Context) {
                     attributes = attributes,
                     isSelf = instanceId != null && attributes["instance_id"] == instanceId
                 )
-                appendLog("解析到服务：${entry.serviceName} -> ${entry.host}:${entry.port}")
-                _state.update { current ->
-                    val updated = current.discoveredServices
-                        .filterNot { it.serviceName == entry.serviceName }
-                        .plus(entry)
-                        .sortedWith(
-                            compareByDescending<FamilyDiscoveredService> { it.isSelf }
-                                .thenBy { it.serviceName.lowercase() }
-                        )
-                    current.copy(discoveredServices = updated, lastError = null)
-                }
+                appendLog("解析到服务：${entry.serviceName} -> ${entry.host}:${entry.port}${if (entry.isSelf) "（本机）" else ""}")
+                upsertDiscoveredService(entry)
             }
         })
+    }
+
+    private fun upsertDiscoveredService(entry: FamilyDiscoveredService) {
+        _state.update { current ->
+            val updated = current.discoveredServices
+                .filterNot { it.deviceKey == entry.deviceKey && it.isSelf == entry.isSelf }
+                .plus(entry)
+                .sortedWith(
+                    compareByDescending<FamilyDiscoveredService> { it.isSelf }
+                        .thenBy { it.serviceName.lowercase() }
+                )
+            current.copy(discoveredServices = updated, lastError = null)
+        }
+    }
+
+    private fun publishLocalSelfService(
+        host: String?,
+        port: Int,
+        instanceId: String,
+        tlsFingerprint: String
+    ) {
+        if (port <= 0) return
+        val serviceName = _state.value.serviceName.ifBlank { buildServiceName() }
+        val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1"
+        upsertDiscoveredService(
+            FamilyDiscoveredService(
+                serviceName = serviceName,
+                serviceType = FAMILY_SERVICE_TYPE,
+                host = resolvedHost,
+                port = port,
+                attributes = mapOf(
+                    "app" to "LocalManager",
+                    "proto" to FAMILY_TLS_PROTOCOL,
+                    "version" to FAMILY_VERSION,
+                    "instance_id" to instanceId,
+                    "platform" to "android",
+                    "tls" to "1",
+                    FAMILY_TLS_FINGERPRINT_ATTR to tlsFingerprint
+                ),
+                isSelf = true
+            )
+        )
+        appendLog("本机留言板服务已加入发现列表：$resolvedHost:$port")
+    }
+
+    private fun handleHttpRequest(method: String, path: String, body: String, remoteAddress: String): FamilyHttpResponse {
+        if (path.startsWith("/boards")) {
+            return boardHttpHandler.handle(method, path, body)
+        }
+        if (method == "GET" && (path == "/" || path.isEmpty())) {
+            val boards = boardStore.listBoards()
+            return FamilyHttpResponse(
+                200,
+                JSONObject().apply {
+                    put("service", "LocalManager Bulletin Board")
+                    put("version", FAMILY_VERSION)
+                    put("board_count", boards.size)
+                }.toString()
+            )
+        }
+        return FamilyHttpResponse(404, JSONObject().apply {
+            put("ok", false)
+            put("error", "not_found")
+        }.toString())
+    }
+
+    private fun fetchBoardSnapshot(service: FamilyDiscoveredService, boardId: String): Result<BulletinBoardSnapshot> {
+        return boardApiRequest(service, "GET", "/boards/$boardId/messages").mapCatching { text ->
+            val json = JSONObject(text)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", "读取留言板失败"))
+            }
+            val messages = buildList {
+                val arr = json.optJSONArray("messages") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    add(BulletinMessage.fromJson(arr.getJSONObject(i)))
+                }
+            }
+            BulletinBoardSnapshot(
+                boardId = json.optString("board_id", boardId),
+                boardName = json.optString("board_name", boardId),
+                revision = json.optLong("revision"),
+                messages = messages
+            )
+        }
+    }
+
+    private fun boardApiRequest(
+        service: FamilyDiscoveredService,
+        method: String,
+        path: String,
+        body: String? = null
+    ): Result<String> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = method
+                connectTimeout = 8000
+                readTimeout = 8000
+                setRequestProperty("Accept", "application/json")
+                if (body != null) {
+                    doOutput = true
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+            }
+            try {
+                if (body != null) {
+                    connection.outputStream.use { output ->
+                        output.write(body.toByteArray(StandardCharsets.UTF_8))
+                    }
+                }
+                val status = connection.responseCode
+                val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+                val responseText = stream?.use { readResponseText(it) }.orEmpty()
+                if (status !in 200..299) {
+                    val detail = runCatching { JSONObject(responseText).optString("message") }.getOrNull()
+                        ?.takeIf { it.isNotBlank() }
+                        ?: responseText.ifBlank { "HTTP $status" }
+                    throw IllegalStateException(detail)
+                }
+                responseText
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 
     private fun stopDiscoveryInternal() {
@@ -405,43 +614,6 @@ class FamilyNetworkManager(context: Context) {
         } finally {
             discoveryListener = null
             _state.update { it.copy(isDiscovering = false) }
-        }
-    }
-
-    private fun postMessage(
-        service: FamilyDiscoveredService,
-        senderName: String,
-        senderInstanceId: String?,
-        content: String,
-        messageId: String
-    ): Result<Unit> {
-        return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS，当前仅允许加密通道。")
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹，无法验证证书身份。")
-            val body = JSONObject().apply {
-                put("message_id", messageId)
-                put("sender_name", senderName)
-                put("sender_instance_id", senderInstanceId ?: "")
-                put("sender_platform", "android")
-                put("content", content)
-                put("timestamp", System.currentTimeMillis())
-            }.toString()
-            val endpoint = URL("https://${service.host}:${service.port}/message")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = "POST"
-                connectTimeout = 5000
-                readTimeout = 5000
-                doOutput = true
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                setRequestProperty("Accept", "application/json")
-            }
-            connection.useJsonRequest(body, expectedAckMessageId = messageId)
         }
     }
 
@@ -520,108 +692,6 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    private fun appendConversationMessage(message: FamilyChatMessage) {
-        _state.update { current ->
-            val updatedConversation = current.messagesByConversation[message.conversationKey]
-                .orEmpty()
-                .plus(message)
-                .sortedBy { it.timestamp }
-                .takeLast(100)
-            current.copy(
-                messagesByConversation = current.messagesByConversation +
-                    (message.conversationKey to updatedConversation)
-            )
-        }
-    }
-
-    private fun handleIncomingMessage(payloadText: String, remoteAddress: String): HttpResponse {
-        val payload = try {
-            JSONObject(payloadText)
-        } catch (e: Throwable) {
-            val detail = e.message ?: e.javaClass.simpleName
-            appendError("收到非法消息 JSON：$detail")
-            return HttpResponse(400, jsonError("invalid_json", detail))
-        }
-        val messageId = payload.optString("message_id").trim().ifEmpty { UUID.randomUUID().toString() }
-        val senderName = payload.optString("sender_name").trim().ifEmpty { remoteAddress }
-        val senderInstanceId = payload.optString("sender_instance_id").trim().ifEmpty { null }
-        val content = payload.optString("content").trim()
-        if (content.isEmpty()) {
-            appendError("收到空消息，来源=$senderName")
-            return HttpResponse(400, jsonError("empty_content", "消息内容不能为空"))
-        }
-        val conversationKey = senderInstanceId ?: senderName
-        val message = FamilyChatMessage(
-            id = messageId,
-            conversationKey = conversationKey,
-            senderName = senderName,
-            senderInstanceId = senderInstanceId,
-            content = content,
-            timestamp = payload.optLong("timestamp").takeIf { it > 0L } ?: System.currentTimeMillis(),
-            incoming = true
-        )
-        appendConversationMessage(message)
-        appendLog("收到消息：$senderName -> $content")
-        return HttpResponse(
-            200,
-            JSONObject().apply {
-                put("ok", true)
-                put("acknowledged", true)
-                put("message_id", messageId)
-                put("conversation_key", conversationKey)
-            }.toString()
-        )
-    }
-
-    private fun jsonError(code: String, message: String): String {
-        return JSONObject().apply {
-            put("ok", false)
-            put("error", code)
-            put("message", message)
-        }.toString()
-    }
-
-    private fun HttpURLConnection.useJsonRequest(body: String, expectedAckMessageId: String) {
-        try {
-            outputStream.use { output ->
-                output.write(body.toByteArray(StandardCharsets.UTF_8))
-            }
-            val status = responseCode
-            if (status !in 200..299) {
-                val errorText = readResponseText(errorStream)
-                throw IllegalStateException(
-                    "HTTP $status${if (errorText.isNotBlank()) ": $errorText" else ""}"
-                )
-            }
-            val responseText = inputStream?.use { stream ->
-                readResponseText(stream)
-            }.orEmpty()
-            val responseJson = try {
-                JSONObject(responseText)
-            } catch (error: Throwable) {
-                throw IllegalStateException(
-                    "对端返回了 2xx，但回执不是合法 JSON：${error.message ?: error.javaClass.simpleName}"
-                )
-            }
-            if (!responseJson.optBoolean("ok", false)) {
-                throw IllegalStateException(
-                    "对端返回了失败回执：${responseJson.optString("message").ifBlank { responseText.ifBlank { "unknown_error" } }}"
-                )
-            }
-            if (!responseJson.optBoolean("acknowledged", false)) {
-                throw IllegalStateException("对端未明确确认已接收消息。")
-            }
-            val ackMessageId = responseJson.optString("message_id").trim()
-            if (ackMessageId != expectedAckMessageId) {
-                throw IllegalStateException(
-                    "对端回执 message_id 不匹配，expected=$expectedAckMessageId actual=${ackMessageId.ifBlank { "<empty>" }}"
-                )
-            }
-        } finally {
-            disconnect()
-        }
-    }
-
     private fun readResponseText(stream: java.io.InputStream?): String {
         if (stream == null) return ""
         return BufferedInputStream(stream).use { input ->
@@ -637,17 +707,11 @@ class FamilyNetworkManager(context: Context) {
     }
 }
 
-private data class HttpResponse(
-    val statusCode: Int,
-    val body: String,
-    val contentType: String = "application/json; charset=utf-8"
-)
-
 private class EmbeddedHttpServer(
     preferredPort: Int,
     sslContext: SSLContext,
     private val log: (String) -> Unit,
-    private val handleMessage: (String, String) -> HttpResponse
+    private val handleRequest: (String, String, String, String) -> FamilyHttpResponse
 ) {
     private val running = AtomicBoolean(false)
     private val serverSocket: SSLServerSocket = (sslContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
@@ -719,18 +783,20 @@ private class EmbeddedHttpServer(
                 }
             }
             val response = when {
-                method == "POST" && path == "/message" -> {
-                    val bodyBytes = readBodyBytes(input, contentLength.coerceAtLeast(0))
-                    handleMessage(
+                method == "POST" || method == "GET" || method == "PUT" || method == "DELETE" -> {
+                    val bodyBytes = if (method == "POST" || method == "PUT") {
+                        readBodyBytes(input, contentLength.coerceAtLeast(0))
+                    } else {
+                        ByteArray(0)
+                    }
+                    handleRequest(
+                        method,
+                        path,
                         bodyBytes.toString(StandardCharsets.UTF_8),
                         client.inetAddress?.hostAddress ?: ""
                     )
                 }
-                method == "GET" -> HttpResponse(
-                    200,
-                    "{\"service\":\"LocalManager Android mDNS prototype\",\"request\":${jsonString(requestLine)},\"port\":$port}"
-                )
-                else -> HttpResponse(404, "{\"ok\":false,\"error\":\"not_found\"}")
+                else -> FamilyHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}")
             }
             val responseBody = response.body.toByteArray(StandardCharsets.UTF_8)
             val responseHead = buildString {
@@ -787,24 +853,8 @@ private class EmbeddedHttpServer(
             200 -> "OK"
             400 -> "Bad Request"
             404 -> "Not Found"
+            405 -> "Method Not Allowed"
             else -> "OK"
-        }
-    }
-
-    private fun jsonString(value: String): String {
-        return buildString {
-            append('"')
-            value.forEach { ch ->
-                when (ch) {
-                    '\\' -> append("\\\\")
-                    '"' -> append("\\\"")
-                    '\n' -> append("\\n")
-                    '\r' -> append("\\r")
-                    '\t' -> append("\\t")
-                    else -> append(ch)
-                }
-            }
-            append('"')
         }
     }
 }
