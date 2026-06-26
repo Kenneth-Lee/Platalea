@@ -6,13 +6,21 @@ import org.json.JSONObject
 class BulletinBoardHttpHandler(
     private val store: BulletinBoardStore
 ) {
-    fun handle(method: String, path: String, body: String): FamilyHttpResponse {
+    fun handle(
+        method: String,
+        path: String,
+        body: String,
+        authLevel: FamilyNetworkAuthLevel
+    ): FamilyHttpResponse {
         val normalizedPath = path.substringBefore('?').trimEnd('/').ifEmpty { "/" }
+        if (method in setOf("PUT", "DELETE") && !authLevel.canManageBoard) {
+            return forbidden("修改或删除留言需要宿主密码")
+        }
         return when {
             method == "GET" && normalizedPath == "/boards" -> listBoards()
             method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
-                getMessages(boardId)
+                getMessages(boardId, authLevel)
             }
             method == "POST" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
@@ -52,12 +60,12 @@ class BulletinBoardHttpHandler(
         return FamilyHttpResponse(200, body.toString())
     }
 
-    private fun getMessages(boardId: String): FamilyHttpResponse {
+    private fun getMessages(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
         val snapshot = store.snapshot(boardId)
             ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
         return FamilyHttpResponse(
             200,
-            snapshot.copy(canManage = false).toJson().toString()
+            snapshot.copy(canManage = authLevel.canManageBoard).toJson().toString()
         )
     }
 
@@ -115,6 +123,9 @@ class BulletinBoardHttpHandler(
 
     private fun badRequest(code: String, message: String): FamilyHttpResponse =
         FamilyHttpResponse(400, jsonError(code, message))
+
+    private fun forbidden(message: String): FamilyHttpResponse =
+        FamilyHttpResponse(403, jsonError("forbidden", message))
 
     private fun notFound(): FamilyHttpResponse =
         FamilyHttpResponse(404, jsonError("not_found", "接口不存在"))

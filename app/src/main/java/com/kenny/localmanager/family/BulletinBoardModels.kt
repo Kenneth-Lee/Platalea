@@ -7,6 +7,15 @@ object FamilyNetworkAuth {
     const val PASSWORD_HEADER = "X-Network-Service-Password"
 }
 
+enum class FamilyNetworkAuthLevel {
+    OPEN,
+    GUEST,
+    HOST;
+
+    val canManageBoard: Boolean
+        get() = this == OPEN || this == HOST
+}
+
 object BulletinBoardDefaults {
     const val DEFAULT_BOARD_ID = "default"
     const val DEFAULT_BOARD_NAME = "默认留言板"

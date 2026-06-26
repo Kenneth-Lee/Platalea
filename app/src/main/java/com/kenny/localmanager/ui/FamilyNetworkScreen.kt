@@ -95,6 +95,7 @@ fun FamilyNetworkScreen(
     networkPassword: String?,
     localServiceEnabled: Boolean,
     familyNetworkUserName: String = "",
+    familyNetworkHostPassword: String = "",
     timeoutMinutes: Int = 0,
     onDismiss: (() -> Unit)? = null
 ) {
@@ -113,8 +114,13 @@ fun FamilyNetworkScreen(
     var boardPasswordInProgress by remember { mutableStateOf(false) }
     val boardAccessCache = remember { mutableStateMapOf<String, String?>() }
 
-    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName) {
-        manager.configure(networkPassword, localServiceEnabled, familyNetworkUserName.ifBlank { null })
+    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
+        manager.configure(
+            networkPassword,
+            localServiceEnabled,
+            familyNetworkUserName.ifBlank { null },
+            familyNetworkHostPassword.ifBlank { null }
+        )
     }
 
     BackHandler(enabled = boardSession != null) {
@@ -135,8 +141,13 @@ fun FamilyNetworkScreen(
         }
     }
 
-    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName) {
-        manager.configure(networkPassword, localServiceEnabled, familyNetworkUserName.ifBlank { null })
+    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
+        manager.configure(
+            networkPassword,
+            localServiceEnabled,
+            familyNetworkUserName.ifBlank { null },
+            familyNetworkHostPassword.ifBlank { null }
+        )
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         manager.start()
         onDispose {
@@ -764,15 +775,6 @@ private fun BulletinMessageRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
-            message.authorDevice?.takeIf { it.isNotBlank() && it != message.authorLabel }?.let { device ->
-                Text(
-                    device,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
             Text(
                 message.content,
                 style = MaterialTheme.typography.bodySmall,

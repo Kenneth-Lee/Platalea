@@ -94,15 +94,18 @@ class FamilyNetworkManager(context: Context) {
     private var currentInstanceId: String? = null
     private var started = false
     private var networkPassword: String? = null
+    private var networkHostPassword: String? = null
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
 
     fun configure(
         networkPassword: String?,
         localServiceEnabled: Boolean,
-        familyNetworkUserName: String? = null
+        familyNetworkUserName: String? = null,
+        networkHostPassword: String? = null
     ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
+        this.networkHostPassword = networkHostPassword?.trim()?.ifEmpty { null }
         this.familyNetworkUserName = familyNetworkUserName?.trim()?.ifEmpty { null }
         val enabledChanged = this.localServiceEnabled != localServiceEnabled
         this.localServiceEnabled = localServiceEnabled
@@ -487,7 +490,7 @@ class FamilyNetworkManager(context: Context) {
             setAttribute("platform", "android")
             setAttribute("tls", "1")
             setAttribute(FAMILY_TLS_FINGERPRINT_ATTR, tlsFingerprint)
-            if (!networkPassword.isNullOrBlank()) {
+            if (!networkPassword.isNullOrBlank() || !networkHostPassword.isNullOrBlank()) {
                 setAttribute("auth", "1")
             }
         }
@@ -688,8 +691,8 @@ class FamilyNetworkManager(context: Context) {
         headers: Map<String, String>
     ): FamilyHttpResponse {
         if (path.startsWith("/boards")) {
-            if (!verifyNetworkPassword(headers)) {
-                return FamilyHttpResponse(
+            val authLevel = resolveAuthLevel(headers)
+                ?: return FamilyHttpResponse(
                     401,
                     JSONObject().apply {
                         put("ok", false)
@@ -697,8 +700,7 @@ class FamilyNetworkManager(context: Context) {
                         put("message", "需要正确的网络服务密码")
                     }.toString()
                 )
-            }
-            return boardHttpHandler.handle(method, path, body)
+            return boardHttpHandler.handle(method, path, body, authLevel)
         }
         if (method == "GET" && (path == "/" || path.isEmpty())) {
             val boards = boardStore.listBoards()
@@ -717,10 +719,21 @@ class FamilyNetworkManager(context: Context) {
         }.toString())
     }
 
-    private fun verifyNetworkPassword(headers: Map<String, String>): Boolean {
-        val required = networkPassword?.trim()?.takeIf { it.isNotEmpty() } ?: return true
+    private fun resolveAuthLevel(headers: Map<String, String>): FamilyNetworkAuthLevel? {
+        val guest = networkPassword
+        val host = networkHostPassword
+        if (guest.isNullOrBlank() && host.isNullOrBlank()) {
+            return FamilyNetworkAuthLevel.OPEN
+        }
         val provided = headers[FamilyNetworkAuth.PASSWORD_HEADER.lowercase(Locale.ROOT)]?.trim().orEmpty()
-        return provided == required
+        if (provided.isEmpty()) return null
+        if (!host.isNullOrBlank() && provided == host) {
+            return FamilyNetworkAuthLevel.HOST
+        }
+        if (!guest.isNullOrBlank() && provided == guest) {
+            return FamilyNetworkAuthLevel.GUEST
+        }
+        return null
     }
 
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {

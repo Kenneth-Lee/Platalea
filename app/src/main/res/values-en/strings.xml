@@ -160,8 +160,8 @@
     <string name="config_startup_decrypt_desc">When enabled, startup asks for the private-key password to unlock it. After a successful unlock, the key stays cached in memory and later key operations will not ask again. This is not exported.</string>
     <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes)</string>
     <string name="config_viewer_preview_range">Range: %1$d to %2$dM</string>
-    <string name="config_ftp_password">Network service password</string>
-    <string name="config_ftp_password_hint">Access password for local FTP and bulletin board. Leave empty for no password. Other devices must enter this password to connect to this device.</string>
+    <string name="config_ftp_password">Guest access password</string>
+    <string name="config_ftp_password_hint">Used by guests for local FTP and bulletin board access. Leave empty for no password.</string>
     <string name="config_ftp_password_set">Password set</string>
     <string name="config_ftp_password_unset">No password</string>
     <string name="config_ftp_timeout_minutes">Network service page auto close (minutes)</string>
@@ -174,7 +174,9 @@
     <string name="config_local_network_service_on">enabled</string>
     <string name="config_local_network_service_off">disabled</string>
     <string name="config_family_network_user_name">Family network display name</string>
-    <string name="config_family_network_user_name_hint">Leave empty to use the device label (e.g. LocalManager-model) when posting. The device label is still stored with each message for traceability.</string>
+    <string name="config_family_network_user_name_hint">Leave empty to use the device label as display name. The device label is still stored with each message for traceability.</string>
+    <string name="config_family_network_host_password">Host password</string>
+    <string name="config_family_network_host_password_hint">For remote host access to manage messages on this device. Leave empty to allow management only from this app locally.</string>
     <string name="config_git">Git Configuration</string>
     <string name="config_gpg_keys">GPG Key Management</string>
     <string name="config_cache">Cache Management</string>
@@ -223,7 +225,7 @@
     <string name="family_board_delete_confirm">Delete this message?</string>
     <string name="family_board_send">Send</string>
     <string name="family_board_password_title">Open Bulletin Board</string>
-    <string name="family_board_password_hint">Enter this device\'s access password (not the password you set for your own device in global settings).</string>
+    <string name="family_board_password_hint">Enter this device\'s access password (guest or host; not the passwords configured on your own device).</string>
     <string name="family_board_password_label">Device access password</string>
     <string name="family_board_password_wrong">Wrong password</string>
     <string name="family_network_requires_password">Password required</string>

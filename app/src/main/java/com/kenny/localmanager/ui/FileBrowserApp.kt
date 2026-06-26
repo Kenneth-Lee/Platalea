@@ -1751,6 +1751,7 @@ private fun FileBrowserAppScreen(
         var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
         var localNetworkServiceEnabled by remember { mutableStateOf(true) }
         var familyNetworkUserName by remember { mutableStateOf("") }
+        var familyNetworkHostPassword by remember { mutableStateOf("") }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -2261,6 +2262,9 @@ private fun FileBrowserAppScreen(
             prefs.familyNetworkUserName.collect { familyNetworkUserName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
+            prefs.familyNetworkHostPassword.collect { familyNetworkHostPassword = it.orEmpty() }
+        }
+        LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
@@ -2268,11 +2272,12 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName) {
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
             familyNetworkManager.configure(
                 ftpPassword,
                 localNetworkServiceEnabled,
-                familyNetworkUserName.ifBlank { null }
+                familyNetworkUserName.ifBlank { null },
+                familyNetworkHostPassword.ifBlank { null }
             )
         }
         DisposableEffect(familyNetworkManager) {
@@ -2902,6 +2907,7 @@ private fun FileBrowserAppScreen(
                             networkPassword = ftpPassword,
                             localServiceEnabled = localNetworkServiceEnabled,
                             familyNetworkUserName = familyNetworkUserName,
+                            familyNetworkHostPassword = familyNetworkHostPassword,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             onDismiss = { requestExitApp() }
                         )
@@ -2927,7 +2933,8 @@ private fun FileBrowserAppScreen(
                                     familyNetworkManager.configure(
                                         s.ifBlank { null },
                                         localNetworkServiceEnabled,
-                                        familyNetworkUserName.ifBlank { null }
+                                        familyNetworkUserName.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
@@ -2939,7 +2946,8 @@ private fun FileBrowserAppScreen(
                                     familyNetworkManager.configure(
                                         ftpPassword,
                                         enabled,
-                                        familyNetworkUserName.ifBlank { null }
+                                        familyNetworkUserName.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 familyNetworkUserName = familyNetworkUserName,
@@ -2949,7 +2957,19 @@ private fun FileBrowserAppScreen(
                                     familyNetworkManager.configure(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
-                                        name.ifBlank { null }
+                                        name.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
+                                    )
+                                },
+                                familyNetworkHostPassword = familyNetworkHostPassword,
+                                onFamilyNetworkHostPasswordChange = { password ->
+                                    familyNetworkHostPassword = password
+                                    scope.launch { prefs.setFamilyNetworkHostPassword(password.ifBlank { null }) }
+                                    familyNetworkManager.configure(
+                                        ftpPassword,
+                                        localNetworkServiceEnabled,
+                                        familyNetworkUserName.ifBlank { null },
+                                        password.ifBlank { null }
                                     )
                                 },
                                 onOpenGitConfig = { showGitConfigDialog = true },
