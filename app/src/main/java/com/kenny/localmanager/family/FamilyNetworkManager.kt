@@ -307,6 +307,178 @@ class FamilyNetworkManager(context: Context) {
         _state.update { it.copy(openBoardSession = null) }
     }
 
+    suspend fun fetchBoardList(
+        service: FamilyDiscoveredService,
+        accessPassword: String? = null
+    ): Result<List<BulletinBoardInfo>> = withContext(Dispatchers.IO) {
+        if (service.isSelf) {
+            runCatching { boardStore.listBoards() }
+        } else {
+            boardApiRequest(
+                service = service,
+                method = "GET",
+                path = "/boards",
+                accessPassword = accessPassword?.trim()?.ifEmpty { null }
+            ).mapCatching { text ->
+                val json = JSONObject(text)
+                if (!json.optBoolean("ok", false)) {
+                    throw IllegalStateException(json.optString("message", "读取留言板列表失败"))
+                }
+                buildList {
+                    val arr = json.optJSONArray("boards") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        add(BulletinBoardInfo.fromJson(arr.getJSONObject(i)))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun remoteCanManageBoard(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (service.isSelf) return@withContext true
+        fetchBoardSnapshot(service, boardId, accessPassword?.trim()?.ifEmpty { null })
+            .getOrNull()
+            ?.canManage == true
+    }
+
+    fun createBoardEntry(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        canManage: Boolean,
+        name: String,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        if (!canManage) {
+            appendError("只有宿主可以创建留言板。")
+            onComplete(Result.failure(IllegalStateException("只有宿主可以创建留言板")))
+            return
+        }
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            appendError("创建留言板失败：名称不能为空。")
+            onComplete(Result.failure(IllegalStateException("名称不能为空")))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching {
+                        boardStore.createBoard(trimmed)
+                            ?: throw IllegalStateException("创建留言板失败")
+                    }
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "POST",
+                        path = "/boards",
+                        body = JSONObject().put("name", trimmed).toString(),
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", "创建留言板失败"))
+                        }
+                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                    }
+                }
+            }
+            result.onSuccess { board ->
+                appendLog("留言板已创建：${board.name}")
+            }.onFailure { error ->
+                appendError("创建留言板失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun deleteBoardEntry(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        canManage: Boolean,
+        boardId: String,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        if (!canManage) {
+            appendError("只有宿主可以删除留言板。")
+            onComplete(Result.failure(IllegalStateException("只有宿主可以删除留言板")))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching {
+                        if (!boardStore.deleteBoard(boardId)) {
+                            throw IllegalStateException("删除失败：留言板不存在，或这是最后一个留言板")
+                        }
+                    }
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "DELETE",
+                        path = "/boards/$boardId",
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", "删除留言板失败"))
+                        }
+                    }
+                }
+            }
+            result.onSuccess {
+                appendLog("留言板已删除：$boardId")
+                val open = _state.value.openBoardSession
+                if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
+                    closeBulletinBoard()
+                }
+            }.onFailure { error ->
+                appendError("删除留言板失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun exportOpenBoard(rootUri: String?) {
+        val session = _state.value.openBoardSession ?: return
+        if (rootUri.isNullOrBlank()) {
+            appendError("导出失败：未设置根目录。")
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val content = if (session.isHost) {
+                        val snapshot = boardStore.snapshot(session.boardId)
+                            ?: throw IllegalStateException("留言板不存在：${session.boardId}")
+                        BulletinBoardExporter.snapshotToMarkdown(snapshot)
+                    } else {
+                        boardApiTextRequest(
+                            service = session.service,
+                            method = "GET",
+                            path = "/boards/${session.boardId}/export.md",
+                            accessPassword = session.accessPassword
+                        ).getOrThrow()
+                    }
+                    BulletinBoardExporter.saveMarkdownToRoot(
+                        context = appContext,
+                        rootUri = rootUri,
+                        fileName = BulletinBoardExporter.defaultExportFileName(session.boardName),
+                        markdown = content
+                    ).getOrThrow()
+                }
+            }
+            result.onSuccess { savedPath ->
+                appendLog("已导出到 $savedPath")
+            }.onFailure { error ->
+                appendError("导出失败：${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
     fun refreshOpenBoard(showLoadingIndicator: Boolean = false) {
         val session = _state.value.openBoardSession ?: return
         scope.launch {
@@ -1085,6 +1257,39 @@ class FamilyNetworkManager(context: Context) {
                         output.write(body.toByteArray(StandardCharsets.UTF_8))
                     }
                 }
+                readApiResponse(connection)
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+    private fun boardApiTextRequest(
+        service: FamilyDiscoveredService,
+        method: String,
+        path: String,
+        accessPassword: String? = null
+    ): Result<String> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = method
+                connectTimeout = 15000
+                readTimeout = 60000
+                setRequestProperty("Accept", "text/markdown, text/plain, */*")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            try {
                 readApiResponse(connection)
             } finally {
                 connection.disconnect()

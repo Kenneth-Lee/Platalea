@@ -34,6 +34,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -89,6 +90,7 @@ import com.kenny.localmanager.family.BulletinAttachmentDownloadProgress
 import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
 import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
+import com.kenny.localmanager.family.BulletinBoardInfo
 import com.kenny.localmanager.family.BulletinBoardOpenSession
 import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
@@ -98,6 +100,12 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
+
+private data class PendingBoardAccess(
+    val service: FamilyDiscoveredService,
+    val accessPassword: String?,
+    val canManageBoards: Boolean
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -126,6 +134,8 @@ fun FamilyNetworkScreen(
     var boardPasswordError by remember { mutableStateOf<String?>(null) }
     var boardPasswordInProgress by remember { mutableStateOf(false) }
     val boardAccessCache = remember { mutableStateMapOf<String, String?>() }
+    var pendingBoardAccess by remember { mutableStateOf<PendingBoardAccess?>(null) }
+    var boardPickerLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
         manager.configure(
@@ -168,9 +178,18 @@ fun FamilyNetworkScreen(
         }
     }
 
+    fun presentBoardPicker(service: FamilyDiscoveredService, accessPassword: String?) {
+        scope.launch {
+            boardPickerLoading = true
+            val canManage = manager.remoteCanManageBoard(service, accessPassword)
+            boardAccessCache[service.deviceKey] = accessPassword
+            pendingBoardAccess = PendingBoardAccess(service, accessPassword, canManage)
+            boardPickerLoading = false
+        }
+    }
+
     fun openBoardWithAccess(service: FamilyDiscoveredService, accessPassword: String?) {
-        boardAccessCache[service.deviceKey] = accessPassword
-        manager.openBulletinBoard(service, accessPassword = accessPassword)
+        presentBoardPicker(service, accessPassword)
     }
 
     fun showPasswordDialog(service: FamilyDiscoveredService, wrongPassword: Boolean) {
@@ -296,6 +315,43 @@ fun FamilyNetworkScreen(
         )
     }
 
+    if (boardPickerLoading) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text(stringResource(R.string.family_board_picker_title)) },
+            text = {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Text(stringResource(R.string.family_board_picker_loading))
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    pendingBoardAccess?.let { access ->
+        BoardPickerDialog(
+            service = access.service,
+            accessPassword = access.accessPassword,
+            canManageBoards = access.canManageBoards,
+            manager = manager,
+            onDismiss = { pendingBoardAccess = null },
+            onSelectBoard = { board ->
+                pendingBoardAccess = null
+                manager.openBulletinBoard(
+                    service = access.service,
+                    boardId = board.id,
+                    accessPassword = access.accessPassword
+                )
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -319,6 +375,14 @@ fun FamilyNetworkScreen(
                 },
                 actions = {
                     if (boardSession != null) {
+                        if (!rootUri.isNullOrBlank()) {
+                            IconButton(onClick = { manager.exportOpenBoard(rootUri) }) {
+                                Icon(
+                                    Icons.Default.Description,
+                                    contentDescription = stringResource(R.string.family_board_export)
+                                )
+                            }
+                        }
                         IconButton(onClick = {
                             manager.refreshOpenBoard(showLoadingIndicator = boardSession.messages.isEmpty())
                         }) {
@@ -368,6 +432,242 @@ fun FamilyNetworkScreen(
             )
         }
     }
+}
+
+@Composable
+private fun BoardPickerDialog(
+    service: FamilyDiscoveredService,
+    accessPassword: String?,
+    canManageBoards: Boolean,
+    manager: FamilyNetworkManager,
+    onDismiss: () -> Unit,
+    onSelectBoard: (BulletinBoardInfo) -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var boards by remember { mutableStateOf<List<BulletinBoardInfo>>(emptyList()) }
+    var loading by remember { mutableStateOf(true) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var showCreateDialog by remember { mutableStateOf(false) }
+    var newBoardName by remember { mutableStateOf("") }
+    var boardToDelete by remember { mutableStateOf<BulletinBoardInfo?>(null) }
+    var actionInProgress by remember { mutableStateOf(false) }
+
+    fun reloadBoards() {
+        scope.launch {
+            loading = true
+            error = null
+            val result = manager.fetchBoardList(service, accessPassword)
+            loading = false
+            result.onSuccess { boards = it }
+                .onFailure { err ->
+                    error = err.message ?: err.javaClass.simpleName
+                }
+        }
+    }
+
+    LaunchedEffect(service.deviceKey, accessPassword) {
+        reloadBoards()
+    }
+
+    if (showCreateDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!actionInProgress) {
+                    showCreateDialog = false
+                    newBoardName = ""
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_create_title)) },
+            text = {
+                OutlinedTextField(
+                    value = newBoardName,
+                    onValueChange = { newBoardName = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text(stringResource(R.string.family_board_create_name_label)) },
+                    singleLine = true,
+                    enabled = !actionInProgress
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !actionInProgress && newBoardName.trim().isNotEmpty(),
+                    onClick = {
+                        actionInProgress = true
+                        manager.createBoardEntry(
+                            service = service,
+                            accessPassword = accessPassword,
+                            canManage = canManageBoards,
+                            name = newBoardName
+                        ) { result ->
+                            actionInProgress = false
+                            result.onSuccess {
+                                showCreateDialog = false
+                                newBoardName = ""
+                                reloadBoards()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !actionInProgress,
+                    onClick = {
+                        showCreateDialog = false
+                        newBoardName = ""
+                    }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
+    boardToDelete?.let { board ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!actionInProgress) boardToDelete = null
+            },
+            title = { Text(stringResource(R.string.family_board_delete_board_title)) },
+            text = {
+                Text(stringResource(R.string.family_board_delete_board_confirm, board.name))
+            },
+            confirmButton = {
+                Button(
+                    enabled = !actionInProgress,
+                    onClick = {
+                        if (boards.size <= 1) {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.family_board_delete_last_board),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            boardToDelete = null
+                            return@Button
+                        }
+                        actionInProgress = true
+                        manager.deleteBoardEntry(
+                            service = service,
+                            accessPassword = accessPassword,
+                            canManage = canManageBoards,
+                            boardId = board.id
+                        ) { result ->
+                            actionInProgress = false
+                            result.onSuccess {
+                                boardToDelete = null
+                                reloadBoards()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_delete)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !actionInProgress,
+                    onClick = { boardToDelete = null }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!actionInProgress) onDismiss() },
+        title = { Text(stringResource(R.string.family_board_picker_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                when {
+                    loading -> {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
+                        }
+                    }
+                    error != null -> {
+                        Text(
+                            error.orEmpty(),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    boards.isEmpty() -> {
+                        Text(
+                            stringResource(R.string.family_board_picker_empty),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    else -> {
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(240.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(boards, key = { it.id }) { board ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = !actionInProgress) {
+                                            onSelectBoard(board)
+                                        }
+                                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            board.name,
+                                            style = MaterialTheme.typography.bodyLarge,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            stringResource(
+                                                R.string.family_board_picker_item_meta,
+                                                board.messageCount
+                                            ),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (canManageBoards && boards.size > 1) {
+                                        IconButton(
+                                            enabled = !actionInProgress,
+                                            onClick = { boardToDelete = board }
+                                        ) {
+                                            Icon(
+                                                Icons.Default.Delete,
+                                                contentDescription = stringResource(R.string.common_delete)
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (canManageBoards) {
+                Button(
+                    enabled = !actionInProgress,
+                    onClick = {
+                        showCreateDialog = true
+                        newBoardName = ""
+                    }
+                ) { Text(stringResource(R.string.family_board_create)) }
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !actionInProgress,
+                onClick = onDismiss
+            ) { Text(stringResource(R.string.common_cancel)) }
+        }
+    )
 }
 
 @Composable

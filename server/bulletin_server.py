@@ -26,6 +26,7 @@ from family_common import (
     binary_response,
     build_service_info,
     json_response,
+    text_response,
     load_or_create_instance_id,
     normalize_hostname,
     normalize_service_type,
@@ -194,6 +195,13 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                     content_type=response.get("content_type", "application/octet-stream"),
                     extra_headers=response.get("extra_headers"),
                 )
+            elif response.get("body_text") is not None:
+                text_response(
+                    self,
+                    int(response["status"]),
+                    str(response["body_text"]),
+                    content_type=response.get("content_type", "text/plain; charset=utf-8"),
+                )
             else:
                 json_response(self, response["status"], response["body"])
             return
@@ -225,6 +233,15 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 
 
 def requires_host_auth(method: str, path: str) -> bool:
+    if method == "POST" and path == "/boards":
+        return True
+    if (
+        method == "DELETE"
+        and path.startswith("/boards/")
+        and "/messages" not in path
+        and "/attachments" not in path
+    ):
+        return True
     if method == "DELETE" and "/attachments/" in path:
         return True
     if method in {"PUT", "DELETE"} and "/messages" in path:
@@ -256,6 +273,81 @@ def handle_board_request(
                     for board in boards
                 ],
             },
+        }
+
+    if method == "POST" and path == "/boards":
+        if auth_level not in {AuthLevel.HOST, AuthLevel.OPEN}:
+            return {
+                "status": HTTPStatus.FORBIDDEN,
+                "body": {
+                    "ok": False,
+                    "error": "forbidden",
+                    "message": "创建留言板需要宿主密码",
+                },
+            }
+        payload = _parse_json(body_bytes.decode("utf-8"))
+        if payload is None:
+            return _bad_request("invalid_json", "请求体不是合法 JSON")
+        name = str(payload.get("name", "")).strip()
+        if not name:
+            return _bad_request("invalid_board", "留言板名称不能为空")
+        board = store.create_board(name)
+        if board is None:
+            return _bad_request("invalid_board", "创建留言板失败")
+        return {
+            "status": HTTPStatus.OK,
+            "body": {
+                "ok": True,
+                "board": {
+                    "id": board.id,
+                    "name": board.name,
+                    "revision": board.revision,
+                    "message_count": board.message_count,
+                },
+            },
+        }
+
+    if (
+        method == "DELETE"
+        and path.startswith("/boards/")
+        and "/messages" not in path
+        and "/attachments" not in path
+    ):
+        if auth_level not in {AuthLevel.HOST, AuthLevel.OPEN}:
+            return {
+                "status": HTTPStatus.FORBIDDEN,
+                "body": {
+                    "ok": False,
+                    "error": "forbidden",
+                    "message": "删除留言板需要宿主密码",
+                },
+            }
+        board_id = path.removeprefix("/boards/")
+        if not board_id or "/" in board_id:
+            return _not_found()
+        if not store.delete_board(board_id):
+            return _bad_request(
+                "board_delete_failed",
+                "删除失败：留言板不存在，或这是最后一个留言板",
+            )
+        return {"status": HTTPStatus.OK, "body": {"ok": True}}
+
+    if method == "GET" and path.startswith("/boards/") and path.endswith("/export.md"):
+        board_id = path.removeprefix("/boards/").removesuffix("/export.md")
+        markdown = store.export_markdown(board_id)
+        if markdown is None:
+            return {
+                "status": HTTPStatus.NOT_FOUND,
+                "body": {
+                    "ok": False,
+                    "error": "board_not_found",
+                    "message": f"留言板不存在：{board_id}",
+                },
+            }
+        return {
+            "status": HTTPStatus.OK,
+            "body_text": markdown,
+            "content_type": "text/markdown; charset=utf-8",
         }
 
     if method == "GET" and path.startswith("/boards/") and path.endswith("/messages"):

@@ -246,6 +246,17 @@
     <string name="family_board_password_hint">Enter this device\'s access password (guest or host; not the passwords configured on your own device).</string>
     <string name="family_board_password_label">Device access password</string>
     <string name="family_board_password_wrong">Wrong password</string>
+    <string name="family_board_picker_title">Select Bulletin Board</string>
+    <string name="family_board_picker_loading">Loading bulletin boards…</string>
+    <string name="family_board_picker_empty">No bulletin boards</string>
+    <string name="family_board_picker_item_meta">%1$d messages</string>
+    <string name="family_board_create">New Board</string>
+    <string name="family_board_create_title">New Bulletin Board</string>
+    <string name="family_board_create_name_label">Board name</string>
+    <string name="family_board_delete_board_title">Delete Bulletin Board</string>
+    <string name="family_board_delete_board_confirm">Delete board \"%1$s\"? All messages and attachments will be removed.</string>
+    <string name="family_board_delete_last_board">At least one board must remain.</string>
+    <string name="family_board_export">Export Markdown</string>
     <string name="family_network_requires_password">Password required</string>
     <string name="family_network_local_password_set">Local access password: set (required for external devices)</string>
     <string name="family_network_local_password_unset">Local access password: not set (open access)</string>

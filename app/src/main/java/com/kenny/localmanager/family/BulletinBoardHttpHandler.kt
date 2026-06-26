@@ -19,6 +19,18 @@ class BulletinBoardHttpHandler(
         }
         return when {
             method == "GET" && normalizedPath == "/boards" -> listBoards()
+            method == "POST" && normalizedPath == "/boards" -> createBoard(bodyBytes.decodeToString())
+            method == "DELETE" && normalizedPath.startsWith("/boards/") &&
+                !normalizedPath.contains("/messages") && !normalizedPath.contains("/attachments") -> {
+                val boardId = normalizedPath.removePrefix("/boards/")
+                if (boardId.isBlank() || boardId.contains('/')) return notFound()
+                deleteBoard(boardId)
+            }
+            method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/export.md") -> {
+                val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/export.md")
+                if (boardId.isBlank() || boardId.contains('/')) return notFound()
+                exportBoard(boardId)
+            }
             method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
                 getMessages(boardId, authLevel)
@@ -69,6 +81,12 @@ class BulletinBoardHttpHandler(
     }
 
     private fun requiresHostAuth(method: String, path: String): Boolean {
+        if (method == "POST" && path == "/boards") return true
+        if (method == "DELETE" && path.startsWith("/boards/") &&
+            !path.contains("/messages") && !path.contains("/attachments")
+        ) {
+            return true
+        }
         if (method == "DELETE" && path.contains("/attachments/")) return true
         if (method in setOf("PUT", "DELETE") && path.contains("/messages")) return true
         return false
@@ -255,6 +273,47 @@ class BulletinBoardHttpHandler(
             })
         }
         return FamilyHttpResponse(200, body.toString())
+    }
+
+    private fun createBoard(bodyText: String): FamilyHttpResponse {
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val name = payload.optString("name").trim()
+        if (name.isEmpty()) return badRequest("invalid_board", "留言板名称不能为空")
+        val board = store.createBoard(name)
+            ?: return badRequest("invalid_board", "创建留言板失败")
+        return FamilyHttpResponse(
+            200,
+            JSONObject().apply {
+                put("ok", true)
+                put("board", JSONObject().apply {
+                    put("id", board.id)
+                    put("name", board.name)
+                    put("revision", board.revision)
+                    put("message_count", board.messageCount)
+                })
+            }.toString()
+        )
+    }
+
+    private fun deleteBoard(boardId: String): FamilyHttpResponse {
+        if (!store.deleteBoard(boardId)) {
+            return badRequest(
+                "board_delete_failed",
+                "删除失败：留言板不存在，或这是最后一个留言板"
+            )
+        }
+        return FamilyHttpResponse(200, JSONObject().apply { put("ok", true) }.toString())
+    }
+
+    private fun exportBoard(boardId: String): FamilyHttpResponse {
+        val snapshot = store.snapshot(boardId)
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
+        val markdown = BulletinBoardExporter.snapshotToMarkdown(snapshot)
+        return FamilyHttpResponse(
+            200,
+            markdown,
+            "text/markdown; charset=utf-8"
+        )
     }
 
     private fun getMessages(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {

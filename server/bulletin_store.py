@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -142,6 +143,50 @@ class BulletinBoardStore:
                     )
                 )
             return sorted(boards, key=lambda item: item.id)
+
+    def create_board(self, name: str) -> BulletinBoardInfo | None:
+        trimmed = name.strip()
+        if not trimmed:
+            return None
+        with self._lock:
+            board_id = str(uuid.uuid4())
+            board_dir = self._board_dir(board_id)
+            board_dir.mkdir(parents=True, exist_ok=True)
+            now = int(time.time() * 1000)
+            meta = {
+                "id": board_id,
+                "name": trimmed,
+                "revision": 0,
+                "created_at": now,
+            }
+            self._write_meta(board_id, meta)
+            self._write_messages(board_id, [])
+            return BulletinBoardInfo(
+                id=board_id,
+                name=trimmed,
+                revision=0,
+                message_count=0,
+            )
+
+    def delete_board(self, board_id: str) -> bool:
+        with self._lock:
+            if self._read_meta(board_id) is None:
+                return False
+            board_count = sum(
+                1
+                for board_dir in self._root_dir.iterdir()
+                if board_dir.is_dir() and self._read_meta(board_dir.name) is not None
+            )
+            if board_count <= 1:
+                return False
+            shutil.rmtree(self._board_dir(board_id))
+            return True
+
+    def export_markdown(self, board_id: str) -> str | None:
+        snapshot = self.snapshot(board_id)
+        if snapshot is None:
+            return None
+        return _snapshot_to_markdown(snapshot)
 
     def snapshot(self, board_id: str) -> BulletinBoardSnapshot | None:
         with self._lock:
@@ -324,3 +369,62 @@ class BulletinBoardStore:
             json.dumps(payload, ensure_ascii=False),
             encoding="utf-8",
         )
+
+
+def _format_byte_count(bytes_value: int) -> str:
+    if bytes_value <= 0:
+        return "0 B"
+    if bytes_value < 1024:
+        return f"{bytes_value} B"
+    if bytes_value < 1024 * 1024:
+        return f"{bytes_value / 1024:.1f} KB"
+    if bytes_value < 1024 * 1024 * 1024:
+        return f"{bytes_value / (1024 * 1024):.1f} MB"
+    return f"{bytes_value / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _format_attachment_line(attachment: dict[str, Any]) -> str:
+    kind = str(attachment.get("kind", "file"))
+    name = str(attachment.get("name", ""))
+    if kind == "directory":
+        size = int(attachment.get("total_size", attachment.get("size", 0)))
+        kind_label = "目录"
+    else:
+        size = int(attachment.get("size", 0))
+        kind_label = "文件"
+    return f"{name}（{kind_label}，{_format_byte_count(size)}）"
+
+
+def _snapshot_to_markdown(snapshot: BulletinBoardSnapshot) -> str:
+    from datetime import datetime
+
+    exported_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [
+        f"# {snapshot.board_name}",
+        "",
+        f"> 留言板 ID：`{snapshot.board_id}`",
+        f"> 导出时间：{exported_at}",
+        f"> 消息数：{len(snapshot.messages)}",
+        "",
+    ]
+    if not snapshot.messages:
+        lines.append("（暂无留言）")
+        return "\n".join(lines) + "\n"
+    for message in snapshot.messages:
+        time_label = datetime.fromtimestamp(message.updated_at / 1000).strftime(
+            "%Y-%m-%d %H:%M"
+        )
+        lines.extend(["---", "", f"**{message.author_label}** · {time_label}"])
+        if message.author_device:
+            lines.extend(["", f"> 设备：{message.author_device}"])
+        lines.append("")
+        if message.content.strip():
+            lines.append(message.content)
+            lines.append("")
+        attachments = message.attachments or []
+        if attachments:
+            lines.append("附件：")
+            for attachment in attachments:
+                lines.append(f"- {_format_attachment_line(attachment)}")
+            lines.append("")
+    return "\n".join(lines).rstrip() + "\n"

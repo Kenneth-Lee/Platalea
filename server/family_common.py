@@ -256,6 +256,20 @@ def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[st
     handler.wfile.write(encoded)
 
 
+def text_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    text: str,
+    content_type: str = "text/plain; charset=utf-8",
+) -> None:
+    encoded = text.encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(encoded)))
+    handler.end_headers()
+    handler.wfile.write(encoded)
+
+
 def read_request_body(handler: BaseHTTPRequestHandler) -> bytes:
     content_length = handler.headers.get("Content-Length", "0")
     try:

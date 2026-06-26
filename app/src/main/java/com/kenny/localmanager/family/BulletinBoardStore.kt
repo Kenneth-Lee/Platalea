@@ -63,6 +63,33 @@ class BulletinBoardStore(context: Context) {
         )
     }
 
+    fun createBoard(name: String): BulletinBoardInfo? = lock.write {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return@write null
+        val boardId = UUID.randomUUID().toString()
+        boardDir(boardId).mkdirs()
+        writeMeta(
+            boardId,
+            JSONObject().apply {
+                put("id", boardId)
+                put("name", trimmed)
+                put("revision", 0L)
+                put("created_at", System.currentTimeMillis())
+            }
+        )
+        writeMessages(boardId, emptyList())
+        BulletinBoardInfo(id = boardId, name = trimmed, revision = 0L, messageCount = 0)
+    }
+
+    fun deleteBoard(boardId: String): Boolean = lock.write {
+        if (readMeta(boardId) == null) return@write false
+        val boardCount = rootDir.listFiles()?.count { file ->
+            file.isDirectory && readMeta(file.name) != null
+        } ?: 0
+        if (boardCount <= 1) return@write false
+        boardDir(boardId).deleteRecursively()
+    }
+
     fun appendMessage(
         boardId: String,
         authorLabel: String,

@@ -26,7 +26,16 @@ data class BulletinBoardInfo(
     val name: String,
     val revision: Long,
     val messageCount: Int
-)
+) {
+    companion object {
+        fun fromJson(obj: JSONObject): BulletinBoardInfo = BulletinBoardInfo(
+            id = obj.getString("id"),
+            name = obj.optString("name", obj.getString("id")),
+            revision = obj.optLong("revision"),
+            messageCount = obj.optInt("message_count")
+        )
+    }
+}
 
 data class BulletinMessage(
     val id: String,
