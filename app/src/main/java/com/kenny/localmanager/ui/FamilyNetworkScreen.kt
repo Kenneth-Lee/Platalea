@@ -49,6 +49,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -80,6 +81,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinAttachmentKind
+import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
+import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
 import com.kenny.localmanager.family.BulletinBoardOpenSession
 import com.kenny.localmanager.family.BulletinMessage
@@ -100,8 +103,9 @@ fun FamilyNetworkScreen(
     familyNetworkUserName: String = "",
     familyNetworkHostPassword: String = "",
     timeoutMinutes: Int = 0,
-    onDismiss: (() -> Unit)? = null,
-    onRequestAttachmentPick: ((draftText: String) -> Unit)? = null
+    rootUri: String? = null,
+    hideDotFiles: Boolean = false,
+    onDismiss: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val activity = context as? Activity
@@ -347,11 +351,14 @@ fun FamilyNetworkScreen(
                     .fillMaxSize()
                     .padding(padding),
                 session = boardSession,
+                manager = manager,
+                attachmentUpload = state.attachmentUpload,
+                rootUri = rootUri,
+                hideDotFiles = hideDotFiles,
                 onRefresh = { manager.refreshOpenBoard() },
                 onPost = { manager.postBoardMessage(it) },
                 onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
-                onDelete = { manager.deleteBoardMessage(it) },
-                onRequestAttachmentPick = onRequestAttachmentPick
+                onDelete = { manager.deleteBoardMessage(it) }
             )
         }
     }
@@ -553,16 +560,21 @@ private fun CollapsibleLocalServiceCard(
 private fun BulletinBoardPage(
     modifier: Modifier,
     session: BulletinBoardOpenSession,
+    manager: FamilyNetworkManager,
+    attachmentUpload: BulletinAttachmentUploadProgress?,
+    rootUri: String?,
+    hideDotFiles: Boolean,
     onRefresh: () -> Unit,
     onPost: (String) -> Unit,
     onUpdate: (String, String) -> Unit,
-    onDelete: (String) -> Unit,
-    onRequestAttachmentPick: ((draftText: String) -> Unit)? = null
+    onDelete: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var draftMessage by remember(session.service.deviceKey) { mutableStateOf("") }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
+    var showAttachmentPickDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     var previousMessageCount by remember(session.service.deviceKey) { mutableIntStateOf(0) }
 
@@ -627,6 +639,21 @@ private fun BulletinBoardPage(
             }
         )
     }
+
+    if (showAttachmentPickDialog && rootUri != null) {
+        AttachmentPickDialog(
+            rootUri = rootUri,
+            hideDotFiles = hideDotFiles,
+            onDismiss = { showAttachmentPickDialog = false },
+            onPicked = { item ->
+                showAttachmentPickDialog = false
+                manager.uploadAttachmentAndPost(item, draftMessage)
+                draftMessage = ""
+            }
+        )
+    }
+
+    val uploadInProgress = attachmentUpload != null
 
     Column(modifier = modifier.fillMaxSize()) {
         Row(
@@ -719,6 +746,12 @@ private fun BulletinBoardPage(
         }
 
         HorizontalDivider()
+        if (uploadInProgress) {
+            AttachmentUploadProgressBar(
+                progress = attachmentUpload!!,
+                onCancel = { manager.cancelAttachmentUpload() }
+            )
+        }
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -728,16 +761,21 @@ private fun BulletinBoardPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            if (onRequestAttachmentPick != null) {
-                IconButton(
-                    onClick = { onRequestAttachmentPick(draftMessage) },
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Attachment,
-                        contentDescription = stringResource(R.string.family_board_add_attachment)
-                    )
-                }
+            IconButton(
+                onClick = {
+                    if (rootUri.isNullOrBlank()) {
+                        Toast.makeText(context, context.getString(R.string.attachment_upload_no_root), Toast.LENGTH_SHORT).show()
+                    } else {
+                        showAttachmentPickDialog = true
+                    }
+                },
+                enabled = !uploadInProgress,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    Icons.Default.Attachment,
+                    contentDescription = stringResource(R.string.family_board_add_attachment)
+                )
             }
             TextField(
                 value = draftMessage,
@@ -757,7 +795,7 @@ private fun BulletinBoardPage(
                     onPost(draftMessage)
                     draftMessage = ""
                 },
-                enabled = draftMessage.trim().isNotEmpty(),
+                enabled = draftMessage.trim().isNotEmpty() && !uploadInProgress,
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
@@ -824,6 +862,64 @@ private fun BulletinMessageRow(
                     contentDescription = stringResource(R.string.common_delete),
                     modifier = Modifier.size(16.dp)
                 )
+            }
+        }
+    }
+}
+
+private fun formatByteCount(bytes: Long): String {
+    if (bytes <= 0) return "0 B"
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${"%.1f".format(bytes / 1024.0)} KB"
+        bytes < 1024 * 1024 * 1024 -> "${"%.1f".format(bytes / (1024.0 * 1024))} MB"
+        else -> "${"%.2f".format(bytes / (1024.0 * 1024 * 1024))} GB"
+    }
+}
+
+@Composable
+private fun AttachmentUploadProgressBar(
+    progress: BulletinAttachmentUploadProgress,
+    onCancel: () -> Unit
+) {
+    val context = LocalContext.current
+    val fraction = (progress.uploadedBytes.toFloat() / progress.totalBytes.toFloat()).coerceIn(0f, 1f)
+    val statusText = when (progress.phase) {
+        BulletinAttachmentUploadPhase.UPLOADING -> context.getString(
+            R.string.attachment_upload_progress,
+            progress.itemName
+        )
+        BulletinAttachmentUploadPhase.POSTING -> context.getString(R.string.attachment_upload_posting)
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            statusText,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        LinearProgressIndicator(
+            progress = { fraction },
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp)
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "${formatByteCount(progress.uploadedBytes)} / ${formatByteCount(progress.totalBytes)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.attachment_upload_cancel))
             }
         }
     }

@@ -256,16 +256,22 @@ class BulletinBoardStore:
             )
             if index < 0:
                 return False
+            target = messages[index]
+            for attachment in target.attachments or []:
+                attachment_id = str(attachment.get("id", "")).strip()
+                if attachment_id:
+                    self.attachments.delete_attachment(board_id, attachment_id)
             now = int(time.time() * 1000)
-            current = messages[index]
             messages[index] = BulletinMessage(
-                id=current.id,
-                seq=current.seq,
-                author_label=current.author_label,
-                content=current.content,
-                created_at=current.created_at,
+                id=target.id,
+                seq=target.seq,
+                author_label=target.author_label,
+                content=target.content,
+                created_at=target.created_at,
                 updated_at=now,
                 deleted=True,
+                author_device=target.author_device,
+                attachments=target.attachments,
             )
             self._write_messages(board_id, messages)
             meta["revision"] = int(meta.get("revision", 0)) + 1

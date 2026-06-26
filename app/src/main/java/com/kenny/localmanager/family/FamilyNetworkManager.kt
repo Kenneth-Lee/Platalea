@@ -6,6 +6,7 @@ import android.net.nsd.NsdServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
+import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.util.getLocalIpAddress
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,6 +61,18 @@ data class FamilyDiscoveredService(
         get() = attributes["auth"]?.trim() == "1"
 }
 
+enum class BulletinAttachmentUploadPhase {
+    UPLOADING,
+    POSTING
+}
+
+data class BulletinAttachmentUploadProgress(
+    val itemName: String,
+    val uploadedBytes: Long,
+    val totalBytes: Long,
+    val phase: BulletinAttachmentUploadPhase = BulletinAttachmentUploadPhase.UPLOADING
+)
+
 data class FamilyNetworkState(
     val isRunning: Boolean = false,
     val isRegistered: Boolean = false,
@@ -70,6 +84,7 @@ data class FamilyNetworkState(
     val discoveredServices: List<FamilyDiscoveredService> = emptyList(),
     val localServiceEnabled: Boolean = true,
     val openBoardSession: BulletinBoardOpenSession? = null,
+    val attachmentUpload: BulletinAttachmentUploadProgress? = null,
     val logLines: List<String> = emptyList(),
     val lastError: String? = null
 )
@@ -91,6 +106,7 @@ class FamilyNetworkManager(context: Context) {
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
     private var serverJob: Job? = null
+    private var attachmentUploadJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
     private var networkPassword: String? = null
@@ -347,8 +363,26 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    fun uploadAttachmentAndPost(
+        item: DocumentFileModel,
+        textContent: String = ""
+    ) {
+        uploadAttachmentsAndPost(listOf(item), textContent)
+    }
+
     fun uploadPickedAttachmentsAndPost(
-        items: List<com.kenny.localmanager.file.DocumentFileModel>,
+        items: List<DocumentFileModel>,
+        textContent: String = ""
+    ) {
+        uploadAttachmentsAndPost(items, textContent)
+    }
+
+    fun cancelAttachmentUpload() {
+        attachmentUploadJob?.cancel()
+    }
+
+    private fun uploadAttachmentsAndPost(
+        items: List<DocumentFileModel>,
         textContent: String = ""
     ) {
         val session = _state.value.openBoardSession ?: return
@@ -356,38 +390,111 @@ class FamilyNetworkManager(context: Context) {
             appendError("上传失败：未选择任何文件或目录。")
             return
         }
-        scope.launch {
-            appendLog("开始上传 ${items.size} 个附件到 ${session.service.serviceName}…")
-            val (_, device) = buildAuthorIdentity()
-            val transport: BulletinAttachmentTransport = if (session.isHost) {
-                LocalBulletinAttachmentTransport(boardStore)
-            } else {
-                RemoteBulletinAttachmentTransport(
-                    service = session.service,
-                    accessPassword = session.accessPassword,
-                    requestJson = { method, path, body ->
-                        boardApiRequest(session.service, method, path, body, session.accessPassword)
-                    },
-                    requestBinary = { method, path, bytes ->
-                        boardApiBinaryRequest(session.service, method, path, bytes, session.accessPassword)
-                    }
-                )
+        attachmentUploadJob?.cancel()
+        attachmentUploadJob = scope.launch {
+            var pendingAttachmentId: String? = null
+            val primaryName = if (items.size == 1) items.first().name else "${items.size} 项附件"
+            val totalBytes = items.sumOf { estimateUploadBytes(appContext, it) }
+            try {
+                _state.update {
+                    it.copy(
+                        attachmentUpload = BulletinAttachmentUploadProgress(
+                            itemName = primaryName,
+                            uploadedBytes = 0L,
+                            totalBytes = totalBytes.coerceAtLeast(1L)
+                        )
+                    )
+                }
+                appendLog("开始上传附件到 ${session.service.serviceName}…")
+                val (_, device) = buildAuthorIdentity()
+                val transport: BulletinAttachmentTransport = if (session.isHost) {
+                    LocalBulletinAttachmentTransport(boardStore)
+                } else {
+                    RemoteBulletinAttachmentTransport(
+                        service = session.service,
+                        accessPassword = session.accessPassword,
+                        requestJson = { method, path, body ->
+                            boardApiRequest(session.service, method, path, body, session.accessPassword)
+                        },
+                        requestBinary = { method, path, bytes ->
+                            boardApiBinaryRequest(session.service, method, path, bytes, session.accessPassword)
+                        }
+                    )
+                }
+                val uploadResult = withContext(Dispatchers.IO) {
+                    BulletinAttachmentUploader.uploadItems(
+                        context = appContext,
+                        transport = transport,
+                        boardId = session.boardId,
+                        items = items,
+                        uploaderDevice = device,
+                        onAttachmentInit = { attachmentId -> pendingAttachmentId = attachmentId },
+                        onProgress = { uploaded, total ->
+                            _state.update { state ->
+                                state.copy(
+                                    attachmentUpload = BulletinAttachmentUploadProgress(
+                                        itemName = primaryName,
+                                        uploadedBytes = uploaded,
+                                        totalBytes = total.coerceAtLeast(1L)
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+                _state.update { state ->
+                    state.copy(
+                        attachmentUpload = state.attachmentUpload?.copy(
+                            phase = BulletinAttachmentUploadPhase.POSTING
+                        )
+                    )
+                }
+                uploadResult.onSuccess { refs ->
+                    val body = textContent.trim().ifBlank { "[${refs.size} 个附件]" }
+                    postBoardMessageInternal(session, body, refs)
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    appendError("上传附件失败：${error.message ?: error.javaClass.simpleName}")
+                }
+            } catch (_: CancellationException) {
+                pendingAttachmentId?.let { attachmentId ->
+                    abortIncompleteUpload(session, attachmentId)
+                }
+                appendLog("附件上传已取消")
+            } finally {
+                _state.update { it.copy(attachmentUpload = null) }
+                attachmentUploadJob = null
             }
-            val uploadResult = withContext(Dispatchers.IO) {
-                BulletinAttachmentUploader.uploadItems(
-                    context = appContext,
-                    transport = transport,
-                    boardId = session.boardId,
-                    items = items,
-                    uploaderDevice = device
-                )
-            }
-            uploadResult.onSuccess { refs ->
-                val body = textContent.trim().ifBlank { "[${refs.size} 个附件]" }
-                postBoardMessageInternal(session, body, refs)
+        }
+    }
+
+    private fun abortIncompleteUpload(session: BulletinBoardOpenSession, attachmentId: String) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                if (session.isHost) {
+                    boardStore.attachments.deleteAttachment(session.boardId, attachmentId)
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "DELETE",
+                        path = "/boards/${session.boardId}/attachments/$attachmentId",
+                        accessPassword = session.accessPassword
+                    )
+                }
             }.onFailure { error ->
-                appendError("上传附件失败：${error.message ?: error.javaClass.simpleName}")
+                appendLog("清理未完成附件失败：${error.message ?: error.javaClass.simpleName}")
             }
+        }
+    }
+
+    private fun estimateUploadBytes(context: android.content.Context, item: DocumentFileModel): Long {
+        return if (item.isDirectory) {
+            runCatching {
+                BulletinAttachmentUploader.collectDirectoryEntries(context, item.uri.toString())
+                    .sumOf { it.size }
+            }.getOrDefault(0L).coerceAtLeast(1L)
+        } else {
+            item.size.coerceAtLeast(1L)
         }
     }
 

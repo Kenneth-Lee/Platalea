@@ -139,6 +139,13 @@
     <string name="directory_pick_bulletin_message_header">[附件拣选]</string>
     <string name="directory_pick_bulletin_message_footer">共 %1$d 项（实际上传待实现）</string>
     <string name="family_board_add_attachment">添加附件</string>
+    <string name="attachment_pick_title">选择附件</string>
+    <string name="attachment_pick_hint">双击文件或目录以选择；单击目录进入</string>
+    <string name="attachment_pick_file_hint">请双击文件以选择</string>
+    <string name="attachment_upload_progress">正在上传 %1$s</string>
+    <string name="attachment_upload_posting">正在发布留言…</string>
+    <string name="attachment_upload_cancel">取消上传</string>
+    <string name="attachment_upload_no_root">未设置根目录，无法选择附件</string>
     <string name="fab_pending_list">待处理列表</string>
     <string name="fab_new">新建</string>
     <string name="context_open_with_other_app">用其他应用打开</string>

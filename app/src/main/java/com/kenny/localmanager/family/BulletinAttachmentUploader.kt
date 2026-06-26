@@ -5,7 +5,10 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.listChildrenFast
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -17,28 +20,73 @@ object BulletinAttachmentUploader {
         transport: BulletinAttachmentTransport,
         boardId: String,
         items: List<DocumentFileModel>,
-        uploaderDevice: String?
+        uploaderDevice: String?,
+        onAttachmentInit: ((attachmentId: String) -> Unit)? = null,
+        onProgress: ((uploadedBytes: Long, totalBytes: Long) -> Unit)? = null
     ): Result<List<BulletinAttachmentRef>> = withContext(Dispatchers.IO) {
-        runCatching {
-            val refs = mutableListOf<BulletinAttachmentRef>()
-            for (item in items) {
-                val ref = if (item.isDirectory) {
-                    uploadDirectory(context, transport, boardId, item, uploaderDevice)
-                } else {
-                    uploadFile(context, transport, boardId, item, uploaderDevice)
-                }
-                refs += ref
-            }
-            refs
+        try {
+            Result.success(runUploadItems(context, transport, boardId, items, uploaderDevice, onAttachmentInit, onProgress))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
         }
     }
 
-    private fun uploadFile(
+    private suspend fun runUploadItems(
+        context: Context,
+        transport: BulletinAttachmentTransport,
+        boardId: String,
+        items: List<DocumentFileModel>,
+        uploaderDevice: String?,
+        onAttachmentInit: ((attachmentId: String) -> Unit)?,
+        onProgress: ((uploadedBytes: Long, totalBytes: Long) -> Unit)?
+    ): List<BulletinAttachmentRef> {
+            val refs = mutableListOf<BulletinAttachmentRef>()
+            var aggregateUploaded = 0L
+            val aggregateTotal = items.sumOf { item ->
+                if (item.isDirectory) {
+                    collectDirectoryEntries(context, item.uri.toString()).sumOf { it.size }
+                } else {
+                    item.size
+                }
+            }.coerceAtLeast(1L)
+            for (item in items) {
+                coroutineContext.ensureActive()
+                val itemBytes = if (item.isDirectory) {
+                    collectDirectoryEntries(context, item.uri.toString()).sumOf { it.size }
+                } else {
+                    item.size
+                }
+                val ref = if (item.isDirectory) {
+                    uploadDirectory(
+                        context, transport, boardId, item, uploaderDevice,
+                        onAttachmentInit, onProgress,
+                        aggregateUploaded, aggregateTotal
+                    )
+                } else {
+                    uploadFile(
+                        context, transport, boardId, item, uploaderDevice,
+                        onAttachmentInit, onProgress,
+                        aggregateUploaded, aggregateTotal
+                    )
+                }
+                aggregateUploaded = minOf(aggregateTotal, aggregateUploaded + itemBytes)
+                refs += ref
+            }
+            return refs
+    }
+
+    private suspend fun uploadFile(
         context: Context,
         transport: BulletinAttachmentTransport,
         boardId: String,
         item: DocumentFileModel,
-        uploaderDevice: String?
+        uploaderDevice: String?,
+        onAttachmentInit: ((String) -> Unit)?,
+        onProgress: ((Long, Long) -> Unit)?,
+        bytesBeforeItem: Long,
+        aggregateTotal: Long
     ): BulletinAttachmentRef {
         val mime = context.contentResolver.getType(item.uri)
         val init = transport.initFileUpload(
@@ -48,6 +96,7 @@ object BulletinAttachmentUploader {
             mime = mime,
             uploaderDevice = uploaderDevice
         ).getOrElse { throw it }
+        onAttachmentInit?.invoke(init.attachmentId)
         uploadStreamInChunks(
             transport = transport,
             boardId = boardId,
@@ -55,17 +104,24 @@ object BulletinAttachmentUploader {
             fileId = null,
             chunkSize = init.chunkSize,
             totalSize = item.size,
-            openStream = { context.contentResolver.openInputStream(item.uri) }
+            openStream = { context.contentResolver.openInputStream(item.uri) },
+            onProgress = { uploadedInItem ->
+                onProgress?.invoke(bytesBeforeItem + uploadedInItem, aggregateTotal)
+            }
         )
         return transport.completeUpload(boardId, init.attachmentId).getOrElse { throw it }
     }
 
-    private fun uploadDirectory(
+    private suspend fun uploadDirectory(
         context: Context,
         transport: BulletinAttachmentTransport,
         boardId: String,
         item: DocumentFileModel,
-        uploaderDevice: String?
+        uploaderDevice: String?,
+        onAttachmentInit: ((String) -> Unit)?,
+        onProgress: ((Long, Long) -> Unit)?,
+        bytesBeforeItem: Long,
+        aggregateTotal: Long
     ): BulletinAttachmentRef {
         val entries = collectDirectoryEntries(context, item.uri.toString())
         if (entries.isEmpty()) {
@@ -77,10 +133,13 @@ object BulletinAttachmentUploader {
             entries = entries,
             uploaderDevice = uploaderDevice
         ).getOrElse { throw it }
+        onAttachmentInit?.invoke(init.attachmentId)
         val pathToUri = mapDirectoryEntryUris(context, item.uri.toString(), entries)
+        var uploadedInDirectory = 0L
         init.directoryFiles.forEach { slot ->
             val uri = pathToUri[slot.path]
                 ?: throw IllegalStateException("目录内找不到文件：${slot.path}")
+            val fileOffset = uploadedInDirectory
             uploadStreamInChunks(
                 transport = transport,
                 boardId = boardId,
@@ -88,20 +147,25 @@ object BulletinAttachmentUploader {
                 fileId = slot.fileId,
                 chunkSize = init.chunkSize,
                 totalSize = slot.size,
-                openStream = { context.contentResolver.openInputStream(uri) }
+                openStream = { context.contentResolver.openInputStream(uri) },
+                onProgress = { uploadedInFile ->
+                    onProgress?.invoke(bytesBeforeItem + fileOffset + uploadedInFile, aggregateTotal)
+                }
             )
+            uploadedInDirectory += slot.size
         }
         return transport.completeUpload(boardId, init.attachmentId).getOrElse { throw it }
     }
 
-    private fun uploadStreamInChunks(
+    private suspend fun uploadStreamInChunks(
         transport: BulletinAttachmentTransport,
         boardId: String,
         attachmentId: String,
         fileId: String?,
         chunkSize: Int,
         totalSize: Long,
-        openStream: () -> InputStream?
+        openStream: () -> InputStream?,
+        onProgress: ((uploadedInStream: Long) -> Unit)? = null
     ) {
         val input = openStream() ?: throw IllegalStateException("无法读取文件流")
         input.use { stream ->
@@ -109,6 +173,7 @@ object BulletinAttachmentUploader {
             var chunkIndex = 0
             var uploaded = 0L
             while (uploaded < totalSize) {
+                coroutineContext.ensureActive()
                 val toRead = minOf(chunkSize.toLong(), totalSize - uploaded).toInt()
                 val read = stream.read(buffer, 0, toRead)
                 if (read <= 0) break
@@ -122,6 +187,7 @@ object BulletinAttachmentUploader {
                 }
                 chunkIndex++
                 uploaded += read
+                onProgress?.invoke(uploaded)
             }
             if (uploaded < totalSize) {
                 throw IllegalStateException("上传未完成：已传 $uploaded / $totalSize 字节")

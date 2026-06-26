@@ -115,8 +115,12 @@ class BulletinBoardStore(context: Context) {
         val messages = readMessages(boardId)
         val index = messages.indexOfFirst { it.id == messageId && !it.deleted }
         if (index < 0) return@write false
+        val target = messages[index]
+        target.attachments.forEach { ref ->
+            attachments.deleteAttachment(boardId, ref.id)
+        }
         val now = System.currentTimeMillis()
-        messages[index] = messages[index].copy(deleted = true, updatedAt = now)
+        messages[index] = target.copy(deleted = true, updatedAt = now)
         writeMessages(boardId, messages)
         writeMeta(boardId, meta.put("revision", meta.optLong("revision") + 1L))
         true
