@@ -66,6 +66,8 @@ data class ConfigTabRouteState(
     val onFtpPasswordChange: (String) -> Unit,
     val networkServiceTimeoutMinutes: Int,
     val onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
+    val localNetworkServiceEnabled: Boolean,
+    val onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     val onOpenGitConfig: () -> Unit,
     val onManageKeys: () -> Unit,
     val onOpenCacheManagement: () -> Unit,
@@ -89,6 +91,8 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onFtpPasswordChange = state.onFtpPasswordChange,
         networkServiceTimeoutMinutes = state.networkServiceTimeoutMinutes,
         onNetworkServiceTimeoutMinutesChange = state.onNetworkServiceTimeoutMinutesChange,
+        localNetworkServiceEnabled = state.localNetworkServiceEnabled,
+        onLocalNetworkServiceEnabledChange = state.onLocalNetworkServiceEnabledChange,
         onOpenGitConfig = state.onOpenGitConfig,
         onManageKeys = state.onManageKeys,
         onOpenCacheManagement = state.onOpenCacheManagement,
@@ -114,6 +118,8 @@ private fun ConfigPanel(
     onFtpPasswordChange: (String) -> Unit,
     networkServiceTimeoutMinutes: Int,
     onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
+    localNetworkServiceEnabled: Boolean,
+    onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -161,14 +167,19 @@ private fun ConfigPanel(
         }
     }
 
-    val ftpSummary = remember(localFtpPassword, localNetworkServiceTimeoutMinutes, context) {
+    val ftpSummary = remember(localFtpPassword, localNetworkServiceTimeoutMinutes, localNetworkServiceEnabled, context) {
         val passwordState = if (localFtpPassword.isBlank()) {
             context.getString(R.string.config_ftp_password_unset)
         } else {
             context.getString(R.string.config_ftp_password_set)
         }
         val timeoutValue = localNetworkServiceTimeoutMinutes.filter { it.isDigit() }.toIntOrNull() ?: networkServiceTimeoutMinutes
-        context.getString(R.string.config_ftp_summary, passwordState, timeoutValue)
+        val localServiceState = if (localNetworkServiceEnabled) {
+            context.getString(R.string.config_local_network_service_on)
+        } else {
+            context.getString(R.string.config_local_network_service_off)
+        }
+        context.getString(R.string.config_ftp_summary, passwordState, localServiceState, timeoutValue)
     }
     val epubTtsSummary = remember(
         effectiveEpubTtsEngine,
@@ -202,6 +213,24 @@ private fun ConfigPanel(
             title = { Text(context.getString(R.string.config_ftp_section)) },
             text = {
                 Column {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(context.getString(R.string.config_local_network_service_enabled))
+                            Text(
+                                context.getString(R.string.config_local_network_service_enabled_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = localNetworkServiceEnabled,
+                            onCheckedChange = onLocalNetworkServiceEnabledChange
+                        )
+                    }
+                    Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = localFtpPassword,
                         onValueChange = { s ->
@@ -712,6 +741,8 @@ fun ConfigDialog(
     onFtpPasswordChange: (String) -> Unit,
     networkServiceTimeoutMinutes: Int,
     onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
+    localNetworkServiceEnabled: Boolean,
+    onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -738,6 +769,8 @@ fun ConfigDialog(
                 onFtpPasswordChange = onFtpPasswordChange,
                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
                 onNetworkServiceTimeoutMinutesChange = onNetworkServiceTimeoutMinutesChange,
+                localNetworkServiceEnabled = localNetworkServiceEnabled,
+                onLocalNetworkServiceEnabledChange = onLocalNetworkServiceEnabledChange,
                 onOpenGitConfig = onOpenGitConfig,
                 onManageKeys = onManageKeys,
                 onOpenCacheManagement = onOpenCacheManagement,

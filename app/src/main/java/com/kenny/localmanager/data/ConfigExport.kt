@@ -18,6 +18,7 @@ private const val KEY_STARTUP_DECRYPT_KEY = "startup_decrypt_key"
 private const val KEY_FTP_PORT = "ftp_port"
 private const val KEY_FTP_PASSWORD = "ftp_password"
 private const val KEY_FTP_TIMEOUT_MINUTES = "ftp_timeout_minutes"
+private const val KEY_LOCAL_NETWORK_SERVICE_ENABLED = "local_network_service_enabled"
 private const val KEY_GIT_REPO_URL = "git_repo_url"
 private const val KEY_GIT_USER_NAME = "git_user_name"
 private const val KEY_GIT_USER_EMAIL = "git_user_email"
@@ -82,6 +83,7 @@ suspend fun exportConfig(
         obj.put(KEY_FTP_PORT, prefs.ftpPort.first())
         prefs.ftpPassword.first()?.let { obj.put(KEY_FTP_PASSWORD, it) }
         obj.put(KEY_FTP_TIMEOUT_MINUTES, prefs.ftpTimeoutMinutes.first())
+        obj.put(KEY_LOCAL_NETWORK_SERVICE_ENABLED, prefs.localNetworkServiceEnabled.first())
         obj.put(KEY_EXTERNAL_OPEN_BY_EXTENSION, JSONObject(prefs.externalOpenByExtension.first()))
         obj.put(KEY_ROOT_BOOKMARKS, RootBookmarkManager(context).toJson())
     }
@@ -180,6 +182,7 @@ fun configJsonCategories(jsonString: String): Set<ConfigExportCategory> {
             obj.has(KEY_FTP_PORT) ||
             obj.has(KEY_FTP_PASSWORD) ||
             obj.has(KEY_FTP_TIMEOUT_MINUTES) ||
+            obj.has(KEY_LOCAL_NETWORK_SERVICE_ENABLED) ||
             obj.has(KEY_EXTERNAL_OPEN_BY_EXTENSION) ||
             obj.has(KEY_ROOT_BOOKMARKS)
         ) add(ConfigExportCategory.OTHER)
@@ -213,6 +216,9 @@ suspend fun importConfig(
         if (obj.has(KEY_FTP_PORT)) prefs.setFtpPort(obj.getInt(KEY_FTP_PORT).coerceIn(1024, 65535))
         if (obj.has(KEY_FTP_PASSWORD)) prefs.setFtpPassword(obj.optString(KEY_FTP_PASSWORD).ifBlank { null })
         if (obj.has(KEY_FTP_TIMEOUT_MINUTES)) prefs.setFtpTimeoutMinutes(obj.getInt(KEY_FTP_TIMEOUT_MINUTES).coerceIn(0, 1440))
+        if (obj.has(KEY_LOCAL_NETWORK_SERVICE_ENABLED)) {
+            prefs.setLocalNetworkServiceEnabled(obj.optBoolean(KEY_LOCAL_NETWORK_SERVICE_ENABLED, true))
+        }
     }
     if (ConfigExportCategory.GIT in categories) {
         if (obj.has(KEY_GIT_REPO_URL)) prefs.setGitRepoUrl(obj.optString(KEY_GIT_REPO_URL).ifBlank { null })

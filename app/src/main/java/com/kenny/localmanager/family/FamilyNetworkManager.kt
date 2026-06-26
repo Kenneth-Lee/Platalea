@@ -9,11 +9,13 @@ import android.util.Log
 import com.kenny.localmanager.util.getLocalIpAddress
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
 import java.nio.charset.StandardCharsets
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
@@ -38,6 +40,7 @@ private const val FAMILY_SERVICE_TYPE = "_localmanager._tcp."
 private const val FAMILY_VERSION = "0.2"
 private const val FAMILY_PREFERRED_PORT = 8765
 private const val FAMILY_LOG_LIMIT = 200
+private const val INSTANCE_ID_FILE = "family_network_instance_id"
 
 data class FamilyDiscoveredService(
     val serviceName: String,
@@ -50,6 +53,10 @@ data class FamilyDiscoveredService(
     val deviceKey: String
         get() = attributes["instance_id"]?.takeIf { it.isNotBlank() }
             ?: "$serviceName@$host:$port"
+
+    /** mDNS TXT `auth=1` 表示对端要求接入密码。 */
+    val requiresPasswordAuth: Boolean
+        get() = attributes["auth"]?.trim() == "1"
 }
 
 data class FamilyNetworkState(
@@ -61,6 +68,7 @@ data class FamilyNetworkState(
     val port: Int = 0,
     val localIp: String? = null,
     val discoveredServices: List<FamilyDiscoveredService> = emptyList(),
+    val localServiceEnabled: Boolean = true,
     val openBoardSession: BulletinBoardOpenSession? = null,
     val logLines: List<String> = emptyList(),
     val lastError: String? = null
@@ -85,11 +93,28 @@ class FamilyNetworkManager(context: Context) {
     private var serverJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
+    private var networkPassword: String? = null
+    private var localServiceEnabled: Boolean = true
+
+    fun configure(networkPassword: String?, localServiceEnabled: Boolean) {
+        this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
+        val enabledChanged = this.localServiceEnabled != localServiceEnabled
+        this.localServiceEnabled = localServiceEnabled
+        _state.update { it.copy(localServiceEnabled = localServiceEnabled) }
+        if (!started) return
+        if (enabledChanged) {
+            if (localServiceEnabled) {
+                startLocalServerStack(_state.value.localIp)
+            } else {
+                stopLocalServerStack()
+            }
+        }
+    }
 
     fun start() {
         if (started) return
         started = true
-        appendLog("启动家庭网络服务。")
+        appendLog("启动家庭网络客户端。")
         val manager = nsdManager
         if (manager == null) {
             val message = "系统未提供 NsdManager，无法进行 mDNS 注册和发现。"
@@ -104,47 +129,82 @@ class FamilyNetworkManager(context: Context) {
             appendLog("获取本机 IP 失败：${e.message ?: e.javaClass.simpleName}")
             null
         }
-        _state.update { it.copy(localIp = localIp) }
+        _state.update {
+            it.copy(
+                localIp = localIp,
+                isRunning = true,
+                localServiceEnabled = localServiceEnabled,
+                lastError = null
+            )
+        }
         try {
-            val localIdentity = tlsManager.localIdentity()
-            val server = EmbeddedHttpServer(
-                preferredPort = FAMILY_PREFERRED_PORT,
-                sslContext = localIdentity.sslContext,
-                log = { appendLog(it) },
-                handleRequest = { method, path, body, remoteAddress ->
-                    handleHttpRequest(method, path, body, remoteAddress)
-                }
-            )
-            server.start()
-            httpsServer = server
-            serverJob = scope.launch(Dispatchers.IO) { server.acceptLoop() }
-            appendLog("本地 HTTPS 服务已监听端口 ${server.port}，证书指纹=${localIdentity.fingerprintSha256}。")
-            val instanceId = UUID.randomUUID().toString()
-            currentInstanceId = instanceId
-            val requestedServiceName = buildServiceName()
-            _state.update {
-                it.copy(
-                    isRunning = true,
-                    isRegistered = false,
-                    serviceName = requestedServiceName,
-                    port = server.port,
-                    lastError = null
-                )
+            if (localServiceEnabled) {
+                startLocalServerStack(localIp)
+            } else {
+                appendLog("本机留言板服务已关闭，仅发现局域网内其他设备。")
             }
-            registerService(
-                manager = manager,
-                requestedServiceName = requestedServiceName,
-                port = server.port,
-                instanceId = instanceId,
-                tlsFingerprint = localIdentity.fingerprintSha256
-            )
-            publishLocalSelfService(localIp, server.port, instanceId, localIdentity.fingerprintSha256)
             startDiscovery(clearDiscovered = false)
         } catch (e: Throwable) {
-            appendError("启动家庭网络服务失败：${e.message ?: e.javaClass.simpleName}")
+            appendError("启动家庭网络失败：${e.message ?: e.javaClass.simpleName}")
             Log.e(TAG, "start failed", e)
             stop()
         }
+    }
+
+    private fun startLocalServerStack(localIp: String?) {
+        if (!localServiceEnabled || httpsServer != null) return
+        val localIdentity = tlsManager.localIdentity()
+        val server = EmbeddedHttpServer(
+            preferredPort = FAMILY_PREFERRED_PORT,
+            sslContext = localIdentity.sslContext,
+            log = { appendLog(it) },
+            handleRequest = { method, path, body, remoteAddress, headers ->
+                handleHttpRequest(method, path, body, remoteAddress, headers)
+            }
+        )
+        server.start()
+        httpsServer = server
+        serverJob = scope.launch(Dispatchers.IO) { server.acceptLoop() }
+        appendLog("本地 HTTPS 留言板已监听端口 ${server.port}，证书指纹=${localIdentity.fingerprintSha256}。")
+        val instanceId = loadOrCreateInstanceId()
+        currentInstanceId = instanceId
+        val requestedServiceName = buildServiceName()
+        _state.update {
+            it.copy(
+                serviceName = requestedServiceName,
+                port = server.port,
+                lastError = null
+            )
+        }
+        val manager = nsdManager ?: return
+        registerService(
+            manager = manager,
+            requestedServiceName = requestedServiceName,
+            port = server.port,
+            instanceId = instanceId,
+            tlsFingerprint = localIdentity.fingerprintSha256
+        )
+    }
+
+    private fun stopLocalServerStack() {
+        unregisterServiceInternal()
+        serverJob?.cancel()
+        serverJob = null
+        httpsServer?.stop()
+        httpsServer = null
+        currentInstanceId = null
+        _state.update { current ->
+            current.copy(
+                isRegistered = false,
+                serviceName = "",
+                port = 0,
+                discoveredServices = current.discoveredServices.filterNot { it.isSelf }
+            )
+        }
+        if (_state.value.openBoardSession?.service?.isSelf == true) {
+            closeBulletinBoard()
+        }
+        appendLog("本机留言板 HTTPS 服务已停止。")
     }
 
     fun refresh() {
@@ -154,13 +214,22 @@ class FamilyNetworkManager(context: Context) {
             return
         }
         appendLog("手工刷新服务发现。")
-        startDiscovery(clearDiscovered = true)
+        _state.update { current ->
+            current.copy(discoveredServices = current.discoveredServices.filter { it.isSelf }.take(1))
+        }
+        startDiscovery(clearDiscovered = false)
+        republishLocalSelfServiceIfRunning()
     }
 
     fun openBulletinBoard(
         service: FamilyDiscoveredService,
-        boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID
+        boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID,
+        accessPassword: String? = null
     ) {
+        if (service.isSelf && !localServiceEnabled) {
+            appendError("本机留言板服务已在配置中关闭，无法进入本机留言板。")
+            return
+        }
         val isHost = service.isSelf
         _state.update {
             it.copy(
@@ -169,11 +238,34 @@ class FamilyNetworkManager(context: Context) {
                     boardId = boardId,
                     boardName = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
                     isHost = isHost,
+                    accessPassword = accessPassword?.trim()?.ifEmpty { null },
                     loading = true
                 )
             )
         }
         scope.launch { refreshOpenBoard() }
+    }
+
+    suspend fun probeBoardAccess(
+        service: FamilyDiscoveredService,
+        boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID,
+        accessPassword: String? = null
+    ): Result<Unit> {
+        if (service.isSelf && !localServiceEnabled) {
+            return Result.failure(IllegalStateException("本机留言板服务已关闭"))
+        }
+        if (service.isSelf) {
+            return withContext(Dispatchers.IO) {
+                if (boardStore.snapshot(boardId) != null) {
+                    Result.success(Unit)
+                } else {
+                    Result.failure(IllegalStateException("留言板不存在：$boardId"))
+                }
+            }
+        }
+        return withContext(Dispatchers.IO) {
+            fetchBoardSnapshot(service, boardId, accessPassword?.trim()?.ifEmpty { null }).map { }
+        }
     }
 
     fun closeBulletinBoard() {
@@ -190,7 +282,11 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             val result = withContext(Dispatchers.IO) {
-                fetchBoardSnapshot(session.service, session.boardId)
+                if (session.isHost) {
+                    loadLocalBoardSnapshot(session.boardId)
+                } else {
+                    fetchBoardSnapshot(session.service, session.boardId, session.accessPassword)
+                }
             }
             result.onSuccess { snapshot ->
                 _state.update { current ->
@@ -242,15 +338,23 @@ class FamilyNetworkManager(context: Context) {
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                boardApiRequest(
-                    service = session.service,
-                    method = "POST",
-                    path = "/boards/${session.boardId}/messages",
-                    body = JSONObject().apply {
-                        put("content", trimmed)
-                        put("author_label", authorLabel)
-                    }.toString()
-                )
+                if (session.isHost) {
+                    runCatching {
+                        boardStore.appendMessage(session.boardId, authorLabel, trimmed)
+                            ?: throw IllegalStateException("消息内容不能为空或留言板不存在")
+                    }.map { }
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "POST",
+                        path = "/boards/${session.boardId}/messages",
+                        body = JSONObject().apply {
+                            put("content", trimmed)
+                            put("author_label", authorLabel)
+                        }.toString(),
+                        accessPassword = session.accessPassword
+                    )
+                }
             }
             result.onSuccess {
                 appendLog("留言已发布到 ${session.service.serviceName}/${session.boardId}")
@@ -274,12 +378,20 @@ class FamilyNetworkManager(context: Context) {
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                boardApiRequest(
-                    service = session.service,
-                    method = "PUT",
-                    path = "/boards/${session.boardId}/messages/$messageId",
-                    body = JSONObject().apply { put("content", trimmed) }.toString()
-                )
+                if (session.isHost) {
+                    runCatching {
+                        boardStore.updateMessage(session.boardId, messageId, trimmed)
+                            ?: throw IllegalStateException("留言不存在或内容为空")
+                    }.map { }
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "PUT",
+                        path = "/boards/${session.boardId}/messages/$messageId",
+                        body = JSONObject().apply { put("content", trimmed) }.toString(),
+                        accessPassword = session.accessPassword
+                    )
+                }
             }
             result.onSuccess {
                 appendLog("留言已更新：$messageId")
@@ -298,11 +410,20 @@ class FamilyNetworkManager(context: Context) {
         }
         scope.launch {
             val result = withContext(Dispatchers.IO) {
-                boardApiRequest(
-                    service = session.service,
-                    method = "DELETE",
-                    path = "/boards/${session.boardId}/messages/$messageId"
-                )
+                if (session.isHost) {
+                    runCatching {
+                        if (!boardStore.deleteMessage(session.boardId, messageId)) {
+                            throw IllegalStateException("留言不存在")
+                        }
+                    }.map { }
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "DELETE",
+                        path = "/boards/${session.boardId}/messages/$messageId",
+                        accessPassword = session.accessPassword
+                    )
+                }
             }
             result.onSuccess {
                 appendLog("留言已删除：$messageId")
@@ -332,6 +453,7 @@ class FamilyNetworkManager(context: Context) {
                 isDiscovering = false,
                 serviceName = "",
                 port = 0,
+                discoveredServices = emptyList(),
                 openBoardSession = null
             )
         }
@@ -360,6 +482,9 @@ class FamilyNetworkManager(context: Context) {
             setAttribute("platform", "android")
             setAttribute("tls", "1")
             setAttribute(FAMILY_TLS_FINGERPRINT_ATTR, tlsFingerprint)
+            if (!networkPassword.isNullOrBlank()) {
+                setAttribute("auth", "1")
+            }
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
@@ -483,9 +608,14 @@ class FamilyNetworkManager(context: Context) {
     }
 
     private fun upsertDiscoveredService(entry: FamilyDiscoveredService) {
+        if (entry.isSelf && !localServiceEnabled) return
         _state.update { current ->
-            val updated = current.discoveredServices
-                .filterNot { it.deviceKey == entry.deviceKey && it.isSelf == entry.isSelf }
+            val withoutDuplicate = if (entry.isSelf) {
+                current.discoveredServices.filterNot { it.isSelf }
+            } else {
+                current.discoveredServices.filterNot { it.deviceKey == entry.deviceKey }
+            }
+            val updated = withoutDuplicate
                 .plus(entry)
                 .sortedWith(
                     compareByDescending<FamilyDiscoveredService> { it.isSelf }
@@ -495,12 +625,32 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    private fun republishLocalSelfServiceIfRunning() {
+        if (!localServiceEnabled) return
+        val instanceId = currentInstanceId ?: return
+        val port = _state.value.port
+        if (port <= 0) return
+        val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
+        publishLocalSelfService(_state.value.localIp, port, instanceId, tlsFingerprint)
+    }
+
+    private fun loadOrCreateInstanceId(): String {
+        val file = File(appContext.filesDir, INSTANCE_ID_FILE)
+        if (file.exists()) {
+            file.readText().trim().takeIf { it.isNotEmpty() }?.let { return it }
+        }
+        val id = UUID.randomUUID().toString()
+        file.writeText(id)
+        return id
+    }
+
     private fun publishLocalSelfService(
         host: String?,
         port: Int,
         instanceId: String,
         tlsFingerprint: String
     ) {
+        if (!localServiceEnabled) return
         if (port <= 0) return
         val serviceName = _state.value.serviceName.ifBlank { buildServiceName() }
         val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1"
@@ -525,8 +675,24 @@ class FamilyNetworkManager(context: Context) {
         appendLog("本机留言板服务已加入发现列表：$resolvedHost:$port")
     }
 
-    private fun handleHttpRequest(method: String, path: String, body: String, remoteAddress: String): FamilyHttpResponse {
+    private fun handleHttpRequest(
+        method: String,
+        path: String,
+        body: String,
+        remoteAddress: String,
+        headers: Map<String, String>
+    ): FamilyHttpResponse {
         if (path.startsWith("/boards")) {
+            if (!verifyNetworkPassword(headers)) {
+                return FamilyHttpResponse(
+                    401,
+                    JSONObject().apply {
+                        put("ok", false)
+                        put("error", "unauthorized")
+                        put("message", "需要正确的网络服务密码")
+                    }.toString()
+                )
+            }
             return boardHttpHandler.handle(method, path, body)
         }
         if (method == "GET" && (path == "/" || path.isEmpty())) {
@@ -546,8 +712,31 @@ class FamilyNetworkManager(context: Context) {
         }.toString())
     }
 
-    private fun fetchBoardSnapshot(service: FamilyDiscoveredService, boardId: String): Result<BulletinBoardSnapshot> {
-        return boardApiRequest(service, "GET", "/boards/$boardId/messages").mapCatching { text ->
+    private fun verifyNetworkPassword(headers: Map<String, String>): Boolean {
+        val required = networkPassword?.trim()?.takeIf { it.isNotEmpty() } ?: return true
+        val provided = headers[FamilyNetworkAuth.PASSWORD_HEADER.lowercase(Locale.ROOT)]?.trim().orEmpty()
+        return provided == required
+    }
+
+    private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {
+        return runCatching {
+            boardStore.snapshot(boardId)
+                ?: throw IllegalStateException("留言板不存在：$boardId")
+        }
+    }
+
+    private fun fetchBoardSnapshot(
+        service: FamilyDiscoveredService,
+        boardId: String,
+        accessPassword: String? = null
+    ): Result<BulletinBoardSnapshot> {
+        return boardApiRequest(
+            service = service,
+            method = "GET",
+            path = "/boards/$boardId/messages",
+            body = null,
+            accessPassword = accessPassword
+        ).mapCatching { text ->
             val json = JSONObject(text)
             if (!json.optBoolean("ok", false)) {
                 throw IllegalStateException(json.optString("message", "读取留言板失败"))
@@ -571,7 +760,8 @@ class FamilyNetworkManager(context: Context) {
         service: FamilyDiscoveredService,
         method: String,
         path: String,
-        body: String? = null
+        body: String? = null,
+        accessPassword: String? = null
     ): Result<String> {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
@@ -588,6 +778,9 @@ class FamilyNetworkManager(context: Context) {
                 connectTimeout = 8000
                 readTimeout = 8000
                 setRequestProperty("Accept", "application/json")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
                 if (body != null) {
                     doOutput = true
                     setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -737,7 +930,7 @@ private class EmbeddedHttpServer(
     preferredPort: Int,
     sslContext: SSLContext,
     private val log: (String) -> Unit,
-    private val handleRequest: (String, String, String, String) -> FamilyHttpResponse
+    private val handleRequest: (String, String, String, String, Map<String, String>) -> FamilyHttpResponse
 ) {
     private val running = AtomicBoolean(false)
     private val serverSocket: SSLServerSocket = (sslContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
@@ -797,12 +990,14 @@ private class EmbeddedHttpServer(
             val method = requestParts.getOrNull(0)?.uppercase() ?: "GET"
             val path = requestParts.getOrNull(1) ?: "/"
             var contentLength = 0
+            val headers = mutableMapOf<String, String>()
             for (line in headerLines.drop(1)) {
                 if (line.isEmpty()) break
                 val separator = line.indexOf(':')
                 if (separator > 0) {
                     val headerName = line.substring(0, separator).trim()
                     val headerValue = line.substring(separator + 1).trim()
+                    headers[headerName.lowercase(Locale.ROOT)] = headerValue
                     if (headerName.equals("Content-Length", ignoreCase = true)) {
                         contentLength = headerValue.toIntOrNull() ?: 0
                     }
@@ -819,7 +1014,8 @@ private class EmbeddedHttpServer(
                         method,
                         path,
                         bodyBytes.toString(StandardCharsets.UTF_8),
-                        client.inetAddress?.hostAddress ?: ""
+                        client.inetAddress?.hostAddress ?: "",
+                        headers
                     )
                 }
                 else -> FamilyHttpResponse(405, "{\"ok\":false,\"error\":\"method_not_allowed\"}")
@@ -879,6 +1075,7 @@ private class EmbeddedHttpServer(
             200 -> "OK"
             400 -> "Bad Request"
             404 -> "Not Found"
+            401 -> "Unauthorized"
             405 -> "Method Not Allowed"
             else -> "OK"
         }

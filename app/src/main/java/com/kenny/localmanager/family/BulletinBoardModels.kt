@@ -3,6 +3,10 @@ package com.kenny.localmanager.family
 import org.json.JSONArray
 import org.json.JSONObject
 
+object FamilyNetworkAuth {
+    const val PASSWORD_HEADER = "X-Network-Service-Password"
+}
+
 object BulletinBoardDefaults {
     const val DEFAULT_BOARD_ID = "default"
     const val DEFAULT_BOARD_NAME = "默认留言板"
@@ -67,6 +71,7 @@ data class BulletinBoardOpenSession(
     val boardId: String,
     val boardName: String,
     val isHost: Boolean,
+    val accessPassword: String? = null,
     val revision: Long = 0L,
     val messages: List<BulletinMessage> = emptyList(),
     val loading: Boolean = false,

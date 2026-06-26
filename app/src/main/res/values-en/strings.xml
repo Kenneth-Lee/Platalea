@@ -160,12 +160,19 @@
     <string name="config_startup_decrypt_desc">When enabled, startup asks for the private-key password to unlock it. After a successful unlock, the key stays cached in memory and later key operations will not ask again. This is not exported.</string>
     <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes)</string>
     <string name="config_viewer_preview_range">Range: %1$d to %2$dM</string>
-    <string name="config_ftp_password">FTP password</string>
-    <string name="config_ftp_password_hint">Leave empty to allow access without a password.</string>
+    <string name="config_ftp_password">Network service password</string>
+    <string name="config_ftp_password_hint">Access password for local FTP and bulletin board. Leave empty for no password. Other devices must enter this password to connect to this device.</string>
+    <string name="config_ftp_password_set">Password set</string>
+    <string name="config_ftp_password_unset">No password</string>
     <string name="config_ftp_timeout_minutes">Network service page auto close (minutes)</string>
     <string name="config_ftp_timeout_placeholder">0 = never exit</string>
     <string name="config_ftp_timeout_hint">Used by the FTP and Family Network pages. 0 means it will not exit automatically.</string>
-    <string name="config_ftp_summary">%1$s; network service pages close in %2$d minute(s)</string>
+    <string name="config_ftp_section">Network Services</string>
+    <string name="config_ftp_summary">%1$s; local board service %2$s; page timeout %3$d min</string>
+    <string name="config_local_network_service_enabled">Enable local bulletin board service</string>
+    <string name="config_local_network_service_enabled_hint">When off, this device is not advertised and cannot be connected, but you can still browse other devices.</string>
+    <string name="config_local_network_service_on">enabled</string>
+    <string name="config_local_network_service_off">disabled</string>
     <string name="config_git">Git Configuration</string>
     <string name="config_gpg_keys">GPG Key Management</string>
     <string name="config_cache">Cache Management</string>
@@ -212,6 +219,14 @@
     <string name="family_board_delete_title">Delete Message</string>
     <string name="family_board_delete_confirm">Delete this message?</string>
     <string name="family_board_send">Send</string>
+    <string name="family_board_password_title">Open Bulletin Board</string>
+    <string name="family_board_password_hint">Enter this device\'s access password (not the password you set for your own device in global settings).</string>
+    <string name="family_board_password_label">Device access password</string>
+    <string name="family_board_password_wrong">Wrong password</string>
+    <string name="family_network_requires_password">Password required</string>
+    <string name="family_network_local_password_set">Local access password: set (required for external devices)</string>
+    <string name="family_network_local_password_unset">Local access password: not set (open access)</string>
+    <string name="family_network_local_service_disabled">Local bulletin board service is disabled</string>
     <string name="family_network_expand">Expand</string>
     <string name="family_network_collapse">Collapse</string>
     <string name="family_network_unknown_service_name">Unnamed Service</string>

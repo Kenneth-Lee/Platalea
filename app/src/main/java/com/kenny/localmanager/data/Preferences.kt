@@ -20,6 +20,7 @@ private val HIDE_DOT_FILES = booleanPreferencesKey("hide_dot_files")
 private val VIEWER_PREVIEW_BYTES = intPreferencesKey("viewer_preview_bytes")
 private val FTP_PORT = intPreferencesKey("ftp_port")
 private val FTP_PASSWORD = stringPreferencesKey("ftp_password")
+private val LOCAL_NETWORK_SERVICE_ENABLED = booleanPreferencesKey("local_network_service_enabled")
 private val FTP_TIMEOUT_MINUTES = intPreferencesKey("ftp_timeout_minutes")
 private val FILTER_VISIBLE = booleanPreferencesKey("filter_visible")
 private val GIT_REPO_URL = stringPreferencesKey("git_repo_url")
@@ -192,6 +193,10 @@ class Preferences(private val context: Context) {
     }
 
     val networkServiceTimeoutMinutes: Flow<Int> = ftpTimeoutMinutes
+
+    val localNetworkServiceEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
+        prefs[LOCAL_NETWORK_SERVICE_ENABLED] ?: true
+    }
 
     val filterVisible: Flow<Boolean> = context.dataStore.data.map { prefs ->
         prefs[FILTER_VISIBLE] ?: true
@@ -564,6 +569,12 @@ class Preferences(private val context: Context) {
 
     suspend fun setNetworkServiceTimeoutMinutes(minutes: Int) {
         setFtpTimeoutMinutes(minutes)
+    }
+
+    suspend fun setLocalNetworkServiceEnabled(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[LOCAL_NETWORK_SERVICE_ENABLED] = enabled
+        }
     }
 
     suspend fun setFilterVisible(visible: Boolean) {

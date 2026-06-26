@@ -1749,6 +1749,7 @@ private fun FileBrowserAppScreen(
         var ftpPort by remember { mutableStateOf(2121) }
         var ftpPassword by remember { mutableStateOf<String?>(null) }
         var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
+        var localNetworkServiceEnabled by remember { mutableStateOf(true) }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -2253,12 +2254,18 @@ private fun FileBrowserAppScreen(
             prefs.networkServiceTimeoutMinutes.collect { networkServiceTimeoutMinutes = it }
         }
         LaunchedEffect(prefs) {
+            prefs.localNetworkServiceEnabled.collect { localNetworkServiceEnabled = it }
+        }
+        LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
             if (activeMainTab != MainTab.FTP) {
                 ftpManager.stop()
             }
+        }
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled) {
+            familyNetworkManager.configure(ftpPassword, localNetworkServiceEnabled)
         }
         DisposableEffect(familyNetworkManager) {
             onDispose {
@@ -2288,6 +2295,7 @@ private fun FileBrowserAppScreen(
                 showGitConfigDialog -> showGitConfigDialog = false
                 showPendingDeleteConfirm -> showPendingDeleteConfirm = false
                 showPendingList -> showPendingList = false
+                familyNetworkManager.state.value.openBoardSession != null -> familyNetworkManager.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 zipUnzipTarget != null -> zipUnzipTarget = null
                 mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
@@ -2883,6 +2891,8 @@ private fun FileBrowserAppScreen(
                     familyNetworkContent = {
                         FamilyNetworkScreen(
                             manager = familyNetworkManager,
+                            networkPassword = ftpPassword,
+                            localServiceEnabled = localNetworkServiceEnabled,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             onDismiss = { requestExitApp() }
                         )
@@ -2905,9 +2915,16 @@ private fun FileBrowserAppScreen(
                                 onFtpPasswordChange = { s ->
                                     ftpPassword = s.ifBlank { null }
                                     scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
+                                    familyNetworkManager.configure(s.ifBlank { null }, localNetworkServiceEnabled)
                                 },
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
                                 onNetworkServiceTimeoutMinutesChange = { scope.launch { prefs.setNetworkServiceTimeoutMinutes(it) } },
+                                localNetworkServiceEnabled = localNetworkServiceEnabled,
+                                onLocalNetworkServiceEnabledChange = { enabled ->
+                                    localNetworkServiceEnabled = enabled
+                                    scope.launch { prefs.setLocalNetworkServiceEnabled(enabled) }
+                                    familyNetworkManager.configure(ftpPassword, enabled)
+                                },
                                 onOpenGitConfig = { showGitConfigDialog = true },
                                 onManageKeys = { showKeyManagementDialog = true },
                                 onOpenCacheManagement = { showCacheManagementDialog = true },
