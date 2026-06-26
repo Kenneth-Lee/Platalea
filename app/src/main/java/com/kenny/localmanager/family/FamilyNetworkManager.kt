@@ -95,9 +95,15 @@ class FamilyNetworkManager(context: Context) {
     private var started = false
     private var networkPassword: String? = null
     private var localServiceEnabled: Boolean = true
+    private var familyNetworkUserName: String? = null
 
-    fun configure(networkPassword: String?, localServiceEnabled: Boolean) {
+    fun configure(
+        networkPassword: String?,
+        localServiceEnabled: Boolean,
+        familyNetworkUserName: String? = null
+    ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
+        this.familyNetworkUserName = familyNetworkUserName?.trim()?.ifEmpty { null }
         val enabledChanged = this.localServiceEnabled != localServiceEnabled
         this.localServiceEnabled = localServiceEnabled
         _state.update { it.copy(localServiceEnabled = localServiceEnabled) }
@@ -238,6 +244,7 @@ class FamilyNetworkManager(context: Context) {
                     boardId = boardId,
                     boardName = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
                     isHost = isHost,
+                    canManageBoard = isHost,
                     accessPassword = accessPassword?.trim()?.ifEmpty { null },
                     loading = true
                 )
@@ -305,6 +312,7 @@ class FamilyNetworkManager(context: Context) {
                                 boardName = snapshot.boardName,
                                 revision = snapshot.revision,
                                 messages = snapshot.messages,
+                                canManageBoard = open.isHost || snapshot.canManage,
                                 loading = false,
                                 lastError = null
                             )
@@ -331,16 +339,12 @@ class FamilyNetworkManager(context: Context) {
             appendError("发送消息失败：消息内容不能为空。")
             return
         }
-        val authorLabel = if (session.isHost) {
-            _state.value.serviceName.ifBlank { buildServiceName() }
-        } else {
-            "访客"
-        }
+        val (authorLabel, authorDevice) = buildAuthorIdentity()
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 if (session.isHost) {
                     runCatching {
-                        boardStore.appendMessage(session.boardId, authorLabel, trimmed)
+                        boardStore.appendMessage(session.boardId, authorLabel, trimmed, authorDevice)
                             ?: throw IllegalStateException("消息内容不能为空或留言板不存在")
                     }.map { }
                 } else {
@@ -351,6 +355,7 @@ class FamilyNetworkManager(context: Context) {
                         body = JSONObject().apply {
                             put("content", trimmed)
                             put("author_label", authorLabel)
+                            put("author_device", authorDevice)
                         }.toString(),
                         accessPassword = session.accessPassword
                     )
@@ -367,7 +372,7 @@ class FamilyNetworkManager(context: Context) {
 
     fun updateBoardMessage(messageId: String, content: String) {
         val session = _state.value.openBoardSession ?: return
-        if (!session.isHost) {
+        if (!session.canManageBoard) {
             appendError("只有宿主可以修改留言。")
             return
         }
@@ -404,7 +409,7 @@ class FamilyNetworkManager(context: Context) {
 
     fun deleteBoardMessage(messageId: String) {
         val session = _state.value.openBoardSession ?: return
-        if (!session.isHost) {
+        if (!session.canManageBoard) {
             appendError("只有宿主可以删除留言。")
             return
         }
@@ -721,6 +726,7 @@ class FamilyNetworkManager(context: Context) {
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {
         return runCatching {
             boardStore.snapshot(boardId)
+                ?.copy(canManage = true)
                 ?: throw IllegalStateException("留言板不存在：$boardId")
         }
     }
@@ -751,7 +757,8 @@ class FamilyNetworkManager(context: Context) {
                 boardId = json.optString("board_id", boardId),
                 boardName = json.optString("board_name", boardId),
                 revision = json.optLong("revision"),
-                messages = messages
+                messages = messages,
+                canManage = json.optBoolean("can_manage", false)
             )
         }
     }
@@ -889,6 +896,12 @@ class FamilyNetworkManager(context: Context) {
     private fun buildServiceName(): String {
         val model = Build.MODEL?.trim()?.replace(Regex("\\s+"), "-")?.takeIf { it.isNotEmpty() } ?: "Android"
         return "LocalManager-$model"
+    }
+
+    private fun buildAuthorIdentity(): Pair<String, String> {
+        val deviceLabel = _state.value.serviceName.ifBlank { buildServiceName() }
+        val displayLabel = familyNetworkUserName?.takeIf { it.isNotBlank() } ?: deviceLabel
+        return displayLabel to deviceLabel
     }
 
     private fun bulletinMessagesEqual(a: List<BulletinMessage>, b: List<BulletinMessage>): Boolean {

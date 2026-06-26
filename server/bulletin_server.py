@@ -16,7 +16,7 @@ from typing import Any
 
 from zeroconf import Zeroconf
 
-from bulletin_store import BulletinBoardStore, DEFAULT_BOARD_ID
+from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
 from family_common import (
     FAMILY_SERVICE_TYPE,
     FAMILY_VERSION,
@@ -172,7 +172,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 )
                 return
             body = read_request_body(self).decode("utf-8") if method in {"POST", "PUT"} else ""
-            response = handle_board_request(self.store, method, normalized_path, body)
+            response = handle_board_request(self.store, method, normalized_path, body, auth_level)
             json_response(self, response["status"], response["body"])
             return
 
@@ -207,6 +207,7 @@ def handle_board_request(
     method: str,
     path: str,
     body_text: str,
+    auth_level: AuthLevel,
 ) -> dict[str, Any]:
     if method == "GET" and path == "/boards":
         boards = store.list_boards()
@@ -238,7 +239,17 @@ def handle_board_request(
                     "message": f"留言板不存在：{board_id}",
                 },
             }
-        return {"status": HTTPStatus.OK, "body": snapshot.to_json()}
+        can_manage = auth_level in {AuthLevel.HOST, AuthLevel.OPEN}
+        return {
+            "status": HTTPStatus.OK,
+            "body": BulletinBoardSnapshot(
+                board_id=snapshot.board_id,
+                board_name=snapshot.board_name,
+                revision=snapshot.revision,
+                messages=snapshot.messages,
+                can_manage=can_manage,
+            ).to_json(),
+        }
 
     if method == "POST" and path.startswith("/boards/") and path.endswith("/messages"):
         board_id = path.removeprefix("/boards/").removesuffix("/messages")
@@ -247,7 +258,8 @@ def handle_board_request(
             return _bad_request("invalid_json", "请求体不是合法 JSON")
         content = str(payload.get("content", ""))
         author_label = str(payload.get("author_label", "访客"))
-        message = store.append_message(board_id, author_label, content)
+        author_device = str(payload.get("author_device", "")).strip() or None
+        message = store.append_message(board_id, author_label, content, author_device)
         if message is None:
             return _bad_request("invalid_message", "消息内容不能为空或留言板不存在")
         snapshot = store.snapshot(board_id)

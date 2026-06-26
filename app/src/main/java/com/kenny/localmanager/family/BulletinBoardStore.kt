@@ -62,7 +62,12 @@ class BulletinBoardStore(context: Context) {
         )
     }
 
-    fun appendMessage(boardId: String, authorLabel: String, content: String): BulletinMessage? = lock.write {
+    fun appendMessage(
+        boardId: String,
+        authorLabel: String,
+        content: String,
+        authorDevice: String? = null
+    ): BulletinMessage? = lock.write {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return@write null
         val meta = readMeta(boardId) ?: return@write null
@@ -75,7 +80,8 @@ class BulletinBoardStore(context: Context) {
             authorLabel = authorLabel.trim().ifEmpty { "访客" },
             content = trimmed,
             createdAt = now,
-            updatedAt = now
+            updatedAt = now,
+            authorDevice = authorDevice?.trim()?.takeIf { it.isNotEmpty() }
         )
         messages += message
         writeMessages(boardId, messages)

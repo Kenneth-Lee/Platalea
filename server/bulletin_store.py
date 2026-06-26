@@ -30,9 +30,10 @@ class BulletinMessage:
     created_at: int
     updated_at: int
     deleted: bool = False
+    author_device: str | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        payload = {
             "id": self.id,
             "seq": self.seq,
             "author_label": self.author_label,
@@ -41,6 +42,9 @@ class BulletinMessage:
             "updated_at": self.updated_at,
             "deleted": self.deleted,
         }
+        if self.author_device:
+            payload["author_device"] = self.author_device
+        return payload
 
     @classmethod
     def from_json(cls, obj: dict[str, Any]) -> BulletinMessage:
@@ -52,6 +56,7 @@ class BulletinMessage:
             created_at=int(obj.get("created_at", 0)),
             updated_at=int(obj.get("updated_at", 0)),
             deleted=bool(obj.get("deleted", False)),
+            author_device=str(obj.get("author_device", "")).strip() or None,
         )
 
 
@@ -61,6 +66,7 @@ class BulletinBoardSnapshot:
     board_name: str
     revision: int
     messages: list[BulletinMessage]
+    can_manage: bool = False
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -68,6 +74,7 @@ class BulletinBoardSnapshot:
             "board_id": self.board_id,
             "board_name": self.board_name,
             "revision": self.revision,
+            "can_manage": self.can_manage,
             "messages": [message.to_json() for message in self.messages],
         }
 
@@ -151,6 +158,7 @@ class BulletinBoardStore:
         board_id: str,
         author_label: str,
         content: str,
+        author_device: str | None = None,
     ) -> BulletinMessage | None:
         trimmed = content.strip()
         if not trimmed:
@@ -169,6 +177,7 @@ class BulletinBoardStore:
                 content=trimmed,
                 created_at=now,
                 updated_at=now,
+                author_device=author_device.strip() if author_device else None,
             )
             messages.append(message)
             self._write_messages(board_id, messages)

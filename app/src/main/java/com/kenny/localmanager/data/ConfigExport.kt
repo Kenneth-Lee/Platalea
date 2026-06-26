@@ -19,6 +19,7 @@ private const val KEY_FTP_PORT = "ftp_port"
 private const val KEY_FTP_PASSWORD = "ftp_password"
 private const val KEY_FTP_TIMEOUT_MINUTES = "ftp_timeout_minutes"
 private const val KEY_LOCAL_NETWORK_SERVICE_ENABLED = "local_network_service_enabled"
+private const val KEY_FAMILY_NETWORK_USER_NAME = "family_network_user_name"
 private const val KEY_GIT_REPO_URL = "git_repo_url"
 private const val KEY_GIT_USER_NAME = "git_user_name"
 private const val KEY_GIT_USER_EMAIL = "git_user_email"
@@ -84,6 +85,7 @@ suspend fun exportConfig(
         prefs.ftpPassword.first()?.let { obj.put(KEY_FTP_PASSWORD, it) }
         obj.put(KEY_FTP_TIMEOUT_MINUTES, prefs.ftpTimeoutMinutes.first())
         obj.put(KEY_LOCAL_NETWORK_SERVICE_ENABLED, prefs.localNetworkServiceEnabled.first())
+        prefs.familyNetworkUserName.first()?.let { obj.put(KEY_FAMILY_NETWORK_USER_NAME, it) }
         obj.put(KEY_EXTERNAL_OPEN_BY_EXTENSION, JSONObject(prefs.externalOpenByExtension.first()))
         obj.put(KEY_ROOT_BOOKMARKS, RootBookmarkManager(context).toJson())
     }
@@ -218,6 +220,9 @@ suspend fun importConfig(
         if (obj.has(KEY_FTP_TIMEOUT_MINUTES)) prefs.setFtpTimeoutMinutes(obj.getInt(KEY_FTP_TIMEOUT_MINUTES).coerceIn(0, 1440))
         if (obj.has(KEY_LOCAL_NETWORK_SERVICE_ENABLED)) {
             prefs.setLocalNetworkServiceEnabled(obj.optBoolean(KEY_LOCAL_NETWORK_SERVICE_ENABLED, true))
+        }
+        if (obj.has(KEY_FAMILY_NETWORK_USER_NAME)) {
+            prefs.setFamilyNetworkUserName(obj.optString(KEY_FAMILY_NETWORK_USER_NAME).ifBlank { null })
         }
     }
     if (ConfigExportCategory.GIT in categories) {

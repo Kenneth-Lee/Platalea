@@ -68,6 +68,8 @@ data class ConfigTabRouteState(
     val onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     val localNetworkServiceEnabled: Boolean,
     val onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
+    val familyNetworkUserName: String,
+    val onFamilyNetworkUserNameChange: (String) -> Unit,
     val onOpenGitConfig: () -> Unit,
     val onManageKeys: () -> Unit,
     val onOpenCacheManagement: () -> Unit,
@@ -93,6 +95,8 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onNetworkServiceTimeoutMinutesChange = state.onNetworkServiceTimeoutMinutesChange,
         localNetworkServiceEnabled = state.localNetworkServiceEnabled,
         onLocalNetworkServiceEnabledChange = state.onLocalNetworkServiceEnabledChange,
+        familyNetworkUserName = state.familyNetworkUserName,
+        onFamilyNetworkUserNameChange = state.onFamilyNetworkUserNameChange,
         onOpenGitConfig = state.onOpenGitConfig,
         onManageKeys = state.onManageKeys,
         onOpenCacheManagement = state.onOpenCacheManagement,
@@ -120,6 +124,8 @@ private fun ConfigPanel(
     onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     localNetworkServiceEnabled: Boolean,
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
+    familyNetworkUserName: String,
+    onFamilyNetworkUserNameChange: (String) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -134,6 +140,7 @@ private fun ConfigPanel(
     val scope = rememberCoroutineScope()
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
+    var localFamilyNetworkUserName by remember { mutableStateOf(familyNetworkUserName) }
     var localNetworkServiceTimeoutMinutes by remember { mutableStateOf(networkServiceTimeoutMinutes.toString()) }
     var showFtpConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsConfigDialog by remember { mutableStateOf(false) }
@@ -203,6 +210,10 @@ private fun ConfigPanel(
         )
     }
 
+    LaunchedEffect(familyNetworkUserName) {
+        localFamilyNetworkUserName = familyNetworkUserName
+    }
+
     LaunchedEffect(Unit) {
         refreshEpubTtsEngines()
     }
@@ -230,6 +241,24 @@ private fun ConfigPanel(
                             onCheckedChange = onLocalNetworkServiceEnabledChange
                         )
                     }
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = localFamilyNetworkUserName,
+                        onValueChange = { s ->
+                            localFamilyNetworkUserName = s
+                            onFamilyNetworkUserNameChange(s)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(context.getString(R.string.config_family_network_user_name)) },
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                context.getString(R.string.config_family_network_user_name_hint),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
                         value = localFtpPassword,
@@ -743,6 +772,8 @@ fun ConfigDialog(
     onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
     localNetworkServiceEnabled: Boolean,
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
+    familyNetworkUserName: String,
+    onFamilyNetworkUserNameChange: (String) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -771,6 +802,8 @@ fun ConfigDialog(
                 onNetworkServiceTimeoutMinutesChange = onNetworkServiceTimeoutMinutesChange,
                 localNetworkServiceEnabled = localNetworkServiceEnabled,
                 onLocalNetworkServiceEnabledChange = onLocalNetworkServiceEnabledChange,
+                familyNetworkUserName = familyNetworkUserName,
+                onFamilyNetworkUserNameChange = onFamilyNetworkUserNameChange,
                 onOpenGitConfig = onOpenGitConfig,
                 onManageKeys = onManageKeys,
                 onOpenCacheManagement = onOpenCacheManagement,

@@ -173,6 +173,8 @@
     <string name="config_local_network_service_enabled_hint">When off, this device is not advertised and cannot be connected, but you can still browse other devices.</string>
     <string name="config_local_network_service_on">enabled</string>
     <string name="config_local_network_service_off">disabled</string>
+    <string name="config_family_network_user_name">Family network display name</string>
+    <string name="config_family_network_user_name_hint">Leave empty to use the device label (e.g. LocalManager-model) when posting. The device label is still stored with each message for traceability.</string>
     <string name="config_git">Git Configuration</string>
     <string name="config_gpg_keys">GPG Key Management</string>
     <string name="config_cache">Cache Management</string>
@@ -210,6 +212,7 @@
     <string name="family_network_open_self_board">Open Local Board</string>
     <string name="family_network_open_board">Open Board</string>
     <string name="family_board_role_host">Role: Host</string>
+    <string name="family_board_role_remote_host">Role: Remote host</string>
     <string name="family_board_role_guest">Role: Guest</string>
     <string name="family_board_revision">Revision: %1$d</string>
     <string name="family_board_no_messages">This board is empty. Post a message to try it out.</string>

@@ -94,6 +94,7 @@ fun FamilyNetworkScreen(
     manager: FamilyNetworkManager,
     networkPassword: String?,
     localServiceEnabled: Boolean,
+    familyNetworkUserName: String = "",
     timeoutMinutes: Int = 0,
     onDismiss: (() -> Unit)? = null
 ) {
@@ -112,8 +113,8 @@ fun FamilyNetworkScreen(
     var boardPasswordInProgress by remember { mutableStateOf(false) }
     val boardAccessCache = remember { mutableStateMapOf<String, String?>() }
 
-    LaunchedEffect(networkPassword, localServiceEnabled) {
-        manager.configure(networkPassword, localServiceEnabled)
+    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName) {
+        manager.configure(networkPassword, localServiceEnabled, familyNetworkUserName.ifBlank { null })
     }
 
     BackHandler(enabled = boardSession != null) {
@@ -134,8 +135,8 @@ fun FamilyNetworkScreen(
         }
     }
 
-    DisposableEffect(manager, activity, networkPassword, localServiceEnabled) {
-        manager.configure(networkPassword, localServiceEnabled)
+    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName) {
+        manager.configure(networkPassword, localServiceEnabled, familyNetworkUserName.ifBlank { null })
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         manager.start()
         onDispose {
@@ -623,10 +624,10 @@ private fun BulletinBoardPage(
             Text(
                 buildString {
                     append(
-                        if (session.isHost) {
-                            stringResource(R.string.family_board_role_host)
-                        } else {
-                            stringResource(R.string.family_board_role_guest)
+                        when {
+                            session.isHost -> stringResource(R.string.family_board_role_host)
+                            session.canManageBoard -> stringResource(R.string.family_board_role_remote_host)
+                            else -> stringResource(R.string.family_board_role_guest)
                         }
                     )
                     append(" · ")
@@ -690,7 +691,7 @@ private fun BulletinBoardPage(
                 ) { message ->
                     BulletinMessageRow(
                         message = message,
-                        isHost = session.isHost,
+                        canManage = session.canManageBoard,
                         onEdit = {
                             editingMessage = message
                             editingText = message.content
@@ -742,7 +743,7 @@ private fun BulletinBoardPage(
 @Composable
 private fun BulletinMessageRow(
     message: BulletinMessage,
-    isHost: Boolean,
+    canManage: Boolean,
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -763,13 +764,22 @@ private fun BulletinMessageRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            message.authorDevice?.takeIf { it.isNotBlank() && it != message.authorLabel }?.let { device ->
+                Text(
+                    device,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Text(
                 message.content,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
-        if (isHost) {
+        if (canManage) {
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                 Icon(
                     Icons.Default.Edit,

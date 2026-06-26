@@ -1750,6 +1750,7 @@ private fun FileBrowserAppScreen(
         var ftpPassword by remember { mutableStateOf<String?>(null) }
         var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
         var localNetworkServiceEnabled by remember { mutableStateOf(true) }
+        var familyNetworkUserName by remember { mutableStateOf("") }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -2257,6 +2258,9 @@ private fun FileBrowserAppScreen(
             prefs.localNetworkServiceEnabled.collect { localNetworkServiceEnabled = it }
         }
         LaunchedEffect(prefs) {
+            prefs.familyNetworkUserName.collect { familyNetworkUserName = it.orEmpty() }
+        }
+        LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
@@ -2264,8 +2268,12 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled) {
-            familyNetworkManager.configure(ftpPassword, localNetworkServiceEnabled)
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName) {
+            familyNetworkManager.configure(
+                ftpPassword,
+                localNetworkServiceEnabled,
+                familyNetworkUserName.ifBlank { null }
+            )
         }
         DisposableEffect(familyNetworkManager) {
             onDispose {
@@ -2893,6 +2901,7 @@ private fun FileBrowserAppScreen(
                             manager = familyNetworkManager,
                             networkPassword = ftpPassword,
                             localServiceEnabled = localNetworkServiceEnabled,
+                            familyNetworkUserName = familyNetworkUserName,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             onDismiss = { requestExitApp() }
                         )
@@ -2915,7 +2924,11 @@ private fun FileBrowserAppScreen(
                                 onFtpPasswordChange = { s ->
                                     ftpPassword = s.ifBlank { null }
                                     scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
-                                    familyNetworkManager.configure(s.ifBlank { null }, localNetworkServiceEnabled)
+                                    familyNetworkManager.configure(
+                                        s.ifBlank { null },
+                                        localNetworkServiceEnabled,
+                                        familyNetworkUserName.ifBlank { null }
+                                    )
                                 },
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
                                 onNetworkServiceTimeoutMinutesChange = { scope.launch { prefs.setNetworkServiceTimeoutMinutes(it) } },
@@ -2923,7 +2936,21 @@ private fun FileBrowserAppScreen(
                                 onLocalNetworkServiceEnabledChange = { enabled ->
                                     localNetworkServiceEnabled = enabled
                                     scope.launch { prefs.setLocalNetworkServiceEnabled(enabled) }
-                                    familyNetworkManager.configure(ftpPassword, enabled)
+                                    familyNetworkManager.configure(
+                                        ftpPassword,
+                                        enabled,
+                                        familyNetworkUserName.ifBlank { null }
+                                    )
+                                },
+                                familyNetworkUserName = familyNetworkUserName,
+                                onFamilyNetworkUserNameChange = { name ->
+                                    familyNetworkUserName = name
+                                    scope.launch { prefs.setFamilyNetworkUserName(name.ifBlank { null }) }
+                                    familyNetworkManager.configure(
+                                        ftpPassword,
+                                        localNetworkServiceEnabled,
+                                        name.ifBlank { null }
+                                    )
                                 },
                                 onOpenGitConfig = { showGitConfigDialog = true },
                                 onManageKeys = { showKeyManagementDialog = true },

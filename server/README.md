@@ -74,7 +74,7 @@ python3 server/bulletin_server.py --config server/config.json
 3. 点击进入，输入 **`guest_password`**（不是手机全局配置里的本机密码）
 4. 进入默认留言板，可查看与发送消息
 
-> 手机端当前作为远端访客，只能读和发，不能改删 PC 留言板上的消息。PC 侧可用宿主密码通过 `board_client.py` 管理。
+> 手机端使用 **guest_password** 可读写留言；使用 **host_password** 连入后界面显示「远程宿主」，可修改/删除 PC 留言板上的消息。
 
 ## PC 命令行测试
 

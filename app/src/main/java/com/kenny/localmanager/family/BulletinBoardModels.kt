@@ -26,7 +26,8 @@ data class BulletinMessage(
     val content: String,
     val createdAt: Long,
     val updatedAt: Long,
-    val deleted: Boolean = false
+    val deleted: Boolean = false,
+    val authorDevice: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
@@ -36,6 +37,7 @@ data class BulletinMessage(
         put("created_at", createdAt)
         put("updated_at", updatedAt)
         put("deleted", deleted)
+        authorDevice?.takeIf { it.isNotBlank() }?.let { put("author_device", it) }
     }
 
     companion object {
@@ -46,7 +48,8 @@ data class BulletinMessage(
             content = obj.optString("content", ""),
             createdAt = obj.optLong("created_at"),
             updatedAt = obj.optLong("updated_at"),
-            deleted = obj.optBoolean("deleted", false)
+            deleted = obj.optBoolean("deleted", false),
+            authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() }
         )
     }
 }
@@ -55,13 +58,15 @@ data class BulletinBoardSnapshot(
     val boardId: String,
     val boardName: String,
     val revision: Long,
-    val messages: List<BulletinMessage>
+    val messages: List<BulletinMessage>,
+    val canManage: Boolean = false
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("ok", true)
         put("board_id", boardId)
         put("board_name", boardName)
         put("revision", revision)
+        put("can_manage", canManage)
         put("messages", JSONArray(messages.map { it.toJson() }))
     }
 }
@@ -71,6 +76,7 @@ data class BulletinBoardOpenSession(
     val boardId: String,
     val boardName: String,
     val isHost: Boolean,
+    val canManageBoard: Boolean = isHost,
     val accessPassword: String? = null,
     val revision: Long = 0L,
     val messages: List<BulletinMessage> = emptyList(),

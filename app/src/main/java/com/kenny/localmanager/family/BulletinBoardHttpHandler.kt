@@ -55,14 +55,18 @@ class BulletinBoardHttpHandler(
     private fun getMessages(boardId: String): FamilyHttpResponse {
         val snapshot = store.snapshot(boardId)
             ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
-        return FamilyHttpResponse(200, snapshot.toJson().toString())
+        return FamilyHttpResponse(
+            200,
+            snapshot.copy(canManage = false).toJson().toString()
+        )
     }
 
     private fun createMessage(boardId: String, bodyText: String): FamilyHttpResponse {
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
         val content = payload.optString("content")
         val authorLabel = payload.optString("author_label", "访客")
-        val message = store.appendMessage(boardId, authorLabel, content)
+        val authorDevice = payload.optString("author_device").takeIf { it.isNotBlank() }
+        val message = store.appendMessage(boardId, authorLabel, content, authorDevice)
             ?: return badRequest("invalid_message", "消息内容不能为空或留言板不存在")
         val snapshot = store.snapshot(boardId)
         return FamilyHttpResponse(
