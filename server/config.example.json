@@ -1,0 +1,14 @@
+{
+  "listen_host": "0.0.0.0",
+  "port": 8765,
+  "service_name": "",
+  "hostname": "",
+  "service_type": "_localmanager._tcp.local.",
+  "board_root": "./boards",
+  "guest_password": "guest",
+  "host_password": "host",
+  "cert_file": "tls/pc_server_cert.pem",
+  "key_file": "tls/pc_server_key.pem",
+  "instance_id_file": "./instance_id",
+  "log_level": "INFO"
+}

@@ -1,144 +1,132 @@
-# LocalManager mDNS 原型
+# LocalManager PC / mDNS 服务端
 
-这个目录提供一个跨平台的 Python 原型，用来验证两件事：
+本目录提供 PC 端家庭网络留言板服务，以及与 Android 客户端兼容的 mDNS 发现、HTTPS API 和 TLS 证书工具。
 
-1. 当前机器能否在局域网中注册一个 LocalManager 的 mDNS 服务。
-2. 当前机器能否枚举并解析局域网中已有的 mDNS 服务，包括它自己刚注册的服务。
+## 目录说明
 
-## 设计范围
+| 文件 | 作用 |
+|------|------|
+| `bulletin_server.py` | **主服务**：留言板 HTTPS API + mDNS 广播 |
+| `bulletin_store.py` | 留言板 JSON 存储（与 Android 格式兼容） |
+| `board_client.py` | 命令行客户端，便于 PC 侧测试 API |
+| `family_common.py` | TLS / mDNS 共用工具 |
+| `config.example.json` | 配置示例 |
+| `mdns_server.py` | 早期 mDNS 原型（调试用，可保留） |
+| `send_message.py` | 早期 `/message` 调试脚本（已过时） |
+| `generate_tls_materials.sh` | 生成私有 CA、PC 证书、Android 资产 |
 
-当前阶段只验证“发现”能力，不实现客户端协议、消息传输、鉴权和队列。
+## 快速开始（双机测试）
 
-现在额外补了一个最小调试消息链路：
+### 1. 依赖
 
-1. `mdns_server.py` 支持接收 `POST /message` 并打印消息。
-2. `send_message.py` 可以从 PC 主动向任意 LocalManager 调试服务发送一条消息。
-
-脚本会做两件事：
-1. `mdns_server.py` 通过 HTTPS 接收 `POST /message` 并打印消息。
-2. `send_message.py` 可以从 PC 主动向任意 LocalManager 调试服务发送一条 HTTPS 消息。
-3. `generate_tls_materials.sh` 用来生成私有 CA、PC 服务端证书，以及 Android 侧使用的开发身份文件。
-2. 用 zeroconf 注册 `_localmanager._tcp.local.`，并持续扫描局域网内的 mDNS 服务类型和实例。
-
-## 安装
-1. 启动一个最小 HTTPS 服务，默认监听 8765 端口。
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv server/.venv
+source server/.venv/bin/activate
 pip install -r server/requirements.txt
 ```
 
-Windows PowerShell 可改为：
+### 2. TLS 证书
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r server/requirements.txt
-```
-
-## 运行
+若尚未生成，或 Android 端 TLS 握手失败：
 
 ```bash
-python3 server/mdns_server.py --port 8765
+bash server/generate_tls_materials.sh
 ```
 
-如果你刚执行过 `server/generate_tls_materials.sh` 重新生成了证书，务必先重启正在运行的 `mdns_server.py`。
-否则旧进程仍会继续使用旧证书，PC 侧和 Android 侧都会出现 TLS 校验失败或握手异常。
+脚本会把 CA 同步到 `app/src/main/assets/family_tls/`，**生成后需重新编译 Android APK**。
 
-如果只想做一次短时间验证：
-
-```bash
-python3 server/mdns_server.py --port 8765 --run-seconds 15 --log-level DEBUG
-python3 server/send_message.py 192.168.3.74 "你好，这是一条来自 PC 的调试消息"
-
-## 发送测试消息
-
-向手机或另一台 PC 的调试服务发送消息：
+### 3. 配置
 
 ```bash
-python3 server/send_message.py 192.168.3.74 "你好，这是一条来自 PC 的调试消息"
-python3 server/send_message.py kllt03.local "发给当前 PC 服务自身的测试消息"
+cp server/config.example.json server/config.json
+# 编辑 guest_password / host_password / board_root 等
 ```
 
-注意：`send_message.py` 的第一个参数是目标主机，不是 mDNS 服务实例名。
-如果你要从 PC 发给手机，请传手机的 IP 地址，例如 `192.168.3.74`；像 `kllt03.local` 这样的地址通常表示当前 PC 自己。
+配置项说明：
 
-如果你已经从 mDNS 日志里拿到了对端证书指纹，可以一并传入，脚本会额外做 SHA-256 指纹校验：
+| 字段 | 说明 |
+|------|------|
+| `port` | HTTPS 监听端口，默认 8765 |
+| `board_root` | 留言板数据目录（相对配置文件路径） |
+| `guest_password` | 普通接入密码：可读留言板、发消息（Android 连入时填此密码） |
+| `host_password` | 宿主密码： additionally 可修改/删除留言 |
+| `service_name` | mDNS 实例名，留空则用 `LocalManager-<主机名>` |
+| `hostname` | mDNS 主机名，留空则用系统主机名 |
 
-```bash
-python3 server/send_message.py 192.168.3.74 "带指纹验证的消息" \
-	--port 8876 \
-	--tls-fingerprint af85ad8071ef77e071546bf2e29a48825879109f37563d5b4b8a025f92693a1b
-```
-```
+留空 `guest_password` 与 `host_password` 表示免密接入（不推荐在真实网络中使用）。
 
-指定 HTTPS 超时秒数，默认 5 秒。
-
-`--ca-cert`
-指定私有 CA 根证书路径，默认 `server/tls/ca_cert.pem`。
-
-`--tls-fingerprint`
-指定对端 HTTPS 证书的 SHA-256 指纹；传入后会额外做证书固定校验。
+### 4. 启动服务
 
 ```bash
-1. `HTTPS 服务已监听`：本机已经开始监听加密消息接口。
-2. `mDNS 服务已注册`：本机已经开始广播服务。
-3. `开始监听服务类型`：脚本已经能从局域网拿到 mDNS 服务类型。
-4. `发现服务` 或 `更新服务`：脚本已经解析到具体实例，通常会包含名称、端口、地址和 TXT 属性。
-
-如果你想区分不同发送方，可以指定名字和实例 ID：
-
-```bash
-python3 server/send_message.py 192.168.3.74 "带身份的消息" \
-	--sender-name kllt03-debug \
-	--sender-instance-id pc-test-001
+python3 server/bulletin_server.py --config server/config.json
 ```
 
-## 常用参数
+日志中应出现：
 
-`--service-name`
-指定实例名，默认使用当前主机名。
+- `HTTPS 服务已监听`
+- `mDNS 服务已注册`
+- `fingerprint=...`（Android 调试时可核对）
 
-`--hostname`
-指定注册到 mDNS 的主机名。传裸主机名时会自动补成 `.local.`。
+### 5. Android 手机测试
 
-`--service-type`
-指定服务类型，默认 `_localmanager._tcp.local.`。
+1. PC 与手机在同一局域网
+2. 手机打开「家庭网络」，应发现 PC 服务（带锁图标表示需要密码）
+3. 点击进入，输入 **`guest_password`**（不是手机全局配置里的本机密码）
+4. 进入默认留言板，可查看与发送消息
 
-`--type-scan-interval`
-重新扫描服务类型的间隔，默认 15 秒。
+> 手机端当前作为远端访客，只能读和发，不能改删 PC 留言板上的消息。PC 侧可用宿主密码通过 `board_client.py` 管理。
 
-`--discovery-timeout-ms`
-解析具体服务详情的超时，默认 2000 毫秒。
+## PC 命令行测试
 
-`--run-seconds`
-运行固定秒数后自动退出，便于脚本化验证。
+```bash
+# 列出留言板（guest 密码）
+python3 server/board_client.py 192.168.1.100 list-boards --password guest
 
-`send_message.py` 还有这些常用参数：
+# 读取消息
+python3 server/board_client.py 192.168.1.100 get-messages --password guest
 
-`--sender-name`
-指定发送方名称，默认 `pc-debug`。
+# 发消息
+python3 server/board_client.py 192.168.1.100 post "你好 from PC" --password guest --author pc-test
 
-`--sender-instance-id`
-指定发送方实例 ID；不传时会自动生成一个临时 UUID。
+# 改/删消息（host 密码）
+python3 server/board_client.py 192.168.1.100 put <message_id> "新内容" --password host
+python3 server/board_client.py 192.168.1.100 delete <message_id> --password host
+```
 
-`--sender-platform`
-指定平台标识，默认 `python`。
+可选 `--tls-fingerprint <sha256>` 做证书指纹固定（与 mDNS TXT `tls_fp_sha256` 一致）。
 
-`--timeout`
-指定 HTTP 超时秒数，默认 5 秒。
+## HTTPS API（与 Android 一致）
 
-## 结果判断
+认证头：`X-Network-Service-Password`
 
-看到以下三类日志，说明最小闭环成立：
+| 方法 | 路径 | 权限 |
+|------|------|------|
+| GET | `/boards` | guest / host |
+| GET | `/boards/{id}/messages` | guest / host |
+| POST | `/boards/{id}/messages` | guest / host |
+| PUT | `/boards/{id}/messages/{msgId}` | host |
+| DELETE | `/boards/{id}/messages/{msgId}` | host |
 
-1. `mDNS 服务已注册`：本机已经开始广播服务。
-2. `开始监听服务类型`：脚本已经能从局域网拿到 mDNS 服务类型。
-3. `发现服务` 或 `更新服务`：脚本已经解析到具体实例，通常会包含名称、端口、地址和 TXT 属性。
+mDNS TXT 属性：`app`, `proto=https`, `version=0.2`, `instance_id`, `platform`, `tls=1`, `tls_fp_sha256`, 有密码时 `auth=1`。
 
-如果一直看不到任何服务，优先检查：
+## 存储格式
 
-1. 当前网络是否允许组播和 mDNS。
-2. 本机防火墙是否阻止 UDP 5353。
-3. 当前机器是否真的拿到了非回环地址。
-4. 局域网里是否确实存在支持 mDNS 的设备或服务。
+```
+board_root/
+  default/
+    meta.json       # id, name, revision
+    messages.json   # 消息数组
+```
+
+与 Android `filesDir/family_boards/` 结构相同，便于日后互拷数据。
+
+## 旧原型
+
+`mdns_server.py` / `send_message.py` 为早期 mDNS 与 `/message` 调试链路，已被 `bulletin_server.py` 取代。若只需验证 mDNS 发现，仍可使用旧脚本。
+
+## 常见问题
+
+1. **手机看不到 PC**：检查防火墙是否放行 TCP `port` 与 UDP 5353；确认同一网段。
+2. **TLS 失败**：重新运行 `generate_tls_materials.sh` 并重启 PC 服务、重装 Android APK。
+3. **401 密码错误**：连 PC 时填 `config.json` 里的 `guest_password`，不是手机「网络服务密码」。
+4. **改证书后连不上**：重启 `bulletin_server.py`，旧进程仍会用旧证书。
