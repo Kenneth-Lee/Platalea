@@ -18,6 +18,7 @@ from typing import Any
 from zeroconf import Zeroconf
 
 from bulletin_attachment_store import DirectoryEntry
+from bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent_thread
 from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
 from family_common import (
     FAMILY_SERVICE_TYPE,
@@ -70,7 +71,7 @@ def resolve_path(base_dir: Path, value: str) -> Path:
     return path.resolve()
 
 
-def load_config(config_path: Path) -> ServerConfig:
+def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     if not config_path.exists():
         raise FileNotFoundError(
             f"配置文件不存在: {config_path}\n"
@@ -87,7 +88,7 @@ def load_config(config_path: Path) -> ServerConfig:
     guest_password = str(raw.get("guest_password", "")).strip() or None
     host_password = str(raw.get("host_password", "")).strip() or None
 
-    return ServerConfig(
+    server_config = ServerConfig(
         listen_host=str(raw.get("listen_host", "0.0.0.0")).strip() or "0.0.0.0",
         port=int(raw.get("port", 8765)),
         service_name=service_name,
@@ -104,6 +105,9 @@ def load_config(config_path: Path) -> ServerConfig:
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
     )
+    agent_raw = raw.get("agent")
+    agent_config = load_agent_config(agent_raw if isinstance(agent_raw, dict) else None)
+    return server_config, agent_config
 
 
 class AuthService:
@@ -687,7 +691,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_server(config: ServerConfig) -> int:
+def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) -> int:
     if config.port <= 0 or config.port > 65535:
         raise ValueError(f"端口无效: {config.port}")
     if not config.cert_file.exists():
@@ -735,6 +739,16 @@ def run_server(config: ServerConfig) -> int:
     )
     LOGGER.info("默认留言板 ID: %s", DEFAULT_BOARD_ID)
 
+    agent_handle: BulletinBoardAgent | None = None
+    if agent_config is not None:
+        agent_state_dir = config.board_root / ".agent"
+        agent_handle, _agent_thread = start_agent_thread(store, agent_config, agent_state_dir)
+        LOGGER.info(
+            "AI Agent 已随服务启动: board=%s @%s",
+            agent_config.board_id,
+            agent_config.model_name,
+        )
+
     try:
         zeroconf_client = Zeroconf()
         zeroconf_client.register_service(service_info)
@@ -755,6 +769,8 @@ def run_server(config: ServerConfig) -> int:
         LOGGER.info("收到 Ctrl+C，准备退出。")
         return 0
     finally:
+        if agent_handle is not None:
+            agent_handle.stop()
         if zeroconf_client is not None:
             try:
                 zeroconf_client.unregister_service(service_info)
@@ -771,7 +787,7 @@ def main() -> int:
     parser = build_argument_parser()
     args = parser.parse_args()
     try:
-        config = load_config(Path(args.config).resolve())
+        config, agent_config = load_config(Path(args.config).resolve())
     except Exception as exc:
         print(f"加载配置失败: {exc}", file=sys.stderr)
         return 1
@@ -782,7 +798,7 @@ def main() -> int:
     )
 
     try:
-        return run_server(config)
+        return run_server(config, agent_config)
     except Exception as exc:
         LOGGER.exception("留言板服务启动失败: %s", exc)
         return 1

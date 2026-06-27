@@ -55,6 +55,28 @@ cp server/config.example.json server/config.json
 
 留空 `guest_password` 与 `host_password` 表示免密接入（不推荐在真实网络中使用）。
 
+### AI Agent（可选，V1）
+
+在 `config.json` 中配置 `agent` 段并设 `enabled: true`。Agent 随 `bulletin_server.py` 在后台运行，监听指定留言板上的 `@model_name` 消息，调用本地 [Ollama](https://ollama.com/) 回复。
+
+| 字段 | 说明 |
+|------|------|
+| `enabled` | 是否启用 Agent |
+| `board_id` | 监听的留言板 ID，默认 `default` |
+| `model_name` | Ollama 模型名，同时作为 @ 触发名（如 `@qwen2.5`） |
+| `ollama_base_url` | Ollama API 地址，默认 `http://127.0.0.1:11434` |
+| `poll_interval_seconds` | 轮询间隔（秒） |
+
+测试步骤：
+
+1. 本机安装并启动 Ollama，拉取与 `model_name` 一致的模型，例如 `ollama pull qwen2.5`
+2. 在 `config.json` 中设 `agent.enabled: true` 与对应 `model_name`
+3. 启动 `bulletin_server.py`，日志应出现 `AI Agent 已随服务启动`
+4. 手机或 `board_client.py` 在留言板发：`@qwen2.5 总结一下最近大家说了什么`
+5. 稍等数秒，应出现 `AI-qwen2.5` 的回复；失败时会发一条含错误原因的回复
+
+Agent 状态（已处理消息 ID）保存在 `{board_root}/.agent/{board_id}_state.json`，避免重复响应。删除该文件可让 Agent 重新处理历史 @（慎用）。
+
 ### 4. 启动服务
 
 ```bash
