@@ -93,6 +93,36 @@ cp server/config.example.json server/config.json
 4. 在留言板用 @ 菜单或手写 `@模型名 问题` 发帖（不同模型 @ 不同名字）
 5. Agent 应异步回复；失败时会发一条含错误原因的回复
 
+#### Agent 工具（V1）
+
+Agent 可通过 Ollama 工具调用（tool calling）使用以下能力（需模型支持，如 `qwen2.5`、`llama3.1` 等）：
+
+| 工具 | 说明 |
+|------|------|
+| `list_attachment_files` | 列出留言板附件及其中文件（可传 `attachment_id` 查单个） |
+| `read_attachment_file` | 读取附件内文本文件（`.txt`/`.md`/`.json` 等） |
+| `web_fetch` | 获取 http/https URL 的文本内容 |
+
+配置段 `agent.tools`：
+
+| 字段 | 说明 |
+|------|------|
+| `enabled` | 是否启用工具，默认 `true` |
+| `attachments` | 附件列表/读取，默认 `true` |
+| `web_fetch` | 网络访问，默认 `true` |
+| `max_attachment_read_bytes` | 单次读取附件最大字节，默认 100000 |
+| `max_web_fetch_bytes` | 单次网页抓取最大字节，默认 200000 |
+| `web_fetch_timeout_seconds` | 网络超时秒数，默认 30 |
+| `max_tool_rounds` | 单轮对话最多工具调用轮数，默认 10 |
+
+测试附件总结：
+
+1. 在留言板发帖并上传 `.txt` / `.md` 附件
+2. `@模型名 请总结附件内容`
+3. Agent 应先调用 `list_attachment_files` / `read_attachment_file`，再回复摘要
+
+`GET /agent` 响应增加 `tools: { enabled, attachments, web_fetch }`。
+
 ### 4. 启动服务
 
 ```bash

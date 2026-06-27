@@ -13,6 +13,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bulletin_agent_tools import (
+    AgentToolExecutor,
+    AgentToolsConfig,
+    build_tool_definitions,
+    load_agent_tools_config,
+    parse_tool_arguments,
+    tools_system_prompt_suffix,
+)
 from bulletin_mention import AGENT_DEVICE_PREFIX
 from bulletin_store import BulletinBoardStore, BulletinMessage
 
@@ -30,6 +38,7 @@ class AgentConfig:
     model_names: tuple[str, ...]
     ollama_base_url: str
     board_ids: frozenset[str] | None
+    tools: AgentToolsConfig
 
     @staticmethod
     def author_label_for(model_name: str) -> str:
@@ -55,6 +64,11 @@ class AgentConfig:
             "enabled": True,
             "models": list(self.model_names),
             "board_ids": sorted(self.board_ids) if self.board_ids is not None else None,
+            "tools": {
+                "enabled": self.tools.enabled,
+                "attachments": self.tools.attachments,
+                "web_fetch": self.tools.web_fetch,
+            },
         }
 
 
@@ -66,11 +80,13 @@ def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
     model_names = _parse_model_names(raw)
     base_url = str(raw.get("ollama_base_url", "http://127.0.0.1:11434")).strip().rstrip("/")
     board_ids = _parse_board_ids(raw)
+    tools = load_agent_tools_config(raw.get("tools") if isinstance(raw.get("tools"), dict) else None)
     return AgentConfig(
         enabled=True,
         model_names=model_names,
         ollama_base_url=base_url,
         board_ids=board_ids,
+        tools=tools,
     )
 
 
@@ -154,10 +170,12 @@ class BulletinBoardAgent:
             else ", ".join(sorted(self._config.board_ids))
         )
         model_list = ", ".join(f"@{name}" for name in self._config.model_names)
+        tools_note = "tools=on" if self._config.tools.enabled else "tools=off"
         LOGGER.info(
-            "AI Agent 已启动: scope=%s models=%s ollama=%s",
+            "AI Agent 已启动: scope=%s models=%s %s ollama=%s",
             scope,
             model_list,
+            tools_note,
             self._config.ollama_base_url,
         )
         self._worker.start()
@@ -244,13 +262,18 @@ class BulletinBoardAgent:
                 question[:120],
             )
             board_context = format_board_context(all_messages, self._config.model_names)
-            reply = call_ollama_chat(
+            system_prompt = build_system_prompt(self._config.tools)
+            reply = run_ollama_agent_chat(
                 base_url=self._config.ollama_base_url,
                 model=model_name,
-                system_prompt=DEFAULT_SYSTEM_PROMPT,
+                system_prompt=system_prompt,
                 board_context=board_context,
                 trigger_author=trigger.author_label,
                 question=question,
+                store=self._store,
+                board_id=board_id,
+                messages=all_messages,
+                tools_config=self._config.tools,
             )
             posted = self._store.append_message(
                 board_id,
@@ -302,6 +325,14 @@ class BulletinBoardAgent:
         return any(author == AgentConfig.author_label_for(name) for name in self._config.model_names)
 
 
+def build_system_prompt(tools_config: AgentToolsConfig) -> str:
+    prompt = DEFAULT_SYSTEM_PROMPT
+    suffix = tools_system_prompt_suffix(tools_config)
+    if suffix:
+        prompt = f"{prompt}\n\n{suffix}"
+    return prompt
+
+
 def extract_mention_question(content: str, model_name: str) -> str | None:
     if not content.strip() or not model_name.strip():
         return None
@@ -339,15 +370,36 @@ def format_board_context(messages: list[BulletinMessage], model_names: tuple[str
         else:
             role = author
         content = message.content.strip()
-        if not content:
+        attachment_note = _format_attachment_note(message)
+        if not content and not attachment_note:
             continue
-        lines.append(f"[{role}] {content}")
+        if content:
+            lines.append(f"[{role}] {content}")
+        if attachment_note:
+            lines.append(f"[{role}] {attachment_note}")
     if not lines:
         return "（留言板暂无文本消息）"
     return "\n".join(lines)
 
 
-def call_ollama_chat(
+def _format_attachment_note(message: BulletinMessage) -> str:
+    attachments = message.attachments or []
+    if not attachments:
+        return ""
+    parts: list[str] = []
+    for attachment in attachments:
+        attachment_id = str(attachment.get("id", "")).strip()
+        name = str(attachment.get("name", "")).strip()
+        kind = str(attachment.get("kind", "file"))
+        if not attachment_id:
+            continue
+        parts.append(f"附件 id={attachment_id} name={name!r} kind={kind}")
+    if not parts:
+        return ""
+    return "（附带 " + "；".join(parts) + "）"
+
+
+def run_ollama_agent_chat(
     *,
     base_url: str,
     model: str,
@@ -355,6 +407,10 @@ def call_ollama_chat(
     board_context: str,
     trigger_author: str,
     question: str,
+    store: BulletinBoardStore,
+    board_id: str,
+    messages: list[BulletinMessage],
+    tools_config: AgentToolsConfig,
     timeout_seconds: float = 300,
 ) -> str:
     user_content = (
@@ -363,14 +419,70 @@ def call_ollama_chat(
         f"用户 {trigger_author} 向你提问：\n"
         f"{question}"
     )
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-        "stream": False,
-    }
+    chat_messages: list[dict[str, Any]] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]
+    tools = build_tool_definitions(tools_config)
+    executor = AgentToolExecutor(store, board_id, messages, tools_config)
+
+    for round_index in range(tools_config.max_tool_rounds):
+        payload: dict[str, Any] = {
+            "model": model,
+            "messages": chat_messages,
+            "stream": False,
+        }
+        if tools:
+            payload["tools"] = tools
+
+        response_message = _ollama_chat_request(
+            base_url=base_url,
+            payload=payload,
+            timeout_seconds=timeout_seconds,
+        )
+        tool_calls = response_message.get("tool_calls")
+        if not tool_calls:
+            content = str(response_message.get("content", "")).strip()
+            if content:
+                return content
+            raise RuntimeError("Ollama 返回空内容")
+
+        chat_messages.append(response_message)
+        for tool_call in tool_calls:
+            function = tool_call.get("function") if isinstance(tool_call, dict) else None
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name", "")).strip()
+            try:
+                arguments = parse_tool_arguments(function.get("arguments"))
+            except ValueError as exc:
+                tool_result = json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+            else:
+                LOGGER.info(
+                    "Agent 工具调用 board=%s round=%s tool=%s args=%s",
+                    board_id,
+                    round_index + 1,
+                    name,
+                    json.dumps(arguments, ensure_ascii=False)[:200],
+                )
+                tool_result = executor.execute(name, arguments)
+            chat_messages.append(
+                {
+                    "role": "tool",
+                    "content": tool_result,
+                    "name": name,
+                }
+            )
+
+    raise RuntimeError(f"工具调用超过最大轮数 ({tools_config.max_tool_rounds})")
+
+
+def _ollama_chat_request(
+    *,
+    base_url: str,
+    payload: dict[str, Any],
+    timeout_seconds: float,
+) -> dict[str, Any]:
     url = f"{base_url.rstrip('/')}/api/chat"
     request = urllib.request.Request(
         url,
@@ -395,10 +507,7 @@ def call_ollama_chat(
     message = parsed.get("message")
     if not isinstance(message, dict):
         raise RuntimeError(f"Ollama 响应缺少 message 字段: {body[:200]}")
-    content = str(message.get("content", "")).strip()
-    if not content:
-        raise RuntimeError("Ollama 返回空内容")
-    return content
+    return message
 
 
 def start_agent(
