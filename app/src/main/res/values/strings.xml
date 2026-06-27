@@ -205,7 +205,7 @@
     <string name="config_viewer_preview_bytes">内部查看器预览长度（字节）</string>
     <string name="config_viewer_preview_range">范围：%1$d～%2$dM</string>
     <string name="config_ftp_password">普通接入密码</string>
-    <string name="config_ftp_password_hint">访客接入本机 FTP 与留言板时使用；留空则免密。他方设备连接本机时需输入此密码。</string>
+    <string name="config_ftp_password_hint">访客接入本机 FTP 与留言板时使用（仅可浏览与发留言）；留空则免密。留言板管理仅在本机应用内进行。</string>
     <string name="config_ftp_password_set">已设置密码</string>
     <string name="config_ftp_password_unset">未设置密码</string>
     <string name="config_ftp_timeout_minutes">网络服务页面自动关闭（分钟）</string>
@@ -214,11 +214,13 @@
     <string name="config_ftp_section">网络服务</string>
     <string name="config_ftp_summary">%1$s；本机服务 %2$s；页面倒计时 %3$d 分钟</string>
     <string name="config_local_network_service_enabled">开启本机留言板服务</string>
-    <string name="config_local_network_service_enabled_hint">关闭后本机不广播、不可被连接，仍可浏览并连接其他设备</string>
+    <string name="config_local_network_service_enabled_hint">关闭后本机不广播、不可被连接，仍可浏览并连接其他设备。本机留言板仅能在应用内管理。</string>
     <string name="config_local_network_service_on">已开启</string>
     <string name="config_local_network_service_off">已关闭</string>
     <string name="config_family_network_user_name">家庭网络用户名</string>
-    <string name="config_family_network_user_name_hint">留空则使用设备标识作为发言显示名；设备标识仍会随消息保存以便追溯</string>
+    <string name="config_family_network_user_name_hint">留言作者显示名；留空则使用主机名</string>
+    <string name="config_family_network_host_name">家庭网络主机名</string>
+    <string name="config_family_network_host_name_hint">用于局域网广播与设备列表显示；留空则使用系统设备名称或型号</string>
     <string name="config_family_network_host_password">宿主密码</string>
     <string name="config_family_network_host_password_hint">远程以宿主身份连接本机留言板时使用，可修改/删除留言；留空则仅本机应用内可管理</string>
     <string name="config_git">Git 配置</string>
@@ -269,7 +271,7 @@
     <string name="family_network_running">运行中</string>
     <string name="family_network_stopped">未运行</string>
     <string name="family_network_service_type">服务类型：%1$s</string>
-    <string name="family_network_service_name">实例名：%1$s</string>
+    <string name="family_network_service_name">主机名：%1$s</string>
     <string name="family_network_port">端口：%1$d</string>
     <string name="family_network_local_ip">本机 IP：%1$s</string>
     <string name="family_network_local_ip_unknown">本机 IP：暂未获取</string>
@@ -284,7 +286,7 @@
     <string name="family_network_service_type_line">类型：%1$s</string>
     <string name="family_network_service_attr_line">TXT：%1$s</string>
     <string name="family_network_open_conversation">进入调试对话</string>
-    <string name="family_network_bulletin_hint">本机默认留言板随页面启动；进入「本机」条目可作为宿主测试增删改。</string>
+    <string name="family_network_bulletin_hint">本机留言板仅能在应用内管理；远程设备连接本机时只能浏览与发留言。</string>
     <string name="family_network_open_self_board">进入本机留言板</string>
     <string name="family_network_open_board">进入留言板</string>
     <string name="family_board_role_host">当前身份：宿主</string>
@@ -313,6 +315,12 @@
     <string name="family_board_delete_board_confirm">确定删除留言板「%1$s」吗？留言与附件将一并删除。</string>
     <string name="family_board_delete_last_board">至少保留一个留言板，无法删除。</string>
     <string name="family_board_export">导出 Markdown</string>
+    <string name="family_board_export_success">已导出到 %1$s</string>
+    <string name="family_board_export_failed">导出失败：%1$s</string>
+    <string name="family_board_clear_passwords">清除已记住的密码</string>
+    <string name="family_board_clear_passwords_title">清除已记住的接入密码</string>
+    <string name="family_board_clear_passwords_confirm">将清除所有已记住的设备接入密码，下次连接需重新输入。确定吗？</string>
+    <string name="family_board_clear_passwords_done">已清除 %1$d 个设备的接入密码</string>
     <string name="family_network_requires_password">需要接入密码</string>
     <string name="family_network_local_password_set">本机接入密码：已设置（外部设备连接本机时需要）</string>
     <string name="family_network_local_password_unset">本机接入密码：未设置（允许免密连接）</string>

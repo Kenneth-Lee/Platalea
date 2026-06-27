@@ -179,7 +179,7 @@
     <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes)</string>
     <string name="config_viewer_preview_range">Range: %1$d to %2$dM</string>
     <string name="config_ftp_password">Guest access password</string>
-    <string name="config_ftp_password_hint">Used by guests for local FTP and bulletin board access. Leave empty for no password.</string>
+    <string name="config_ftp_password_hint">Used by guests for local FTP and bulletin board access (read and post only). Leave empty for no password. Board management is local-app only.</string>
     <string name="config_ftp_password_set">Password set</string>
     <string name="config_ftp_password_unset">No password</string>
     <string name="config_ftp_timeout_minutes">Network service page auto close (minutes)</string>
@@ -188,11 +188,13 @@
     <string name="config_ftp_section">Network Services</string>
     <string name="config_ftp_summary">%1$s; local board service %2$s; page timeout %3$d min</string>
     <string name="config_local_network_service_enabled">Enable local bulletin board service</string>
-    <string name="config_local_network_service_enabled_hint">When off, this device is not advertised and cannot be connected, but you can still browse other devices.</string>
+    <string name="config_local_network_service_enabled_hint">When off, this device is not advertised and cannot be connected, but you can still browse other devices. Local boards can only be managed in this app.</string>
     <string name="config_local_network_service_on">enabled</string>
     <string name="config_local_network_service_off">disabled</string>
     <string name="config_family_network_user_name">Family network display name</string>
-    <string name="config_family_network_user_name_hint">Leave empty to use the device label as display name. The device label is still stored with each message for traceability.</string>
+    <string name="config_family_network_user_name_hint">Author name on messages; leave empty to use the host name.</string>
+    <string name="config_family_network_host_name">Family network host name</string>
+    <string name="config_family_network_host_name_hint">Used for LAN broadcast and the device list; leave empty to use the system device name or model.</string>
     <string name="config_family_network_host_password">Host password</string>
     <string name="config_family_network_host_password_hint">For remote host access to manage messages on this device. Leave empty to allow management only from this app locally.</string>
     <string name="config_git">Git Configuration</string>
@@ -213,7 +215,7 @@
     <string name="family_network_running">Running</string>
     <string name="family_network_stopped">Stopped</string>
     <string name="family_network_service_type">Service type: %1$s</string>
-    <string name="family_network_service_name">Instance name: %1$s</string>
+    <string name="family_network_service_name">Host name: %1$s</string>
     <string name="family_network_port">Port: %1$d</string>
     <string name="family_network_local_ip">Local IP: %1$s</string>
     <string name="family_network_local_ip_unknown">Local IP: unavailable</string>
@@ -228,7 +230,7 @@
     <string name="family_network_service_type_line">Type: %1$s</string>
     <string name="family_network_service_attr_line">TXT: %1$s</string>
     <string name="family_network_open_conversation">Open Debug Chat</string>
-    <string name="family_network_bulletin_hint">The default local bulletin board starts with this page. Open the Self entry to test host CRUD in a loopback session.</string>
+    <string name="family_network_bulletin_hint">Local boards can only be managed in this app. Remote devices connecting here can browse and post only.</string>
     <string name="family_network_open_self_board">Open Local Board</string>
     <string name="family_network_open_board">Open Board</string>
     <string name="family_board_role_host">Role: Host</string>
@@ -257,6 +259,12 @@
     <string name="family_board_delete_board_confirm">Delete board \"%1$s\"? All messages and attachments will be removed.</string>
     <string name="family_board_delete_last_board">At least one board must remain.</string>
     <string name="family_board_export">Export Markdown</string>
+    <string name="family_board_export_success">Exported to %1$s</string>
+    <string name="family_board_export_failed">Export failed: %1$s</string>
+    <string name="family_board_clear_passwords">Clear saved passwords</string>
+    <string name="family_board_clear_passwords_title">Clear Saved Access Passwords</string>
+    <string name="family_board_clear_passwords_confirm">This clears all saved device access passwords. You will need to enter them again next time. Continue?</string>
+    <string name="family_board_clear_passwords_done">Cleared saved passwords for %1$d device(s)</string>
     <string name="family_network_requires_password">Password required</string>
     <string name="family_network_local_password_set">Local access password: set (required for external devices)</string>
     <string name="family_network_local_password_unset">Local access password: not set (open access)</string>

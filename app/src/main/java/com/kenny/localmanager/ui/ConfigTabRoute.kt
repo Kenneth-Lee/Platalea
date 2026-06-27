@@ -70,8 +70,8 @@ data class ConfigTabRouteState(
     val onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     val familyNetworkUserName: String,
     val onFamilyNetworkUserNameChange: (String) -> Unit,
-    val familyNetworkHostPassword: String,
-    val onFamilyNetworkHostPasswordChange: (String) -> Unit,
+    val familyNetworkHostName: String,
+    val onFamilyNetworkHostNameChange: (String) -> Unit,
     val onOpenGitConfig: () -> Unit,
     val onManageKeys: () -> Unit,
     val onOpenCacheManagement: () -> Unit,
@@ -99,8 +99,8 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onLocalNetworkServiceEnabledChange = state.onLocalNetworkServiceEnabledChange,
         familyNetworkUserName = state.familyNetworkUserName,
         onFamilyNetworkUserNameChange = state.onFamilyNetworkUserNameChange,
-        familyNetworkHostPassword = state.familyNetworkHostPassword,
-        onFamilyNetworkHostPasswordChange = state.onFamilyNetworkHostPasswordChange,
+        familyNetworkHostName = state.familyNetworkHostName,
+        onFamilyNetworkHostNameChange = state.onFamilyNetworkHostNameChange,
         onOpenGitConfig = state.onOpenGitConfig,
         onManageKeys = state.onManageKeys,
         onOpenCacheManagement = state.onOpenCacheManagement,
@@ -130,8 +130,8 @@ private fun ConfigPanel(
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     familyNetworkUserName: String,
     onFamilyNetworkUserNameChange: (String) -> Unit,
-    familyNetworkHostPassword: String,
-    onFamilyNetworkHostPasswordChange: (String) -> Unit,
+    familyNetworkHostName: String,
+    onFamilyNetworkHostNameChange: (String) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -147,7 +147,7 @@ private fun ConfigPanel(
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
     var localFamilyNetworkUserName by remember { mutableStateOf(familyNetworkUserName) }
-    var localFamilyNetworkHostPassword by remember { mutableStateOf(familyNetworkHostPassword) }
+    var localFamilyNetworkHostName by remember { mutableStateOf(familyNetworkHostName) }
     var localNetworkServiceTimeoutMinutes by remember { mutableStateOf(networkServiceTimeoutMinutes.toString()) }
     var showFtpConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsConfigDialog by remember { mutableStateOf(false) }
@@ -220,8 +220,8 @@ private fun ConfigPanel(
     LaunchedEffect(familyNetworkUserName) {
         localFamilyNetworkUserName = familyNetworkUserName
     }
-    LaunchedEffect(familyNetworkHostPassword) {
-        localFamilyNetworkHostPassword = familyNetworkHostPassword
+    LaunchedEffect(familyNetworkHostName) {
+        localFamilyNetworkHostName = familyNetworkHostName
     }
 
     LaunchedEffect(Unit) {
@@ -271,6 +271,24 @@ private fun ConfigPanel(
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
+                        value = localFamilyNetworkHostName,
+                        onValueChange = { s ->
+                            localFamilyNetworkHostName = s
+                            onFamilyNetworkHostNameChange(s)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(context.getString(R.string.config_family_network_host_name)) },
+                        singleLine = true,
+                        supportingText = {
+                            Text(
+                                context.getString(R.string.config_family_network_host_name_hint),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
                         value = localFtpPassword,
                         onValueChange = { s ->
                             localFtpPassword = s
@@ -283,25 +301,6 @@ private fun ConfigPanel(
                         supportingText = {
                             Text(
                                 context.getString(R.string.config_ftp_password_hint),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = localFamilyNetworkHostPassword,
-                        onValueChange = { s ->
-                            localFamilyNetworkHostPassword = s
-                            onFamilyNetworkHostPasswordChange(s)
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(context.getString(R.string.config_family_network_host_password)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
-                        supportingText = {
-                            Text(
-                                context.getString(R.string.config_family_network_host_password_hint),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodySmall
                             )
@@ -803,8 +802,8 @@ fun ConfigDialog(
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     familyNetworkUserName: String,
     onFamilyNetworkUserNameChange: (String) -> Unit,
-    familyNetworkHostPassword: String,
-    onFamilyNetworkHostPasswordChange: (String) -> Unit,
+    familyNetworkHostName: String,
+    onFamilyNetworkHostNameChange: (String) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
@@ -835,8 +834,8 @@ fun ConfigDialog(
                 onLocalNetworkServiceEnabledChange = onLocalNetworkServiceEnabledChange,
                 familyNetworkUserName = familyNetworkUserName,
                 onFamilyNetworkUserNameChange = onFamilyNetworkUserNameChange,
-                familyNetworkHostPassword = familyNetworkHostPassword,
-                onFamilyNetworkHostPasswordChange = onFamilyNetworkHostPasswordChange,
+                familyNetworkHostName = familyNetworkHostName,
+                onFamilyNetworkHostNameChange = onFamilyNetworkHostNameChange,
                 onOpenGitConfig = onOpenGitConfig,
                 onManageKeys = onManageKeys,
                 onOpenCacheManagement = onOpenCacheManagement,

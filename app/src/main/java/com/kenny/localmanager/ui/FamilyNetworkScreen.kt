@@ -71,7 +71,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -114,7 +113,7 @@ fun FamilyNetworkScreen(
     networkPassword: String?,
     localServiceEnabled: Boolean,
     familyNetworkUserName: String = "",
-    familyNetworkHostPassword: String = "",
+    familyNetworkHostName: String = "",
     timeoutMinutes: Int = 0,
     rootUri: String? = null,
     hideDotFiles: Boolean = false,
@@ -133,16 +132,16 @@ fun FamilyNetworkScreen(
     var boardPasswordInput by remember { mutableStateOf("") }
     var boardPasswordError by remember { mutableStateOf<String?>(null) }
     var boardPasswordInProgress by remember { mutableStateOf(false) }
-    val boardAccessCache = remember { mutableStateMapOf<String, String?>() }
     var pendingBoardAccess by remember { mutableStateOf<PendingBoardAccess?>(null) }
     var boardPickerLoading by remember { mutableStateOf(false) }
+    var showClearPasswordsDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
+    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
         manager.configure(
             networkPassword,
             localServiceEnabled,
             familyNetworkUserName.ifBlank { null },
-            familyNetworkHostPassword.ifBlank { null }
+            familyNetworkHostName.ifBlank { null }
         )
     }
 
@@ -164,12 +163,12 @@ fun FamilyNetworkScreen(
         }
     }
 
-    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
+    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
         manager.configure(
             networkPassword,
             localServiceEnabled,
             familyNetworkUserName.ifBlank { null },
-            familyNetworkHostPassword.ifBlank { null }
+            familyNetworkHostName.ifBlank { null }
         )
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         manager.start()
@@ -182,7 +181,7 @@ fun FamilyNetworkScreen(
         scope.launch {
             boardPickerLoading = true
             val canManage = manager.remoteCanManageBoard(service, accessPassword)
-            boardAccessCache[service.deviceKey] = accessPassword
+            manager.rememberBoardAccessPassword(service.deviceKey, accessPassword)
             pendingBoardAccess = PendingBoardAccess(service, accessPassword, canManage)
             boardPickerLoading = false
         }
@@ -212,14 +211,15 @@ fun FamilyNetworkScreen(
             openBoardWithAccess(service, accessPassword = null)
             return
         }
-        boardAccessCache[service.deviceKey]?.let { cached ->
+        if (manager.hasRememberedBoardAccessPassword(service.deviceKey)) {
+            val cached = manager.getRememberedBoardAccessPassword(service.deviceKey)
             scope.launch {
                 boardPasswordInProgress = true
                 val result = manager.probeBoardAccess(service, accessPassword = cached)
                 boardPasswordInProgress = false
                 result.onSuccess { openBoardWithAccess(service, cached) }
                     .onFailure {
-                        boardAccessCache.remove(service.deviceKey)
+                        manager.forgetBoardAccessPassword(service.deviceKey)
                         showPasswordDialog(service, wrongPassword = true)
                     }
             }
@@ -234,6 +234,7 @@ fun FamilyNetworkScreen(
             val probe = manager.probeBoardAccess(service, accessPassword = null)
             boardPasswordInProgress = false
             if (probe.isSuccess) {
+                manager.rememberBoardAccessPassword(service.deviceKey, null)
                 openBoardWithAccess(service, null)
             } else {
                 showPasswordDialog(service, wrongPassword = false)
@@ -293,6 +294,7 @@ fun FamilyNetworkScreen(
                                 pendingBoardService = null
                                 boardPasswordInput = ""
                                 boardPasswordError = null
+                                manager.rememberBoardAccessPassword(service.deviceKey, password)
                                 openBoardWithAccess(service, password)
                             } else {
                                 boardPasswordError = context.getString(R.string.family_board_password_wrong)
@@ -311,6 +313,30 @@ fun FamilyNetworkScreen(
                         boardPasswordError = null
                     }
                 ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
+    if (showClearPasswordsDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearPasswordsDialog = false },
+            title = { Text(stringResource(R.string.family_board_clear_passwords_title)) },
+            text = { Text(stringResource(R.string.family_board_clear_passwords_confirm)) },
+            confirmButton = {
+                Button(onClick = {
+                    val count = manager.clearAllBoardAccessPasswords()
+                    showClearPasswordsDialog = false
+                    Toast.makeText(
+                        context,
+                        context.getString(R.string.family_board_clear_passwords_done, count),
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearPasswordsDialog = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             }
         )
     }
@@ -376,7 +402,26 @@ fun FamilyNetworkScreen(
                 actions = {
                     if (boardSession != null) {
                         if (!rootUri.isNullOrBlank()) {
-                            IconButton(onClick = { manager.exportOpenBoard(rootUri) }) {
+                            IconButton(onClick = {
+                                manager.exportOpenBoard(rootUri) { result ->
+                                    result.onSuccess { path ->
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.family_board_export_success, path),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }.onFailure { error ->
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(
+                                                R.string.family_board_export_failed,
+                                                error.message ?: error.javaClass.simpleName
+                                            ),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }) {
                                 Icon(
                                     Icons.Default.Description,
                                     contentDescription = stringResource(R.string.family_board_export)
@@ -389,6 +434,14 @@ fun FamilyNetworkScreen(
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
                     } else {
+                        if (state.rememberedBoardAccessCount > 0) {
+                            IconButton(onClick = { showClearPasswordsDialog = true }) {
+                                Icon(
+                                    Icons.Default.Lock,
+                                    contentDescription = stringResource(R.string.family_board_clear_passwords)
+                                )
+                            }
+                        }
                         IconButton(onClick = { manager.refresh() }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
@@ -804,8 +857,8 @@ private fun CollapsibleLocalServiceCard(
                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.9f)
                 )
                 Text(stringResource(R.string.family_network_service_type, state.serviceType), style = MaterialTheme.typography.bodySmall)
-                if (state.serviceName.isNotBlank()) {
-                    Text(stringResource(R.string.family_network_service_name, state.serviceName), style = MaterialTheme.typography.bodySmall)
+                if (state.localHostDisplayName.isNotBlank()) {
+                    Text(stringResource(R.string.family_network_service_name, state.localHostDisplayName), style = MaterialTheme.typography.bodySmall)
                 }
                 Text(
                     if (state.isRegistered) stringResource(R.string.family_network_registered)
@@ -1046,7 +1099,7 @@ private fun BulletinBoardPage(
                         }
                     )
                     append(" · ")
-                    append(session.service.host)
+                    append(session.service.displayHostName.ifBlank { session.service.host })
                     append(':')
                     append(session.service.port)
                 },
@@ -1474,7 +1527,7 @@ private fun FamilyNetworkServiceCard(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Text(
-                        service.serviceName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
+                        service.displayHostName.ifBlank { stringResource(R.string.family_network_unknown_service_name) },
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,

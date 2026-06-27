@@ -14,8 +14,8 @@ class BulletinBoardHttpHandler(
         headers: Map<String, String> = emptyMap()
     ): FamilyHttpResponse {
         val normalizedPath = path.substringBefore('?').trimEnd('/').ifEmpty { "/" }
-        if (requiresHostAuth(method, normalizedPath) && !authLevel.canManageBoard) {
-            return forbidden("修改或删除需要宿主密码")
+        if (requiresHostAuth(method, normalizedPath)) {
+            return forbidden("远程不可修改或删除，请在本机应用中操作")
         }
         return when {
             method == "GET" && normalizedPath == "/boards" -> listBoards()
@@ -321,7 +321,7 @@ class BulletinBoardHttpHandler(
             ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
         return FamilyHttpResponse(
             200,
-            snapshot.copy(canManage = authLevel.canManageBoard).toJson().toString()
+            snapshot.copy(canManage = false).toJson().toString()
         )
     }
 

@@ -133,6 +133,7 @@ def build_service_properties(
     *,
     auth_required: bool,
     platform: str = "python",
+    host_name: str | None = None,
 ) -> dict[str, str]:
     props = {
         "app": "LocalManager",
@@ -145,7 +146,17 @@ def build_service_properties(
     }
     if auth_required:
         props["auth"] = "1"
+    if host_name:
+        props["host_name"] = host_name
     return props
+
+
+def _display_host_name(service_name: str) -> str:
+    prefix = "LocalManager-"
+    if service_name.startswith(prefix):
+        stripped = service_name.removeprefix(prefix).strip()
+        return stripped or service_name
+    return service_name
 
 
 def build_service_info(
@@ -170,6 +181,7 @@ def build_service_info(
         tls_fingerprint,
         auth_required=auth_required,
         platform=platform,
+        host_name=_display_host_name(service_name),
     )
     return ServiceInfo(
         type_=service_type,

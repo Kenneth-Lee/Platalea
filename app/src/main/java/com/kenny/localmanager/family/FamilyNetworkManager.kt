@@ -56,6 +56,10 @@ data class FamilyDiscoveredService(
         get() = attributes["instance_id"]?.takeIf { it.isNotBlank() }
             ?: "$serviceName@$host:$port"
 
+    /** 列表展示用主机名：优先 TXT `host_name`，否则解析 mDNS 服务实例名。 */
+    val displayHostName: String
+        get() = FamilyNetworkHostNames.displayHostName(serviceName, attributes)
+
     /** mDNS TXT `auth=1` 表示对端要求接入密码。 */
     val requiresPasswordAuth: Boolean
         get() = attributes["auth"]?.trim() == "1"
@@ -86,6 +90,7 @@ data class FamilyNetworkState(
     val isDiscovering: Boolean = false,
     val serviceType: String = FAMILY_SERVICE_TYPE,
     val serviceName: String = "",
+    val localHostDisplayName: String = "",
     val port: Int = 0,
     val localIp: String? = null,
     val discoveredServices: List<FamilyDiscoveredService> = emptyList(),
@@ -93,6 +98,7 @@ data class FamilyNetworkState(
     val openBoardSession: BulletinBoardOpenSession? = null,
     val attachmentUpload: BulletinAttachmentUploadProgress? = null,
     val attachmentDownload: BulletinAttachmentDownloadProgress? = null,
+    val rememberedBoardAccessCount: Int = 0,
     val logLines: List<String> = emptyList(),
     val lastError: String? = null
 )
@@ -113,24 +119,59 @@ class FamilyNetworkManager(context: Context) {
     private var httpsServer: EmbeddedHttpServer? = null
     private var registrationListener: NsdManager.RegistrationListener? = null
     private var discoveryListener: NsdManager.DiscoveryListener? = null
+    private val pendingResolveQueue = ArrayDeque<NsdServiceInfo>()
+    private val pendingResolveNames = mutableSetOf<String>()
+    private var resolveInProgress = false
+    private val resolveQueueLock = Any()
     private var serverJob: Job? = null
     private var attachmentUploadJob: Job? = null
     private var attachmentDownloadJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
     private var networkPassword: String? = null
-    private var networkHostPassword: String? = null
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
+    private var familyNetworkHostName: String? = null
+    private val boardAccessPasswordCache = mutableMapOf<String, String?>()
+
+    fun hasRememberedBoardAccessPassword(deviceKey: String): Boolean =
+        deviceKey in boardAccessPasswordCache
+
+    fun getRememberedBoardAccessPassword(deviceKey: String): String? =
+        boardAccessPasswordCache[deviceKey]
+
+    fun rememberBoardAccessPassword(deviceKey: String, password: String?) {
+        boardAccessPasswordCache[deviceKey] = password?.trim()?.ifEmpty { null }
+        syncRememberedPasswordCount()
+    }
+
+    fun forgetBoardAccessPassword(deviceKey: String) {
+        if (boardAccessPasswordCache.remove(deviceKey) != null) {
+            syncRememberedPasswordCount()
+        }
+    }
+
+    fun clearAllBoardAccessPasswords(): Int {
+        val count = boardAccessPasswordCache.size
+        boardAccessPasswordCache.clear()
+        syncRememberedPasswordCount()
+        return count
+    }
+
+    private fun syncRememberedPasswordCount() {
+        _state.update { it.copy(rememberedBoardAccessCount = boardAccessPasswordCache.size) }
+    }
 
     fun configure(
         networkPassword: String?,
         localServiceEnabled: Boolean,
         familyNetworkUserName: String? = null,
-        networkHostPassword: String? = null
+        familyNetworkHostName: String? = null
     ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
-        this.networkHostPassword = networkHostPassword?.trim()?.ifEmpty { null }
+        val newHostName = familyNetworkHostName?.trim()?.ifEmpty { null }
+        val hostNameChanged = this.familyNetworkHostName != newHostName
+        this.familyNetworkHostName = newHostName
         this.familyNetworkUserName = familyNetworkUserName?.trim()?.ifEmpty { null }
         val enabledChanged = this.localServiceEnabled != localServiceEnabled
         this.localServiceEnabled = localServiceEnabled
@@ -142,6 +183,8 @@ class FamilyNetworkManager(context: Context) {
             } else {
                 stopLocalServerStack()
             }
+        } else if (hostNameChanged && localServiceEnabled && httpsServer != null) {
+            reregisterMdnsService()
         }
     }
 
@@ -202,10 +245,12 @@ class FamilyNetworkManager(context: Context) {
         appendLog("本地 HTTPS 留言板已监听端口 ${server.port}，证书指纹=${localIdentity.fingerprintSha256}。")
         val instanceId = loadOrCreateInstanceId()
         currentInstanceId = instanceId
-        val requestedServiceName = buildServiceName()
+        val displayHostName = resolveLocalDisplayHostName(instanceId)
+        val requestedServiceName = sanitizeMdnsServiceName(displayHostName)
         _state.update {
             it.copy(
                 serviceName = requestedServiceName,
+                localHostDisplayName = displayHostName,
                 port = server.port,
                 lastError = null
             )
@@ -214,6 +259,7 @@ class FamilyNetworkManager(context: Context) {
         registerService(
             manager = manager,
             requestedServiceName = requestedServiceName,
+            displayHostName = displayHostName,
             port = server.port,
             instanceId = instanceId,
             tlsFingerprint = localIdentity.fingerprintSha256
@@ -442,10 +488,15 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    fun exportOpenBoard(rootUri: String?) {
+    fun exportOpenBoard(
+        rootUri: String?,
+        onComplete: ((Result<String>) -> Unit)? = null
+    ) {
         val session = _state.value.openBoardSession ?: return
         if (rootUri.isNullOrBlank()) {
-            appendError("导出失败：未设置根目录。")
+            val error = IllegalStateException("未设置根目录")
+            appendError("导出失败：${error.message}")
+            onComplete?.invoke(Result.failure(error))
             return
         }
         scope.launch {
@@ -476,6 +527,7 @@ class FamilyNetworkManager(context: Context) {
             }.onFailure { error ->
                 appendError("导出失败：${error.message ?: error.javaClass.simpleName}")
             }
+            onComplete?.invoke(result)
         }
     }
 
@@ -681,7 +733,7 @@ class FamilyNetworkManager(context: Context) {
                         )
                     )
                 }
-                appendLog("开始上传附件到 ${session.service.serviceName}…")
+                appendLog("开始上传附件到 ${session.service.displayHostName}…")
                 val (_, device) = buildAuthorIdentity()
                 val transport: BulletinAttachmentTransport = if (session.isHost) {
                     LocalBulletinAttachmentTransport(boardStore)
@@ -811,7 +863,7 @@ class FamilyNetworkManager(context: Context) {
             }
         }
         result.onSuccess {
-            appendLog("留言已发布到 ${session.service.serviceName}/${session.boardId}")
+            appendLog("留言已发布到 ${session.service.displayHostName}/${session.boardId}")
             refreshOpenBoard()
         }.onFailure { error ->
             appendError("发布留言失败：${error.message ?: error.javaClass.simpleName}")
@@ -920,6 +972,7 @@ class FamilyNetworkManager(context: Context) {
     private fun registerService(
         manager: NsdManager,
         requestedServiceName: String,
+        displayHostName: String,
         port: Int,
         instanceId: String,
         tlsFingerprint: String
@@ -932,10 +985,11 @@ class FamilyNetworkManager(context: Context) {
             setAttribute("proto", FAMILY_TLS_PROTOCOL)
             setAttribute("version", FAMILY_VERSION)
             setAttribute("instance_id", instanceId)
+            setAttribute(FamilyNetworkHostNames.TXT_HOST_NAME, displayHostName)
             setAttribute("platform", "android")
             setAttribute("tls", "1")
             setAttribute(FAMILY_TLS_FINGERPRINT_ATTR, tlsFingerprint)
-            if (!networkPassword.isNullOrBlank() || !networkHostPassword.isNullOrBlank()) {
+            if (!networkPassword.isNullOrBlank()) {
                 setAttribute("auth", "1")
             }
         }
@@ -946,6 +1000,7 @@ class FamilyNetworkManager(context: Context) {
                     it.copy(
                         isRegistered = true,
                         serviceName = info.serviceName ?: requestedServiceName,
+                        localHostDisplayName = displayHostName,
                         port = info.port.takeIf { value -> value > 0 } ?: port,
                         lastError = null
                     )
@@ -954,6 +1009,7 @@ class FamilyNetworkManager(context: Context) {
                     host = _state.value.localIp,
                     port = info.port.takeIf { value -> value > 0 } ?: port,
                     instanceId = instanceId,
+                    displayHostName = displayHostName,
                     tlsFingerprint = tlsFingerprint
                 )
             }
@@ -1016,15 +1072,11 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onServiceFound(serviceInfo: NsdServiceInfo) {
-                if (serviceInfo.serviceType != FAMILY_SERVICE_TYPE) return
-                val localServiceName = _state.value.serviceName.trim()
+                if (!serviceTypeMatches(serviceInfo.serviceType)) return
                 val candidateName = serviceInfo.serviceName?.trim().orEmpty()
-                if (localServiceName.isNotEmpty() && candidateName == localServiceName) {
-                    appendLog("跳过解析本机服务：$candidateName")
-                    return
-                }
-                appendLog("发现候选服务：${serviceInfo.serviceName}")
-                resolveService(serviceInfo)
+                if (candidateName.isEmpty()) return
+                appendLog("发现候选服务：$candidateName")
+                enqueueResolve(serviceInfo)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
@@ -1035,14 +1087,51 @@ class FamilyNetworkManager(context: Context) {
         manager.discoverServices(FAMILY_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
     }
 
-    private fun resolveService(serviceInfo: NsdServiceInfo) {
+    private fun serviceTypeMatches(reportedType: String?): Boolean {
+        val normalized = reportedType?.trim()?.trimEnd('.').orEmpty()
+        val expected = FAMILY_SERVICE_TYPE.trimEnd('.')
+        return normalized == expected || normalized == "$expected.local"
+    }
+
+    private fun enqueueResolve(serviceInfo: NsdServiceInfo) {
+        val serviceName = serviceInfo.serviceName?.trim().orEmpty()
+        if (serviceName.isEmpty()) return
+        synchronized(resolveQueueLock) {
+            if (serviceName in pendingResolveNames) return
+            pendingResolveNames.add(serviceName)
+            pendingResolveQueue.addLast(serviceInfo)
+        }
+        drainResolveQueue()
+    }
+
+    private fun drainResolveQueue() {
         val manager = nsdManager ?: return
-        manager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+        val next = synchronized(resolveQueueLock) {
+            if (resolveInProgress || pendingResolveQueue.isEmpty()) return
+            resolveInProgress = true
+            pendingResolveQueue.removeFirst()
+        }
+        manager.resolveService(next, object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
+                val name = serviceInfo.serviceName?.trim().orEmpty()
+                synchronized(resolveQueueLock) {
+                    pendingResolveNames.remove(name)
+                    resolveInProgress = false
+                    if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE) {
+                        pendingResolveNames.add(name)
+                        pendingResolveQueue.addFirst(serviceInfo)
+                    }
+                }
                 appendError("解析服务失败，name=${serviceInfo.serviceName}，错误码=$errorCode")
+                drainResolveQueue()
             }
 
             override fun onServiceResolved(resolved: NsdServiceInfo) {
+                val name = resolved.serviceName?.trim().orEmpty()
+                synchronized(resolveQueueLock) {
+                    pendingResolveNames.remove(name)
+                    resolveInProgress = false
+                }
                 val host = resolved.host?.hostAddress ?: resolved.host?.hostName ?: ""
                 val attributes = decodeAttributes(resolved)
                 val instanceId = currentInstanceId
@@ -1054,10 +1143,19 @@ class FamilyNetworkManager(context: Context) {
                     attributes = attributes,
                     isSelf = instanceId != null && attributes["instance_id"] == instanceId
                 )
-                appendLog("解析到服务：${entry.serviceName} -> ${entry.host}:${entry.port}${if (entry.isSelf) "（本机）" else ""}")
+                appendLog("解析到服务：${entry.displayHostName} -> ${entry.host}:${entry.port}${if (entry.isSelf) "（本机）" else ""}")
                 upsertDiscoveredService(entry)
+                drainResolveQueue()
             }
         })
+    }
+
+    private fun clearResolveQueue() {
+        synchronized(resolveQueueLock) {
+            pendingResolveQueue.clear()
+            pendingResolveNames.clear()
+            resolveInProgress = false
+        }
     }
 
     private fun upsertDiscoveredService(entry: FamilyDiscoveredService) {
@@ -1072,7 +1170,7 @@ class FamilyNetworkManager(context: Context) {
                 .plus(entry)
                 .sortedWith(
                     compareByDescending<FamilyDiscoveredService> { it.isSelf }
-                        .thenBy { it.serviceName.lowercase() }
+                        .thenBy { it.displayHostName.lowercase() }
                 )
             current.copy(discoveredServices = updated, lastError = null)
         }
@@ -1084,7 +1182,8 @@ class FamilyNetworkManager(context: Context) {
         val port = _state.value.port
         if (port <= 0) return
         val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
-        publishLocalSelfService(_state.value.localIp, port, instanceId, tlsFingerprint)
+        val displayHostName = resolveLocalDisplayHostName(instanceId)
+        publishLocalSelfService(_state.value.localIp, port, instanceId, displayHostName, tlsFingerprint)
     }
 
     private fun loadOrCreateInstanceId(): String {
@@ -1101,11 +1200,12 @@ class FamilyNetworkManager(context: Context) {
         host: String?,
         port: Int,
         instanceId: String,
+        displayHostName: String,
         tlsFingerprint: String
     ) {
         if (!localServiceEnabled) return
         if (port <= 0) return
-        val serviceName = _state.value.serviceName.ifBlank { buildServiceName() }
+        val serviceName = _state.value.serviceName.ifBlank { sanitizeMdnsServiceName(displayHostName) }
         val resolvedHost = host?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1"
         upsertDiscoveredService(
             FamilyDiscoveredService(
@@ -1118,6 +1218,7 @@ class FamilyNetworkManager(context: Context) {
                     "proto" to FAMILY_TLS_PROTOCOL,
                     "version" to FAMILY_VERSION,
                     "instance_id" to instanceId,
+                    FamilyNetworkHostNames.TXT_HOST_NAME to displayHostName,
                     "platform" to "android",
                     "tls" to "1",
                     FAMILY_TLS_FINGERPRINT_ATTR to tlsFingerprint
@@ -1125,8 +1226,40 @@ class FamilyNetworkManager(context: Context) {
                 isSelf = true
             )
         )
-        appendLog("本机留言板服务已加入发现列表：$resolvedHost:$port")
+        appendLog("本机留言板服务已加入发现列表：$displayHostName（$resolvedHost:$port）")
     }
+
+    private fun reregisterMdnsService() {
+        if (!localServiceEnabled || httpsServer == null) return
+        val instanceId = currentInstanceId ?: return
+        val port = _state.value.port.takeIf { it > 0 } ?: httpsServer?.port ?: return
+        val displayHostName = resolveLocalDisplayHostName(instanceId)
+        val requestedServiceName = sanitizeMdnsServiceName(displayHostName)
+        _state.update {
+            it.copy(
+                serviceName = requestedServiceName,
+                localHostDisplayName = displayHostName
+            )
+        }
+        unregisterServiceInternal()
+        val manager = nsdManager ?: return
+        val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
+        registerService(
+            manager = manager,
+            requestedServiceName = requestedServiceName,
+            displayHostName = displayHostName,
+            port = port,
+            instanceId = instanceId,
+            tlsFingerprint = tlsFingerprint
+        )
+        appendLog("主机名已更新，重新广播 mDNS：$displayHostName")
+    }
+
+    private fun resolveLocalDisplayHostName(instanceId: String): String =
+        FamilyNetworkHostNames.resolveDisplayHostName(appContext, familyNetworkHostName, instanceId)
+
+    private fun sanitizeMdnsServiceName(displayHostName: String): String =
+        FamilyNetworkHostNames.sanitizeMdnsServiceName(displayHostName)
 
     private fun handleHttpRequest(
         method: String,
@@ -1166,16 +1299,12 @@ class FamilyNetworkManager(context: Context) {
 
     private fun resolveAuthLevel(headers: Map<String, String>): FamilyNetworkAuthLevel? {
         val guest = networkPassword
-        val host = networkHostPassword
-        if (guest.isNullOrBlank() && host.isNullOrBlank()) {
+        if (guest.isNullOrBlank()) {
             return FamilyNetworkAuthLevel.OPEN
         }
         val provided = headers[FamilyNetworkAuth.PASSWORD_HEADER.lowercase(Locale.ROOT)]?.trim().orEmpty()
         if (provided.isEmpty()) return null
-        if (!host.isNullOrBlank() && provided == host) {
-            return FamilyNetworkAuthLevel.HOST
-        }
-        if (!guest.isNullOrBlank() && provided == guest) {
+        if (provided == guest) {
             return FamilyNetworkAuthLevel.GUEST
         }
         return null
@@ -1399,6 +1528,7 @@ class FamilyNetworkManager(context: Context) {
     }
 
     private fun stopDiscoveryInternal() {
+        clearResolveQueue()
         val manager = nsdManager ?: return
         val listener = discoveryListener ?: return
         try {
@@ -1476,13 +1606,11 @@ class FamilyNetworkManager(context: Context) {
         Log.e(TAG, message)
     }
 
-    private fun buildServiceName(): String {
-        val model = Build.MODEL?.trim()?.replace(Regex("\\s+"), "-")?.takeIf { it.isNotEmpty() } ?: "Android"
-        return "LocalManager-$model"
-    }
-
     private fun buildAuthorIdentity(): Pair<String, String> {
-        val deviceLabel = _state.value.serviceName.ifBlank { buildServiceName() }
+        val instanceId = currentInstanceId.orEmpty()
+        val deviceLabel = _state.value.localHostDisplayName.ifBlank {
+            resolveLocalDisplayHostName(instanceId)
+        }
         val displayLabel = familyNetworkUserName?.takeIf { it.isNotBlank() } ?: deviceLabel
         return displayLabel to deviceLabel
     }

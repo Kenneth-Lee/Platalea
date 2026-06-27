@@ -1755,7 +1755,7 @@ private fun FileBrowserAppScreen(
         var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
         var localNetworkServiceEnabled by remember { mutableStateOf(true) }
         var familyNetworkUserName by remember { mutableStateOf("") }
-        var familyNetworkHostPassword by remember { mutableStateOf("") }
+        var familyNetworkHostName by remember { mutableStateOf("") }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -2266,7 +2266,7 @@ private fun FileBrowserAppScreen(
             prefs.familyNetworkUserName.collect { familyNetworkUserName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
-            prefs.familyNetworkHostPassword.collect { familyNetworkHostPassword = it.orEmpty() }
+            prefs.familyNetworkHostName.collect { familyNetworkHostName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
@@ -2276,12 +2276,12 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostPassword) {
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
             familyNetworkManager.configure(
                 ftpPassword,
                 localNetworkServiceEnabled,
                 familyNetworkUserName.ifBlank { null },
-                familyNetworkHostPassword.ifBlank { null }
+                familyNetworkHostName.ifBlank { null }
             )
         }
         val familyNetworkUiState by familyNetworkManager.state.collectAsState()
@@ -2924,7 +2924,7 @@ private fun FileBrowserAppScreen(
                             networkPassword = ftpPassword,
                             localServiceEnabled = localNetworkServiceEnabled,
                             familyNetworkUserName = familyNetworkUserName,
-                            familyNetworkHostPassword = familyNetworkHostPassword,
+                            familyNetworkHostName = familyNetworkHostName,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             rootUri = rootUri ?: initialDirUri,
                             hideDotFiles = hideDotFiles,
@@ -2953,7 +2953,7 @@ private fun FileBrowserAppScreen(
                                         s.ifBlank { null },
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        familyNetworkHostPassword.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null }
                                     )
                                 },
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
@@ -2966,7 +2966,7 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         enabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        familyNetworkHostPassword.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null }
                                     )
                                 },
                                 familyNetworkUserName = familyNetworkUserName,
@@ -2977,18 +2977,18 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         name.ifBlank { null },
-                                        familyNetworkHostPassword.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null }
                                     )
                                 },
-                                familyNetworkHostPassword = familyNetworkHostPassword,
-                                onFamilyNetworkHostPasswordChange = { password ->
-                                    familyNetworkHostPassword = password
-                                    scope.launch { prefs.setFamilyNetworkHostPassword(password.ifBlank { null }) }
+                                familyNetworkHostName = familyNetworkHostName,
+                                onFamilyNetworkHostNameChange = { name ->
+                                    familyNetworkHostName = name
+                                    scope.launch { prefs.setFamilyNetworkHostName(name.ifBlank { null }) }
                                     familyNetworkManager.configure(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        password.ifBlank { null }
+                                        name.ifBlank { null }
                                     )
                                 },
                                 onOpenGitConfig = { showGitConfigDialog = true },
