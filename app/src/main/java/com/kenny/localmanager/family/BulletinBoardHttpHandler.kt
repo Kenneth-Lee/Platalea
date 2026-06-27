@@ -319,10 +319,13 @@ class BulletinBoardHttpHandler(
     private fun getMessages(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
         val snapshot = store.snapshot(boardId)
             ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
-        return FamilyHttpResponse(
-            200,
-            snapshot.copy(canManage = false).toJson().toString()
-        )
+        val participants = BulletinBoardMention.collectParticipants(snapshot.messages)
+        val body = snapshot.copy(
+            canManage = false,
+            agents = emptyList(),
+            participants = participants
+        ).toJson().toString()
+        return FamilyHttpResponse(200, body)
     }
 
     private fun createMessage(boardId: String, bodyText: String): FamilyHttpResponse {

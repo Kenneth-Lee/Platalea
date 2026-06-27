@@ -1,0 +1,34 @@
+from __future__ import annotations
+
+from typing import Any
+
+AGENT_DEVICE_PREFIX = "agent:"
+
+
+def collect_participants(messages: list[Any]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for message in messages:
+        if getattr(message, "deleted", False):
+            continue
+        device = (getattr(message, "author_device", None) or "").strip()
+        if device.startswith(AGENT_DEVICE_PREFIX):
+            continue
+        label = (getattr(message, "author_label", "") or "").strip()
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return sorted(labels, key=str.casefold)
+
+
+def enrich_board_payload(
+    payload: dict[str, Any],
+    *,
+    agents: list[str],
+    participants: list[str],
+) -> dict[str, Any]:
+    enriched = dict(payload)
+    enriched["agents"] = agents
+    enriched["participants"] = participants
+    return enriched

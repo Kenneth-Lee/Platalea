@@ -18,7 +18,8 @@ from typing import Any
 from zeroconf import Zeroconf
 
 from bulletin_attachment_store import DirectoryEntry
-from bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent_thread
+from bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent
+from bulletin_mention import collect_participants, enrich_board_payload
 from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
 from family_common import (
     FAMILY_SERVICE_TYPE,
@@ -190,6 +191,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 body_bytes,
                 auth_level,
                 self._header_map(),
+                agent=getattr(self.server, "agent", None),
             )
             if response.get("binary") is not None:
                 binary_response(
@@ -208,6 +210,18 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 )
             else:
                 json_response(self, response["status"], response["body"])
+            return
+
+        if method == "GET" and normalized_path == "/agent":
+            agent = getattr(self.server, "agent", None)
+            if agent is None:
+                json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {"ok": True, "enabled": False, "models": [], "board_ids": None},
+                )
+            else:
+                json_response(self, HTTPStatus.OK, agent._config.to_public_json())
             return
 
         if method == "GET" and normalized_path in {"/", ""}:
@@ -260,6 +274,7 @@ def handle_board_request(
     body_bytes: bytes,
     auth_level: AuthLevel,
     headers: dict[str, str],
+    agent: BulletinBoardAgent | None = None,
 ) -> dict[str, Any]:
     if method == "GET" and path == "/boards":
         boards = store.list_boards()
@@ -367,16 +382,20 @@ def handle_board_request(
                 },
             }
         can_manage = auth_level in {AuthLevel.HOST, AuthLevel.OPEN}
-        return {
-            "status": HTTPStatus.OK,
-            "body": BulletinBoardSnapshot(
+        agents = agent._config.models_for_board(board_id) if agent is not None else []
+        participants = collect_participants(snapshot.messages)
+        body = enrich_board_payload(
+            BulletinBoardSnapshot(
                 board_id=snapshot.board_id,
                 board_name=snapshot.board_name,
                 revision=snapshot.revision,
                 messages=snapshot.messages,
                 can_manage=can_manage,
             ).to_json(),
-        }
+            agents=agents,
+            participants=participants,
+        )
+        return {"status": HTTPStatus.OK, "body": body}
 
     if method == "POST" and path.startswith("/boards/") and path.endswith("/messages"):
         board_id = path.removeprefix("/boards/").removesuffix("/messages")
@@ -399,6 +418,8 @@ def handle_board_request(
                 else "消息内容不能为空或留言板不存在"
             )
             return _bad_request("invalid_message", detail)
+        if agent is not None:
+            agent.notify_new_message(board_id, message.id)
         snapshot = store.snapshot(board_id)
         return {
             "status": HTTPStatus.OK,
@@ -742,10 +763,10 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     agent_handle: BulletinBoardAgent | None = None
     if agent_config is not None:
         agent_state_dir = config.board_root / ".agent"
-        agent_handle, _agent_thread = start_agent_thread(store, agent_config, agent_state_dir)
+        agent_handle = start_agent(store, agent_config, agent_state_dir)
+        https_server.agent = agent_handle  # type: ignore[attr-defined]
         LOGGER.info(
-            "AI Agent 已随服务启动: board=%s @%s",
-            agent_config.board_id,
+            "AI Agent 已随服务启动: @%s",
             agent_config.model_name,
         )
 

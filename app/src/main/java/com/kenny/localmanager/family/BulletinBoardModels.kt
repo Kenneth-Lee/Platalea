@@ -90,7 +90,9 @@ data class BulletinBoardSnapshot(
     val boardName: String,
     val revision: Long,
     val messages: List<BulletinMessage>,
-    val canManage: Boolean = false
+    val canManage: Boolean = false,
+    val agents: List<String> = emptyList(),
+    val participants: List<String> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("ok", true)
@@ -99,6 +101,23 @@ data class BulletinBoardSnapshot(
         put("revision", revision)
         put("can_manage", canManage)
         put("messages", JSONArray(messages.map { it.toJson() }))
+        put("agents", JSONArray(agents))
+        put("participants", JSONArray(participants))
+    }
+
+    companion object {
+        fun parseAgents(json: JSONObject): List<String> = parseStringArray(json.optJSONArray("agents"))
+        fun parseParticipants(json: JSONObject): List<String> =
+            parseStringArray(json.optJSONArray("participants"))
+
+        private fun parseStringArray(array: JSONArray?): List<String> {
+            if (array == null) return emptyList()
+            return buildList {
+                for (i in 0 until array.length()) {
+                    add(array.optString(i).trim())
+                }
+            }.filter { it.isNotEmpty() }
+        }
     }
 }
 
@@ -111,6 +130,8 @@ data class BulletinBoardOpenSession(
     val accessPassword: String? = null,
     val revision: Long = 0L,
     val messages: List<BulletinMessage> = emptyList(),
+    val agents: List<String> = emptyList(),
+    val participants: List<String> = emptyList(),
     val loading: Boolean = false,
     val lastError: String? = null
 )

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import re
 import threading
 import time
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bulletin_mention import AGENT_DEVICE_PREFIX
 from bulletin_store import BulletinBoardStore, BulletinMessage
 
 LOGGER = logging.getLogger("local_manager.bulletin_agent")
@@ -21,16 +23,13 @@ DEFAULT_SYSTEM_PROMPT = (
     "请根据提供的留言板对话记录回答，保持简洁；信息不足时请说明。"
 )
 
-AGENT_DEVICE_PREFIX = "agent:"
-
 
 @dataclass(frozen=True)
 class AgentConfig:
     enabled: bool
-    board_id: str
     model_name: str
     ollama_base_url: str
-    poll_interval_seconds: float
+    board_ids: frozenset[str] | None
 
     @property
     def author_label(self) -> str:
@@ -39,6 +38,24 @@ class AgentConfig:
     @property
     def author_device(self) -> str:
         return f"{AGENT_DEVICE_PREFIX}{self.model_name}"
+
+    def applies_to_board(self, board_id: str) -> bool:
+        if self.board_ids is None:
+            return True
+        return board_id in self.board_ids
+
+    def models_for_board(self, board_id: str) -> list[str]:
+        if not self.applies_to_board(board_id):
+            return []
+        return [self.model_name]
+
+    def to_public_json(self) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "enabled": True,
+            "models": [self.model_name],
+            "board_ids": sorted(self.board_ids) if self.board_ids is not None else None,
+        }
 
 
 def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
@@ -49,18 +66,29 @@ def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
     model_name = str(raw.get("model_name", "")).strip()
     if not model_name:
         raise ValueError("agent.enabled 为 true 时必须设置 agent.model_name")
-    board_id = str(raw.get("board_id", "default")).strip() or "default"
-    base_url = str(raw.get("ollama_base_url", "http://127.0.0.1:11434")).strip()
-    base_url = base_url.rstrip("/")
-    poll = float(raw.get("poll_interval_seconds", 3))
-    poll = max(1.0, min(poll, 60.0))
+    base_url = str(raw.get("ollama_base_url", "http://127.0.0.1:11434")).strip().rstrip("/")
+    board_ids = _parse_board_ids(raw)
     return AgentConfig(
         enabled=True,
-        board_id=board_id,
         model_name=model_name,
         ollama_base_url=base_url,
-        poll_interval_seconds=poll,
+        board_ids=board_ids,
     )
+
+
+def _parse_board_ids(raw: dict[str, Any]) -> frozenset[str] | None:
+    if "board_ids" in raw:
+        value = raw.get("board_ids")
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("agent.board_ids 必须是字符串数组或 null")
+        ids = {str(item).strip() for item in value if str(item).strip()}
+        return frozenset(ids) if ids else None
+    legacy = str(raw.get("board_id", "")).strip()
+    if legacy:
+        return frozenset({legacy})
+    return None
 
 
 class AgentStateStore:
@@ -99,67 +127,101 @@ class BulletinBoardAgent:
     def __init__(self, store: BulletinBoardStore, config: AgentConfig, state_dir: Path) -> None:
         self._store = store
         self._config = config
-        self._state = AgentStateStore(state_dir / f"{config.board_id}_state.json")
-        self._processed_ids = self._state.load_processed_ids()
-        self._busy = False
+        self._state_dir = state_dir
+        self._board_states: dict[str, AgentStateStore] = {}
+        self._processed_by_board: dict[str, set[str]] = {}
+        self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
         self._stop = threading.Event()
+        self._worker = threading.Thread(target=self._worker_loop, name="bulletin-agent", daemon=True)
 
-    def run_forever(self) -> None:
+    def start(self) -> None:
+        scope = (
+            "全部留言板"
+            if self._config.board_ids is None
+            else ", ".join(sorted(self._config.board_ids))
+        )
         LOGGER.info(
-            "AI Agent 已启动: board=%s model=@%s ollama=%s",
-            self._config.board_id,
+            "AI Agent 已启动: scope=%s model=@%s ollama=%s",
+            scope,
             self._config.model_name,
             self._config.ollama_base_url,
         )
-        while not self._stop.is_set():
-            try:
-                self._poll_once()
-            except Exception:
-                LOGGER.exception("Agent 轮询异常")
-            self._stop.wait(self._config.poll_interval_seconds)
+        self._worker.start()
+        self._scan_all_boards_once()
 
     def stop(self) -> None:
         self._stop.set()
+        self._queue.put(None)
+        if self._worker.is_alive():
+            self._worker.join(timeout=2)
 
-    def _poll_once(self) -> None:
-        if self._busy:
+    def notify_new_message(self, board_id: str, message_id: str) -> None:
+        if not self._config.applies_to_board(board_id):
             return
-        snapshot = self._store.snapshot(self._config.board_id)
+        self._queue.put((board_id, message_id))
+
+    def _worker_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                item = self._queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            board_id, message_id = item
+            try:
+                self._process_message(board_id, message_id)
+            except Exception:
+                LOGGER.exception("Agent 处理消息失败 board=%s message=%s", board_id, message_id)
+
+    def _scan_all_boards_once(self) -> None:
+        for board in self._store.list_boards():
+            if not self._config.applies_to_board(board.id):
+                continue
+            snapshot = self._store.snapshot(board.id)
+            if snapshot is None:
+                continue
+            for message in snapshot.messages:
+                if message.id in self._get_processed(board.id):
+                    continue
+                if message.deleted or self._is_agent_message(message):
+                    self._mark_processed(board.id, message.id)
+                    continue
+                if extract_mention_question(message.content, self._config.model_name) is not None:
+                    self.notify_new_message(board.id, message.id)
+
+    def _process_message(self, board_id: str, message_id: str) -> None:
+        if message_id in self._get_processed(board_id):
+            return
+        snapshot = self._store.snapshot(board_id)
         if snapshot is None:
-            LOGGER.warning("留言板不存在: %s", self._config.board_id)
             return
-
-        pending: list[BulletinMessage] = []
-        for message in snapshot.messages:
-            if message.id in self._processed_ids:
-                continue
-            if message.deleted:
-                self._mark_processed(message.id)
-                continue
-            if self._is_agent_message(message):
-                self._mark_processed(message.id)
-                continue
-            pending.append(message)
-
-        for message in pending:
-            self._mark_processed(message.id)
-            question = extract_mention_question(message.content, self._config.model_name)
-            if question is None:
-                continue
-            self._handle_mention(message, question, snapshot.messages)
+        message = next((item for item in snapshot.messages if item.id == message_id), None)
+        if message is None or message.deleted:
+            self._mark_processed(board_id, message_id)
+            return
+        if self._is_agent_message(message):
+            self._mark_processed(board_id, message_id)
+            return
+        self._mark_processed(board_id, message_id)
+        question = extract_mention_question(message.content, self._config.model_name)
+        if question is None:
+            return
+        self._handle_mention(board_id, message, question, snapshot.messages)
 
     def _handle_mention(
         self,
+        board_id: str,
         trigger: BulletinMessage,
         question: str,
-        all_messages: list[Any],
+        all_messages: list[BulletinMessage],
     ) -> None:
-        self._busy = True
         try:
             LOGGER.info(
-                "收到 @%s 来自 %s (message=%s): %s",
+                "收到 @%s 来自 %s (board=%s message=%s): %s",
                 self._config.model_name,
                 trigger.author_label,
+                board_id,
                 trigger.id,
                 question[:120],
             )
@@ -173,48 +235,59 @@ class BulletinBoardAgent:
                 question=question,
             )
             posted = self._store.append_message(
-                self._config.board_id,
+                board_id,
                 self._config.author_label,
                 reply,
                 author_device=self._config.author_device,
             )
             if posted is None:
                 raise RuntimeError("Agent 回复写入留言板失败")
-            self._mark_processed(posted.id)
-            LOGGER.info("Agent 已回复 message=%s", posted.id)
+            self._mark_processed(board_id, posted.id)
+            LOGGER.info("Agent 已回复 board=%s message=%s", board_id, posted.id)
         except Exception as exc:
             LOGGER.exception("Agent 处理 @%s 失败", self._config.model_name)
             error_text = f"AI 处理失败：{exc}"
             posted = self._store.append_message(
-                self._config.board_id,
+                board_id,
                 self._config.author_label,
                 error_text,
                 author_device=self._config.author_device,
             )
             if posted is not None:
-                self._mark_processed(posted.id)
-        finally:
-            self._busy = False
+                self._mark_processed(board_id, posted.id)
+
+    def _state_for_board(self, board_id: str) -> AgentStateStore:
+        cached = self._board_states.get(board_id)
+        if cached is not None:
+            return cached
+        store = AgentStateStore(self._state_dir / f"{board_id}_state.json")
+        self._board_states[board_id] = store
+        self._processed_by_board[board_id] = store.load_processed_ids()
+        return store
+
+    def _get_processed(self, board_id: str) -> set[str]:
+        self._state_for_board(board_id)
+        return self._processed_by_board.setdefault(board_id, set())
+
+    def _mark_processed(self, board_id: str, message_id: str) -> None:
+        processed = self._get_processed(board_id)
+        if message_id in processed:
+            return
+        processed.add(message_id)
+        self._state_for_board(board_id).save_processed_ids(processed)
 
     def _is_agent_message(self, message: BulletinMessage) -> bool:
         device = (message.author_device or "").strip()
         if device.startswith(AGENT_DEVICE_PREFIX):
             return True
-        label = message.author_label.strip()
-        return label == self._config.author_label
-
-    def _mark_processed(self, message_id: str) -> None:
-        if message_id in self._processed_ids:
-            return
-        self._processed_ids.add(message_id)
-        self._state.save_processed_ids(self._processed_ids)
+        return message.author_label.strip() == self._config.author_label
 
 
 def extract_mention_question(content: str, model_name: str) -> str | None:
     if not content.strip() or not model_name.strip():
         return None
-    pattern = rf"@{re.escape(model_name)}\b"
-    match = re.search(pattern, content, flags=re.IGNORECASE)
+    needle = f"@{model_name}"
+    match = re.search(re.escape(needle), content, flags=re.IGNORECASE)
     if not match:
         return None
     question = content[match.end() :].strip()
@@ -223,18 +296,18 @@ def extract_mention_question(content: str, model_name: str) -> str | None:
     return question
 
 
-def format_board_context(messages: list[Any], model_name: str) -> str:
+def format_board_context(messages: list[BulletinMessage], model_name: str) -> str:
     lines: list[str] = []
     for message in messages:
-        if getattr(message, "deleted", False):
+        if message.deleted:
             continue
-        author = getattr(message, "author_label", "") or "访客"
-        device = getattr(message, "author_device", None) or ""
+        author = message.author_label or "访客"
+        device = message.author_device or ""
         if device.startswith(AGENT_DEVICE_PREFIX) or author == f"AI-{model_name}":
             role = "助手"
         else:
             role = author
-        content = getattr(message, "content", "").strip()
+        content = message.content.strip()
         if not content:
             continue
         lines.append(f"[{role}] {content}")
@@ -297,16 +370,11 @@ def call_ollama_chat(
     return content
 
 
-def start_agent_thread(
+def start_agent(
     store: BulletinBoardStore,
     config: AgentConfig,
     state_dir: Path,
-) -> tuple[BulletinBoardAgent, threading.Thread]:
+) -> BulletinBoardAgent:
     agent = BulletinBoardAgent(store, config, state_dir)
-    thread = threading.Thread(
-        target=agent.run_forever,
-        name="bulletin-agent",
-        daemon=True,
-    )
-    thread.start()
-    return agent, thread
+    agent.start()
+    return agent

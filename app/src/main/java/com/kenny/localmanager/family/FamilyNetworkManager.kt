@@ -550,9 +550,12 @@ class FamilyNetworkManager(context: Context) {
             result.onSuccess { snapshot ->
                 _state.update { current ->
                     val open = current.openBoardSession ?: return@update current
-                    val unchanged = open.revision == snapshot.revision &&
+                    val messagesUnchanged = open.revision == snapshot.revision &&
                         bulletinMessagesEqual(open.messages, snapshot.messages)
-                    if (unchanged) {
+                    val metaUnchanged = messagesUnchanged &&
+                        open.agents == snapshot.agents &&
+                        open.participants == snapshot.participants
+                    if (metaUnchanged) {
                         if (open.loading) {
                             current.copy(openBoardSession = open.copy(loading = false))
                         } else {
@@ -564,6 +567,8 @@ class FamilyNetworkManager(context: Context) {
                                 boardName = snapshot.boardName,
                                 revision = snapshot.revision,
                                 messages = snapshot.messages,
+                                agents = snapshot.agents,
+                                participants = snapshot.participants,
                                 canManageBoard = open.isHost || snapshot.canManage,
                                 loading = false,
                                 lastError = null
@@ -1291,6 +1296,17 @@ class FamilyNetworkManager(context: Context) {
                 }.toString()
             )
         }
+        if (method == "GET" && path == "/agent") {
+            return FamilyHttpResponse(
+                200,
+                JSONObject().apply {
+                    put("ok", true)
+                    put("enabled", false)
+                    put("models", JSONArray())
+                    put("board_ids", JSONObject.NULL)
+                }.toString()
+            )
+        }
         return FamilyHttpResponse(404, JSONObject().apply {
             put("ok", false)
             put("error", "not_found")
@@ -1312,9 +1328,13 @@ class FamilyNetworkManager(context: Context) {
 
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {
         return runCatching {
-            boardStore.snapshot(boardId)
-                ?.copy(canManage = true)
+            val snapshot = boardStore.snapshot(boardId)
                 ?: throw IllegalStateException("留言板不存在：$boardId")
+            snapshot.copy(
+                canManage = true,
+                agents = emptyList(),
+                participants = BulletinBoardMention.collectParticipants(snapshot.messages)
+            )
         }
     }
 
@@ -1345,7 +1365,11 @@ class FamilyNetworkManager(context: Context) {
                 boardName = json.optString("board_name", boardId),
                 revision = json.optLong("revision"),
                 messages = messages,
-                canManage = json.optBoolean("can_manage", false)
+                canManage = json.optBoolean("can_manage", false),
+                agents = BulletinBoardSnapshot.parseAgents(json),
+                participants = BulletinBoardSnapshot.parseParticipants(json).ifEmpty {
+                    BulletinBoardMention.collectParticipants(messages)
+                }
             )
         }
     }

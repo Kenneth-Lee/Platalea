@@ -59,6 +59,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -90,6 +91,8 @@ import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
 import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
 import com.kenny.localmanager.family.BulletinBoardInfo
+import com.kenny.localmanager.family.BulletinBoardMention
+import com.kenny.localmanager.family.BulletinMentionTextField
 import com.kenny.localmanager.family.BulletinBoardOpenSession
 import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
@@ -930,7 +933,12 @@ private fun BulletinBoardPage(
     onDelete: (String) -> Unit
 ) {
     val context = LocalContext.current
-    var draftMessage by remember(session.service.deviceKey) { mutableStateOf("") }
+    var draftMessage by remember(session.service.deviceKey, session.boardId) {
+        mutableStateOf(TextFieldValue(""))
+    }
+    val mentionTargets = remember(session.agents, session.participants) {
+        BulletinBoardMention.buildTargets(session.agents, session.participants)
+    }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
@@ -1009,8 +1017,8 @@ private fun BulletinBoardPage(
             onDismiss = { showAttachmentPickDialog = false },
             onPicked = { item ->
                 showAttachmentPickDialog = false
-                manager.uploadAttachmentAndPost(item, draftMessage)
-                draftMessage = ""
+                manager.uploadAttachmentAndPost(item, draftMessage.text)
+                draftMessage = TextFieldValue("")
             }
         )
     }
@@ -1211,25 +1219,21 @@ private fun BulletinBoardPage(
                     contentDescription = stringResource(R.string.family_board_add_attachment)
                 )
             }
-            TextField(
+            BulletinMentionTextField(
                 value = draftMessage,
                 onValueChange = { draftMessage = it },
+                mentionTargets = mentionTargets,
                 modifier = Modifier.weight(1f),
-                placeholder = { Text(stringResource(R.string.family_board_message_placeholder)) },
-                singleLine = false,
+                enabled = !transferInProgress,
                 maxLines = 3,
-                textStyle = MaterialTheme.typography.bodySmall,
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface
-                )
+                placeholder = { Text(stringResource(R.string.family_board_message_placeholder)) }
             )
             IconButton(
                 onClick = {
-                    onPost(draftMessage)
-                    draftMessage = ""
+                    onPost(draftMessage.text)
+                    draftMessage = TextFieldValue("")
                 },
-                enabled = draftMessage.trim().isNotEmpty() && !transferInProgress,
+                enabled = draftMessage.text.trim().isNotEmpty() && !transferInProgress,
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
