@@ -64,7 +64,7 @@ cp server/config.example.json server/config.json
 | `enabled` | 是否启用 Agent |
 | `board_ids` | 生效的留言板 ID 列表；`null` 或省略表示**全部留言板** |
 | `models` | Ollama 模型名数组，每个模型均可通过 `@模型名` 触发（如 `gpt-oss:latest`） |
-| `model_name` | （已废弃，兼容旧配置）单个模型名；请改用 `models` |
+| `model_name` | 单个模型名字符串；**多模型请用 `models`**。也兼容把 `model_name` 写成数组（不推荐） |
 | `ollama_base_url` | Ollama API 地址，默认 `http://127.0.0.1:11434` |
 
 协议扩展：

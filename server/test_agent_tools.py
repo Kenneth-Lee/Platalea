@@ -160,6 +160,33 @@ class AgentToolsTest(unittest.TestCase):
         self.assertIn("abc", context)
         self.assertIn("doc.md", context)
 
+    def test_load_agent_config_model_name_list(self) -> None:
+        from bulletin_agent import load_agent_config
+
+        cfg = load_agent_config(
+            {
+                "enabled": True,
+                "model_name": ["gpt-oss:latest", "qwen3.6:27b-coding-nvfp4"],
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(
+            cfg.model_names,
+            ("gpt-oss:latest", "qwen3.6:27b-coding-nvfp4"),
+        )
+
+    def test_load_agent_config_models_list(self) -> None:
+        from bulletin_agent import load_agent_config
+
+        cfg = load_agent_config(
+            {
+                "enabled": True,
+                "models": ["a", "b"],
+            }
+        )
+        assert cfg is not None
+        self.assertEqual(cfg.model_names, ("a", "b"))
+
     def test_extract_mention_for_models(self) -> None:
         got = extract_mention_for_models("@gpt-oss:latest 你好", ("qwen2.5", "gpt-oss:latest"))
         self.assertEqual(got, ("gpt-oss:latest", "你好"))

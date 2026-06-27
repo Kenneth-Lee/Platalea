@@ -92,17 +92,22 @@ def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
 
 def _parse_model_names(raw: dict[str, Any]) -> tuple[str, ...]:
     if "models" in raw:
-        value = raw.get("models")
-        if not isinstance(value, list):
-            raise ValueError("agent.models 必须是字符串数组")
+        return _parse_model_name_list(raw.get("models"), field="agent.models")
+    if "model_name" in raw:
+        return _parse_model_name_list(raw.get("model_name"), field="agent.model_name")
+    raise ValueError("agent.enabled 为 true 时必须设置 agent.models 或 agent.model_name")
+
+
+def _parse_model_name_list(value: Any, *, field: str) -> tuple[str, ...]:
+    if isinstance(value, list):
         names = tuple(str(item).strip() for item in value if str(item).strip())
         if not names:
-            raise ValueError("agent.models 不能为空")
+            raise ValueError(f"{field} 不能为空")
         return names
-    legacy = str(raw.get("model_name", "")).strip()
-    if not legacy:
-        raise ValueError("agent.enabled 为 true 时必须设置 agent.models 或 agent.model_name")
-    return (legacy,)
+    text = str(value).strip()
+    if not text:
+        raise ValueError(f"{field} 不能为空")
+    return (text,)
 
 
 def _parse_board_ids(raw: dict[str, Any]) -> frozenset[str] | None:
