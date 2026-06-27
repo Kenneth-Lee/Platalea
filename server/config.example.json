@@ -7,6 +7,21 @@
   "board_root": "./boards",
   "guest_password": "guest",
   "host_password": "host",
+  "_comment_roles": "也可改用 roles 对象（需含 admin）；未配置时 guest_password/host_password 分别映射为 guest/admin",
+  "roles_example": {
+    "admin": {
+      "password": "host",
+      "label": "管理员",
+      "can_create_boards": true,
+      "can_manage_boards": true
+    },
+    "guest": {
+      "password": "guest",
+      "label": "客人",
+      "can_create_boards": false,
+      "can_manage_boards": false
+    }
+  },
   "cert_file": "tls/pc_server_cert.pem",
   "key_file": "tls/pc_server_key.pem",
   "instance_id_file": "./instance_id",
@@ -16,6 +31,7 @@
     "board_ids": null,
     "models": ["qwen2.5", "gpt-oss:latest"],
     "ollama_base_url": "http://127.0.0.1:11434",
+    "max_board_context_chars": 12000,
     "tools": {
       "enabled": true,
       "attachments": true,

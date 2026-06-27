@@ -30,17 +30,38 @@ data class BulletinBoardInfo(
     val id: String,
     val name: String,
     val revision: Long,
-    val messageCount: Int
+    val messageCount: Int,
+    val roleIds: List<String>? = null
 ) {
     companion object {
-        fun fromJson(obj: JSONObject): BulletinBoardInfo = BulletinBoardInfo(
-            id = obj.getString("id"),
-            name = obj.optString("name", obj.getString("id")),
-            revision = obj.optLong("revision"),
-            messageCount = obj.optInt("message_count")
-        )
+        fun fromJson(obj: JSONObject): BulletinBoardInfo {
+            val roleIds = when {
+                !obj.has("role_ids") -> null
+                obj.isNull("role_ids") -> null
+                else -> buildList {
+                    val arr = obj.optJSONArray("role_ids") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        add(arr.optString(i).trim())
+                    }
+                }.filter { it.isNotEmpty() }
+            }
+            return BulletinBoardInfo(
+                id = obj.getString("id"),
+                name = obj.optString("name", obj.getString("id")),
+                revision = obj.optLong("revision"),
+                messageCount = obj.optInt("message_count"),
+                roleIds = roleIds
+            )
+        }
     }
 }
+
+data class BulletinBoardListResult(
+    val boards: List<BulletinBoardInfo>,
+    val roleId: String? = null,
+    val roleLabel: String? = null,
+    val canManage: Boolean = false
+)
 
 data class BulletinMessage(
     val id: String,
@@ -126,6 +147,8 @@ data class BulletinBoardSnapshot(
     val revision: Long,
     val messages: List<BulletinMessage>,
     val canManage: Boolean = false,
+    val roleId: String? = null,
+    val roleLabel: String? = null,
     val agents: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
     val commands: List<String> = emptyList()
@@ -165,6 +188,8 @@ data class BulletinBoardOpenSession(
     val boardName: String,
     val isHost: Boolean,
     val canManageBoard: Boolean = isHost,
+    val remoteRoleId: String? = null,
+    val remoteRoleLabel: String? = null,
     val accessPassword: String? = null,
     val revision: Long = 0L,
     val messages: List<BulletinMessage> = emptyList(),

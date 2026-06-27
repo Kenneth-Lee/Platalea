@@ -156,9 +156,28 @@ class AgentToolsTest(unittest.TestCase):
                 attachments=[{"id": "abc", "kind": "file", "name": "doc.md"}],
             )
         ]
-        context = format_board_context(messages, ["qwen2.5"])
+        context, omitted = format_board_context(messages, ["qwen2.5"])
+        self.assertEqual(omitted, 0)
         self.assertIn("abc", context)
         self.assertIn("doc.md", context)
+
+    def test_format_board_context_trims_to_recent(self) -> None:
+        messages = [
+            BulletinMessage(
+                id=str(i),
+                seq=i,
+                author_label="u",
+                content=f"消息{i} " + ("x" * 50),
+                created_at=i,
+                updated_at=i,
+            )
+            for i in range(1, 11)
+        ]
+        context, omitted = format_board_context(messages, ["qwen2.5"], max_chars=300)
+        self.assertGreater(omitted, 0)
+        self.assertIn("已省略较早", context)
+        self.assertIn("消息10", context)
+        self.assertNotIn("消息1 ", context)
 
     def test_load_agent_config_model_name_list(self) -> None:
         from bulletin_agent import load_agent_config

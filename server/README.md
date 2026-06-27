@@ -2,6 +2,16 @@
 
 本目录提供 PC 端家庭网络留言板服务，以及与 Android 客户端兼容的 mDNS 发现、HTTPS API 和 TLS 证书工具。
 
+## 设计与路线图
+
+当前运行时代码仍为 **guest / host 双密码、全板可见**。下列设计文档描述下一阶段目标，**尚未全部实现**：
+
+| 文档 | 内容 |
+|------|------|
+| [docs/家庭网络留言板角色与权限.md](../docs/家庭网络留言板角色与权限.md) | 多角色密码、一板多 `role_ids`、Agent 按角色、按模型上下文预算 |
+| [docs/家庭网络留言板导入导出.md](../docs/家庭网络留言板导入导出.md) | `.boardpack` 包、本机↔服务器导入、上传到服务器 |
+| [docs/家庭网络共享策略.md](../docs/家庭网络共享策略.md) | 总览与 AI 助手 |
+
 ## 目录说明
 
 | 文件 | 作用 |
@@ -48,8 +58,9 @@ cp server/config.example.json server/config.json
 |------|------|
 | `port` | HTTPS 监听端口，默认 8765 |
 | `board_root` | 留言板数据目录（相对配置文件路径） |
-| `guest_password` | 普通接入密码：可读留言板、发消息（Android 连入时填此密码） |
-| `host_password` | 宿主密码：还可创建/删除留言板，修改/删除留言 |
+| `guest_password` | **兼容项**：未配置 `roles` 时映射为 `guest` 角色密码 |
+| `host_password` | **兼容项**：未配置 `roles` 时映射为 `admin` 角色密码 |
+| `roles` | 多角色配置（须含 `admin`）；见 [角色与权限文档](../docs/家庭网络留言板角色与权限.md) |
 | `service_name` | mDNS 实例名，留空则用 `LocalManager-<主机名>` |
 | `hostname` | mDNS 主机名，留空则用系统主机名 |
 
@@ -66,6 +77,9 @@ cp server/config.example.json server/config.json
 | `models` | Ollama 模型名数组，每个模型均可通过 `@模型名` 触发（如 `gpt-oss:latest`） |
 | `model_name` | 单个模型名字符串；**多模型请用 `models`**。也兼容把 `model_name` 写成数组（不推荐） |
 | `ollama_base_url` | Ollama API 地址，默认 `http://127.0.0.1:11434` |
+| `max_board_context_chars` | **过渡项**：留言板上下文最大字符数，默认 12000；未来将改为每模型 `context_chars`（见角色文档） |
+
+发给 LLM 的上下文不含 `ai_status` 状态行；过长时从最新留言往回取、整条不拆（见策略文档 §2.3）。
 
 协议扩展：
 

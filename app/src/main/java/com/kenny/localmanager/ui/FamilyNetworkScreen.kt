@@ -516,7 +516,7 @@ private fun BoardPickerDialog(
             error = null
             val result = manager.fetchBoardList(service, accessPassword)
             loading = false
-            result.onSuccess { boards = it }
+            result.onSuccess { listResult -> boards = listResult.boards }
                 .onFailure { err ->
                     error = err.message ?: err.javaClass.simpleName
                 }
@@ -1118,6 +1118,10 @@ private fun BulletinBoardPage(
                     append(
                         when {
                             session.isHost -> stringResource(R.string.family_board_role_host)
+                            !session.remoteRoleLabel.isNullOrBlank() ->
+                                stringResource(R.string.family_board_role_remote, session.remoteRoleLabel)
+                            !session.remoteRoleId.isNullOrBlank() ->
+                                stringResource(R.string.family_board_role_remote, session.remoteRoleId)
                             session.canManageBoard -> stringResource(R.string.family_board_role_remote_host)
                             else -> stringResource(R.string.family_board_role_guest)
                         }

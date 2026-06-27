@@ -175,17 +175,30 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
 
     if command == "list-boards":
         boards = body.get("boards") or []
+        role_id = body.get("role_id")
+        role_label = body.get("role_label")
+        if role_id or role_label:
+            label = role_label or role_id
+            manage = "可管理" if body.get("can_manage") else "只读"
+            print(f"当前角色: {label}（{manage}）")
         if not boards:
             print("（暂无留言板）")
             return
         print(f"共 {len(boards)} 个留言板：")
         for board in boards:
-            print(
+            line = (
                 f"  • {board.get('id', '?')}  "
                 f"「{board.get('name', '')}」  "
                 f"消息 {board.get('message_count', 0)}  "
                 f"rev {board.get('revision', 0)}"
             )
+            role_ids = board.get("role_ids")
+            if "role_ids" in board:
+                if role_ids is None:
+                    line += "  roles=(legacy)"
+                else:
+                    line += f"  roles={role_ids}"
+            print(line)
         return
 
     if command == "get-agent":

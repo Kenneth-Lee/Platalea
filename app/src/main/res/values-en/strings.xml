@@ -233,6 +233,7 @@
     <string name="family_network_bulletin_hint">Local boards can only be managed in this app. Remote devices connecting here can browse and post only.</string>
     <string name="family_network_open_self_board">Open Local Board</string>
     <string name="family_network_open_board">Open Board</string>
+    <string name="family_board_role_remote">Role: Remote · %1$s</string>
     <string name="family_board_role_host">Role: Host</string>
     <string name="family_board_role_remote_host">Role: Remote host</string>
     <string name="family_board_role_guest">Role: Guest</string>

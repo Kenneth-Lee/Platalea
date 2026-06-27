@@ -9,7 +9,6 @@ import socket
 import sys
 import time
 from dataclasses import dataclass
-from enum import Enum
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -21,6 +20,14 @@ from bulletin_attachment_store import DirectoryEntry
 from bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent
 from bulletin_mention import collect_participants, enrich_board_payload
 from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
+from bulletin_roles import (
+    AuthContext,
+    RolesConfig,
+    auth_session_fields,
+    can_access_board,
+    load_roles_config,
+    normalize_stored_role_ids,
+)
 from family_common import (
     FAMILY_SERVICE_TYPE,
     FAMILY_VERSION,
@@ -39,12 +46,6 @@ from family_common import (
 LOGGER = logging.getLogger("local_manager.bulletin_server")
 
 
-class AuthLevel(str, Enum):
-    OPEN = "open"
-    GUEST = "guest"
-    HOST = "host"
-
-
 @dataclass(frozen=True)
 class ServerConfig:
     listen_host: str
@@ -53,8 +54,7 @@ class ServerConfig:
     hostname: str
     service_type: str
     board_root: Path
-    guest_password: str | None
-    host_password: str | None
+    roles: RolesConfig
     cert_file: Path
     key_file: Path
     instance_id_file: Path
@@ -62,7 +62,7 @@ class ServerConfig:
 
     @property
     def auth_required(self) -> bool:
-        return bool(self.guest_password or self.host_password)
+        return self.roles.auth_required
 
 
 def resolve_path(base_dir: Path, value: str) -> Path:
@@ -88,6 +88,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
 
     guest_password = str(raw.get("guest_password", "")).strip() or None
     host_password = str(raw.get("host_password", "")).strip() or None
+    roles = load_roles_config(raw, guest_password=guest_password, host_password=host_password)
 
     server_config = ServerConfig(
         listen_host=str(raw.get("listen_host", "0.0.0.0")).strip() or "0.0.0.0",
@@ -96,8 +97,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
         hostname=hostname,
         service_type=str(raw.get("service_type", FAMILY_SERVICE_TYPE)).strip() or FAMILY_SERVICE_TYPE,
         board_root=resolve_path(base_dir, str(raw.get("board_root", "./boards"))),
-        guest_password=guest_password,
-        host_password=host_password,
+        roles=roles,
         cert_file=resolve_path(base_dir, str(raw.get("cert_file", "tls/pc_server_cert.pem"))),
         key_file=resolve_path(base_dir, str(raw.get("key_file", "tls/pc_server_key.pem"))),
         instance_id_file=resolve_path(
@@ -112,23 +112,11 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
 
 
 class AuthService:
-    def __init__(self, config: ServerConfig) -> None:
-        self._config = config
+    def __init__(self, roles: RolesConfig) -> None:
+        self._roles = roles
 
-    def resolve(self, headers: dict[str, str]) -> AuthLevel | None:
-        guest = self._config.guest_password
-        host = self._config.host_password
-        if not guest and not host:
-            return AuthLevel.OPEN
-
-        provided = headers.get(PASSWORD_HEADER, "").strip()
-        if not provided:
-            return None
-        if host and provided == host:
-            return AuthLevel.HOST
-        if guest and provided == guest:
-            return AuthLevel.GUEST
-        return None
+    def resolve(self, headers: dict[str, str]) -> AuthContext | None:
+        return self._roles.resolve(headers)
 
 
 class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
@@ -157,8 +145,8 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
     def _dispatch(self, method: str) -> None:
         normalized_path = self.path.split("?", 1)[0].rstrip("/") or "/"
         if normalized_path.startswith("/boards"):
-            auth_level = self.auth_service.resolve(self._header_map())
-            if auth_level is None:
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None:
                 json_response(
                     self,
                     HTTPStatus.UNAUTHORIZED,
@@ -169,27 +157,13 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            if requires_host_auth(method, normalized_path) and auth_level not in {
-                AuthLevel.HOST,
-                AuthLevel.OPEN,
-            }:
-                json_response(
-                    self,
-                    HTTPStatus.FORBIDDEN,
-                    {
-                        "ok": False,
-                        "error": "forbidden",
-                        "message": "修改或删除需要宿主密码",
-                    },
-                )
-                return
             body_bytes = read_request_body(self) if method in {"POST", "PUT"} else b""
             response = handle_board_request(
                 self.store,
                 method,
                 normalized_path,
                 body_bytes,
-                auth_level,
+                auth,
                 self._header_map(),
                 agent=getattr(self.server, "agent", None),
             )
@@ -213,6 +187,18 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
             return
 
         if method == "GET" and normalized_path == "/agent":
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None and self.auth_service._roles.auth_required:
+                json_response(
+                    self,
+                    HTTPStatus.UNAUTHORIZED,
+                    {
+                        "ok": False,
+                        "error": "unauthorized",
+                        "message": "需要正确的网络服务密码",
+                    },
+                )
+                return
             agent = getattr(self.server, "agent", None)
             if agent is None:
                 json_response(
@@ -250,8 +236,10 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
         LOGGER.debug("HTTP %s - %s", self.address_string(), fmt % args)
 
 
-def requires_host_auth(method: str, path: str) -> bool:
+def requires_manage_auth(method: str, path: str) -> bool:
     if method == "POST" and path == "/boards":
+        return True
+    if method == "PUT" and path.startswith("/boards/") and "/messages" not in path and "/attachments" not in path:
         return True
     if (
         method == "DELETE"
@@ -267,63 +255,136 @@ def requires_host_auth(method: str, path: str) -> bool:
     return False
 
 
+def _forbidden(message: str = "当前角色无权执行此操作") -> dict[str, Any]:
+    return {
+        "status": HTTPStatus.FORBIDDEN,
+        "body": {"ok": False, "error": "forbidden", "message": message},
+    }
+
+
+def _board_access_denied() -> dict[str, Any]:
+    return {
+        "status": HTTPStatus.NOT_FOUND,
+        "body": {
+            "ok": False,
+            "error": "board_not_found",
+            "message": "留言板不存在或当前角色无权访问",
+        },
+    }
+
+
+def _board_to_json(board, auth: AuthContext) -> dict[str, Any]:
+    item: dict[str, Any] = {
+        "id": board.id,
+        "name": board.name,
+        "revision": board.revision,
+        "message_count": board.message_count,
+    }
+    if auth.can_manage:
+        item["role_ids"] = list(board.role_ids) if board.role_ids is not None else None
+    return item
+
+
+def _parse_role_ids_payload(payload: dict[str, Any]) -> tuple[str, ...] | None:
+    if "role_ids" not in payload:
+        return None
+    raw = payload.get("role_ids")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("role_ids 必须是数组")
+    return normalize_stored_role_ids(raw)
+
+
+def _require_board_access(
+    store: BulletinBoardStore,
+    board_id: str,
+    auth: AuthContext,
+) -> dict[str, Any] | None:
+    board_info = store.get_board_info(board_id)
+    if board_info is None or not can_access_board(auth, board_info.role_ids):
+        return _board_access_denied()
+    return None
+
+
 def handle_board_request(
     store: BulletinBoardStore,
     method: str,
     path: str,
     body_bytes: bytes,
-    auth_level: AuthLevel,
+    auth: AuthContext,
     headers: dict[str, str],
     agent: BulletinBoardAgent | None = None,
 ) -> dict[str, Any]:
+    if requires_manage_auth(method, path) and not auth.can_manage:
+        return _forbidden("修改或删除需要管理员权限")
+
     if method == "GET" and path == "/boards":
         boards = store.list_boards()
-        return {
-            "status": HTTPStatus.OK,
-            "body": {
-                "ok": True,
-                "boards": [
-                    {
-                        "id": board.id,
-                        "name": board.name,
-                        "revision": board.revision,
-                        "message_count": board.message_count,
-                    }
-                    for board in boards
-                ],
-            },
+        visible = [board for board in boards if can_access_board(auth, board.role_ids)]
+        body: dict[str, Any] = {
+            "ok": True,
+            "boards": [_board_to_json(board, auth) for board in visible],
+            **auth_session_fields(auth),
         }
+        return {"status": HTTPStatus.OK, "body": body}
 
     if method == "POST" and path == "/boards":
-        if auth_level not in {AuthLevel.HOST, AuthLevel.OPEN}:
-            return {
-                "status": HTTPStatus.FORBIDDEN,
-                "body": {
-                    "ok": False,
-                    "error": "forbidden",
-                    "message": "创建留言板需要宿主密码",
-                },
-            }
+        if not auth.can_create_boards:
+            return _forbidden("创建留言板需要管理员权限")
         payload = _parse_json(body_bytes.decode("utf-8"))
         if payload is None:
             return _bad_request("invalid_json", "请求体不是合法 JSON")
         name = str(payload.get("name", "")).strip()
         if not name:
             return _bad_request("invalid_board", "留言板名称不能为空")
-        board = store.create_board(name)
+        try:
+            role_ids = _parse_role_ids_payload(payload)
+        except ValueError as exc:
+            return _bad_request("invalid_board", str(exc))
+        if role_ids is None:
+            role_ids = ()
+        board = store.create_board(name, role_ids=role_ids)
         if board is None:
             return _bad_request("invalid_board", "创建留言板失败")
         return {
             "status": HTTPStatus.OK,
             "body": {
                 "ok": True,
-                "board": {
-                    "id": board.id,
-                    "name": board.name,
-                    "revision": board.revision,
-                    "message_count": board.message_count,
-                },
+                "board": _board_to_json(board, auth),
             },
+        }
+
+    if (
+        method == "PUT"
+        and path.startswith("/boards/")
+        and "/messages" not in path
+        and "/attachments" not in path
+    ):
+        board_id = path.removeprefix("/boards/")
+        if not board_id or "/" in board_id:
+            return _not_found()
+        board_info = store.get_board_info(board_id)
+        if board_info is None:
+            return _board_access_denied()
+        payload = _parse_json(body_bytes.decode("utf-8"))
+        if payload is None:
+            return _bad_request("invalid_json", "请求体不是合法 JSON")
+        name = payload.get("name")
+        try:
+            role_ids = _parse_role_ids_payload(payload)
+        except ValueError as exc:
+            return _bad_request("invalid_board", str(exc))
+        updated = store.update_board(
+            board_id,
+            name=str(name).strip() if name is not None else None,
+            role_ids=role_ids,
+        )
+        if updated is None:
+            return _bad_request("invalid_board", "更新留言板失败")
+        return {
+            "status": HTTPStatus.OK,
+            "body": {"ok": True, "board": _board_to_json(updated, auth)},
         }
 
     if (
@@ -332,18 +393,12 @@ def handle_board_request(
         and "/messages" not in path
         and "/attachments" not in path
     ):
-        if auth_level not in {AuthLevel.HOST, AuthLevel.OPEN}:
-            return {
-                "status": HTTPStatus.FORBIDDEN,
-                "body": {
-                    "ok": False,
-                    "error": "forbidden",
-                    "message": "删除留言板需要宿主密码",
-                },
-            }
         board_id = path.removeprefix("/boards/")
         if not board_id or "/" in board_id:
             return _not_found()
+        board_info = store.get_board_info(board_id)
+        if board_info is None or not can_access_board(auth, board_info.role_ids):
+            return _board_access_denied()
         if not store.delete_board(board_id):
             return _bad_request(
                 "board_delete_failed",
@@ -353,6 +408,9 @@ def handle_board_request(
 
     if method == "GET" and path.startswith("/boards/") and path.endswith("/export.md"):
         board_id = path.removeprefix("/boards/").removesuffix("/export.md")
+        board_info = store.get_board_info(board_id)
+        if board_info is None or not can_access_board(auth, board_info.role_ids):
+            return _board_access_denied()
         markdown = store.export_markdown(board_id)
         if markdown is None:
             return {
@@ -371,17 +429,12 @@ def handle_board_request(
 
     if method == "GET" and path.startswith("/boards/") and path.endswith("/messages"):
         board_id = path.removeprefix("/boards/").removesuffix("/messages")
+        board_info = store.get_board_info(board_id)
+        if board_info is None or not can_access_board(auth, board_info.role_ids):
+            return _board_access_denied()
         snapshot = store.snapshot(board_id)
         if snapshot is None:
-            return {
-                "status": HTTPStatus.NOT_FOUND,
-                "body": {
-                    "ok": False,
-                    "error": "board_not_found",
-                    "message": f"留言板不存在：{board_id}",
-                },
-            }
-        can_manage = auth_level in {AuthLevel.HOST, AuthLevel.OPEN}
+            return _board_access_denied()
         agents = agent._config.models_for_board(board_id) if agent is not None else []
         commands = agent._config.commands_for_board(board_id) if agent is not None else []
         participants = collect_participants(snapshot.messages)
@@ -391,16 +444,20 @@ def handle_board_request(
                 board_name=snapshot.board_name,
                 revision=snapshot.revision,
                 messages=snapshot.messages,
-                can_manage=can_manage,
+                can_manage=auth.can_manage,
             ).to_json(),
             agents=agents,
             participants=participants,
             commands=commands,
         )
+        body.update(auth_session_fields(auth))
         return {"status": HTTPStatus.OK, "body": body}
 
     if method == "POST" and path.startswith("/boards/") and path.endswith("/messages"):
         board_id = path.removeprefix("/boards/").removesuffix("/messages")
+        board_info = store.get_board_info(board_id)
+        if board_info is None or not can_access_board(auth, board_info.role_ids):
+            return _board_access_denied()
         body_text = body_bytes.decode("utf-8")
         payload = _parse_json(body_text)
         if payload is None:
@@ -451,9 +508,16 @@ def handle_board_request(
 
     if method == "POST" and path.endswith("/attachments/init"):
         board_id = path.removeprefix("/boards/").removesuffix("/attachments/init")
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         return _init_attachment(store, board_id, body_bytes.decode("utf-8"))
 
     if method == "PUT" and "/attachments/" in path and "/chunks/" in path:
+        board_id = path.removeprefix("/boards/").split("/attachments/", 1)[0]
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         return _put_attachment_chunk(store, path, body_bytes)
 
     if method == "POST" and path.endswith("/complete") and "/attachments/" in path:
@@ -461,9 +525,16 @@ def handle_board_request(
         if not match:
             return _not_found()
         board_id, attachment_id = match.groups()
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         return _complete_attachment(store, board_id, attachment_id)
 
     if method == "GET" and path.endswith("/blob") and "/attachments/" in path:
+        board_id = path.removeprefix("/boards/").split("/attachments/", 1)[0]
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         return _get_attachment_blob(store, path, headers.get("Range") or headers.get("range"))
 
     if (
@@ -476,6 +547,9 @@ def handle_board_request(
         if len(parts) != 2:
             return _not_found()
         board_id, attachment_id = parts
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         meta = store.attachments.get_attachment_meta(board_id, attachment_id)
         if meta is None:
             return {
@@ -493,6 +567,9 @@ def handle_board_request(
         if len(parts) != 2:
             return _not_found()
         board_id, attachment_id = parts
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         if not store.attachments.delete_attachment(board_id, attachment_id):
             return {
                 "status": HTTPStatus.NOT_FOUND,
@@ -509,6 +586,9 @@ def handle_board_request(
         if len(parts) != 2:
             return _not_found()
         board_id, message_id = parts
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         payload = _parse_json(body_bytes.decode("utf-8"))
         if payload is None:
             return _bad_request("invalid_json", "请求体不是合法 JSON")
@@ -538,6 +618,9 @@ def handle_board_request(
         if len(parts) != 2:
             return _not_found()
         board_id, message_id = parts
+        denied = _require_board_access(store, board_id, auth)
+        if denied is not None:
+            return denied
         if not store.delete_message(board_id, message_id):
             return {
                 "status": HTTPStatus.NOT_FOUND,
@@ -743,7 +826,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         raise FileNotFoundError(f"TLS 私钥不存在: {config.key_file}")
 
     store = BulletinBoardStore(config.board_root)
-    auth_service = AuthService(config)
+    auth_service = AuthService(config.roles)
     instance_id = load_or_create_instance_id(config.instance_id_file)
     service_type = normalize_service_type(config.service_type)
     hostname = normalize_hostname(config.hostname)
@@ -772,9 +855,8 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
 
     LOGGER.info("留言板数据目录: %s", config.board_root)
     LOGGER.info(
-        "密码策略: guest=%s host=%s auth_required=%s",
-        "已设置" if config.guest_password else "未设置",
-        "已设置" if config.host_password else "未设置",
+        "密码策略: roles=%s auth_required=%s",
+        ",".join(sorted(config.roles.roles.keys())),
         config.auth_required,
     )
     LOGGER.info("默认留言板 ID: %s", DEFAULT_BOARD_ID)

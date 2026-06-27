@@ -18,6 +18,7 @@ from bulletin_ai_internal import (
     is_conversation_message,
 )
 from bulletin_attachment_store import BulletinAttachmentStore
+from bulletin_roles import board_role_ids_from_meta, normalize_stored_role_ids
 
 DEFAULT_BOARD_ID = "default"
 DEFAULT_BOARD_NAME = "默认留言板"
@@ -29,6 +30,7 @@ class BulletinBoardInfo:
     name: str
     revision: int
     message_count: int
+    role_ids: tuple[str, ...] | None = None
 
 
 @dataclass
@@ -157,11 +159,16 @@ class BulletinBoardStore:
                         name=str(meta.get("name", board_dir.name)),
                         revision=int(meta.get("revision", 0)),
                         message_count=active_count,
+                        role_ids=board_role_ids_from_meta(meta),
                     )
                 )
             return sorted(boards, key=lambda item: item.id)
 
-    def create_board(self, name: str) -> BulletinBoardInfo | None:
+    def create_board(
+        self,
+        name: str,
+        role_ids: tuple[str, ...] | None = (),
+    ) -> BulletinBoardInfo | None:
         trimmed = name.strip()
         if not trimmed:
             return None
@@ -170,11 +177,13 @@ class BulletinBoardStore:
             board_dir = self._board_dir(board_id)
             board_dir.mkdir(parents=True, exist_ok=True)
             now = int(time.time() * 1000)
+            stored_role_ids = normalize_stored_role_ids(list(role_ids or ()))
             meta = {
                 "id": board_id,
                 "name": trimmed,
                 "revision": 0,
                 "created_at": now,
+                "role_ids": list(stored_role_ids),
             }
             self._write_meta(board_id, meta)
             self._write_messages(board_id, [])
@@ -183,6 +192,57 @@ class BulletinBoardStore:
                 name=trimmed,
                 revision=0,
                 message_count=0,
+                role_ids=stored_role_ids,
+            )
+
+    def update_board(
+        self,
+        board_id: str,
+        *,
+        name: str | None = None,
+        role_ids: tuple[str, ...] | None = None,
+    ) -> BulletinBoardInfo | None:
+        with self._lock:
+            meta = self._read_meta(board_id)
+            if meta is None:
+                return None
+            trimmed_name = name.strip() if name is not None else None
+            if trimmed_name is not None and not trimmed_name:
+                return None
+            if trimmed_name is not None:
+                meta["name"] = trimmed_name
+            if role_ids is not None:
+                meta["role_ids"] = list(normalize_stored_role_ids(list(role_ids)))
+            self._write_meta(board_id, meta)
+            active_count = sum(
+                1
+                for message in self._read_messages(board_id)
+                if is_conversation_message(message)
+            )
+            return BulletinBoardInfo(
+                id=board_id,
+                name=str(meta.get("name", board_id)),
+                revision=int(meta.get("revision", 0)),
+                message_count=active_count,
+                role_ids=board_role_ids_from_meta(meta),
+            )
+
+    def get_board_info(self, board_id: str) -> BulletinBoardInfo | None:
+        with self._lock:
+            meta = self._read_meta(board_id)
+            if meta is None:
+                return None
+            active_count = sum(
+                1
+                for message in self._read_messages(board_id)
+                if is_conversation_message(message)
+            )
+            return BulletinBoardInfo(
+                id=str(meta["id"]),
+                name=str(meta.get("name", board_id)),
+                revision=int(meta.get("revision", 0)),
+                message_count=active_count,
+                role_ids=board_role_ids_from_meta(meta),
             )
 
     def delete_board(self, board_id: str) -> bool:

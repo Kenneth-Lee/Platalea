@@ -356,9 +356,14 @@ class FamilyNetworkManager(context: Context) {
     suspend fun fetchBoardList(
         service: FamilyDiscoveredService,
         accessPassword: String? = null
-    ): Result<List<BulletinBoardInfo>> = withContext(Dispatchers.IO) {
+    ): Result<BulletinBoardListResult> = withContext(Dispatchers.IO) {
         if (service.isSelf) {
-            runCatching { boardStore.listBoards() }
+            runCatching {
+                BulletinBoardListResult(
+                    boards = boardStore.listBoards(),
+                    canManage = true
+                )
+            }
         } else {
             boardApiRequest(
                 service = service,
@@ -370,12 +375,18 @@ class FamilyNetworkManager(context: Context) {
                 if (!json.optBoolean("ok", false)) {
                     throw IllegalStateException(json.optString("message", "读取留言板列表失败"))
                 }
-                buildList {
+                val boards = buildList {
                     val arr = json.optJSONArray("boards") ?: JSONArray()
                     for (i in 0 until arr.length()) {
                         add(BulletinBoardInfo.fromJson(arr.getJSONObject(i)))
                     }
                 }
+                BulletinBoardListResult(
+                    boards = boards,
+                    roleId = json.optString("role_id").takeIf { it.isNotBlank() },
+                    roleLabel = json.optString("role_label").takeIf { it.isNotBlank() },
+                    canManage = json.optBoolean("can_manage", false)
+                )
             }
         }
     }
@@ -386,9 +397,7 @@ class FamilyNetworkManager(context: Context) {
         boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID
     ): Boolean = withContext(Dispatchers.IO) {
         if (service.isSelf) return@withContext true
-        fetchBoardSnapshot(service, boardId, accessPassword?.trim()?.ifEmpty { null })
-            .getOrNull()
-            ?.canManage == true
+        fetchBoardList(service, accessPassword).getOrNull()?.canManage == true
     }
 
     fun createBoardEntry(
@@ -572,6 +581,8 @@ class FamilyNetworkManager(context: Context) {
                                 participants = snapshot.participants,
                                 commands = snapshot.commands,
                                 canManageBoard = open.isHost || snapshot.canManage,
+                                remoteRoleId = snapshot.roleId ?: open.remoteRoleId,
+                                remoteRoleLabel = snapshot.roleLabel ?: open.remoteRoleLabel,
                                 loading = false,
                                 lastError = null
                             )
@@ -1370,6 +1381,8 @@ class FamilyNetworkManager(context: Context) {
                 revision = json.optLong("revision"),
                 messages = messages,
                 canManage = json.optBoolean("can_manage", false),
+                roleId = json.optString("role_id").takeIf { it.isNotBlank() },
+                roleLabel = json.optString("role_label").takeIf { it.isNotBlank() },
                 agents = BulletinBoardSnapshot.parseAgents(json),
                 participants = BulletinBoardSnapshot.parseParticipants(json).ifEmpty {
                     BulletinBoardMention.collectParticipants(messages)

@@ -289,6 +289,7 @@
     <string name="family_network_bulletin_hint">本机留言板仅能在应用内管理；远程设备连接本机时只能浏览与发留言。</string>
     <string name="family_network_open_self_board">进入本机留言板</string>
     <string name="family_network_open_board">进入留言板</string>
+    <string name="family_board_role_remote">当前身份：远程 · %1$s</string>
     <string name="family_board_role_host">当前身份：宿主</string>
     <string name="family_board_role_remote_host">当前身份：远程宿主</string>
     <string name="family_board_role_guest">当前身份：访客</string>

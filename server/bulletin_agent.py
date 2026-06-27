@@ -22,7 +22,11 @@ from bulletin_agent_tools import (
     parse_tool_arguments,
     tools_system_prompt_suffix,
 )
-from bulletin_ai_internal import DEFAULT_AGENT_COMMANDS, agent_commands_for_board
+from bulletin_ai_internal import (
+    DEFAULT_AGENT_COMMANDS,
+    agent_commands_for_board,
+    is_ai_status_message,
+)
 from bulletin_mention import AGENT_DEVICE_PREFIX
 from bulletin_store import BulletinBoardStore, BulletinMessage
 
@@ -33,6 +37,9 @@ DEFAULT_SYSTEM_PROMPT = (
     "请根据提供的留言板对话记录回答，保持简洁；信息不足时请说明。"
 )
 
+DEFAULT_MAX_BOARD_CONTEXT_CHARS = 12_000
+CONTEXT_OMITTED_PREFIX = "（已省略较早的 {count} 条留言，以下为最近对话）"
+
 
 @dataclass(frozen=True)
 class AgentConfig:
@@ -41,6 +48,7 @@ class AgentConfig:
     ollama_base_url: str
     board_ids: frozenset[str] | None
     tools: AgentToolsConfig
+    max_board_context_chars: int
 
     @staticmethod
     def author_label_for(model_name: str) -> str:
@@ -87,12 +95,14 @@ def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
     base_url = str(raw.get("ollama_base_url", "http://127.0.0.1:11434")).strip().rstrip("/")
     board_ids = _parse_board_ids(raw)
     tools = load_agent_tools_config(raw.get("tools") if isinstance(raw.get("tools"), dict) else None)
+    max_context = int(raw.get("max_board_context_chars", DEFAULT_MAX_BOARD_CONTEXT_CHARS))
     return AgentConfig(
         enabled=True,
         model_names=model_names,
         ollama_base_url=base_url,
         board_ids=board_ids,
         tools=tools,
+        max_board_context_chars=max(1000, max_context),
     )
 
 
@@ -354,7 +364,18 @@ class BulletinBoardAgent:
                 question[:120],
             )
             reporter.update("正在思考…")
-            board_context = format_board_context(all_messages, self._config.model_names)
+            board_context, omitted = format_board_context(
+                all_messages,
+                self._config.model_names,
+                max_chars=self._config.max_board_context_chars,
+            )
+            if omitted:
+                LOGGER.info(
+                    "留言板上下文已截断 board=%s kept_chars≈%d omitted_messages=%d",
+                    board_id,
+                    len(board_context),
+                    omitted,
+                )
             system_prompt = build_system_prompt(self._config.tools)
             reply = run_ollama_agent_chat(
                 base_url=self._config.ollama_base_url,
@@ -466,29 +487,71 @@ def extract_mention_for_models(
     return None
 
 
-def format_board_context(messages: list[BulletinMessage], model_names: tuple[str, ...] | list[str]) -> str:
+def format_board_context(
+    messages: list[BulletinMessage],
+    model_names: tuple[str, ...] | list[str],
+    *,
+    max_chars: int | None = DEFAULT_MAX_BOARD_CONTEXT_CHARS,
+) -> tuple[str, int]:
+    """格式化留言板对话上下文。返回 (文本, 省略的较早留言条数)。"""
     agent_labels = {AgentConfig.author_label_for(name) for name in model_names}
+    blocks: list[str] = []
+    for message in sorted(messages, key=lambda item: item.seq):
+        block = _message_context_block(message, agent_labels)
+        if block is not None:
+            blocks.append(block)
+    if not blocks:
+        return "（留言板暂无文本消息）", 0
+    if max_chars is None or max_chars <= 0 or _total_chars(blocks) <= max_chars:
+        return "\n".join(blocks), 0
+    selected, omitted = _select_recent_context_blocks(blocks, max_chars)
+    if omitted <= 0:
+        return "\n".join(selected), 0
+    prefix = CONTEXT_OMITTED_PREFIX.format(count=omitted)
+    return f"{prefix}\n" + "\n".join(selected), omitted
+
+
+def _message_context_block(message: BulletinMessage, agent_labels: set[str]) -> str | None:
+    if message.deleted or is_ai_status_message(message):
+        return None
+    author = message.author_label or "访客"
+    device = message.author_device or ""
+    if device.startswith(AGENT_DEVICE_PREFIX) or author in agent_labels:
+        role = "助手"
+    else:
+        role = author
     lines: list[str] = []
-    for message in messages:
-        if message.deleted or is_ai_status_message(message):
-            continue
-        author = message.author_label or "访客"
-        device = message.author_device or ""
-        if device.startswith(AGENT_DEVICE_PREFIX) or author in agent_labels:
-            role = "助手"
-        else:
-            role = author
-        content = message.content.strip()
-        attachment_note = _format_attachment_note(message)
-        if not content and not attachment_note:
-            continue
-        if content:
-            lines.append(f"[{role}] {content}")
-        if attachment_note:
-            lines.append(f"[{role}] {attachment_note}")
+    content = message.content.strip()
+    attachment_note = _format_attachment_note(message)
+    if content:
+        lines.append(f"[{role}] {content}")
+    if attachment_note:
+        lines.append(f"[{role}] {attachment_note}")
     if not lines:
-        return "（留言板暂无文本消息）"
+        return None
     return "\n".join(lines)
+
+
+def _total_chars(blocks: list[str]) -> int:
+    if not blocks:
+        return 0
+    return sum(len(block) for block in blocks) + max(0, len(blocks) - 1)
+
+
+def _select_recent_context_blocks(blocks: list[str], max_chars: int) -> tuple[list[str], int]:
+    """从最新留言往回取，保证每条留言块完整。"""
+    selected_rev: list[str] = []
+    used = 0
+    for block in reversed(blocks):
+        extra = len(block) + (1 if selected_rev else 0)
+        if selected_rev and used + extra > max_chars:
+            continue
+        selected_rev.append(block)
+        used += extra
+    if not selected_rev and blocks:
+        selected_rev.append(blocks[-1])
+    selected = list(reversed(selected_rev))
+    return selected, len(blocks) - len(selected)
 
 
 def _format_attachment_note(message: BulletinMessage) -> str:
