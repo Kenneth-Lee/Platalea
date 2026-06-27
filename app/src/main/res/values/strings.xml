@@ -319,6 +319,11 @@
     <string name="family_board_delete_board_confirm">确定删除留言板「%1$s」吗？留言与附件将一并删除。</string>
     <string name="family_board_delete_last_board">至少保留一个留言板，无法删除。</string>
     <string name="family_board_export">导出 Markdown</string>
+    <string name="family_board_export_pack">导出归档包</string>
+    <string name="family_board_import_pack">导入归档包</string>
+    <string name="family_board_pack_export_success">归档包已导出到 %1$s</string>
+    <string name="family_board_pack_import_success">已导入留言板：%1$s</string>
+    <string name="family_board_pack_failed">归档包操作失败：%1$s</string>
     <string name="family_board_export_success">已导出到 %1$s</string>
     <string name="family_board_export_failed">导出失败：%1$s</string>
     <string name="family_board_clear_passwords">清除已记住的密码</string>

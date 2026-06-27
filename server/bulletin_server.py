@@ -13,6 +13,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs
 
 from zeroconf import Zeroconf
 
@@ -20,6 +21,7 @@ from bulletin_attachment_store import DirectoryEntry
 from bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent
 from bulletin_mention import collect_participants, enrich_board_payload
 from bulletin_store import BulletinBoardStore, BulletinBoardSnapshot, DEFAULT_BOARD_ID
+from bulletin_boardpack import BoardpackError, BoardpackImportOptions, parse_import_options_payload
 from bulletin_roles import (
     AuthContext,
     RolesConfig,
@@ -59,6 +61,7 @@ class ServerConfig:
     key_file: Path
     instance_id_file: Path
     log_level: str
+    max_import_bytes: int | None
 
     @property
     def auth_required(self) -> bool:
@@ -70,6 +73,15 @@ def resolve_path(base_dir: Path, value: str) -> Path:
     if not path.is_absolute():
         path = base_dir / path
     return path.resolve()
+
+
+def _parse_optional_positive_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    parsed = int(value)
+    if parsed <= 0:
+        return None
+    return parsed
 
 
 def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
@@ -105,6 +117,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
             str(raw.get("instance_id_file", "./instance_id")),
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
+        max_import_bytes=_parse_optional_positive_int(raw.get("max_import_bytes")),
     )
     agent_raw = raw.get("agent")
     agent_config = load_agent_config(agent_raw if isinstance(agent_raw, dict) else None)
@@ -144,6 +157,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 
     def _dispatch(self, method: str) -> None:
         normalized_path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        query_string = self.path.split("?", 1)[1] if "?" in self.path else ""
         if normalized_path.startswith("/boards"):
             auth = self.auth_service.resolve(self._header_map())
             if auth is None:
@@ -166,6 +180,8 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 auth,
                 self._header_map(),
                 agent=getattr(self.server, "agent", None),
+                max_import_bytes=getattr(self.server, "max_import_bytes", None),
+                query_string=query_string,
             )
             if response.get("binary") is not None:
                 binary_response(
@@ -237,7 +253,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 
 
 def requires_manage_auth(method: str, path: str) -> bool:
-    if method == "POST" and path == "/boards":
+    if method == "POST" and path in {"/boards", "/boards/import"}:
         return True
     if method == "PUT" and path.startswith("/boards/") and "/messages" not in path and "/attachments" not in path:
         return True
@@ -315,6 +331,8 @@ def handle_board_request(
     auth: AuthContext,
     headers: dict[str, str],
     agent: BulletinBoardAgent | None = None,
+    max_import_bytes: int | None = None,
+    query_string: str = "",
 ) -> dict[str, Any]:
     if requires_manage_auth(method, path) and not auth.can_manage:
         return _forbidden("修改或删除需要管理员权限")
@@ -353,6 +371,29 @@ def handle_board_request(
                 "ok": True,
                 "board": _board_to_json(board, auth),
             },
+        }
+
+    if method == "POST" and path == "/boards/import":
+        if not auth.can_create_boards:
+            return _forbidden("导入留言板需要管理员权限")
+        if not body_bytes:
+            return _bad_request("invalid_boardpack", "请求体为空")
+        try:
+            options = _parse_boardpack_import_options(query_string, headers)
+        except BoardpackError as exc:
+            return _bad_request(exc.code, exc.message)
+        try:
+            board = store.import_boardpack(
+                body_bytes,
+                name=options.name,
+                role_ids=options.role_ids,
+                max_import_bytes=max_import_bytes,
+            )
+        except ValueError as exc:
+            return _boardpack_error_response(str(exc))
+        return {
+            "status": HTTPStatus.OK,
+            "body": {"ok": True, "board": _board_to_json(board, auth)},
         }
 
     if (
@@ -425,6 +466,30 @@ def handle_board_request(
             "status": HTTPStatus.OK,
             "body_text": markdown,
             "content_type": "text/markdown; charset=utf-8",
+        }
+
+    if method == "GET" and path.startswith("/boards/") and path.endswith("/export.boardpack"):
+        board_id = path.removeprefix("/boards/").removesuffix("/export.boardpack")
+        board_info = store.get_board_info(board_id)
+        if board_info is None or not can_access_board(auth, board_info.role_ids):
+            return _board_access_denied()
+        pack = store.export_boardpack(board_id)
+        if pack is None:
+            return {
+                "status": HTTPStatus.NOT_FOUND,
+                "body": {
+                    "ok": False,
+                    "error": "board_not_found",
+                    "message": f"留言板不存在：{board_id}",
+                },
+            }
+        return {
+            "status": HTTPStatus.OK,
+            "binary": pack,
+            "content_type": "application/vnd.localmanager.boardpack+zip",
+            "extra_headers": {
+                "Content-Disposition": f'attachment; filename="{_boardpack_filename(board_info.name)}"',
+            },
         }
 
     if method == "GET" and path.startswith("/boards/") and path.endswith("/messages"):
@@ -642,6 +707,47 @@ def handle_board_request(
     return _not_found()
 
 
+def _boardpack_filename(board_name: str) -> str:
+    safe = re.sub(r'[\\/:*?"<>|]+', "_", board_name.strip()).strip("._") or "board"
+    return f"{safe}.boardpack"
+
+
+def _parse_boardpack_import_options(
+    query_string: str,
+    headers: dict[str, str],
+) -> BoardpackImportOptions:
+    name: str | None = None
+    role_ids: tuple[str, ...] | None = None
+    if query_string.strip():
+        params = parse_qs(query_string, keep_blank_values=True)
+        if params.get("name"):
+            name = str(params["name"][0]).strip() or None
+        if "role_ids" in params:
+            raw = str(params.get("role_ids", [""])[0]).strip()
+            role_ids = (
+                normalize_stored_role_ids(
+                    [part.strip() for part in raw.split(",") if part.strip()]
+                )
+                if raw
+                else ()
+            )
+    options = BoardpackImportOptions(name=name, role_ids=role_ids)
+    header_raw = headers.get("X-Boardpack-Import-Options", "").strip()
+    if not header_raw:
+        return options
+    payload = _parse_json(header_raw)
+    if payload is None:
+        raise BoardpackError("invalid_board", "X-Boardpack-Import-Options 不是合法 JSON")
+    return parse_import_options_payload(payload)
+
+
+def _boardpack_error_response(message: str) -> dict[str, Any]:
+    if ":" in message:
+        code, detail = message.split(":", 1)
+        return _bad_request(code.strip(), detail.strip())
+    return _bad_request("invalid_boardpack", message)
+
+
 def _parse_json(body_text: str) -> dict[str, Any] | None:
     if not body_text.strip():
         return {}
@@ -840,6 +946,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     )
     https_server.store = store  # type: ignore[attr-defined]
     https_server.auth_service = auth_service  # type: ignore[attr-defined]
+    https_server.max_import_bytes = config.max_import_bytes  # type: ignore[attr-defined]
 
     zeroconf_client: Zeroconf | None = None
     service_info = build_service_info(

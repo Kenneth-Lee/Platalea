@@ -7,7 +7,7 @@
   "board_root": "./boards",
   "guest_password": "guest",
   "host_password": "host",
-  "_comment_roles": "也可改用 roles 对象（需含 admin）；未配置时 guest_password/host_password 分别映射为 guest/admin",
+  "max_import_bytes": 524288000,
   "roles_example": {
     "admin": {
       "password": "host",

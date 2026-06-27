@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-
 from bulletin_ai_internal import (
     MESSAGE_KIND_AI_STATUS,
     MESSAGE_KIND_MESSAGE,
@@ -18,6 +17,12 @@ from bulletin_ai_internal import (
     is_conversation_message,
 )
 from bulletin_attachment_store import BulletinAttachmentStore
+from bulletin_boardpack import (
+    BoardpackError,
+    BoardpackImportOptions,
+    export_boardpack_from_board_dir,
+    import_boardpack_bytes,
+)
 from bulletin_roles import board_role_ids_from_meta, normalize_stored_role_ids
 
 DEFAULT_BOARD_ID = "default"
@@ -243,6 +248,49 @@ class BulletinBoardStore:
                 revision=int(meta.get("revision", 0)),
                 message_count=active_count,
                 role_ids=board_role_ids_from_meta(meta),
+            )
+
+    def export_boardpack(self, board_id: str, *, source_device: str = "python") -> bytes | None:
+        with self._lock:
+            if self._read_meta(board_id) is None:
+                return None
+            return export_boardpack_from_board_dir(
+                self._board_dir(board_id),
+                source_device=source_device,
+            )
+
+    def import_boardpack(
+        self,
+        data: bytes,
+        *,
+        name: str | None = None,
+        role_ids: tuple[str, ...] | None = None,
+        source_device: str = "python",
+        max_import_bytes: int | None = None,
+    ) -> BulletinBoardInfo:
+        with self._lock:
+            options = BoardpackImportOptions(name=name, role_ids=role_ids)
+            try:
+                imported = import_boardpack_bytes(
+                    self._root_dir,
+                    data,
+                    options=options,
+                    max_import_bytes=max_import_bytes,
+                )
+            except BoardpackError as exc:
+                raise ValueError(f"{exc.code}: {exc.message}") from exc
+            role_ids_value = imported.get("role_ids")
+            parsed_role_ids: tuple[str, ...] | None
+            if role_ids_value is None:
+                parsed_role_ids = None
+            else:
+                parsed_role_ids = tuple(str(item) for item in role_ids_value)
+            return BulletinBoardInfo(
+                id=str(imported["id"]),
+                name=str(imported["name"]),
+                revision=int(imported.get("revision", 0)),
+                message_count=int(imported.get("message_count", 0)),
+                role_ids=parsed_role_ids,
             )
 
     def delete_board(self, board_id: str) -> bool:

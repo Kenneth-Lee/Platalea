@@ -540,6 +540,123 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    fun exportBoardpack(
+        service: FamilyDiscoveredService,
+        board: BulletinBoardInfo,
+        accessPassword: String?,
+        onComplete: (Result<ByteArray>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    if (service.isSelf) {
+                        boardStore.exportBoardpack(board.id)
+                            ?: throw IllegalStateException("留言板不存在：${board.id}")
+                    } else {
+                        boardApiBytesRequest(
+                            service = service,
+                            path = "/boards/${board.id}/export.boardpack",
+                            accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                        ).getOrThrow()
+                    }
+                }
+            }
+            result.onFailure { error ->
+                appendError("导出 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun saveBoardpack(
+        uri: android.net.Uri,
+        data: ByteArray,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                BulletinBoardPack.writeToUri(appContext, uri, data)
+            }
+            result.onSuccess {
+                appendLog("boardpack 已保存。")
+            }.onFailure { error ->
+                appendError("保存 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun saveBoardpackToRoot(
+        rootUri: String,
+        boardName: String,
+        data: ByteArray,
+        onComplete: (Result<String>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                BulletinBoardPack.saveToRoot(
+                    context = appContext,
+                    rootUri = rootUri,
+                    fileName = BulletinBoardPack.defaultPackFileName(boardName),
+                    data = data
+                )
+            }
+            result.onSuccess { path ->
+                appendLog("boardpack 已导出到 $path")
+            }.onFailure { error ->
+                appendError("导出 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun importBoardpackFromUri(
+        uri: android.net.Uri,
+        name: String? = null,
+        roleIds: List<String>? = null,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val bytes = BulletinBoardPack.readFromUri(appContext, uri).getOrThrow()
+                    boardStore.importBoardpack(bytes, name, roleIds)
+                }
+            }
+            result.onSuccess { board ->
+                appendLog("已导入留言板：${board.name}")
+            }.onFailure { error ->
+                appendError("导入 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun importBoardpackRemote(
+        service: FamilyDiscoveredService,
+        data: ByteArray,
+        accessPassword: String?,
+        name: String? = null,
+        roleIds: List<String>? = null,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching { boardStore.importBoardpack(data, name, roleIds) }
+                } else {
+                    importBoardpackViaApi(service, data, accessPassword, name, roleIds)
+                }
+            }
+            result.onSuccess { board ->
+                appendLog("已导入留言板：${board.name}")
+            }.onFailure { error ->
+                appendError("导入 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
     fun refreshOpenBoard(showLoadingIndicator: Boolean = false) {
         val session = _state.value.openBoardSession ?: return
         scope.launch {
@@ -1517,6 +1634,111 @@ class FamilyNetworkManager(context: Context) {
         if (header.isNullOrBlank()) return null
         val total = header.substringAfter('/', "").toLongOrNull()
         return total?.takeIf { it > 0 }
+    }
+
+    private fun boardApiBytesRequest(
+        service: FamilyDiscoveredService,
+        path: String,
+        accessPassword: String? = null
+    ): Result<ByteArray> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 300000
+                setRequestProperty("Accept", "application/zip, application/octet-stream, */*")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            try {
+                val status = connection.responseCode
+                if (status !in 200..299) {
+                    val detail = connection.errorStream?.use { readResponseText(it) }.orEmpty()
+                    throw IllegalStateException(detail.ifBlank { "HTTP $status" })
+                }
+                connection.inputStream.use { it.readBytes() }
+            } finally {
+                connection.disconnect()
+            }
+        }
+    }
+
+    private fun importBoardpackViaApi(
+        service: FamilyDiscoveredService,
+        data: ByteArray,
+        accessPassword: String?,
+        name: String?,
+        roleIds: List<String>?
+    ): Result<BulletinBoardInfo> {
+        val query = buildList {
+            name?.trim()?.takeIf { it.isNotEmpty() }?.let { add("name=${java.net.URLEncoder.encode(it, "UTF-8")}") }
+            if (roleIds != null) {
+                add(
+                    "role_ids=${
+                        java.net.URLEncoder.encode(roleIds.joinToString(","), "UTF-8")
+                    }"
+                )
+            }
+        }.joinToString("&")
+        val path = if (query.isBlank()) "/boards/import" else "/boards/import?$query"
+        return runCatching {
+            val response = boardApiBinaryImportRequest(
+                service = service,
+                path = path,
+                body = data,
+                accessPassword = accessPassword?.trim()?.ifEmpty { null }
+            ).getOrThrow()
+            val json = JSONObject(response)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", "导入留言板失败"))
+            }
+            BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+        }
+    }
+
+    private fun boardApiBinaryImportRequest(
+        service: FamilyDiscoveredService,
+        path: String,
+        body: ByteArray,
+        accessPassword: String? = null
+    ): Result<String> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = "POST"
+                connectTimeout = 15000
+                readTimeout = 300000
+                doOutput = true
+                setRequestProperty("Content-Type", "application/vnd.localmanager.boardpack+zip")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            try {
+                connection.outputStream.use { output -> output.write(body) }
+                readApiResponse(connection)
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 
     private fun boardApiBinaryRequest(

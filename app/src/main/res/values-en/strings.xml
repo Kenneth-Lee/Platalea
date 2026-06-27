@@ -263,6 +263,11 @@
     <string name="family_board_delete_board_confirm">Delete board \"%1$s\"? All messages and attachments will be removed.</string>
     <string name="family_board_delete_last_board">At least one board must remain.</string>
     <string name="family_board_export">Export Markdown</string>
+    <string name="family_board_export_pack">Export archive pack</string>
+    <string name="family_board_import_pack">Import archive pack</string>
+    <string name="family_board_pack_export_success">Archive exported to %1$s</string>
+    <string name="family_board_pack_import_success">Board imported: %1$s</string>
+    <string name="family_board_pack_failed">Archive operation failed: %1$s</string>
     <string name="family_board_export_success">Exported to %1$s</string>
     <string name="family_board_export_failed">Export failed: %1$s</string>
     <string name="family_board_clear_passwords">Clear saved passwords</string>

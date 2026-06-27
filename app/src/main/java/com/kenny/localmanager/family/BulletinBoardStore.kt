@@ -81,6 +81,26 @@ class BulletinBoardStore(context: Context) {
         BulletinBoardInfo(id = boardId, name = trimmed, revision = 0L, messageCount = 0)
     }
 
+    fun exportBoardpack(boardId: String): ByteArray? = lock.read {
+        if (readMeta(boardId) == null) return@read null
+        runCatching {
+            BulletinBoardPack.exportBoardDir(boardDir(boardId))
+        }.getOrElse { throw IllegalStateException(it.message ?: "导出 boardpack 失败") }
+    }
+
+    fun importBoardpack(
+        data: ByteArray,
+        name: String? = null,
+        roleIds: List<String>? = null
+    ): BulletinBoardInfo = lock.write {
+        runCatching {
+            BulletinBoardPack.importIntoRoot(rootDir, data, name, roleIds)
+        }.getOrElse { error ->
+            val packError = error as? BulletinBoardPack.PackException
+            throw IllegalStateException(packError?.message ?: error.message ?: "导入 boardpack 失败")
+        }
+    }
+
     fun deleteBoard(boardId: String): Boolean = lock.write {
         if (readMeta(boardId) == null) return@write false
         val boardCount = rootDir.listFiles()?.count { file ->

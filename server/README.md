@@ -205,6 +205,8 @@ python3 server/bulletin_server.py --config server/config.json
 | `delete-board` | `<board_id>` | host | `DELETE /boards/{id}` |
 | `put` | `<board_id> <message_id> <content>` | host | `PUT /boards/{id}/messages/{msgId}` |
 | `delete` | `<board_id> <message_id>` | host | `DELETE /boards/{id}/messages/{msgId}` |
+| `export-boardpack` | `<board_id> <output.boardpack>` | guest+可见 | `GET /boards/{id}/export.boardpack` |
+| `import-boardpack` | `<input.boardpack>` | host | `POST /boards/import` |
 
 `post` 可选 `--author <名称>` 指定显示名，默认 `pc-cli`。
 
@@ -258,6 +260,8 @@ python3 server/board_client.py list-boards --password guest --json
 | POST | `/boards/{id}/messages` | guest / host |
 | PUT | `/boards/{id}/messages/{msgId}` | host |
 | DELETE | `/boards/{id}/messages/{msgId}` | host |
+| GET | `/boards/{id}/export.boardpack` | 可见角色（ZIP 归档） |
+| POST | `/boards/import` | admin（body 为 `.boardpack` ZIP） |
 
 mDNS TXT 属性：`app`, `proto=https`, `version=0.2`, `instance_id`, `platform`, `tls=1`, `tls_fp_sha256`, 有密码时 `auth=1`。
 

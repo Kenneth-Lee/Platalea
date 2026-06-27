@@ -96,6 +96,19 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("board_id", help="留言板 ID")
     delete.add_argument("message_id", help="消息 ID")
 
+    export_pack = sub.add_parser("export-boardpack", help="导出留言板归档包到文件")
+    export_pack.add_argument("board_id", help="留言板 ID")
+    export_pack.add_argument("output", help="输出 .boardpack 路径")
+
+    import_pack = sub.add_parser("import-boardpack", help="从归档包导入留言板（需 host 密码）")
+    import_pack.add_argument("input", help="输入 .boardpack 路径")
+    import_pack.add_argument("--name", default="", help="覆盖显示名（可选）")
+    import_pack.add_argument(
+        "--role-ids",
+        default="",
+        help="覆盖 role_ids，逗号分隔（可选，不含 admin）",
+    )
+
     return parser
 
 
@@ -156,6 +169,44 @@ def request_api(
         raw = response.read().decode("utf-8", errors="replace")
         parsed = json.loads(raw) if raw.strip() else {}
         return response.status, parsed
+    finally:
+        connection.close()
+
+
+def request_api_bytes(
+    host: str,
+    port: int,
+    method: str,
+    path: str,
+    *,
+    password: str,
+    body: bytes | None,
+    accept: str,
+    content_type: str | None,
+    ca_cert: str,
+    tls_fingerprint: str,
+    timeout: int = 120,
+) -> tuple[int, bytes]:
+    headers: dict[str, str] = {"Accept": accept}
+    if password:
+        headers[PASSWORD_HEADER] = password
+    if content_type:
+        headers["Content-Type"] = content_type
+
+    ssl_context = ssl.create_default_context(cafile=ca_cert)
+    ssl_context.check_hostname = False
+    connection = http.client.HTTPSConnection(host, port, context=ssl_context, timeout=timeout)
+    try:
+        connection.connect()
+        if tls_fingerprint:
+            peer = connection.sock.getpeercert(binary_form=True)
+            actual = hashlib.sha256(peer).hexdigest()
+            expected = tls_fingerprint.strip().lower().replace(":", "")
+            if actual != expected:
+                raise ssl.SSLError(f"TLS 指纹不匹配 expected={expected} actual={actual}")
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        return response.status, response.read()
     finally:
         connection.close()
 
@@ -247,6 +298,11 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
         print(f"已创建留言板: {board.get('id')} 「{board.get('name')}」")
         return
 
+    if command == "import-boardpack":
+        board = body.get("board") or {}
+        print(f"已导入留言板: {board.get('id')} 「{board.get('name')}」")
+        return
+
     if command == "delete-board":
         print(f"已删除留言板: {board_id}")
         return
@@ -295,6 +351,81 @@ def main() -> int:
         method = "DELETE"
         body = None
         password = host_password
+    elif args.command == "export-boardpack":
+        path = f"/boards/{board_id}/export.boardpack"
+        method = "GET"
+        body = None
+        password = guest_password
+        try:
+            status, payload = request_api_bytes(
+                host,
+                port,
+                method,
+                path,
+                password=password,
+                body=None,
+                accept="application/zip, application/octet-stream, */*",
+                content_type=None,
+                ca_cert=args.ca_cert,
+                tls_fingerprint=args.tls_fingerprint,
+            )
+        except Exception as exc:
+            print(f"请求失败 ({host}:{port}): {exc}", file=sys.stderr)
+            return 1
+        if status >= 400:
+            detail = payload.decode("utf-8", errors="replace")
+            print(f"错误 ({status}): {detail}", file=sys.stderr)
+            return 1
+        output = Path(args.output).expanduser()
+        output.write_bytes(payload)
+        print(f"已导出 boardpack: {output} ({len(payload)} 字节)")
+        return 0
+    elif args.command == "import-boardpack":
+        pack_path = Path(args.input).expanduser()
+        if not pack_path.exists():
+            print(f"文件不存在: {pack_path}", file=sys.stderr)
+            return 1
+        query_parts: list[str] = []
+        if args.name.strip():
+            from urllib.parse import quote
+
+            query_parts.append(f"name={quote(args.name.strip())}")
+        if args.role_ids.strip():
+            from urllib.parse import quote
+
+            query_parts.append(f"role_ids={quote(args.role_ids.strip())}")
+        path = "/boards/import"
+        if query_parts:
+            path = f"{path}?{'&'.join(query_parts)}"
+        method = "POST"
+        body_bytes = pack_path.read_bytes()
+        password = host_password
+        try:
+            status, payload = request_api_bytes(
+                host,
+                port,
+                method,
+                path,
+                password=password,
+                body=body_bytes,
+                accept="application/json",
+                content_type="application/vnd.localmanager.boardpack+zip",
+                ca_cert=args.ca_cert,
+                tls_fingerprint=args.tls_fingerprint,
+            )
+        except Exception as exc:
+            print(f"请求失败 ({host}:{port}): {exc}", file=sys.stderr)
+            return 1
+        try:
+            parsed = json.loads(payload.decode("utf-8"))
+        except json.JSONDecodeError:
+            print(f"错误 ({status}): 响应不是 JSON", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"status": status, "body": parsed}, ensure_ascii=False, indent=2))
+        else:
+            print_human("import-boardpack", status, parsed, "")
+        return 0 if status < 400 else 1
     else:
         parser.error(f"未知命令: {args.command}")
         return 2
