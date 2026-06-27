@@ -200,6 +200,17 @@ object BulletinBoardMention {
         atIndex,
         ComposeInputTarget(mentionLabel, ComposeInputTargetKind.AGENT)
     )
+
+    fun filterTargets(query: ActiveInputQuery, composeTargets: List<ComposeInputTarget>): List<ComposeInputTarget> {
+        return composeTargets.filter { target ->
+            when (query.trigger) {
+                ActiveInputTrigger.MENTION ->
+                    target.kind != ComposeInputTargetKind.COMMAND && target.matches(query.query)
+                ActiveInputTrigger.COMMAND ->
+                    target.kind == ComposeInputTargetKind.COMMAND && target.matches(query.query)
+            }
+        }
+    }
 }
 
 @Composable
@@ -213,32 +224,35 @@ fun BulletinMentionTextField(
     placeholder: @Composable (() -> Unit)? = null
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    /** 当前 @ 或 / 触发段的起始位置；同一段内编辑不再自动弹菜单 */
+    var autoShownForTriggerAt by remember { mutableStateOf<Int?>(null) }
     val activeQuery = remember(value.text, value.selection.end) {
         BulletinBoardMention.findActiveInputQuery(value.text, value.selection.end)
     }
     val filteredTargets = remember(activeQuery, composeTargets) {
-        if (activeQuery == null) {
-            emptyList()
+        activeQuery?.let { BulletinBoardMention.filterTargets(it, composeTargets) }.orEmpty()
+    }
+
+    fun handleValueChange(newValue: TextFieldValue) {
+        onValueChange(newValue)
+        val query = BulletinBoardMention.findActiveInputQuery(newValue.text, newValue.selection.end)
+        if (query == null) {
+            autoShownForTriggerAt = null
+            menuExpanded = false
+            return
+        }
+        if (autoShownForTriggerAt != query.startIndex) {
+            autoShownForTriggerAt = query.startIndex
+            menuExpanded = BulletinBoardMention.filterTargets(query, composeTargets).isNotEmpty()
         } else {
-            val query = activeQuery.query
-            composeTargets.filter { target ->
-                when (activeQuery.trigger) {
-                    ActiveInputTrigger.MENTION ->
-                        target.kind != ComposeInputTargetKind.COMMAND && target.matches(query)
-                    ActiveInputTrigger.COMMAND ->
-                        target.kind == ComposeInputTargetKind.COMMAND && target.matches(query)
-                }
-            }
+            menuExpanded = false
         }
     }
 
     Box(modifier = modifier) {
         TextField(
             value = value,
-            onValueChange = {
-                onValueChange(it)
-                menuExpanded = BulletinBoardMention.findActiveInputQuery(it.text, it.selection.end) != null
-            },
+            onValueChange = { handleValueChange(it) },
             modifier = Modifier.fillMaxWidth(),
             enabled = enabled,
             placeholder = placeholder,
@@ -252,7 +266,10 @@ fun BulletinMentionTextField(
         )
         DropdownMenu(
             expanded = menuExpanded && activeQuery != null && filteredTargets.isNotEmpty(),
-            onDismissRequest = { menuExpanded = false }
+            onDismissRequest = {
+                menuExpanded = false
+                activeQuery?.let { autoShownForTriggerAt = it.startIndex }
+            }
         ) {
             filteredTargets.forEach { target ->
                 DropdownMenuItem(
@@ -299,8 +316,9 @@ fun BulletinMentionTextField(
                     },
                     onClick = {
                         val startIndex = activeQuery?.startIndex ?: return@DropdownMenuItem
-                        onValueChange(BulletinBoardMention.applyTarget(value, startIndex, target))
+                        autoShownForTriggerAt = startIndex
                         menuExpanded = false
+                        onValueChange(BulletinBoardMention.applyTarget(value, startIndex, target))
                     }
                 )
             }

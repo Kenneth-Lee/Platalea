@@ -240,7 +240,7 @@
     <string name="family_board_ai_status_title">%1$s · status</string>
     <string name="family_board_no_messages">This board is empty. Post a message to try it out.</string>
     <string name="family_board_message_label">Message</string>
-    <string name="family_board_message_placeholder">Type a message; @ for models/users, / for commands</string>
+    <string name="family_board_message_placeholder">Message</string>
     <string name="family_board_command_ai_status">Check AI progress</string>
     <string name="family_board_command_ai_stop">Stop current AI task</string>
     <string name="family_board_edit_title">Edit Message</string>
