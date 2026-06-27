@@ -14,7 +14,7 @@
   "agent": {
     "enabled": false,
     "board_ids": null,
-    "model_name": "qwen2.5",
+    "models": ["qwen2.5", "gpt-oss:latest"],
     "ollama_base_url": "http://127.0.0.1:11434"
   }
 }

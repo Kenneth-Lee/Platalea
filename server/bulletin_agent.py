@@ -27,17 +27,17 @@ DEFAULT_SYSTEM_PROMPT = (
 @dataclass(frozen=True)
 class AgentConfig:
     enabled: bool
-    model_name: str
+    model_names: tuple[str, ...]
     ollama_base_url: str
     board_ids: frozenset[str] | None
 
-    @property
-    def author_label(self) -> str:
-        return f"AI-{self.model_name}"
+    @staticmethod
+    def author_label_for(model_name: str) -> str:
+        return f"AI-{model_name}"
 
-    @property
-    def author_device(self) -> str:
-        return f"{AGENT_DEVICE_PREFIX}{self.model_name}"
+    @staticmethod
+    def author_device_for(model_name: str) -> str:
+        return f"{AGENT_DEVICE_PREFIX}{model_name}"
 
     def applies_to_board(self, board_id: str) -> bool:
         if self.board_ids is None:
@@ -47,13 +47,13 @@ class AgentConfig:
     def models_for_board(self, board_id: str) -> list[str]:
         if not self.applies_to_board(board_id):
             return []
-        return [self.model_name]
+        return list(self.model_names)
 
     def to_public_json(self) -> dict[str, Any]:
         return {
             "ok": True,
             "enabled": True,
-            "models": [self.model_name],
+            "models": list(self.model_names),
             "board_ids": sorted(self.board_ids) if self.board_ids is not None else None,
         }
 
@@ -63,17 +63,30 @@ def load_agent_config(raw: dict[str, Any] | None) -> AgentConfig | None:
         return None
     if not raw.get("enabled"):
         return None
-    model_name = str(raw.get("model_name", "")).strip()
-    if not model_name:
-        raise ValueError("agent.enabled 为 true 时必须设置 agent.model_name")
+    model_names = _parse_model_names(raw)
     base_url = str(raw.get("ollama_base_url", "http://127.0.0.1:11434")).strip().rstrip("/")
     board_ids = _parse_board_ids(raw)
     return AgentConfig(
         enabled=True,
-        model_name=model_name,
+        model_names=model_names,
         ollama_base_url=base_url,
         board_ids=board_ids,
     )
+
+
+def _parse_model_names(raw: dict[str, Any]) -> tuple[str, ...]:
+    if "models" in raw:
+        value = raw.get("models")
+        if not isinstance(value, list):
+            raise ValueError("agent.models 必须是字符串数组")
+        names = tuple(str(item).strip() for item in value if str(item).strip())
+        if not names:
+            raise ValueError("agent.models 不能为空")
+        return names
+    legacy = str(raw.get("model_name", "")).strip()
+    if not legacy:
+        raise ValueError("agent.enabled 为 true 时必须设置 agent.models 或 agent.model_name")
+    return (legacy,)
 
 
 def _parse_board_ids(raw: dict[str, Any]) -> frozenset[str] | None:
@@ -140,10 +153,11 @@ class BulletinBoardAgent:
             if self._config.board_ids is None
             else ", ".join(sorted(self._config.board_ids))
         )
+        model_list = ", ".join(f"@{name}" for name in self._config.model_names)
         LOGGER.info(
-            "AI Agent 已启动: scope=%s model=@%s ollama=%s",
+            "AI Agent 已启动: scope=%s models=%s ollama=%s",
             scope,
-            self._config.model_name,
+            model_list,
             self._config.ollama_base_url,
         )
         self._worker.start()
@@ -187,7 +201,7 @@ class BulletinBoardAgent:
                 if message.deleted or self._is_agent_message(message):
                     self._mark_processed(board.id, message.id)
                     continue
-                if extract_mention_question(message.content, self._config.model_name) is not None:
+                if extract_mention_for_models(message.content, self._config.model_names) is not None:
                     self.notify_new_message(board.id, message.id)
 
     def _process_message(self, board_id: str, message_id: str) -> None:
@@ -204,31 +218,35 @@ class BulletinBoardAgent:
             self._mark_processed(board_id, message_id)
             return
         self._mark_processed(board_id, message_id)
-        question = extract_mention_question(message.content, self._config.model_name)
-        if question is None:
+        mention = extract_mention_for_models(message.content, self._config.model_names)
+        if mention is None:
             return
-        self._handle_mention(board_id, message, question, snapshot.messages)
+        model_name, question = mention
+        self._handle_mention(board_id, message, model_name, question, snapshot.messages)
 
     def _handle_mention(
         self,
         board_id: str,
         trigger: BulletinMessage,
+        model_name: str,
         question: str,
         all_messages: list[BulletinMessage],
     ) -> None:
+        author_label = AgentConfig.author_label_for(model_name)
+        author_device = AgentConfig.author_device_for(model_name)
         try:
             LOGGER.info(
                 "收到 @%s 来自 %s (board=%s message=%s): %s",
-                self._config.model_name,
+                model_name,
                 trigger.author_label,
                 board_id,
                 trigger.id,
                 question[:120],
             )
-            board_context = format_board_context(all_messages, self._config.model_name)
+            board_context = format_board_context(all_messages, self._config.model_names)
             reply = call_ollama_chat(
                 base_url=self._config.ollama_base_url,
-                model=self._config.model_name,
+                model=model_name,
                 system_prompt=DEFAULT_SYSTEM_PROMPT,
                 board_context=board_context,
                 trigger_author=trigger.author_label,
@@ -236,22 +254,22 @@ class BulletinBoardAgent:
             )
             posted = self._store.append_message(
                 board_id,
-                self._config.author_label,
+                author_label,
                 reply,
-                author_device=self._config.author_device,
+                author_device=author_device,
             )
             if posted is None:
                 raise RuntimeError("Agent 回复写入留言板失败")
             self._mark_processed(board_id, posted.id)
-            LOGGER.info("Agent 已回复 board=%s message=%s", board_id, posted.id)
+            LOGGER.info("Agent 已回复 board=%s message=%s model=%s", board_id, posted.id, model_name)
         except Exception as exc:
-            LOGGER.exception("Agent 处理 @%s 失败", self._config.model_name)
+            LOGGER.exception("Agent 处理 @%s 失败", model_name)
             error_text = f"AI 处理失败：{exc}"
             posted = self._store.append_message(
                 board_id,
-                self._config.author_label,
+                author_label,
                 error_text,
-                author_device=self._config.author_device,
+                author_device=author_device,
             )
             if posted is not None:
                 self._mark_processed(board_id, posted.id)
@@ -280,7 +298,8 @@ class BulletinBoardAgent:
         device = (message.author_device or "").strip()
         if device.startswith(AGENT_DEVICE_PREFIX):
             return True
-        return message.author_label.strip() == self._config.author_label
+        author = message.author_label.strip()
+        return any(author == AgentConfig.author_label_for(name) for name in self._config.model_names)
 
 
 def extract_mention_question(content: str, model_name: str) -> str | None:
@@ -296,14 +315,26 @@ def extract_mention_question(content: str, model_name: str) -> str | None:
     return question
 
 
-def format_board_context(messages: list[BulletinMessage], model_name: str) -> str:
+def extract_mention_for_models(
+    content: str,
+    model_names: tuple[str, ...] | list[str],
+) -> tuple[str, str] | None:
+    for model_name in sorted(model_names, key=len, reverse=True):
+        question = extract_mention_question(content, model_name)
+        if question is not None:
+            return model_name, question
+    return None
+
+
+def format_board_context(messages: list[BulletinMessage], model_names: tuple[str, ...] | list[str]) -> str:
+    agent_labels = {AgentConfig.author_label_for(name) for name in model_names}
     lines: list[str] = []
     for message in messages:
         if message.deleted:
             continue
         author = message.author_label or "访客"
         device = message.author_device or ""
-        if device.startswith(AGENT_DEVICE_PREFIX) or author == f"AI-{model_name}":
+        if device.startswith(AGENT_DEVICE_PREFIX) or author in agent_labels:
             role = "助手"
         else:
             role = author

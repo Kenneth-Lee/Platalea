@@ -766,8 +766,8 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         agent_handle = start_agent(store, agent_config, agent_state_dir)
         https_server.agent = agent_handle  # type: ignore[attr-defined]
         LOGGER.info(
-            "AI Agent 已随服务启动: @%s",
-            agent_config.model_name,
+            "AI Agent 已随服务启动: %s",
+            ", ".join(f"@{name}" for name in agent_config.model_names),
         )
 
     try:
