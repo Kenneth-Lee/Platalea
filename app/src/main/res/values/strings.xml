@@ -293,6 +293,7 @@
     <string name="family_board_role_remote_host">当前身份：远程宿主</string>
     <string name="family_board_role_guest">当前身份：访客</string>
     <string name="family_board_revision">序列版本：%1$d</string>
+    <string name="family_board_ai_status_title">%1$s · 状态</string>
     <string name="family_board_no_messages">留言板还没有内容，发一条试试。</string>
     <string name="family_board_message_label">留言内容</string>
     <string name="family_board_message_placeholder">输入要发布到留言板的文本</string>

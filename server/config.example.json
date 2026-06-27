@@ -23,7 +23,8 @@
       "max_attachment_read_bytes": 100000,
       "max_web_fetch_bytes": 200000,
       "web_fetch_timeout_seconds": 30,
-      "max_tool_rounds": 10
+      "max_tool_rounds": 10,
+      "status_heartbeat_seconds": 15
     }
   }
 }

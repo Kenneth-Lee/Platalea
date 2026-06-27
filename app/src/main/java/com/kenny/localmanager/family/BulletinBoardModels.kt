@@ -21,6 +21,11 @@ object BulletinBoardDefaults {
     const val DEFAULT_BOARD_NAME = "默认留言板"
 }
 
+object BulletinMessageKind {
+    const val MESSAGE = "message"
+    const val AI_STATUS = "ai_status"
+}
+
 data class BulletinBoardInfo(
     val id: String,
     val name: String,
@@ -46,8 +51,26 @@ data class BulletinMessage(
     val updatedAt: Long,
     val deleted: Boolean = false,
     val authorDevice: String? = null,
-    val attachments: List<BulletinAttachmentRef> = emptyList()
+    val attachments: List<BulletinAttachmentRef> = emptyList(),
+    val messageKind: String = BulletinMessageKind.MESSAGE
 ) {
+    val isAiStatus: Boolean
+        get() = messageKind == BulletinMessageKind.AI_STATUS ||
+            content.trimStart().startsWith("/ai status", ignoreCase = true)
+
+    val isConversationMessage: Boolean
+        get() = !deleted && !isAiStatus
+
+    val aiStatusDetail: String
+        get() {
+            val trimmed = content.trim()
+            return if (trimmed.startsWith("/ai status", ignoreCase = true)) {
+                trimmed.removePrefix("/ai status").trim()
+            } else {
+                trimmed
+            }
+        }
+
     fun toJson(): JSONObject = JSONObject().apply {
         put("id", id)
         put("seq", seq)
@@ -56,6 +79,9 @@ data class BulletinMessage(
         put("created_at", createdAt)
         put("updated_at", updatedAt)
         put("deleted", deleted)
+        if (messageKind != BulletinMessageKind.MESSAGE) {
+            put("message_kind", messageKind)
+        }
         authorDevice?.takeIf { it.isNotBlank() }?.let { put("author_device", it) }
         if (attachments.isNotEmpty()) {
             put("attachments", JSONArray(attachments.map { it.toJson() }))
@@ -70,16 +96,25 @@ data class BulletinMessage(
                     add(BulletinAttachmentRef.fromJson(arr.getJSONObject(i)))
                 }
             }
+            val content = obj.optString("content", "")
+            var messageKind = obj.optString("message_kind", BulletinMessageKind.MESSAGE)
+                .ifBlank { BulletinMessageKind.MESSAGE }
+            if (messageKind == BulletinMessageKind.MESSAGE &&
+                content.trimStart().startsWith("/ai status", ignoreCase = true)
+            ) {
+                messageKind = BulletinMessageKind.AI_STATUS
+            }
             return BulletinMessage(
                 id = obj.getString("id"),
                 seq = obj.optLong("seq"),
                 authorLabel = obj.optString("author_label", ""),
-                content = obj.optString("content", ""),
+                content = content,
                 createdAt = obj.optLong("created_at"),
                 updatedAt = obj.optLong("updated_at"),
                 deleted = obj.optBoolean("deleted", false),
                 authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() },
-                attachments = attachmentList
+                attachments = attachmentList,
+                messageKind = messageKind
             )
         }
     }

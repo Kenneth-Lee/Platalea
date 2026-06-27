@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from bulletin_ai_internal import is_ai_status_message
+
 AGENT_DEVICE_PREFIX = "agent:"
 
 
@@ -10,6 +12,8 @@ def collect_participants(messages: list[Any]) -> list[str]:
     seen: set[str] = set()
     for message in messages:
         if getattr(message, "deleted", False):
+            continue
+        if is_ai_status_message(message):
             continue
         device = (getattr(message, "author_device", None) or "").strip()
         if device.startswith(AGENT_DEVICE_PREFIX):

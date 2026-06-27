@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from bulletin_store import BulletinBoardStore, BulletinMessage
+
+if TYPE_CHECKING:
+    from bulletin_agent_status import AgentStatusReporter
 
 DEFAULT_MAX_ATTACHMENT_READ_BYTES = 100_000
 DEFAULT_MAX_WEB_FETCH_BYTES = 200_000
@@ -26,6 +30,7 @@ class AgentToolsConfig:
     max_web_fetch_bytes: int = DEFAULT_MAX_WEB_FETCH_BYTES
     web_fetch_timeout_seconds: float = DEFAULT_WEB_FETCH_TIMEOUT_SECONDS
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
+    status_heartbeat_seconds: float = 15.0
 
 
 def load_agent_tools_config(raw: dict[str, Any] | None) -> AgentToolsConfig:
@@ -37,6 +42,7 @@ def load_agent_tools_config(raw: dict[str, Any] | None) -> AgentToolsConfig:
     max_web = int(raw.get("max_web_fetch_bytes", DEFAULT_MAX_WEB_FETCH_BYTES))
     timeout = float(raw.get("web_fetch_timeout_seconds", DEFAULT_WEB_FETCH_TIMEOUT_SECONDS))
     max_rounds = int(raw.get("max_tool_rounds", DEFAULT_MAX_TOOL_ROUNDS))
+    heartbeat = float(raw.get("status_heartbeat_seconds", 15.0))
     return AgentToolsConfig(
         enabled=True,
         web_fetch=bool(raw.get("web_fetch", True)),
@@ -45,6 +51,7 @@ def load_agent_tools_config(raw: dict[str, Any] | None) -> AgentToolsConfig:
         max_web_fetch_bytes=max(1024, max_web),
         web_fetch_timeout_seconds=max(1.0, timeout),
         max_tool_rounds=max(1, max_rounds),
+        status_heartbeat_seconds=max(3.0, heartbeat),
     )
 
 
@@ -134,13 +141,25 @@ class AgentToolExecutor:
         board_id: str,
         messages: list[BulletinMessage],
         config: AgentToolsConfig,
+        *,
+        status_reporter: AgentStatusReporter | None = None,
+        cancel_event: threading.Event | None = None,
     ) -> None:
         self._store = store
         self._board_id = board_id
         self._messages = messages
         self._config = config
+        self._status_reporter = status_reporter
+        self._cancel_event = cancel_event
+
+    def _check_cancelled(self) -> None:
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise RuntimeError("任务已被用户停止")
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
+        self._check_cancelled()
+        if self._status_reporter is not None:
+            self._status_reporter.update(self._tool_status_label(name, arguments))
         try:
             if name == "list_attachment_files":
                 return self._list_attachment_files(arguments)
@@ -151,6 +170,21 @@ class AgentToolExecutor:
             return json.dumps({"ok": False, "error": f"未知工具: {name}"}, ensure_ascii=False)
         except Exception as exc:
             return json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False)
+
+    @staticmethod
+    def _tool_status_label(name: str, arguments: dict[str, Any]) -> str:
+        if name == "web_fetch":
+            return f"正在访问 {arguments.get('url', '网页')}…"
+        if name == "list_attachment_files":
+            attachment_id = str(arguments.get("attachment_id", "")).strip()
+            if attachment_id:
+                return f"正在列出附件 {attachment_id} 的文件…"
+            return "正在列出留言板附件…"
+        if name == "read_attachment_file":
+            path = str(arguments.get("file_path", "")).strip()
+            suffix = f" / {path}" if path else ""
+            return f"正在读取附件 {arguments.get('attachment_id', '')}{suffix}…"
+        return f"正在调用 {name}…"
 
     def _list_attachment_files(self, arguments: dict[str, Any]) -> str:
         if not self._config.attachments:

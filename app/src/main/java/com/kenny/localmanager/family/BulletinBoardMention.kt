@@ -43,7 +43,7 @@ object BulletinBoardMention {
     fun collectParticipants(messages: List<BulletinMessage>): List<String> {
         val seen = linkedSetOf<String>()
         messages.forEach { message ->
-            if (message.deleted) return@forEach
+            if (!message.isConversationMessage) return@forEach
             val device = message.authorDevice?.trim().orEmpty()
             if (device.startsWith(AGENT_DEVICE_PREFIX)) return@forEach
             val label = message.authorLabel.trim()

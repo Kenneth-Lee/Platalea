@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Any
 
 
+from bulletin_ai_internal import (
+    MESSAGE_KIND_AI_STATUS,
+    MESSAGE_KIND_MESSAGE,
+    format_ai_status_content,
+    is_ai_status_message,
+    is_conversation_message,
+)
 from bulletin_attachment_store import BulletinAttachmentStore
 
 DEFAULT_BOARD_ID = "default"
@@ -35,6 +42,7 @@ class BulletinMessage:
     deleted: bool = False
     author_device: str | None = None
     attachments: list[dict[str, Any]] | None = None
+    message_kind: str = MESSAGE_KIND_MESSAGE
 
     def to_json(self) -> dict[str, Any]:
         payload = {
@@ -46,6 +54,8 @@ class BulletinMessage:
             "updated_at": self.updated_at,
             "deleted": self.deleted,
         }
+        if self.message_kind != MESSAGE_KIND_MESSAGE:
+            payload["message_kind"] = self.message_kind
         if self.author_device:
             payload["author_device"] = self.author_device
         if self.attachments:
@@ -55,16 +65,21 @@ class BulletinMessage:
     @classmethod
     def from_json(cls, obj: dict[str, Any]) -> BulletinMessage:
         attachments = obj.get("attachments")
+        content = str(obj.get("content", ""))
+        message_kind = str(obj.get("message_kind", MESSAGE_KIND_MESSAGE)).strip() or MESSAGE_KIND_MESSAGE
+        if message_kind == MESSAGE_KIND_MESSAGE and content.strip().lower().startswith("/ai status"):
+            message_kind = MESSAGE_KIND_AI_STATUS
         return cls(
             id=str(obj["id"]),
             seq=int(obj.get("seq", 0)),
             author_label=str(obj.get("author_label", "")),
-            content=str(obj.get("content", "")),
+            content=content,
             created_at=int(obj.get("created_at", 0)),
             updated_at=int(obj.get("updated_at", 0)),
             deleted=bool(obj.get("deleted", False)),
             author_device=str(obj.get("author_device", "")).strip() or None,
             attachments=attachments if isinstance(attachments, list) else None,
+            message_kind=message_kind,
         )
 
 
@@ -132,7 +147,9 @@ class BulletinBoardStore:
                 if meta is None:
                     continue
                 active_count = sum(
-                    1 for message in self._read_messages(board_dir.name) if not message.deleted
+                    1
+                    for message in self._read_messages(board_dir.name)
+                    if is_conversation_message(message)
                 )
                 boards.append(
                     BulletinBoardInfo(
@@ -213,6 +230,7 @@ class BulletinBoardStore:
         content: str,
         author_device: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        message_kind: str = MESSAGE_KIND_MESSAGE,
     ) -> BulletinMessage | None:
         trimmed = content.strip()
         attachment_list = attachments or []
@@ -238,12 +256,56 @@ class BulletinBoardStore:
                 updated_at=now,
                 author_device=author_device.strip() if author_device else None,
                 attachments=attachment_list or None,
+                message_kind=message_kind,
             )
             messages.append(message)
             self._write_messages(board_id, messages)
             meta["revision"] = int(meta.get("revision", 0)) + 1
             self._write_meta(board_id, meta)
             return message
+
+    def append_ai_status(
+        self,
+        board_id: str,
+        author_label: str,
+        detail: str,
+        author_device: str | None = None,
+    ) -> BulletinMessage | None:
+        return self.append_message(
+            board_id,
+            author_label,
+            format_ai_status_content(detail),
+            author_device=author_device,
+            message_kind=MESSAGE_KIND_AI_STATUS,
+        )
+
+    def delete_ai_status_messages(
+        self,
+        board_id: str,
+        *,
+        author_device: str | None = None,
+    ) -> int:
+        with self._lock:
+            meta = self._read_meta(board_id)
+            if meta is None:
+                return 0
+            messages = self._read_messages(board_id)
+            removed = 0
+            kept: list[BulletinMessage] = []
+            for message in messages:
+                if not is_ai_status_message(message):
+                    kept.append(message)
+                    continue
+                if author_device and (message.author_device or "") != author_device:
+                    kept.append(message)
+                    continue
+                removed += 1
+            if removed == 0:
+                return 0
+            self._write_messages(board_id, kept)
+            meta["revision"] = int(meta.get("revision", 0)) + 1
+            self._write_meta(board_id, meta)
+            return removed
 
     def update_message(
         self,
@@ -278,6 +340,9 @@ class BulletinBoardStore:
                 created_at=messages[index].created_at,
                 updated_at=now,
                 deleted=False,
+                author_device=messages[index].author_device,
+                attachments=messages[index].attachments,
+                message_kind=messages[index].message_kind,
             )
             messages[index] = updated
             self._write_messages(board_id, messages)
@@ -411,6 +476,8 @@ def _snapshot_to_markdown(snapshot: BulletinBoardSnapshot) -> str:
         lines.append("（暂无留言）")
         return "\n".join(lines) + "\n"
     for message in snapshot.messages:
+        if not is_conversation_message(message):
+            continue
         time_label = datetime.fromtimestamp(message.updated_at / 1000).strftime(
             "%Y-%m-%d %H:%M"
         )

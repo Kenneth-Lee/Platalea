@@ -121,6 +121,17 @@ Agent 可通过 Ollama 工具调用（tool calling）使用以下能力（需模
 2. `@模型名 请总结附件内容`
 3. Agent 应先调用 `list_attachment_files` / `read_attachment_file`，再回复摘要
 
+#### AI 状态与内部命令
+
+长时间处理（如 `web_fetch`）时，Agent 会写入 **`ai_status` 消息**（内容以 `/ai status` 开头），在留言板以单独样式显示，**不计入留言数、不参与对话上下文、不导出 Markdown**。完成后自动清除状态行。
+
+用户内部命令（**不产生普通留言**）：
+
+| 命令 | 作用 |
+|------|------|
+| `/ai status` | 查询当前 Agent 是否在忙及进度 |
+| `/ai stop` / `/stopai` | 请求停止进行中的任务 |
+
 `GET /agent` 响应增加 `tools: { enabled, attachments, web_fetch }`。
 
 ### 4. 启动服务

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -955,6 +956,10 @@ private fun BulletinBoardPage(
         }
     }
 
+    val conversationMessages = remember(session.messages) {
+        session.messages.filter { it.isConversationMessage }
+    }
+
     LaunchedEffect(session.messages.size) {
         if (session.messages.isNotEmpty() && session.messages.size >= previousMessageCount) {
             listState.animateScrollToItem(session.messages.lastIndex)
@@ -1142,7 +1147,7 @@ private fun BulletinBoardPage(
             ) {
                 CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
             }
-        } else if (session.messages.isEmpty()) {
+        } else if (conversationMessages.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1165,17 +1170,21 @@ private fun BulletinBoardPage(
                     key = { it.id },
                     contentType = { "bulletin_message" }
                 ) { message ->
-                    BulletinMessageRow(
-                        message = message,
-                        canManage = session.canManageBoard,
-                        activeDownloadId = attachmentDownload?.attachmentId,
-                        onEdit = {
-                            editingMessage = message
-                            editingText = message.content
-                        },
-                        onDelete = { deletingMessage = message },
-                        onAttachmentClick = { attachment -> requestAttachmentDownload(attachment) }
-                    )
+                    if (message.isAiStatus) {
+                        BulletinAiStatusRow(message = message)
+                    } else {
+                        BulletinMessageRow(
+                            message = message,
+                            canManage = session.canManageBoard,
+                            activeDownloadId = attachmentDownload?.attachmentId,
+                            onEdit = {
+                                editingMessage = message
+                                editingText = message.content
+                            },
+                            onDelete = { deletingMessage = message },
+                            onAttachmentClick = { attachment -> requestAttachmentDownload(attachment) }
+                        )
+                    }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
                 }
             }
@@ -1238,6 +1247,51 @@ private fun BulletinBoardPage(
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
             }
+        }
+    }
+}
+
+@Composable
+private fun BulletinAiStatusRow(message: BulletinMessage) {
+    val timeLabel = remember(message.updatedAt) {
+        SimpleDateFormat("MM-dd HH:mm", Locale.getDefault()).format(Date(message.updatedAt))
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .background(
+                MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                shape = MaterialTheme.shapes.small
+            )
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            Icons.Default.SmartToy,
+            contentDescription = null,
+            modifier = Modifier.size(16.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.family_board_ai_status_title, message.authorLabel),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                message.aiStatusDetail.ifBlank { message.content },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Text(
+                timeLabel,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+            )
         }
     }
 }

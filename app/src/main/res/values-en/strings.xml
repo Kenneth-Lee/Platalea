@@ -237,6 +237,7 @@
     <string name="family_board_role_remote_host">Role: Remote host</string>
     <string name="family_board_role_guest">Role: Guest</string>
     <string name="family_board_revision">Revision: %1$d</string>
+    <string name="family_board_ai_status_title">%1$s · status</string>
     <string name="family_board_no_messages">This board is empty. Post a message to try it out.</string>
     <string name="family_board_message_label">Message</string>
     <string name="family_board_message_placeholder">Type text to post on this board</string>

@@ -42,7 +42,7 @@ class BulletinBoardStore(context: Context) {
         rootDir.listFiles()?.mapNotNull { dir ->
             if (!dir.isDirectory) return@mapNotNull null
             val meta = readMeta(dir.name) ?: return@mapNotNull null
-            val activeCount = readMessages(dir.name).count { !it.deleted }
+            val activeCount = readMessages(dir.name).count { it.isConversationMessage }
             BulletinBoardInfo(
                 id = meta.getString("id"),
                 name = meta.optString("name", dir.name),

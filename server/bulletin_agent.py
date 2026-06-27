@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bulletin_agent_status import AgentRunHandle, AgentStatusReporter
 from bulletin_agent_tools import (
     AgentToolExecutor,
     AgentToolsConfig,
@@ -21,6 +22,7 @@ from bulletin_agent_tools import (
     parse_tool_arguments,
     tools_system_prompt_suffix,
 )
+from bulletin_ai_internal import is_ai_status_message, is_conversation_message
 from bulletin_mention import AGENT_DEVICE_PREFIX
 from bulletin_store import BulletinBoardStore, BulletinMessage
 
@@ -167,6 +169,8 @@ class BulletinBoardAgent:
         self._queue: queue.Queue[tuple[str, str] | None] = queue.Queue()
         self._stop = threading.Event()
         self._worker = threading.Thread(target=self._worker_loop, name="bulletin-agent", daemon=True)
+        self._active_runs: dict[str, AgentRunHandle] = {}
+        self._runs_lock = threading.Lock()
 
     def start(self) -> None:
         scope = (
@@ -191,6 +195,64 @@ class BulletinBoardAgent:
         self._queue.put(None)
         if self._worker.is_alive():
             self._worker.join(timeout=2)
+
+    def notify_control_command(
+        self,
+        board_id: str,
+        command: str,
+        detail: str,
+        author_label: str,
+    ) -> None:
+        if not self._config.applies_to_board(board_id):
+            return
+        if command == "stop":
+            handle = self._get_active_run(board_id)
+            if handle is None:
+                label = (
+                    AgentConfig.author_label_for(self._config.model_names[0])
+                    if self._config.model_names
+                    else "AI"
+                )
+                self._store.append_ai_status(board_id, label, "当前没有进行中的 Agent 任务")
+                return
+            handle.cancel_event.set()
+            self._store.append_ai_status(
+                board_id,
+                handle.author_label,
+                "已收到停止请求，正在结束当前任务…",
+                author_device=handle.author_device,
+            )
+            return
+        if command == "status":
+            handle = self._get_active_run(board_id)
+            label = (
+                AgentConfig.author_label_for(self._config.model_names[0])
+                if self._config.model_names
+                else "AI"
+            )
+            if handle is None:
+                self._store.append_ai_status(board_id, label, "当前没有进行中的 Agent 任务")
+                return
+            text = handle.last_detail or "正在处理…"
+            if detail:
+                text = f"{text}（查询来自 {author_label}：{detail}）"
+            self._store.append_ai_status(
+                board_id,
+                handle.author_label,
+                text,
+                author_device=handle.author_device,
+            )
+
+    def _get_active_run(self, board_id: str) -> AgentRunHandle | None:
+        with self._runs_lock:
+            return self._active_runs.get(board_id)
+
+    def _set_active_run(self, board_id: str, handle: AgentRunHandle | None) -> None:
+        with self._runs_lock:
+            if handle is None:
+                self._active_runs.pop(board_id, None)
+            else:
+                self._active_runs[board_id] = handle
 
     def notify_new_message(self, board_id: str, message_id: str) -> None:
         if not self._config.applies_to_board(board_id):
@@ -221,7 +283,7 @@ class BulletinBoardAgent:
             for message in snapshot.messages:
                 if message.id in self._get_processed(board.id):
                     continue
-                if message.deleted or self._is_agent_message(message):
+                if message.deleted or self._is_agent_message(message) or is_ai_status_message(message):
                     self._mark_processed(board.id, message.id)
                     continue
                 if extract_mention_for_models(message.content, self._config.model_names) is not None:
@@ -240,6 +302,15 @@ class BulletinBoardAgent:
         if self._is_agent_message(message):
             self._mark_processed(board_id, message_id)
             return
+        if is_ai_status_message(message):
+            self._mark_processed(board_id, message_id)
+            return
+        if self._get_active_run(board_id) is not None:
+            mention = extract_mention_for_models(message.content, self._config.model_names)
+            if mention is not None:
+                self._mark_processed(board_id, message_id)
+                LOGGER.info("Agent 忙碌中，忽略新 @ board=%s message=%s", board_id, message_id)
+                return
         self._mark_processed(board_id, message_id)
         mention = extract_mention_for_models(message.content, self._config.model_names)
         if mention is None:
@@ -257,6 +328,18 @@ class BulletinBoardAgent:
     ) -> None:
         author_label = AgentConfig.author_label_for(model_name)
         author_device = AgentConfig.author_device_for(model_name)
+        handle = AgentRunHandle(
+            board_id=board_id,
+            model_name=model_name,
+            author_label=author_label,
+            author_device=author_device,
+        )
+        self._set_active_run(board_id, handle)
+        reporter = AgentStatusReporter(
+            self._store,
+            handle,
+            heartbeat_seconds=self._config.tools.status_heartbeat_seconds,
+        )
         try:
             LOGGER.info(
                 "收到 @%s 来自 %s (board=%s message=%s): %s",
@@ -266,6 +349,7 @@ class BulletinBoardAgent:
                 trigger.id,
                 question[:120],
             )
+            reporter.update("正在思考…")
             board_context = format_board_context(all_messages, self._config.model_names)
             system_prompt = build_system_prompt(self._config.tools)
             reply = run_ollama_agent_chat(
@@ -279,7 +363,17 @@ class BulletinBoardAgent:
                 board_id=board_id,
                 messages=all_messages,
                 tools_config=self._config.tools,
+                status_reporter=reporter,
+                cancel_event=handle.cancel_event,
             )
+            if handle.cancel_event.is_set():
+                self._store.append_ai_status(
+                    board_id,
+                    author_label,
+                    "任务已停止",
+                    author_device=author_device,
+                )
+                return
             posted = self._store.append_message(
                 board_id,
                 author_label,
@@ -292,7 +386,10 @@ class BulletinBoardAgent:
             LOGGER.info("Agent 已回复 board=%s message=%s model=%s", board_id, posted.id, model_name)
         except Exception as exc:
             LOGGER.exception("Agent 处理 @%s 失败", model_name)
-            error_text = f"AI 处理失败：{exc}"
+            if handle.cancel_event.is_set():
+                error_text = "任务已停止"
+            else:
+                error_text = f"AI 处理失败：{exc}"
             posted = self._store.append_message(
                 board_id,
                 author_label,
@@ -301,6 +398,9 @@ class BulletinBoardAgent:
             )
             if posted is not None:
                 self._mark_processed(board_id, posted.id)
+        finally:
+            reporter.clear()
+            self._set_active_run(board_id, None)
 
     def _state_for_board(self, board_id: str) -> AgentStateStore:
         cached = self._board_states.get(board_id)
@@ -366,7 +466,7 @@ def format_board_context(messages: list[BulletinMessage], model_names: tuple[str
     agent_labels = {AgentConfig.author_label_for(name) for name in model_names}
     lines: list[str] = []
     for message in messages:
-        if message.deleted:
+        if message.deleted or is_ai_status_message(message):
             continue
         author = message.author_label or "访客"
         device = message.author_device or ""
@@ -416,6 +516,8 @@ def run_ollama_agent_chat(
     board_id: str,
     messages: list[BulletinMessage],
     tools_config: AgentToolsConfig,
+    status_reporter: AgentStatusReporter | None = None,
+    cancel_event: threading.Event | None = None,
     timeout_seconds: float = 300,
 ) -> str:
     user_content = (
@@ -429,9 +531,20 @@ def run_ollama_agent_chat(
         {"role": "user", "content": user_content},
     ]
     tools = build_tool_definitions(tools_config)
-    executor = AgentToolExecutor(store, board_id, messages, tools_config)
+    executor = AgentToolExecutor(
+        store,
+        board_id,
+        messages,
+        tools_config,
+        status_reporter=status_reporter,
+        cancel_event=cancel_event,
+    )
 
     for round_index in range(tools_config.max_tool_rounds):
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("任务已被用户停止")
+        if status_reporter is not None and round_index == 0:
+            status_reporter.update("正在生成回答…")
         payload: dict[str, Any] = {
             "model": model,
             "messages": chat_messages,

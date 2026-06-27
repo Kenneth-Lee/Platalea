@@ -406,6 +406,23 @@ def handle_board_request(
         content = str(payload.get("content", ""))
         author_label = str(payload.get("author_label", "访客"))
         author_device = str(payload.get("author_device", "")).strip() or None
+        if agent is not None:
+            from bulletin_ai_internal import parse_ai_control_command
+
+            control = parse_ai_control_command(content)
+            if control is not None:
+                command, detail = control
+                agent.notify_control_command(board_id, command, detail, author_label)
+                snapshot = store.snapshot(board_id)
+                return {
+                    "status": HTTPStatus.OK,
+                    "body": {
+                        "ok": True,
+                        "internal": True,
+                        "command": command,
+                        "revision": snapshot.revision if snapshot else 0,
+                    },
+                }
         attachments = payload.get("attachments")
         attachment_list = attachments if isinstance(attachments, list) else None
         message = store.append_message(
