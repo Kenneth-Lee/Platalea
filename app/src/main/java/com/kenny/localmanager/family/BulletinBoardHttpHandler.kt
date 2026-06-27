@@ -323,7 +323,8 @@ class BulletinBoardHttpHandler(
         val body = snapshot.copy(
             canManage = false,
             agents = emptyList(),
-            participants = participants
+            participants = participants,
+            commands = emptyList()
         ).toJson().toString()
         return FamilyHttpResponse(200, body)
     }

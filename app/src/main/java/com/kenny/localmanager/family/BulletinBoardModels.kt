@@ -127,7 +127,8 @@ data class BulletinBoardSnapshot(
     val messages: List<BulletinMessage>,
     val canManage: Boolean = false,
     val agents: List<String> = emptyList(),
-    val participants: List<String> = emptyList()
+    val participants: List<String> = emptyList(),
+    val commands: List<String> = emptyList()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("ok", true)
@@ -138,12 +139,14 @@ data class BulletinBoardSnapshot(
         put("messages", JSONArray(messages.map { it.toJson() }))
         put("agents", JSONArray(agents))
         put("participants", JSONArray(participants))
+        put("commands", JSONArray(commands))
     }
 
     companion object {
         fun parseAgents(json: JSONObject): List<String> = parseStringArray(json.optJSONArray("agents"))
         fun parseParticipants(json: JSONObject): List<String> =
             parseStringArray(json.optJSONArray("participants"))
+        fun parseCommands(json: JSONObject): List<String> = parseStringArray(json.optJSONArray("commands"))
 
         private fun parseStringArray(array: JSONArray?): List<String> {
             if (array == null) return emptyList()
@@ -167,6 +170,7 @@ data class BulletinBoardOpenSession(
     val messages: List<BulletinMessage> = emptyList(),
     val agents: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
+    val commands: List<String> = emptyList(),
     val loading: Boolean = false,
     val lastError: String? = null
 )

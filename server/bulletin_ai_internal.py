@@ -9,6 +9,17 @@ MESSAGE_KIND_AI_STATUS = "ai_status"
 
 AI_STATUS_PREFIX = "/ai status "
 
+DEFAULT_AGENT_COMMANDS: tuple[str, ...] = (
+    "/ai status",
+    "/ai stop",
+)
+
+
+def agent_commands_for_board(agent_applies: bool) -> list[str]:
+    if not agent_applies:
+        return []
+    return list(DEFAULT_AGENT_COMMANDS)
+
 
 def format_ai_status_content(detail: str) -> str:
     text = detail.strip()

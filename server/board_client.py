@@ -193,11 +193,13 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
             print("AI Agent：未启用")
             return
         models = body.get("models") or []
+        commands = body.get("commands") or []
         board_ids = body.get("board_ids")
         scope = "全部留言板" if board_ids is None else ", ".join(board_ids)
         print("AI Agent：已启用")
         print(f"  生效范围: {scope}")
         print(f"  可 @ 模型: {', '.join(models) if models else '（无）'}")
+        print(f"  可用 / 命令: {', '.join(commands) if commands else '（无）'}")
         return
 
     if command == "get-messages":
@@ -205,9 +207,12 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
         messages = body.get("messages") or []
         agents = body.get("agents") or []
         participants = body.get("participants") or []
+        commands = body.get("commands") or []
         print(f"留言板: {board_id} 「{name}」  共 {len(messages)} 条")
         if agents:
             print(f"可 @ 模型: {', '.join(agents)}")
+        if commands:
+            print(f"可用 / 命令: {', '.join(commands)}")
         if participants:
             print(f"参与者: {', '.join(participants)}")
         print()

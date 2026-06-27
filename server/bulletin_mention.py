@@ -31,8 +31,10 @@ def enrich_board_payload(
     *,
     agents: list[str],
     participants: list[str],
+    commands: list[str] | None = None,
 ) -> dict[str, Any]:
     enriched = dict(payload)
     enriched["agents"] = agents
     enriched["participants"] = participants
+    enriched["commands"] = commands if commands is not None else []
     return enriched

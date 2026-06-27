@@ -937,8 +937,19 @@ private fun BulletinBoardPage(
     var draftMessage by remember(session.service.deviceKey, session.boardId) {
         mutableStateOf(TextFieldValue(""))
     }
-    val mentionTargets = remember(session.agents, session.participants) {
-        BulletinBoardMention.buildTargets(session.agents, session.participants)
+    val commandDescriptions = remember(context) {
+        mapOf(
+            "/ai status" to context.getString(R.string.family_board_command_ai_status),
+            "/ai stop" to context.getString(R.string.family_board_command_ai_stop)
+        )
+    }
+    val composeTargets = remember(session.agents, session.participants, session.commands, commandDescriptions) {
+        BulletinBoardMention.buildComposeTargets(
+            session.agents,
+            session.participants,
+            session.commands,
+            commandDescriptions
+        )
     }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
@@ -1231,7 +1242,7 @@ private fun BulletinBoardPage(
             BulletinMentionTextField(
                 value = draftMessage,
                 onValueChange = { draftMessage = it },
-                mentionTargets = mentionTargets,
+                composeTargets = composeTargets,
                 modifier = Modifier.weight(1f),
                 enabled = !transferInProgress,
                 maxLines = 3,

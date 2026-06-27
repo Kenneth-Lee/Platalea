@@ -69,10 +69,10 @@ cp server/config.example.json server/config.json
 
 协议扩展：
 
-- `GET /agent`：返回 `{ enabled, models, board_ids }`（访客可读）
-- `GET /boards/{id}/messages` 响应增加 `agents`（可 @ 的模型名）与 `participants`（板上发过言的用户名）
+- `GET /agent`：返回 `{ enabled, models, commands, board_ids }`（访客可读）
+- `GET /boards/{id}/messages` 响应增加 `agents`、`participants`、`commands`（可 @ 的模型、内部 / 命令）
 
-手机端输入 `@` 时会弹出上述列表供选择。
+手机端输入 `@` 或 `/` 时会弹出上述列表供选择。
 
 配置示例：
 

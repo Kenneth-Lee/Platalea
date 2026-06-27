@@ -554,7 +554,8 @@ class FamilyNetworkManager(context: Context) {
                         bulletinMessagesEqual(open.messages, snapshot.messages)
                     val metaUnchanged = messagesUnchanged &&
                         open.agents == snapshot.agents &&
-                        open.participants == snapshot.participants
+                        open.participants == snapshot.participants &&
+                        open.commands == snapshot.commands
                     if (metaUnchanged) {
                         if (open.loading) {
                             current.copy(openBoardSession = open.copy(loading = false))
@@ -569,6 +570,7 @@ class FamilyNetworkManager(context: Context) {
                                 messages = snapshot.messages,
                                 agents = snapshot.agents,
                                 participants = snapshot.participants,
+                                commands = snapshot.commands,
                                 canManageBoard = open.isHost || snapshot.canManage,
                                 loading = false,
                                 lastError = null
@@ -1304,6 +1306,7 @@ class FamilyNetworkManager(context: Context) {
                     put("enabled", false)
                     put("models", JSONArray())
                     put("board_ids", JSONObject.NULL)
+                    put("commands", JSONArray())
                 }.toString()
             )
         }
@@ -1333,7 +1336,8 @@ class FamilyNetworkManager(context: Context) {
             snapshot.copy(
                 canManage = true,
                 agents = emptyList(),
-                participants = BulletinBoardMention.collectParticipants(snapshot.messages)
+                participants = BulletinBoardMention.collectParticipants(snapshot.messages),
+                commands = emptyList()
             )
         }
     }
@@ -1369,7 +1373,8 @@ class FamilyNetworkManager(context: Context) {
                 agents = BulletinBoardSnapshot.parseAgents(json),
                 participants = BulletinBoardSnapshot.parseParticipants(json).ifEmpty {
                     BulletinBoardMention.collectParticipants(messages)
-                }
+                },
+                commands = BulletinBoardSnapshot.parseCommands(json)
             )
         }
     }

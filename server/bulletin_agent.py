@@ -22,7 +22,7 @@ from bulletin_agent_tools import (
     parse_tool_arguments,
     tools_system_prompt_suffix,
 )
-from bulletin_ai_internal import is_ai_status_message, is_conversation_message
+from bulletin_ai_internal import DEFAULT_AGENT_COMMANDS, agent_commands_for_board
 from bulletin_mention import AGENT_DEVICE_PREFIX
 from bulletin_store import BulletinBoardStore, BulletinMessage
 
@@ -60,12 +60,16 @@ class AgentConfig:
             return []
         return list(self.model_names)
 
+    def commands_for_board(self, board_id: str) -> list[str]:
+        return agent_commands_for_board(self.applies_to_board(board_id))
+
     def to_public_json(self) -> dict[str, Any]:
         return {
             "ok": True,
             "enabled": True,
             "models": list(self.model_names),
             "board_ids": sorted(self.board_ids) if self.board_ids is not None else None,
+            "commands": list(DEFAULT_AGENT_COMMANDS),
             "tools": {
                 "enabled": self.tools.enabled,
                 "attachments": self.tools.attachments,

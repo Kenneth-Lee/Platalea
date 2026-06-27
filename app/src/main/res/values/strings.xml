@@ -296,7 +296,9 @@
     <string name="family_board_ai_status_title">%1$s · 状态</string>
     <string name="family_board_no_messages">留言板还没有内容，发一条试试。</string>
     <string name="family_board_message_label">留言内容</string>
-    <string name="family_board_message_placeholder">输入要发布到留言板的文本</string>
+    <string name="family_board_message_placeholder">输入留言；@ 选模型或用户，/ 选命令</string>
+    <string name="family_board_command_ai_status">查询 AI 处理进度</string>
+    <string name="family_board_command_ai_stop">停止当前 AI 任务</string>
     <string name="family_board_edit_title">修改留言</string>
     <string name="family_board_delete_title">删除留言</string>
     <string name="family_board_delete_confirm">确定删除这条留言吗？</string>

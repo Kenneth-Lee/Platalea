@@ -218,7 +218,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 json_response(
                     self,
                     HTTPStatus.OK,
-                    {"ok": True, "enabled": False, "models": [], "board_ids": None},
+                    {"ok": True, "enabled": False, "models": [], "board_ids": None, "commands": []},
                 )
             else:
                 json_response(self, HTTPStatus.OK, agent._config.to_public_json())
@@ -383,6 +383,7 @@ def handle_board_request(
             }
         can_manage = auth_level in {AuthLevel.HOST, AuthLevel.OPEN}
         agents = agent._config.models_for_board(board_id) if agent is not None else []
+        commands = agent._config.commands_for_board(board_id) if agent is not None else []
         participants = collect_participants(snapshot.messages)
         body = enrich_board_payload(
             BulletinBoardSnapshot(
@@ -394,6 +395,7 @@ def handle_board_request(
             ).to_json(),
             agents=agents,
             participants=participants,
+            commands=commands,
         )
         return {"status": HTTPStatus.OK, "body": body}
 
