@@ -60,6 +60,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
+import com.kenny.localmanager.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
@@ -259,7 +261,7 @@ fun PicZipViewerScreen(
                     IconButton(onClick = {
                         if (isEncrypted) showExitCacheDialog = true else onBack(null)
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -278,10 +280,10 @@ fun PicZipViewerScreen(
                                 .clickable { jumpToInput = "${currentIndex + 1}"; showJumpToDialog = true }
                         )
                         IconButton(onClick = { showDirectory = true }) {
-                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = "目录")
+                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.pic_zip_directory))
                         }
                         IconButton(onClick = { rotationDegrees = (rotationDegrees + 90f) % 360f }) {
-                            Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = "旋转")
+                            Icon(Icons.AutoMirrored.Filled.RotateRight, contentDescription = stringResource(R.string.pic_zip_rotate))
                         }
                     }
                 }
@@ -297,7 +299,7 @@ fun PicZipViewerScreen(
         ) {
             if (imagePaths.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("压缩包内无图片", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(R.string.pic_zip_no_images), style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 Box(
@@ -394,7 +396,13 @@ fun PicZipViewerScreen(
                                     },
                                     enabled = !saveInProgress
                                 ) {
-                                    Text(if (saveInProgress) "保存中" else "保存到根目录")
+                                    Text(
+                                        if (saveInProgress) {
+                                            stringResource(R.string.pic_zip_saving)
+                                        } else {
+                                            stringResource(R.string.pic_zip_save_to_root)
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -432,7 +440,7 @@ fun PicZipViewerScreen(
                             },
                             enabled = currentIndex > 0
                         ) {
-                            Icon(Icons.Filled.SkipPrevious, contentDescription = "上一张")
+                            Icon(Icons.Filled.SkipPrevious, contentDescription = stringResource(R.string.pic_zip_previous))
                         }
                         Box(Modifier.weight(1f))
                         IconButton(
@@ -445,7 +453,7 @@ fun PicZipViewerScreen(
                             },
                             enabled = currentIndex < imagePaths.size - 1
                         ) {
-                            Icon(Icons.Filled.SkipNext, contentDescription = "下一张")
+                            Icon(Icons.Filled.SkipNext, contentDescription = stringResource(R.string.pic_zip_next))
                         }
                     }
                 }
@@ -499,16 +507,19 @@ fun PicZipViewerScreen(
     if (showJumpToDialog && imagePaths.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showJumpToDialog = false },
-            title = { Text("跳转到第几张") },
+            title = { Text(stringResource(R.string.pic_zip_jump_to_title)) },
             text = {
                 Column {
-                    Text("共 ${imagePaths.size} 张，输入 1～${imagePaths.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(R.string.pic_zip_jump_to_hint, imagePaths.size, imagePaths.size),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = jumpToInput,
                         onValueChange = { jumpToInput = it.filter { c -> c.isDigit() } },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("页码") },
+                        label = { Text(stringResource(R.string.pic_zip_page_number)) },
                         singleLine = true
                     )
                 }
@@ -522,9 +533,9 @@ fun PicZipViewerScreen(
                         offset = Offset.Zero
                         showJumpToDialog = false
                     }
-                ) { Text("确定") }
+                ) { Text(stringResource(R.string.common_ok)) }
             },
-            dismissButton = { TextButton(onClick = { showJumpToDialog = false }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { showJumpToDialog = false }) { Text(stringResource(R.string.common_cancel)) } }
         )
     }
 
@@ -532,20 +543,20 @@ fun PicZipViewerScreen(
     if (showExitCacheDialog) {
         AlertDialog(
             onDismissRequest = { showExitCacheDialog = false },
-            title = { Text("退出加密图片包") },
-            text = { Text("是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可使用已有缓存。", color = MaterialTheme.colorScheme.onSurface) },
+            title = { Text(stringResource(R.string.pic_zip_exit_encrypted_title)) },
+            text = { Text(stringResource(R.string.pic_zip_exit_encrypted_message), color = MaterialTheme.colorScheme.onSurface) },
             confirmButton = {
                 Button(onClick = {
                     showExitCacheDialog = false
                     try { cacheDir.deleteRecursively() } catch (_: Exception) {}
                     onBack(true)
-                }) { Text("删除缓存并退出") }
+                }) { Text(stringResource(R.string.pic_zip_delete_cache_exit)) }
             },
             dismissButton = {
                 TextButton(onClick = {
                     showExitCacheDialog = false
                     onBack(false)
-                }) { Text("保留缓存并退出") }
+                }) { Text(stringResource(R.string.pic_zip_keep_cache_exit)) }
             }
         )
     }

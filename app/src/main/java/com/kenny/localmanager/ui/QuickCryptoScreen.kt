@@ -479,7 +479,11 @@ fun QuickCryptoScreen() {
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = if (option.keyId == selectedRecipientKeyId) "${option.label} [已选]" else option.label,
+                                    text = if (option.keyId == selectedRecipientKeyId) {
+                                        stringResource(R.string.quick_crypto_recipient_selected, option.label)
+                                    } else {
+                                        option.label
+                                    },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }

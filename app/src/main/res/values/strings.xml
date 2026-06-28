@@ -1783,4 +1783,20 @@ OPF目录文件: %2$s</string>
     <string name="family_msg_99038">创建留言板失败：名称不能为空。</string>
     <string name="family_msg_99856">导入归档包失败：%1$s</string>
     <string name="family_self_suffix">（本机）</string>
+    <string name="pic_zip_no_images">压缩包内无图片</string>
+    <string name="pic_zip_directory">目录</string>
+    <string name="pic_zip_rotate">旋转</string>
+    <string name="pic_zip_saving">保存中</string>
+    <string name="pic_zip_save_to_root">保存到根目录</string>
+    <string name="pic_zip_previous">上一张</string>
+    <string name="pic_zip_next">下一张</string>
+    <string name="pic_zip_jump_to_title">跳转到第几张</string>
+    <string name="pic_zip_jump_to_hint">共 %1$d 张，输入 1～%2$d</string>
+    <string name="pic_zip_page_number">页码</string>
+    <string name="pic_zip_exit_encrypted_title">退出加密图片包</string>
+    <string name="pic_zip_exit_encrypted_message">是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可使用已有缓存。</string>
+    <string name="pic_zip_delete_cache_exit">删除缓存并退出</string>
+    <string name="pic_zip_keep_cache_exit">保留缓存并退出</string>
+    <string name="quick_note_section_heading_markdown">## 思想火花</string>
+    <string name="quick_crypto_recipient_selected">%1$s [已选]</string>
 </resources>

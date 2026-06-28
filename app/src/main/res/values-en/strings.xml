@@ -1783,4 +1783,20 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="family_msg_99038">创建留言板 failed：名称 cannot be empty。</string>
     <string name="family_msg_99856">import archive pack failed：${error.message ?: error.javaClass.simpleName}</string>
     <string name="family_self_suffix"> (local)</string>
+    <string name="pic_zip_no_images">No images in this archive</string>
+    <string name="pic_zip_directory">Directory</string>
+    <string name="pic_zip_rotate">Rotate</string>
+    <string name="pic_zip_saving">Saving…</string>
+    <string name="pic_zip_save_to_root">Save to root</string>
+    <string name="pic_zip_previous">Previous</string>
+    <string name="pic_zip_next">Next</string>
+    <string name="pic_zip_jump_to_title">Jump to image</string>
+    <string name="pic_zip_jump_to_hint">%1$d images total; enter 1–%2$d</string>
+    <string name="pic_zip_page_number">Image number</string>
+    <string name="pic_zip_exit_encrypted_title">Leave encrypted image archive</string>
+    <string name="pic_zip_exit_encrypted_message">Delete the extracted cache from this session? If you keep it, you will still need the password next time, but existing cache can be reused.</string>
+    <string name="pic_zip_delete_cache_exit">Delete cache and exit</string>
+    <string name="pic_zip_keep_cache_exit">Keep cache and exit</string>
+    <string name="quick_note_section_heading_markdown">## Quick notes</string>
+    <string name="quick_crypto_recipient_selected">%1$s [Selected]</string>
 </resources>

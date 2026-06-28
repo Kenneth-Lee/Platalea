@@ -73,8 +73,7 @@ import kotlinx.coroutines.launch
 const val QUICK_NOTE_FILE_NAME: String = ".lm.note.md"
 const val QUICK_NOTE_GPG_FILE_NAME: String = ".lm.note.md.gpg"
 
-private const val QUICK_NOTE_SECTION_TITLE = "思想火花"
-private const val QUICK_NOTE_SECTION_HEADING = "## 思想火花"
+private val QUICK_NOTE_SECTION_HEADINGS = setOf("## 思想火花", "## Quick notes")
 
 data class QuickNoteFileInfo(
     val uri: Uri,
@@ -180,7 +179,7 @@ suspend fun saveQuickNoteData(
 ): Result<QuickNoteLoadedData> {
     val latestRawText = readQuickNoteRawText(context, currentData.fileInfo, currentData.sourcePassword)
         .getOrElse { return Result.failure(it) }
-    val mergedText = mergeQuickNoteSection(latestRawText, entries)
+    val mergedText = mergeQuickNoteSection(context, latestRawText, entries)
     val outBytes = mergedText.toByteArray(Charsets.UTF_8)
     val ok = if (currentData.fileInfo.isEncrypted) {
         val secretKeys = loadSecretKeyRings(context)
@@ -252,7 +251,7 @@ private fun parseQuickNoteSectionContent(fullText: String): QuickNoteParseResult
     for (line in sectionLines) {
         val trimmed = line.trimEnd()
         when {
-            trimmed.trim() == QUICK_NOTE_SECTION_HEADING -> Unit
+            trimmed in QUICK_NOTE_SECTION_HEADINGS -> Unit
             trimmed.isBlank() -> Unit
             trimmed.trimStart().startsWith("### ") -> {
                 flushCurrent()
@@ -280,9 +279,9 @@ private fun parseQuickNoteSectionContent(fullText: String): QuickNoteParseResult
 fun parseQuickNoteEntries(fullText: String): List<QuickNoteEntry> =
     parseQuickNoteSectionContent(fullText).entries
 
-private fun mergeQuickNoteSection(fullText: String, entries: List<QuickNoteEntry>): String {
+private fun mergeQuickNoteSection(context: Context, fullText: String, entries: List<QuickNoteEntry>): String {
     val normalized = fullText.replace("\r\n", "\n")
-    val sectionText = buildQuickNoteSection(entries)
+    val sectionText = buildQuickNoteSection(context, entries)
     val range = findQuickNoteSectionRange(normalized)
     if (range == null) {
         return if (normalized.isBlank()) {
@@ -309,10 +308,10 @@ private fun mergeQuickNoteSection(fullText: String, entries: List<QuickNoteEntry
     }
 }
 
-private fun buildQuickNoteSection(entries: List<QuickNoteEntry>): String {
+private fun buildQuickNoteSection(context: Context, entries: List<QuickNoteEntry>): String {
     val orderedCategories = buildQuickNoteCategoryOrder(entries)
     return buildString {
-        append(QUICK_NOTE_SECTION_HEADING)
+        append(context.getString(R.string.quick_note_section_heading_markdown))
         if (entries.isNotEmpty()) append("\n\n")
         orderedCategories.forEachIndexed { index, category ->
             if (category != null) {
@@ -364,7 +363,7 @@ private fun findQuickNoteSectionRange(fullText: String): QuickNoteSectionRange? 
     val lines = fullText.replace("\r\n", "\n").split("\n")
     var startIndex = -1
     for (index in lines.indices) {
-        if (lines[index].trim() == QUICK_NOTE_SECTION_HEADING) {
+        if (lines[index].trim() in QUICK_NOTE_SECTION_HEADINGS) {
             startIndex = index
             break
         }
