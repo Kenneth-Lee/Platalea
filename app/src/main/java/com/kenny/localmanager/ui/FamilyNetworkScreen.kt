@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Forward
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.ContentCopy
@@ -46,6 +47,7 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -99,6 +101,7 @@ import com.kenny.localmanager.family.BulletinBoardInfo
 import com.kenny.localmanager.family.BulletinBoardMention
 import com.kenny.localmanager.family.BulletinMentionTextField
 import com.kenny.localmanager.family.BulletinBoardOpenSession
+import com.kenny.localmanager.family.BulletinBoardPack
 import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
 import com.kenny.localmanager.family.FamilyNetworkManager
@@ -146,6 +149,32 @@ fun FamilyNetworkScreen(
     var showBoardMenu by remember { mutableStateOf(false) }
     var showDeleteBoardDialog by remember { mutableStateOf(false) }
     var deleteBoardInProgress by remember { mutableStateOf(false) }
+    var showRenameBoardDialog by remember { mutableStateOf(false) }
+    var renameBoardName by remember { mutableStateOf("") }
+    var renameBoardInProgress by remember { mutableStateOf(false) }
+    var renameBoardError by remember { mutableStateOf<String?>(null) }
+    var renameExistingNames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var messageForwardSelectionMode by remember { mutableStateOf(false) }
+    var selectedForwardMessageIds by remember { mutableStateOf(setOf<String>()) }
+
+    LaunchedEffect(boardSession?.boardId) {
+        messageForwardSelectionMode = false
+        selectedForwardMessageIds = emptySet()
+    }
+
+    LaunchedEffect(showRenameBoardDialog, boardSession?.boardId, boardSession?.service?.deviceKey) {
+        val session = boardSession
+        if (!showRenameBoardDialog || session == null) {
+            renameExistingNames = emptySet()
+            return@LaunchedEffect
+        }
+        renameBoardName = session.boardName
+        renameBoardError = null
+        manager.fetchBoardList(session.service, session.accessPassword)
+            .onSuccess { result ->
+                renameExistingNames = result.boards.map { it.name.trim() }.toSet()
+            }
+    }
 
     LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
         manager.configure(
@@ -182,11 +211,12 @@ fun FamilyNetworkScreen(
             familyNetworkHostName.ifBlank { null }
         )
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        manager.start()
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
+
+    var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
     fun presentBoardPicker(service: FamilyDiscoveredService, accessPassword: String?) {
         scope.launch {
@@ -391,6 +421,88 @@ fun FamilyNetworkScreen(
         )
     }
 
+    if (showRenameBoardDialog && boardSession != null) {
+        val session = boardSession
+        val trimmedRenameName = renameBoardName.trim()
+        val renameNameTaken = trimmedRenameName.isNotEmpty() &&
+            trimmedRenameName != session.boardName.trim() &&
+            trimmedRenameName in renameExistingNames
+        AlertDialog(
+            onDismissRequest = {
+                if (!renameBoardInProgress) {
+                    showRenameBoardDialog = false
+                    renameBoardError = null
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_rename_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = renameBoardName,
+                        onValueChange = {
+                            renameBoardName = it
+                            renameBoardError = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.family_board_create_name_label)) },
+                        singleLine = true,
+                        enabled = !renameBoardInProgress,
+                        isError = renameNameTaken || renameBoardError != null
+                    )
+                    if (renameNameTaken) {
+                        Text(
+                            stringResource(R.string.family_board_name_duplicate, trimmedRenameName),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    renameBoardError?.let { error ->
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !renameBoardInProgress &&
+                        trimmedRenameName.isNotEmpty() &&
+                        !renameNameTaken &&
+                        trimmedRenameName != session.boardName.trim(),
+                    onClick = {
+                        renameBoardInProgress = true
+                        manager.renameBoardEntry(
+                            service = session.service,
+                            accessPassword = session.accessPassword,
+                            canManage = session.canManageBoard,
+                            boardId = session.boardId,
+                            newName = trimmedRenameName
+                        ) { result ->
+                            renameBoardInProgress = false
+                            result.onSuccess {
+                                showRenameBoardDialog = false
+                                renameBoardError = null
+                            }.onFailure { error ->
+                                renameBoardError = error.message ?: error.javaClass.simpleName
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_save)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !renameBoardInProgress,
+                    onClick = {
+                        showRenameBoardDialog = false
+                        renameBoardError = null
+                    }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
     if (showDeleteBoardDialog && boardSession != null) {
         val session = boardSession
         AlertDialog(
@@ -568,6 +680,13 @@ fun FamilyNetworkScreen(
                                     }
                                     if (canManageBoard) {
                                         DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_rename)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                showRenameBoardDialog = true
+                                            }
+                                        )
+                                        DropdownMenuItem(
                                             text = {
                                                 Text(
                                                     stringResource(R.string.family_board_delete_board_title),
@@ -577,6 +696,16 @@ fun FamilyNetworkScreen(
                                             onClick = {
                                                 showBoardMenu = false
                                                 showDeleteBoardDialog = true
+                                            }
+                                        )
+                                    }
+                                    if (session.messages.any { it.isConversationMessage }) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.bulletin_forward_select_messages)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                messageForwardSelectionMode = true
+                                                selectedForwardMessageIds = emptySet()
                                             }
                                         )
                                     }
@@ -631,9 +760,30 @@ fun FamilyNetworkScreen(
                 onRefresh = { manager.refreshOpenBoard() },
                 onPost = { manager.postBoardMessage(it) },
                 onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
-                onDelete = { manager.deleteBoardMessage(it) }
+                onDelete = { manager.deleteBoardMessage(it) },
+                onForwardMessages = { messages ->
+                    bulletinForwardPayload = BulletinForwardPayload.Messages(boardSession, messages)
+                },
+                messageSelectionMode = messageForwardSelectionMode,
+                onMessageSelectionModeChange = { active ->
+                    messageForwardSelectionMode = active
+                    if (!active) selectedForwardMessageIds = emptySet()
+                },
+                selectedMessageIds = selectedForwardMessageIds,
+                onSelectedMessageIdsChange = { selectedForwardMessageIds = it }
             )
         }
+    }
+
+    bulletinForwardPayload?.let { payload ->
+        BulletinForwardTargetFlow(
+            manager = manager,
+            payload = payload,
+            localServiceEnabled = localServiceEnabled,
+            keepEphemeralSession = false,
+            onDismiss = { bulletinForwardPayload = null },
+            onComplete = { bulletinForwardPayload = null }
+        )
     }
 }
 
@@ -658,8 +808,15 @@ private fun BoardPickerDialog(
     var actionInProgress by remember { mutableStateOf(false) }
     var showBoardpackPickDialog by remember { mutableStateOf(false) }
     var pendingImportFile by remember { mutableStateOf<DocumentFileModel?>(null) }
+    var pendingImportName by remember { mutableStateOf("") }
+    var importPackNameLoading by remember { mutableStateOf(false) }
+    var importNameConflict by remember { mutableStateOf(false) }
+    var importPackNameError by remember { mutableStateOf<String?>(null) }
+    var importPackSourceName by remember { mutableStateOf("") }
+    var createNameError by remember { mutableStateOf<String?>(null) }
 
     val targetDeviceLabel = service.displayHostName.ifBlank { service.serviceName }
+    val existingBoardNames = remember(boards) { boards.map { it.name.trim() }.toSet() }
 
     val reloadBoards: () -> Unit = {
         scope.launch {
@@ -691,34 +848,119 @@ private fun BoardPickerDialog(
             onPicked = { file ->
                 showBoardpackPickDialog = false
                 pendingImportFile = file
+                pendingImportName = ""
+                importNameConflict = false
+                importPackNameError = null
+                importPackSourceName = ""
             }
         )
     }
 
+    LaunchedEffect(pendingImportFile?.uri) {
+        val file = pendingImportFile ?: return@LaunchedEffect
+        importPackNameLoading = true
+        importPackNameError = null
+        val result = withContext(Dispatchers.IO) {
+            runCatching {
+                val bytes = BulletinBoardPack.readFromDocumentFile(context, file).getOrThrow()
+                BulletinBoardPack.peekBoardName(bytes)
+            }
+        }
+        importPackNameLoading = false
+        result.onSuccess { packName ->
+            importPackSourceName = packName
+            importNameConflict = packName in existingBoardNames
+            pendingImportName = if (importNameConflict) {
+                BulletinBoardPack.suggestUniqueBoardName(packName, existingBoardNames)
+            } else {
+                packName
+            }
+        }.onFailure { error ->
+            importPackNameError = error.message ?: error.javaClass.simpleName
+        }
+    }
+
     pendingImportFile?.let { file ->
+        val trimmedImportName = pendingImportName.trim()
+        val importNameTaken = trimmedImportName.isNotEmpty() && trimmedImportName in existingBoardNames
+        val canConfirmImport = !actionInProgress &&
+            !importPackNameLoading &&
+            trimmedImportName.isNotEmpty() &&
+            !importNameTaken &&
+            importPackNameError == null
         AlertDialog(
             onDismissRequest = {
                 if (!actionInProgress) pendingImportFile = null
             },
             title = { Text(stringResource(R.string.family_board_import_pack_confirm_title)) },
             text = {
-                Text(
-                    stringResource(
-                        R.string.family_board_import_pack_confirm_message,
-                        file.name,
-                        targetDeviceLabel
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.family_board_import_pack_confirm_message,
+                            file.name,
+                            targetDeviceLabel
+                        )
                     )
-                )
+                    if (importPackNameLoading) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(
+                                stringResource(R.string.family_board_picker_loading),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = pendingImportName,
+                            onValueChange = { pendingImportName = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(stringResource(R.string.family_board_import_name_label)) },
+                            singleLine = true,
+                            enabled = !actionInProgress,
+                            isError = importNameTaken || importPackNameError != null
+                        )
+                        if (importNameConflict && importPackSourceName.isNotEmpty()) {
+                            Text(
+                                stringResource(
+                                    R.string.family_board_import_name_conflict,
+                                    importPackSourceName
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (importNameTaken) {
+                            Text(
+                                stringResource(R.string.family_board_name_duplicate, trimmedImportName),
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        importPackNameError?.let { error ->
+                            Text(
+                                error,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+                }
             },
             confirmButton = {
                 Button(
-                    enabled = !actionInProgress,
+                    enabled = canConfirmImport,
                     onClick = {
                         actionInProgress = true
                         manager.importBoardpackFromFile(
                             file = file,
                             service = service,
-                            accessPassword = accessPassword
+                            accessPassword = accessPassword,
+                            importName = trimmedImportName
                         ) { result ->
                             actionInProgress = false
                             pendingImportFile = null
@@ -753,27 +995,50 @@ private fun BoardPickerDialog(
     }
 
     if (showCreateDialog) {
+        val trimmedCreateName = newBoardName.trim()
+        val createNameTaken = trimmedCreateName.isNotEmpty() && trimmedCreateName in existingBoardNames
         AlertDialog(
             onDismissRequest = {
                 if (!actionInProgress) {
                     showCreateDialog = false
                     newBoardName = ""
+                    createNameError = null
                 }
             },
             title = { Text(stringResource(R.string.family_board_create_title)) },
             text = {
-                OutlinedTextField(
-                    value = newBoardName,
-                    onValueChange = { newBoardName = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.family_board_create_name_label)) },
-                    singleLine = true,
-                    enabled = !actionInProgress
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newBoardName,
+                        onValueChange = {
+                            newBoardName = it
+                            createNameError = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.family_board_create_name_label)) },
+                        singleLine = true,
+                        enabled = !actionInProgress,
+                        isError = createNameTaken || createNameError != null
+                    )
+                    if (createNameTaken) {
+                        Text(
+                            stringResource(R.string.family_board_name_duplicate, trimmedCreateName),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    createNameError?.let { error ->
+                        Text(
+                            error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
             },
             confirmButton = {
                 Button(
-                    enabled = !actionInProgress && newBoardName.trim().isNotEmpty(),
+                    enabled = !actionInProgress && trimmedCreateName.isNotEmpty() && !createNameTaken,
                     onClick = {
                         actionInProgress = true
                         manager.createBoardEntry(
@@ -786,7 +1051,10 @@ private fun BoardPickerDialog(
                             result.onSuccess {
                                 showCreateDialog = false
                                 newBoardName = ""
+                                createNameError = null
                                 reloadBoards()
+                            }.onFailure { error ->
+                                createNameError = error.message ?: error.javaClass.simpleName
                             }
                         }
                     }
@@ -798,6 +1066,7 @@ private fun BoardPickerDialog(
                     onClick = {
                         showCreateDialog = false
                         newBoardName = ""
+                        createNameError = null
                     }
                 ) { Text(stringResource(R.string.common_cancel)) }
             }
@@ -1114,7 +1383,12 @@ private fun BulletinBoardPage(
     onRefresh: () -> Unit,
     onPost: (String) -> Unit,
     onUpdate: (String, String) -> Unit,
-    onDelete: (String) -> Unit
+    onDelete: (String) -> Unit,
+    onForwardMessages: (List<BulletinMessage>) -> Unit,
+    messageSelectionMode: Boolean,
+    onMessageSelectionModeChange: (Boolean) -> Unit,
+    selectedMessageIds: Set<String>,
+    onSelectedMessageIdsChange: (Set<String>) -> Unit
 ) {
     val context = LocalContext.current
     var draftMessage by remember(session.service.deviceKey, session.boardId) {
@@ -1139,6 +1413,10 @@ private fun BulletinBoardPage(
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var showAttachmentPickDialog by remember { mutableStateOf(false) }
     var pendingDownloadConflict by remember { mutableStateOf<BulletinAttachmentRef?>(null) }
+    var previewAttachment by remember { mutableStateOf<BulletinAttachmentRef?>(null) }
+    var previewMeta by remember { mutableStateOf<org.json.JSONObject?>(null) }
+    var previewLoading by remember { mutableStateOf(false) }
+    var previewError by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var previousMessageCount by remember(session.service.deviceKey) { mutableIntStateOf(0) }
@@ -1226,6 +1504,19 @@ private fun BulletinBoardPage(
     val downloadInProgress = attachmentDownload != null
     val transferInProgress = uploadInProgress || downloadInProgress
 
+    fun requestAttachmentPreview(attachment: BulletinAttachmentRef) {
+        previewAttachment = attachment
+        previewMeta = null
+        previewError = null
+        previewLoading = true
+        scope.launch {
+            val result = manager.fetchAttachmentMeta(session, attachment.id)
+            previewLoading = false
+            result.onSuccess { previewMeta = it }
+                .onFailure { previewError = it.message ?: it.javaClass.simpleName }
+        }
+    }
+
     fun requestAttachmentDownload(attachment: BulletinAttachmentRef) {
         if (rootUri.isNullOrBlank()) {
             Toast.makeText(context, context.getString(R.string.attachment_upload_no_root), Toast.LENGTH_SHORT).show()
@@ -1242,6 +1533,26 @@ private fun BulletinBoardPage(
                 manager.downloadBoardAttachment(rootUri, attachment)
             }
         }
+    }
+
+    previewAttachment?.let { attachment ->
+        BulletinAttachmentPreviewDialog(
+            attachment = attachment,
+            meta = previewMeta,
+            loading = previewLoading,
+            error = previewError,
+            onDismiss = {
+                previewAttachment = null
+                previewMeta = null
+                previewError = null
+            },
+            onDownload = {
+                previewAttachment = null
+                previewMeta = null
+                previewError = null
+                requestAttachmentDownload(attachment)
+            }
+        )
     }
 
     pendingDownloadConflict?.let { attachment ->
@@ -1370,17 +1681,28 @@ private fun BulletinBoardPage(
                 ) { message ->
                     if (message.isAiStatus) {
                         BulletinAiStatusRow(message = message)
-                    } else {
+                    } else if (message.isConversationMessage) {
                         BulletinMessageRow(
                             message = message,
                             canManage = session.canManageBoard,
                             activeDownloadId = attachmentDownload?.attachmentId,
+                            selectionMode = messageSelectionMode,
+                            selected = message.id in selectedMessageIds,
+                            onToggleSelect = {
+                                onSelectedMessageIdsChange(
+                                    if (message.id in selectedMessageIds) {
+                                        selectedMessageIds - message.id
+                                    } else {
+                                        selectedMessageIds + message.id
+                                    }
+                                )
+                            },
                             onEdit = {
                                 editingMessage = message
                                 editingText = message.content
                             },
                             onDelete = { deletingMessage = message },
-                            onAttachmentClick = { attachment -> requestAttachmentDownload(attachment) }
+                            onAttachmentClick = { attachment -> requestAttachmentPreview(attachment) }
                         )
                     }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -1389,6 +1711,42 @@ private fun BulletinBoardPage(
         }
 
         HorizontalDivider()
+        if (messageSelectionMode) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    stringResource(R.string.bulletin_forward_select_messages),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { onMessageSelectionModeChange(false) }) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                    Button(
+                        enabled = selectedMessageIds.isNotEmpty() && !transferInProgress,
+                        onClick = {
+                            val selected = conversationMessages.filter { it.id in selectedMessageIds }
+                            onForwardMessages(selected)
+                            onMessageSelectionModeChange(false)
+                        }
+                    ) {
+                        Text(
+                            stringResource(
+                                R.string.bulletin_forward_messages_action,
+                                selectedMessageIds.size
+                            )
+                        )
+                    }
+                }
+            }
+            HorizontalDivider()
+        }
         if (uploadInProgress) {
             AttachmentUploadProgressBar(
                 progress = attachmentUpload!!,
@@ -1410,6 +1768,7 @@ private fun BulletinBoardPage(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            if (!messageSelectionMode) {
             IconButton(
                 onClick = {
                     if (rootUri.isNullOrBlank()) {
@@ -1444,6 +1803,7 @@ private fun BulletinBoardPage(
                 modifier = Modifier.size(40.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.Send, contentDescription = stringResource(R.string.family_board_send))
+            }
             }
         }
     }
@@ -1499,6 +1859,9 @@ private fun BulletinMessageRow(
     message: BulletinMessage,
     canManage: Boolean,
     activeDownloadId: String?,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: () -> Unit = {},
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onAttachmentClick: (BulletinAttachmentRef) -> Unit
@@ -1510,9 +1873,14 @@ private fun BulletinMessageRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(enabled = selectionMode) { onToggleSelect() }
             .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.Top
     ) {
+        if (selectionMode) {
+            Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
+            Spacer(Modifier.width(4.dp))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 "${message.authorLabel} · $timeLabel",
@@ -1549,7 +1917,7 @@ private fun BulletinMessageRow(
                 }
             }
         }
-        if (canManage) {
+        if (canManage && !selectionMode) {
             IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
                 Icon(
                     Icons.Default.Edit,
@@ -1566,6 +1934,134 @@ private fun BulletinMessageRow(
             }
         }
     }
+}
+
+@Composable
+private fun BulletinAttachmentPreviewDialog(
+    attachment: BulletinAttachmentRef,
+    meta: org.json.JSONObject?,
+    loading: Boolean,
+    error: String?,
+    onDismiss: () -> Unit,
+    onDownload: () -> Unit
+) {
+    val kindLabel = when (attachment.kind) {
+        BulletinAttachmentKind.FILE -> stringResource(R.string.attachment_preview_kind_file)
+        BulletinAttachmentKind.DIRECTORY -> stringResource(R.string.attachment_preview_kind_directory)
+    }
+    val sizeBytes = when (attachment.kind) {
+        BulletinAttachmentKind.FILE -> meta?.optLong("size")?.takeIf { it > 0 } ?: attachment.size
+        BulletinAttachmentKind.DIRECTORY -> meta?.optLong("total_size")?.takeIf { it > 0 }
+            ?: attachment.totalSize
+    }
+    val fileEntries = remember(meta) {
+        meta?.optJSONArray("files")?.let { files ->
+            buildList {
+                for (i in 0 until files.length()) {
+                    val file = files.getJSONObject(i)
+                    add(file.optString("path") to file.optLong("size"))
+                }
+            }
+        }.orEmpty()
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.attachment_preview_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    attachment.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    kindLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (sizeBytes > 0) {
+                    Text(
+                        stringResource(R.string.attachment_preview_size, formatByteCount(sizeBytes)),
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                when {
+                    loading -> {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(
+                                stringResource(R.string.attachment_preview_loading),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    error != null -> {
+                        Text(
+                            error,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    fileEntries.isNotEmpty() -> {
+                        Text(
+                            stringResource(R.string.attachment_preview_file_count, fileEntries.size),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            stringResource(R.string.attachment_preview_files_header),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 240.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            fileEntries.forEach { (path, size) ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        path,
+                                        modifier = Modifier.weight(1f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (size > 0) {
+                                        Text(
+                                            formatByteCount(size),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDownload, enabled = !loading) {
+                Text(stringResource(R.string.attachment_preview_download))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        }
+    )
 }
 
 private fun formatByteCount(bytes: Long): String {

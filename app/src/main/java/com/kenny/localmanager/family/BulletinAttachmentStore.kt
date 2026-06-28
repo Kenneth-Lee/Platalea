@@ -248,6 +248,92 @@ class BulletinAttachmentStore(private val boardsRoot: File) {
             BulletinAttachmentStatus.READY.wire
     }
 
+    /** 将已就绪附件复制到另一块留言板（本机 store 内操作）。 */
+    fun duplicateReadyAttachment(
+        sourceBoardId: String,
+        attachmentId: String,
+        targetBoardId: String
+    ): BulletinAttachmentRef? = lock.write {
+        if (readMeta(targetBoardId) == null) return@write null
+        val sourceMeta = readAttachmentMeta(sourceBoardId, attachmentId) ?: return@write null
+        if (sourceMeta.optString("status") != BulletinAttachmentStatus.READY.wire) return@write null
+        val sourceDir = attachmentDir(sourceBoardId, attachmentId)
+        if (!sourceDir.exists()) return@write null
+
+        val newAttachmentId = UUID.randomUUID().toString()
+        val targetDir = attachmentDir(targetBoardId, newAttachmentId)
+        targetDir.mkdirs()
+        val now = System.currentTimeMillis()
+
+        when (sourceMeta.optString("kind")) {
+            BulletinAttachmentKind.FILE.wire -> {
+                File(sourceDir, "blob").let { blob ->
+                    File(targetDir, "blob").writeBytes(blob.readBytes())
+                }
+                val meta = JSONObject(sourceMeta.toString()).apply {
+                    put("id", newAttachmentId)
+                    put("board_id", targetBoardId)
+                    put("created_at", now)
+                    put("completed_at", now)
+                }
+                writeAttachmentMeta(targetBoardId, newAttachmentId, meta)
+                attachmentRefFromMeta(meta)
+            }
+            BulletinAttachmentKind.DIRECTORY.wire -> {
+                val sourceFilesDir = File(sourceDir, "files")
+                val targetFilesDir = File(targetDir, "files")
+                targetFilesDir.mkdirs()
+                val manifest = readManifest(sourceFilesDir) ?: return@write null
+                val newManifestEntries = JSONArray()
+                var totalSize = 0L
+                for (i in 0 until manifest.length()) {
+                    val entry = manifest.getJSONObject(i)
+                    val oldFileId = entry.getString("file_id")
+                    val newFileId = UUID.randomUUID().toString()
+                    val sourceFileDir = File(sourceFilesDir, oldFileId)
+                    val targetFileDir = File(targetFilesDir, newFileId)
+                    targetFileDir.mkdirs()
+                    File(sourceFileDir, "blob").let { blob ->
+                        File(targetFileDir, "blob").writeBytes(blob.readBytes())
+                    }
+                    readFileMemberMeta(sourceFileDir)?.let { fileMeta ->
+                        writeFileMemberMeta(
+                            targetFileDir,
+                            JSONObject(fileMeta.toString()).apply { put("file_id", newFileId) }
+                        )
+                    }
+                    val size = entry.optLong("size")
+                    totalSize += size
+                    newManifestEntries.put(
+                        JSONObject().apply {
+                            put("file_id", newFileId)
+                            put("path", entry.optString("path"))
+                            put("size", size)
+                            entry.optString("sha256").takeIf { it.isNotBlank() }?.let { put("sha256", it) }
+                        }
+                    )
+                }
+                File(targetFilesDir, "manifest.json").writeText(
+                    JSONObject().apply {
+                        put("version", 1)
+                        put("entries", newManifestEntries)
+                    }.toString()
+                )
+                val meta = JSONObject(sourceMeta.toString()).apply {
+                    put("id", newAttachmentId)
+                    put("board_id", targetBoardId)
+                    put("created_at", now)
+                    put("total_size", totalSize)
+                    put("file_count", newManifestEntries.length())
+                    put("completed_at", now)
+                }
+                writeAttachmentMeta(targetBoardId, newAttachmentId, meta)
+                attachmentRefFromMeta(meta)
+            }
+            else -> null
+        }
+    }
+
     fun attachmentRefFromMeta(meta: JSONObject): BulletinAttachmentRef {
         val kind = BulletinAttachmentKind.fromWire(meta.optString("kind", "file"))
             ?: BulletinAttachmentKind.FILE

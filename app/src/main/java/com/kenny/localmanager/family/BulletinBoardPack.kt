@@ -26,6 +26,40 @@ object BulletinBoardPack {
 
     class PackException(val code: String, override val message: String) : Exception(message)
 
+    fun peekBoardName(data: ByteArray): String {
+        var name: String? = null
+        ZipInputStream(ByteArrayInputStream(data)).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory && entry.name == "${BOARD_PREFIX}meta.json") {
+                    val meta = runCatching { JSONObject(String(zip.readBytes(), Charsets.UTF_8)) }
+                        .getOrElse {
+                            throw PackException("invalid_board", "board/meta.json 不是合法 JSON")
+                        }
+                    name = meta.optString("name").trim()
+                    break
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        return name?.takeIf { it.isNotEmpty() }
+            ?: throw PackException("invalid_boardpack", "包内缺少 board/meta.json 或名称无效")
+    }
+
+    fun suggestUniqueBoardName(baseName: String, existingNames: Set<String>): String {
+        val trimmed = baseName.trim().ifBlank { "board" }
+        if (trimmed !in existingNames) return trimmed
+        val imported = "$trimmed (导入)"
+        if (imported !in existingNames) return imported
+        var index = 2
+        while (true) {
+            val candidate = "$trimmed ($index)"
+            if (candidate !in existingNames) return candidate
+            index += 1
+        }
+    }
+
     fun exportBoardDir(boardDir: File, sourceDevice: String = "android"): ByteArray {
         val metaFile = File(boardDir, "meta.json")
         if (!metaFile.exists()) {
@@ -124,9 +158,16 @@ object BulletinBoardPack {
             boardDir.deleteRecursively()
             throw PackException("invalid_board", "覆盖名称不能为空")
         }
-        if (trimmedName.isNotEmpty()) {
-            meta.put("name", trimmedName)
+        val finalName = trimmedName.ifEmpty { meta.optString("name", newBoardId).trim() }
+        if (finalName.isEmpty()) {
+            boardDir.deleteRecursively()
+            throw PackException("invalid_board", "留言板名称不能为空")
         }
+        if (isBoardNameTaken(rootDir, finalName)) {
+            boardDir.deleteRecursively()
+            throw PackException("board_name_duplicate", "留言板名称已存在：$finalName")
+        }
+        meta.put("name", finalName)
         if (roleIds != null) {
             meta.put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
         }
@@ -194,6 +235,17 @@ object BulletinBoardPack {
         val safeBoard = sanitizePackFileName(boardName).removeSuffix(".boardpack")
         val ts = fileTimeFormat.format(Date())
         return "${safeBoard}_$ts.boardpack"
+    }
+
+    private fun isBoardNameTaken(rootDir: File, name: String): Boolean {
+        if (name.isEmpty()) return false
+        return rootDir.listFiles()?.any { dir ->
+            if (!dir.isDirectory) return@any false
+            val metaFile = File(dir, "meta.json")
+            if (!metaFile.isFile) return@any false
+            val meta = runCatching { JSONObject(metaFile.readText()) }.getOrNull() ?: return@any false
+            meta.optString("name", dir.name).trim() == name
+        } == true
     }
 
     private fun validateManifest(manifest: JSONObject?) {

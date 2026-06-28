@@ -20,6 +20,12 @@ class BulletinBoardHttpHandler(
         return when {
             method == "GET" && normalizedPath == "/boards" -> listBoards()
             method == "POST" && normalizedPath == "/boards" -> createBoard(bodyBytes.decodeToString())
+            method == "PATCH" && normalizedPath.startsWith("/boards/") &&
+                !normalizedPath.contains("/messages") && !normalizedPath.contains("/attachments") -> {
+                val boardId = normalizedPath.removePrefix("/boards/")
+                if (boardId.isBlank() || boardId.contains('/')) return notFound()
+                renameBoard(boardId, bodyBytes.decodeToString())
+            }
             method == "DELETE" && normalizedPath.startsWith("/boards/") &&
                 !normalizedPath.contains("/messages") && !normalizedPath.contains("/attachments") -> {
                 val boardId = normalizedPath.removePrefix("/boards/")
@@ -82,6 +88,11 @@ class BulletinBoardHttpHandler(
 
     private fun requiresHostAuth(method: String, path: String): Boolean {
         if (method == "POST" && path == "/boards") return true
+        if (method == "PATCH" && path.startsWith("/boards/") &&
+            !path.contains("/messages") && !path.contains("/attachments")
+        ) {
+            return true
+        }
         if (method == "DELETE" && path.startsWith("/boards/") &&
             !path.contains("/messages") && !path.contains("/attachments")
         ) {
@@ -279,8 +290,34 @@ class BulletinBoardHttpHandler(
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
         val name = payload.optString("name").trim()
         if (name.isEmpty()) return badRequest("invalid_board", "留言板名称不能为空")
+        if (store.isBoardNameTaken(name)) {
+            return badRequest("board_name_duplicate", "留言板名称已存在：$name")
+        }
         val board = store.createBoard(name)
             ?: return badRequest("invalid_board", "创建留言板失败")
+        return FamilyHttpResponse(
+            200,
+            JSONObject().apply {
+                put("ok", true)
+                put("board", JSONObject().apply {
+                    put("id", board.id)
+                    put("name", board.name)
+                    put("revision", board.revision)
+                    put("message_count", board.messageCount)
+                })
+            }.toString()
+        )
+    }
+
+    private fun renameBoard(boardId: String, bodyText: String): FamilyHttpResponse {
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val name = payload.optString("name").trim()
+        if (name.isEmpty()) return badRequest("invalid_board", "留言板名称不能为空")
+        if (store.isBoardNameTaken(name, excludeBoardId = boardId)) {
+            return badRequest("board_name_duplicate", "留言板名称已存在：$name")
+        }
+        val board = store.renameBoard(boardId, name)
+            ?: return badRequest("board_rename_failed", "重命名失败：留言板不存在")
         return FamilyHttpResponse(
             200,
             JSONObject().apply {

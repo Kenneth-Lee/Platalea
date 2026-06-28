@@ -18,7 +18,9 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -1659,6 +1662,7 @@ private fun FileBrowserAppScreen(
         val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
         val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
         var showPendingList by remember { mutableStateOf(false) }
+        var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
         var showPendingDeleteConfirm by remember { mutableStateOf(false) }
         var showPlaybackTargetDialog by remember { mutableStateOf(false) }
@@ -2282,18 +2286,8 @@ private fun FileBrowserAppScreen(
                 familyNetworkHostName.ifBlank { null }
             )
         }
-        val familyNetworkUiState by familyNetworkManager.state.collectAsState()
         LaunchedEffect(activeMainTab) {
-            if (activeMainTab != MainTab.FAMILY_NETWORK) {
-                if (familyNetworkUiState.openBoardSession != null) {
-                    familyNetworkManager.closeBulletinBoard()
-                }
-            }
-            if (activeMainTab == MainTab.FAMILY_NETWORK) {
-                familyNetworkManager.start()
-            } else {
-                familyNetworkManager.stop()
-            }
+            familyNetworkManager.setFamilyTabActive(activeMainTab == MainTab.FAMILY_NETWORK)
         }
         DisposableEffect(familyNetworkManager) {
             onDispose {
@@ -2569,6 +2563,10 @@ private fun FileBrowserAppScreen(
                 onRefreshDone = { refreshTrigger++ }
             )
         }
+        val finishPendingListAndReturn: () -> Unit = {
+            pendingList.clear()
+            showPendingList = false
+        }
 
         val ftpRootUri = rootUri
         Column(Modifier.fillMaxSize()) {
@@ -2810,6 +2808,10 @@ private fun FileBrowserAppScreen(
                                 },
                                 onShareFileToGit = { model ->
                                     shareFileToGitTarget = model
+                                },
+                                onForwardToBulletin = { items ->
+                                    if (items.isEmpty()) return@DirectoryTabRouteState
+                                    bulletinForwardPayload = BulletinForwardPayload.Files(items)
                                 },
                                 onUnzipRequest = { zipUnzipTarget = it },
                                 onRequestMdZipView = { mdZipTarget = it },
@@ -3075,6 +3077,13 @@ private fun FileBrowserAppScreen(
                 onCopyHere = doCopyHere,
                 onMoveHere = doMoveHere,
                 onRequestDelete = { showPendingDeleteConfirm = true },
+                onRequestForwardToBulletin = {
+                    if (pendingList.isEmpty()) {
+                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                    } else {
+                        bulletinForwardPayload = BulletinForwardPayload.Files(pendingList.toList())
+                    }
+                },
                 onRequestBatchObfuscate = {
                     val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
                     if (list.isEmpty()) Toast.makeText(context, "没有可混淆的文件（请勿选已 .qx 或文件夹）", Toast.LENGTH_SHORT).show()
@@ -3149,6 +3158,19 @@ private fun FileBrowserAppScreen(
                     }
                 },
                 onDismiss = { showPendingList = false }
+            )
+        }
+        bulletinForwardPayload?.let { payload ->
+            BulletinForwardTargetFlow(
+                manager = familyNetworkManager,
+                payload = payload,
+                localServiceEnabled = localNetworkServiceEnabled,
+                keepEphemeralSession = activeMainTab != MainTab.FAMILY_NETWORK,
+                onDismiss = { bulletinForwardPayload = null },
+                onComplete = {
+                    finishPendingListAndReturn()
+                    bulletinForwardPayload = null
+                }
             )
         }
         if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
@@ -3269,10 +3291,9 @@ private fun FileBrowserAppScreen(
                                         }
                                     }
                                 }
-                                toDelete.forEach { pendingList.remove(it) }
                                 refreshTrigger++
                                 showPendingDeleteConfirm = false
-                                showPendingList = false
+                                finishPendingListAndReturn()
                                 Toast.makeText(context, if (deletePermanently) "已删除 ${toDelete.size} 项" else "已移到回收站 ${toDelete.size} 项", Toast.LENGTH_SHORT).show()
                             }
                         },
@@ -3809,8 +3830,7 @@ private fun FileBrowserAppScreen(
                         batchObfuscatePassword = ""
                         batchObfuscatePasswordConfirm = ""
                         Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
-                        pendingList.clear()
-                        showPendingList = false
+                        finishPendingListAndReturn()
                         refreshTrigger++
                     }
                 },
@@ -4986,7 +5006,7 @@ private fun FileBrowserAppScreen(
                                 pendingCompressPassword = ""
                                 pendingCompressPasswordConfirm = ""
                                 if (ok) {
-                                    pendingList.clear()
+                                    finishPendingListAndReturn()
                                     Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
@@ -6311,6 +6331,7 @@ internal fun FileBrowserScreen(
     onCreateQuickNote: () -> Unit = {},
     onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
     onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
+    onForwardToBulletin: ((List<DocumentFileModel>) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
@@ -7149,6 +7170,15 @@ internal fun FileBrowserScreen(
                             }
                         ) { Text(context.getString(R.string.context_share_to_git), color = MaterialTheme.colorScheme.onSurface) }
                     }
+                    if (onForwardToBulletin != null) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onForwardToBulletin.invoke(listOf(menuTarget))
+                                contextMenuTarget = null
+                            }
+                        ) { Text(context.getString(R.string.context_forward_to_bulletin), color = MaterialTheme.colorScheme.onSurface) }
+                    }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -7910,13 +7940,13 @@ fun PendingListScreen(
     onRequestBatchGpgDecrypt: () -> Unit = {},
     onRequestCompressToZip: () -> Unit = {},
     onRequestCompressTo7z: () -> Unit = {},
+    onRequestForwardToBulletin: () -> Unit = {},
     onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
     onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val isPickMode = mode == PendingListMode.DIRECTORY_PICK
-    var showHelpDialog by remember { mutableStateOf(false) }
     var filterText by remember { mutableStateOf("") }
     val filteredPendingItems = if (filterText.isBlank()) pendingList
     else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
@@ -7934,13 +7964,6 @@ fun PendingListScreen(
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                actions = {
-                    if (!isPickMode) {
-                    IconButton(onClick = { showHelpDialog = true }) {
-                        Icon(Icons.Default.Info, contentDescription = "说明")
-                    }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -7993,66 +8016,63 @@ fun PendingListScreen(
                     }
                 }
                 if (!isPickMode) {
-                Row(
+                val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
+                val pendingActions = listOf(
+                    context.getString(R.string.pending_list_action_copy) to onCopyHere,
+                    context.getString(R.string.pending_list_action_move) to onMoveHere,
+                    context.getString(R.string.pending_list_action_delete) to onRequestDelete,
+                    context.getString(R.string.pending_list_action_clear_filter) to {
+                        onClearFilteredList(filteredPendingItems)
+                    },
+                    context.getString(R.string.pending_list_action_playback) to {
+                        if (audioFromFiltered.isEmpty()) {
+                            Toast.makeText(context, "当前列表没有可播放的音频文件", Toast.LENGTH_SHORT).show()
+                        } else {
+                            onAddToPlayback(audioFromFiltered)
+                        }
+                    },
+                    context.getString(R.string.pending_list_action_obfuscate) to onRequestBatchObfuscate,
+                    context.getString(R.string.pending_list_action_deobfuscate) to onRequestBatchDeobfuscate,
+                    context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
+                    context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
+                    context.getString(R.string.pending_list_action_zip) to onRequestCompressToZip,
+                    context.getString(R.string.pending_list_action_7z) to onRequestCompressTo7z,
+                    context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
+                )
+                Column(
                     Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 4.dp, vertical = 2.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    IconButton(onClick = onCopyHere) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = "拷贝到当前目录")
-                    }
-                    IconButton(onClick = onMoveHere) {
-                        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = "移动到当前目录")
-                    }
-                    IconButton(onClick = onRequestDelete) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "删除",
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    IconButton(onClick = { onClearFilteredList(filteredPendingItems) }) {
-                        Icon(Icons.Default.Clear, contentDescription = "清空当前过滤结果")
-                    }
-                    val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
-                    IconButton(
-                        onClick = {
-                            if (audioFromFiltered.isEmpty()) {
-                                Toast.makeText(context, "当前列表没有可播放的音频文件", Toast.LENGTH_SHORT).show()
-                            } else {
-                                onAddToPlayback(audioFromFiltered)
+                    pendingActions.chunked(5).forEach { rowActions ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            rowActions.forEach { (label, action) ->
+                                TextButton(
+                                    onClick = action,
+                                    shape = RectangleShape,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                    colors = ButtonDefaults.textButtonColors(),
+                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .defaultMinSize(minWidth = 0.dp, minHeight = 30.dp)
+                                ) {
+                                    Text(
+                                        label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            }
+                            repeat(5 - rowActions.size) {
+                                Spacer(Modifier.weight(1f))
                             }
                         }
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "加入播放")
-                    }
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onRequestBatchObfuscate) {
-                        Icon(Icons.Default.Lock, contentDescription = "混淆")
-                    }
-                    IconButton(onClick = onRequestBatchDeobfuscate) {
-                        Icon(Icons.Default.LockOpen, contentDescription = "去混淆")
-                    }
-                    IconButton(onClick = onRequestBatchGpgEncrypt) {
-                        Icon(Icons.Default.Lock, contentDescription = "加密", tint = MaterialTheme.colorScheme.primary)
-                    }
-                    IconButton(onClick = onRequestBatchGpgDecrypt) {
-                        Icon(Icons.Default.LockOpen, contentDescription = "解密", tint = MaterialTheme.colorScheme.primary)
-                    }
-                    IconButton(onClick = onRequestCompressToZip) {
-                        Icon(Icons.Default.Archive, contentDescription = "压缩为 ZIP")
-                    }
-                    IconButton(onClick = onRequestCompressTo7z) {
-                        Icon(Icons.Default.Archive, contentDescription = "压缩为 7Z", tint = MaterialTheme.colorScheme.primary)
                     }
                 }
                 }
@@ -8127,85 +8147,6 @@ fun PendingListScreen(
             }
         }
     }
-    if (showHelpDialog && !isPickMode) {
-        AlertDialog(
-            onDismissRequest = { showHelpDialog = false },
-            title = { Text("操作说明") },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.ContentCopy, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("拷贝：将列表中所有项拷贝到当前目录（原文件保留）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("移动：将列表中所有项移动到当前目录（原位置删除）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Delete, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.size(8.dp))
-                        Text("删除：可将列表中所有项移到回收站（可恢复），或直接永久删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("混淆：对列表中非 .qx 文件进行快速混淆（需同一密码）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.LockOpen, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("去混淆：对列表中 .qx 文件进行快速去混淆", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.size(8.dp))
-                        Text("加密：对列表中非 .gpg 文件进行 GPG 加密，可选对称加密（密码）或公钥加密（选一个公钥，全部用该密钥加密）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("压缩：支持将列表内容打包为 ZIP 或 7Z，可设置压缩包密码。", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.LockOpen, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.size(8.dp))
-                        Text("解密：对列表中 .gpg 文件进行 GPG 解密（列表必须全是 .gpg）", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Clear, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("清空列表：仅移除当前过滤结果中的项（未设过滤时即全部）。拷贝/移动/删除/混淆/加解密等批处理仍针对整个列表。", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("加入播放：可选择新建播放列表，或把当前列表中的 MP3/OGG 追加到已有播放列表；新建列表会立即开始播放，追加到已有列表时会保留当前播放状态。", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurface)
-                        Spacer(Modifier.size(8.dp))
-                        Text("压缩：将待处理列表中所有文件和目录压缩为一个 ZIP/7Z 文件，保存到当前目录，支持设置密码。", style = MaterialTheme.typography.bodyMedium)
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text("上方「当前目录」即执行拷贝/移动时的目标目录（从根目录起的路径）。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            confirmButton = { TextButton(onClick = { showHelpDialog = false }) { Text("知道了") } }
-        )
-    }
-
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

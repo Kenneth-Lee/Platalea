@@ -63,9 +63,30 @@ class BulletinBoardStore(context: Context) {
         )
     }
 
+    fun isBoardNameTaken(name: String, excludeBoardId: String? = null): Boolean = lock.read {
+        isBoardNameTakenLocked(name.trim(), excludeBoardId)
+    }
+
+    fun renameBoard(boardId: String, newName: String): BulletinBoardInfo? = lock.write {
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) return@write null
+        val meta = readMeta(boardId) ?: return@write null
+        if (isBoardNameTakenLocked(trimmed, boardId)) return@write null
+        meta.put("name", trimmed)
+        writeMeta(boardId, meta)
+        val activeCount = readMessages(boardId).count { it.isConversationMessage }
+        BulletinBoardInfo(
+            id = meta.getString("id"),
+            name = trimmed,
+            revision = meta.optLong("revision"),
+            messageCount = activeCount
+        )
+    }
+
     fun createBoard(name: String): BulletinBoardInfo? = lock.write {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return@write null
+        if (isBoardNameTakenLocked(trimmed, excludeBoardId = null)) return@write null
         val boardId = UUID.randomUUID().toString()
         boardDir(boardId).mkdirs()
         writeMeta(
@@ -206,5 +227,15 @@ class BulletinBoardStore(context: Context) {
         val arr = JSONArray()
         messages.forEach { arr.put(it.toJson()) }
         messagesFile(boardId).writeText(arr.toString())
+    }
+
+    private fun isBoardNameTakenLocked(name: String, excludeBoardId: String?): Boolean {
+        if (name.isEmpty()) return false
+        return rootDir.listFiles()?.any { dir ->
+            if (!dir.isDirectory) return@any false
+            if (dir.name == excludeBoardId) return@any false
+            val meta = readMeta(dir.name) ?: return@any false
+            meta.optString("name", dir.name).trim() == name
+        } == true
     }
 }

@@ -32,6 +32,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -84,6 +85,13 @@ data class BulletinAttachmentDownloadProgress(
     val totalBytes: Long
 )
 
+data class BulletinForwardTarget(
+    val service: FamilyDiscoveredService,
+    val boardId: String,
+    val boardName: String,
+    val accessPassword: String?
+)
+
 data class FamilyNetworkState(
     val isRunning: Boolean = false,
     val isRegistered: Boolean = false,
@@ -126,8 +134,13 @@ class FamilyNetworkManager(context: Context) {
     private var serverJob: Job? = null
     private var attachmentUploadJob: Job? = null
     private var attachmentDownloadJob: Job? = null
+    private var stopIfIdleJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
+    /** 家庭网络 Tab 是否在前台。 */
+    private var familyTabActive = false
+    /** 转发等临时操作持有会话（如文件浏览器转发留言板）。 */
+    private var ephemeralSessionCount = 0
     private var networkPassword: String? = null
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
@@ -185,6 +198,90 @@ class FamilyNetworkManager(context: Context) {
             }
         } else if (hostNameChanged && localServiceEnabled && httpsServer != null) {
             reregisterMdnsService()
+        }
+    }
+
+    /** 由 UI 在家庭网络 Tab 显示/隐藏时调用，替代直接 start/stop。 */
+    fun setFamilyTabActive(active: Boolean) {
+        if (familyTabActive == active) return
+        familyTabActive = active
+        if (active) {
+            stopIfIdleJob?.cancel()
+            ensureStarted()
+            refreshDiscoveryAfterActivation()
+        } else {
+            if (_state.value.openBoardSession != null) {
+                closeBulletinBoard()
+            }
+            stopIfIdle()
+        }
+    }
+
+    /** 临时启动发现/本机服务（如文件浏览器转发留言板），与 Tab 生命周期独立。 */
+    fun beginEphemeralSession() {
+        ephemeralSessionCount++
+        ensureStarted()
+    }
+
+    fun endEphemeralSession() {
+        ephemeralSessionCount = maxOf(0, ephemeralSessionCount - 1)
+        stopIfIdle()
+    }
+
+    /** 本机留言板在发现列表中的条目；服务未启动时返回 null。 */
+    fun resolveLocalSelfService(): FamilyDiscoveredService? {
+        if (!localServiceEnabled) return null
+        _state.value.discoveredServices.firstOrNull { it.isSelf }?.let { return it }
+        val instanceId = currentInstanceId ?: return null
+        val port = httpsServer?.port?.takeIf { it > 0 } ?: _state.value.port.takeIf { it > 0 } ?: return null
+        val displayHostName = resolveLocalDisplayHostName(instanceId)
+        val serviceName = _state.value.serviceName.ifBlank { sanitizeMdnsServiceName(displayHostName) }
+        val resolvedHost = _state.value.localIp?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1"
+        val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
+        return FamilyDiscoveredService(
+            serviceName = serviceName,
+            serviceType = FAMILY_SERVICE_TYPE,
+            host = resolvedHost,
+            port = port,
+            attributes = mapOf(
+                "app" to "LocalManager",
+                "proto" to FAMILY_TLS_PROTOCOL,
+                "version" to FAMILY_VERSION,
+                "instance_id" to instanceId,
+                FamilyNetworkHostNames.TXT_HOST_NAME to displayHostName,
+                "platform" to "android",
+                "tls" to "1",
+                FAMILY_TLS_FINGERPRINT_ATTR to tlsFingerprint
+            ),
+            isSelf = true
+        )
+    }
+
+    private fun ensureStarted() {
+        if (!started) start()
+    }
+
+    private fun stopIfIdle() {
+        stopIfIdleJob?.cancel()
+        if (familyTabActive || ephemeralSessionCount > 0) return
+        if (attachmentUploadJob?.isActive == true) return
+        stopIfIdleJob = scope.launch {
+            delay(400)
+            if (familyTabActive || ephemeralSessionCount > 0) return@launch
+            if (attachmentUploadJob?.isActive == true) return@launch
+            stop()
+        }
+    }
+
+    /** 从其他 Tab 切回家庭网络时，若远端设备未出现在列表中则重新发现。 */
+    private fun refreshDiscoveryAfterActivation() {
+        if (!started) return
+        val snapshot = _state.value
+        if (snapshot.isDiscovering && snapshot.discoveredServices.any { !it.isSelf }) return
+        scope.launch {
+            delay(150)
+            if (!familyTabActive || !started) return@launch
+            refresh()
         }
     }
 
@@ -422,6 +519,9 @@ class FamilyNetworkManager(context: Context) {
             val result = withContext(Dispatchers.IO) {
                 if (service.isSelf) {
                     runCatching {
+                        if (boardStore.isBoardNameTaken(trimmed)) {
+                            throw IllegalStateException("留言板名称已存在：$trimmed")
+                        }
                         boardStore.createBoard(trimmed)
                             ?: throw IllegalStateException("创建留言板失败")
                     }
@@ -445,6 +545,68 @@ class FamilyNetworkManager(context: Context) {
                 appendLog("留言板已创建：${board.name}")
             }.onFailure { error ->
                 appendError("创建留言板失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    fun renameBoardEntry(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        canManage: Boolean,
+        boardId: String,
+        newName: String,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        if (!canManage) {
+            appendError("只有宿主可以重命名留言板。")
+            onComplete(Result.failure(IllegalStateException("只有宿主可以重命名留言板")))
+            return
+        }
+        val trimmed = newName.trim()
+        if (trimmed.isEmpty()) {
+            appendError("重命名失败：名称不能为空。")
+            onComplete(Result.failure(IllegalStateException("名称不能为空")))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching {
+                        if (boardStore.isBoardNameTaken(trimmed, excludeBoardId = boardId)) {
+                            throw IllegalStateException("留言板名称已存在：$trimmed")
+                        }
+                        boardStore.renameBoard(boardId, trimmed)
+                            ?: throw IllegalStateException("重命名失败：留言板不存在")
+                    }
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "PATCH",
+                        path = "/boards/$boardId",
+                        body = JSONObject().put("name", trimmed).toString(),
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", "重命名留言板失败"))
+                        }
+                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                    }
+                }
+            }
+            result.onSuccess { board ->
+                appendLog("留言板已重命名为：${board.name}")
+                val open = _state.value.openBoardSession
+                if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
+                    _state.update { current ->
+                        current.copy(
+                            openBoardSession = open.copy(boardName = board.name)
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                appendError("重命名留言板失败：${error.message ?: error.javaClass.simpleName}")
             }
             onComplete(result)
         }
@@ -614,20 +776,22 @@ class FamilyNetworkManager(context: Context) {
         file: DocumentFileModel,
         service: FamilyDiscoveredService,
         accessPassword: String?,
+        importName: String? = null,
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val bytes = BulletinBoardPack.readFromDocumentFile(appContext, file).getOrThrow()
+                    val trimmedName = importName?.trim()?.takeIf { it.isNotEmpty() }
                     if (service.isSelf) {
-                        boardStore.importBoardpack(bytes)
+                        boardStore.importBoardpack(bytes, name = trimmedName)
                     } else {
                         importBoardpackViaApi(
                             service = service,
                             data = bytes,
                             accessPassword = accessPassword?.trim()?.ifEmpty { null },
-                            name = null,
+                            name = trimmedName,
                             roleIds = null,
                         ).getOrThrow()
                     }
@@ -714,6 +878,174 @@ class FamilyNetworkManager(context: Context) {
         scope.launch {
             postBoardMessageInternal(session, trimmed, attachments)
         }
+    }
+
+    /**
+     * 将文件/目录作为**单个目录附件**转发到指定留言板。
+     * 调用方应在非家庭网络 Tab 时通过 [beginEphemeralSession]/[endEphemeralSession] 维持临时服务。
+     */
+    fun forwardFilesAsDirectoryMessage(
+        target: BulletinForwardTarget,
+        items: List<DocumentFileModel>,
+        textContent: String = "",
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        if (items.isEmpty()) {
+            onComplete(Result.failure(IllegalStateException("未选择任何文件或目录")))
+            return
+        }
+        if (target.service.isSelf && !localServiceEnabled) {
+            onComplete(Result.failure(IllegalStateException("本机留言板服务已关闭，无法转发到本机")))
+            return
+        }
+        attachmentUploadJob?.cancel()
+        attachmentUploadJob = scope.launch {
+            var pendingAttachmentId: String? = null
+            val attachmentName = when (items.size) {
+                1 -> items.first().name
+                else -> "${items.size} 项"
+            }
+            val totalBytes = items.sumOf { estimateUploadBytes(appContext, it) }.coerceAtLeast(1L)
+            try {
+                _state.update {
+                    it.copy(
+                        attachmentUpload = BulletinAttachmentUploadProgress(
+                            itemName = attachmentName,
+                            uploadedBytes = 0L,
+                            totalBytes = totalBytes
+                        )
+                    )
+                }
+                appendLog("开始转发 ${items.size} 项到 ${target.service.displayHostName}/${target.boardName}…")
+                val (_, device) = buildAuthorIdentity()
+                val transport = buildAttachmentTransport(target)
+                val uploadResult = withContext(Dispatchers.IO) {
+                    BulletinAttachmentUploader.uploadItemsAsSingleDirectory(
+                        context = appContext,
+                        transport = transport,
+                        boardId = target.boardId,
+                        items = items,
+                        attachmentName = attachmentName,
+                        uploaderDevice = device,
+                        onAttachmentInit = { attachmentId -> pendingAttachmentId = attachmentId },
+                        onProgress = { uploaded, total ->
+                            _state.update { state ->
+                                state.copy(
+                                    attachmentUpload = BulletinAttachmentUploadProgress(
+                                        itemName = attachmentName,
+                                        uploadedBytes = uploaded,
+                                        totalBytes = total.coerceAtLeast(1L)
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+                _state.update { state ->
+                    state.copy(
+                        attachmentUpload = state.attachmentUpload?.copy(
+                            phase = BulletinAttachmentUploadPhase.POSTING
+                        )
+                    )
+                }
+                val postResult = uploadResult.fold(
+                    onSuccess = { refs ->
+                        val body = textContent.trim().ifBlank { "[${refs.firstOrNull()?.name ?: attachmentName}]" }
+                        postMessageToTarget(target, body, refs)
+                    },
+                    onFailure = { Result.failure(it) }
+                )
+                postResult.onSuccess {
+                    appendLog("已转发到 ${target.service.displayHostName}/${target.boardName}")
+                }.onFailure { error ->
+                    appendError("转发失败：${error.message ?: error.javaClass.simpleName}")
+                }
+                onComplete(postResult)
+            } catch (e: CancellationException) {
+                pendingAttachmentId?.let { abortIncompleteUploadForTarget(target, it) }
+                appendLog("转发已取消")
+                onComplete(Result.failure(e))
+            } catch (e: Throwable) {
+                pendingAttachmentId?.let { abortIncompleteUploadForTarget(target, it) }
+                appendError("转发失败：${e.message ?: e.javaClass.simpleName}")
+                onComplete(Result.failure(e))
+            } finally {
+                _state.update { it.copy(attachmentUpload = null) }
+                attachmentUploadJob = null
+            }
+        }
+    }
+
+    /**
+     * 将留言板消息转发到另一块留言板（逐条发送，附件在可能时本地复制或重新上传）。
+     */
+    fun forwardMessagesToBoard(
+        sourceSession: BulletinBoardOpenSession,
+        target: BulletinForwardTarget,
+        messages: List<BulletinMessage>,
+        onComplete: (Result<Int>) -> Unit = {}
+    ) {
+        if (messages.isEmpty()) {
+            onComplete(Result.failure(IllegalStateException("未选择任何消息")))
+            return
+        }
+        if (target.service.isSelf && !localServiceEnabled) {
+            onComplete(Result.failure(IllegalStateException("本机留言板服务已关闭，无法转发到本机")))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    var sent = 0
+                    val (_, device) = buildAuthorIdentity()
+                    val targetTransport = buildAttachmentTransport(target)
+                    val sourceDownload = buildDownloadTransport(sourceSession)
+                    for (message in messages) {
+                        if (!message.isConversationMessage) continue
+                        val attachmentRefs = BulletinMessageForwarder.relayAttachments(
+                            sourceSession = sourceSession,
+                            sourceDownload = sourceDownload,
+                            target = target,
+                            targetTransport = targetTransport,
+                            message = message,
+                            uploaderDevice = device,
+                            boardStore = boardStore
+                        ).getOrThrow()
+                        val prefix = "[转发自 ${sourceSession.boardName}] "
+                        val content = if (message.content.isBlank()) {
+                            if (attachmentRefs.isEmpty()) continue
+                            "[${attachmentRefs.size} 个附件]"
+                        } else {
+                            prefix + message.content
+                        }
+                        postMessageToTarget(target, content, attachmentRefs).getOrThrow()
+                        sent++
+                    }
+                    if (sent == 0) {
+                        throw IllegalStateException("没有可转发的消息")
+                    }
+                    sent
+                }
+            }
+            result.onSuccess { count ->
+                appendLog("已转发 $count 条消息到 ${target.service.displayHostName}/${target.boardName}")
+                if (_state.value.openBoardSession?.service?.deviceKey == target.service.deviceKey &&
+                    _state.value.openBoardSession?.boardId == target.boardId
+                ) {
+                    refreshOpenBoard()
+                }
+            }.onFailure { error ->
+                appendError("转发消息失败：${error.message ?: error.javaClass.simpleName}")
+            }
+            onComplete(result)
+        }
+    }
+
+    suspend fun fetchAttachmentMeta(
+        session: BulletinBoardOpenSession,
+        attachmentId: String
+    ): Result<org.json.JSONObject> = withContext(Dispatchers.IO) {
+        buildDownloadTransport(session).getAttachmentMeta(session.boardId, attachmentId)
     }
 
     fun cancelAttachmentDownload() {
@@ -935,6 +1267,80 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    private fun abortIncompleteUploadForTarget(target: BulletinForwardTarget, attachmentId: String) {
+        scope.launch(Dispatchers.IO) {
+            runCatching {
+                if (target.service.isSelf) {
+                    boardStore.attachments.deleteAttachment(target.boardId, attachmentId)
+                } else {
+                    boardApiRequest(
+                        service = target.service,
+                        method = "DELETE",
+                        path = "/boards/${target.boardId}/attachments/$attachmentId",
+                        accessPassword = target.accessPassword
+                    )
+                }
+            }.onFailure { error ->
+                appendLog("清理未完成附件失败：${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
+    private fun buildAttachmentTransport(target: BulletinForwardTarget): BulletinAttachmentTransport {
+        return if (target.service.isSelf) {
+            LocalBulletinAttachmentTransport(boardStore)
+        } else {
+            RemoteBulletinAttachmentTransport(
+                service = target.service,
+                accessPassword = target.accessPassword,
+                requestJson = { method, path, body ->
+                    boardApiRequest(target.service, method, path, body, target.accessPassword)
+                },
+                requestBinary = { method, path, bytes ->
+                    boardApiBinaryRequest(target.service, method, path, bytes, target.accessPassword)
+                }
+            )
+        }
+    }
+
+    private suspend fun postMessageToTarget(
+        target: BulletinForwardTarget,
+        content: String,
+        attachments: List<BulletinAttachmentRef>
+    ): Result<Unit> {
+        val (authorLabel, authorDevice) = buildAuthorIdentity()
+        return withContext(Dispatchers.IO) {
+            if (target.service.isSelf) {
+                runCatching {
+                    boardStore.appendMessage(
+                        target.boardId,
+                        authorLabel,
+                        content,
+                        authorDevice,
+                        attachments
+                    ) ?: throw IllegalStateException(
+                        if (attachments.isNotEmpty()) "消息无效或附件未就绪" else "消息内容不能为空或留言板不存在"
+                    )
+                }.map { }
+            } else {
+                boardApiRequest(
+                    service = target.service,
+                    method = "POST",
+                    path = "/boards/${target.boardId}/messages",
+                    body = JSONObject().apply {
+                        put("content", content)
+                        put("author_label", authorLabel)
+                        put("author_device", authorDevice)
+                        if (attachments.isNotEmpty()) {
+                            put("attachments", JSONArray(attachments.map { it.toJson() }))
+                        }
+                    }.toString(),
+                    accessPassword = target.accessPassword
+                ).map { }
+            }
+        }
+    }
+
     private fun estimateUploadBytes(context: android.content.Context, item: DocumentFileModel): Long {
         return if (item.isDirectory) {
             runCatching {
@@ -1060,6 +1466,7 @@ class FamilyNetworkManager(context: Context) {
     }
 
     fun stop() {
+        stopIfIdleJob?.cancel()
         if (!started && httpsServer == null && registrationListener == null && discoveryListener == null) return
         appendLog("停止家庭网络服务。")
         stopDiscoveryInternal()
@@ -1164,6 +1571,16 @@ class FamilyNetworkManager(context: Context) {
         }
         val listener = object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
+                if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE) {
+                    appendLog("服务发现尚未完全停止，稍后自动重试…")
+                    scope.launch {
+                        delay(500)
+                        if (started && (familyTabActive || ephemeralSessionCount > 0)) {
+                            startDiscovery(clearDiscovered = false)
+                        }
+                    }
+                    return
+                }
                 appendError("启动服务发现失败，类型=$serviceType，错误码=$errorCode")
                 _state.update { it.copy(isDiscovering = false) }
                 try {

@@ -233,6 +233,107 @@ object BulletinAttachmentUploader {
                 }
             }
         }
+        return result.filterKeys { it in wanted }
+    }
+
+    /** 将多个文件/目录合并上传为**单个**目录附件。 */
+    suspend fun uploadItemsAsSingleDirectory(
+        context: Context,
+        transport: BulletinAttachmentTransport,
+        boardId: String,
+        items: List<DocumentFileModel>,
+        attachmentName: String,
+        uploaderDevice: String?,
+        onAttachmentInit: ((attachmentId: String) -> Unit)? = null,
+        onProgress: ((uploadedBytes: Long, totalBytes: Long) -> Unit)? = null
+    ): Result<List<BulletinAttachmentRef>> = withContext(Dispatchers.IO) {
+        try {
+            if (items.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("未选择任何文件或目录"))
+            }
+            val entries = collectMultiItemDirectoryEntries(context, items)
+            if (entries.isEmpty()) {
+                return@withContext Result.failure(IllegalStateException("所选文件/目录均为空，无法组成目录附件"))
+            }
+            val pathToUri = mapMultiItemEntryUris(context, items, entries)
+            val aggregateTotal = entries.sumOf { it.size }.coerceAtLeast(1L)
+            val init = transport.initDirectoryUpload(
+                boardId = boardId,
+                name = attachmentName,
+                entries = entries,
+                uploaderDevice = uploaderDevice
+            ).getOrElse { throw it }
+            onAttachmentInit?.invoke(init.attachmentId)
+            var uploadedInDirectory = 0L
+            init.directoryFiles.forEach { slot ->
+                val uri = pathToUri[slot.path]
+                    ?: throw IllegalStateException("目录内找不到文件：${slot.path}")
+                val fileOffset = uploadedInDirectory
+                uploadStreamInChunks(
+                    transport = transport,
+                    boardId = boardId,
+                    attachmentId = init.attachmentId,
+                    fileId = slot.fileId,
+                    chunkSize = init.chunkSize,
+                    totalSize = slot.size,
+                    openStream = { context.contentResolver.openInputStream(uri) },
+                    onProgress = { uploadedInFile ->
+                        onProgress?.invoke(fileOffset + uploadedInFile, aggregateTotal)
+                    }
+                )
+                uploadedInDirectory += slot.size
+            }
+            val ref = transport.completeUpload(boardId, init.attachmentId).getOrElse { throw it }
+            Result.success(listOf(ref))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            Result.failure(e)
+        }
+    }
+
+    fun collectMultiItemDirectoryEntries(
+        context: Context,
+        items: List<DocumentFileModel>
+    ): List<BulletinDirectoryEntry> {
+        val entries = mutableListOf<BulletinDirectoryEntry>()
+        items.forEach { item ->
+            if (item.isDirectory) {
+                collectDirectoryEntries(context, item.uri.toString()).forEach { entry ->
+                    val path = if (entry.path.isBlank()) item.name else "${item.name}/${entry.path}"
+                    entries += entry.copy(path = path)
+                }
+            } else {
+                entries += BulletinDirectoryEntry(path = item.name, size = item.size)
+            }
+        }
+        return entries
+    }
+
+    fun mapMultiItemEntryUris(
+        context: Context,
+        items: List<DocumentFileModel>,
+        entries: List<BulletinDirectoryEntry>
+    ): Map<String, Uri> {
+        val wanted = entries.map { it.path }.toSet()
+        val result = mutableMapOf<String, Uri>()
+        items.forEach { item ->
+            if (item.isDirectory) {
+                val relativeEntries = entries
+                    .filter { it.path == item.name || it.path.startsWith("${item.name}/") }
+                    .map { entry ->
+                        val rel = entry.path.removePrefix("${item.name}/").trimStart('/')
+                        entry.copy(path = rel)
+                    }
+                    .filter { it.path.isNotBlank() }
+                mapDirectoryEntryUris(context, item.uri.toString(), relativeEntries).forEach { (rel, uri) ->
+                    val fullPath = if (rel.isBlank()) item.name else "${item.name}/$rel"
+                    result[fullPath] = uri
+                }
+            } else if (item.name in wanted) {
+                result[item.name] = item.uri
+            }
+        }
         return result
     }
 }
