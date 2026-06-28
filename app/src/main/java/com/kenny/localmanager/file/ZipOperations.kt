@@ -909,10 +909,10 @@ fun getMdZipCacheTimestamp(cacheDir: File): Long {
 
 /** 在已有缓存目录中查找（或生成）可渲染的 md/rst 文件。
  * @param isRstZip true 表示来源为 .rst.zip，优先查找 rst；false 表示 .md.zip，优先查找 md。 */
-fun findMdZipCacheTarget(cacheDir: File, isRstZip: Boolean): File? {
+fun findMdZipCacheTarget(context: Context, cacheDir: File, isRstZip: Boolean): File? {
     val contentDir = File(cacheDir, "content")
     if (!contentDir.exists() || !contentDir.isDirectory) return null
-    return findOrCreateRenderableFile(contentDir, isRstZip)
+    return findOrCreateRenderableFile(context, contentDir, isRstZip)
 }
 
 /** 根据 zip 类型确定搜索候选文件名。 */
@@ -923,7 +923,7 @@ private fun candidatesForZipType(isRstZip: Boolean): List<String> =
  * 在目录树中查找 index/README 文件。若未找到，自动在有效目录中生成一个包含
  * 同类文件链接列表的 index 文件。
  */
-private fun findOrCreateRenderableFile(dir: File, isRstZip: Boolean): File? {
+private fun findOrCreateRenderableFile(context: Context, dir: File, isRstZip: Boolean): File? {
     val effectiveDir = unwrapSingleChildDir(dir)
     // 1. 查找已有的 index / README
     for (name in candidatesForZipType(isRstZip)) {
@@ -935,7 +935,7 @@ private fun findOrCreateRenderableFile(dir: File, isRstZip: Boolean): File? {
     if (files.isEmpty()) return null
     // 3. 生成 index
     val indexFile = File(effectiveDir, "index.$ext")
-    indexFile.writeText(generateIndexContent(files, effectiveDir, isRstZip))
+    indexFile.writeText(generateIndexContent(context, files, effectiveDir, isRstZip))
     return indexFile
 }
 
@@ -970,14 +970,14 @@ private fun normalizeArchiveRelativePath(rawPath: String): String {
         .removePrefix("./")
 }
 
-private fun parseIndexedChapterLine(rawLine: String, lineNumber: Int): Pair<String, String?>? {
+private fun parseIndexedChapterLine(context: Context, rawLine: String, lineNumber: Int): Pair<String, String?>? {
     val line = rawLine.trim().removePrefix("\uFEFF")
     if (line.isBlank()) return null
     if (line.first() == '"' || line.first() == '\'') {
         val quote = line.first()
         val closingIndex = line.indexOf(quote, startIndex = 1)
         if (closingIndex < 0) {
-            throw IllegalStateException(".index 第 $lineNumber 行格式错误：带引号的章节路径缺少结束引号")
+            throw IllegalStateException(context.getString(R.string.zip_index_line_unclosed_quote, lineNumber))
         }
         val path = line.substring(1, closingIndex)
         val title = line.substring(closingIndex + 1).trim().ifBlank { null }
@@ -1002,18 +1002,25 @@ private fun resolveIndexedChapterFile(relativePath: String, roots: List<File>): 
     return null
 }
 
-private fun loadIndexedChapterFiles(indexFile: File, roots: List<File>): List<IndexedChapterEntry> {
+private fun loadIndexedChapterFiles(context: Context, indexFile: File, roots: List<File>): List<IndexedChapterEntry> {
     val lines = indexFile.readLines()
     val chapters = mutableListOf<IndexedChapterEntry>()
     lines.forEachIndexed { index, rawLine ->
         val lineNumber = index + 1
-        val parsed = parseIndexedChapterLine(rawLine, lineNumber) ?: return@forEachIndexed
+        val parsed = parseIndexedChapterLine(context, rawLine, lineNumber) ?: return@forEachIndexed
         val normalized = normalizeArchiveRelativePath(parsed.first)
         if (!normalized.endsWith(".txt", ignoreCase = true) && !normalized.endsWith(".llm", ignoreCase = true)) {
-            throw IllegalStateException(".index 第 $lineNumber 行不是支持的章节文件：$normalized；只支持 .txt 或 .llm")
+            throw IllegalStateException(context.getString(R.string.zip_index_line_unsupported_chapter, lineNumber, normalized))
         }
         val sourceFile = resolveIndexedChapterFile(normalized, roots)
-            ?: throw IllegalStateException(".index 第 $lineNumber 行指向的章节文件不存在：$normalized；查找根目录=${roots.joinToString { it.absolutePath }}")
+            ?: throw IllegalStateException(
+                context.getString(
+                    R.string.zip_index_line_chapter_missing,
+                    lineNumber,
+                    normalized,
+                    roots.joinToString { it.absolutePath }
+                )
+            )
         chapters += IndexedChapterEntry(
             relativePath = normalized,
             sourceFile = sourceFile,
@@ -1021,7 +1028,7 @@ private fun loadIndexedChapterFiles(indexFile: File, roots: List<File>): List<In
         )
     }
     if (chapters.isEmpty()) {
-        throw IllegalStateException("检测到 .index 文件，但其中没有可用的章节条目：${indexFile.absolutePath}")
+        throw IllegalStateException(context.getString(R.string.zip_index_no_entries, indexFile.absolutePath))
     }
     return chapters
 }
@@ -1039,13 +1046,14 @@ private fun toDefaultIndexedChapterEntries(files: List<Pair<String, File>>): Lis
 /** 生成 index 文件内容，包含所有同类文件的链接。 */
 @Suppress("UNUSED_PARAMETER")
 private fun generateIndexContent(
+    context: Context,
     files: List<Pair<String, File>>,
     baseDir: File,
     isRstZip: Boolean
 ): String {
     val sb = StringBuilder()
     if (isRstZip) {
-        sb.appendLine(if (Locale.getDefault().language.startsWith("zh")) "目录" else "Contents")
+        sb.appendLine(context.getString(R.string.zip_generated_index_title_rst))
         sb.appendLine("====")
         sb.appendLine()
         for ((rel, _) in files) {
@@ -1053,7 +1061,7 @@ private fun generateIndexContent(
             sb.appendLine("- `$label <$rel>`_")
         }
     } else {
-        sb.appendLine(if (Locale.getDefault().language.startsWith("zh")) "# 目录" else "# Contents")
+        sb.appendLine(context.getString(R.string.zip_generated_index_heading_md, context.getString(R.string.zip_generated_index_title_md)))
         sb.appendLine()
         for ((rel, _) in files) {
             val label = rel.substringBeforeLast('.').replace("/", " / ")
@@ -1103,7 +1111,7 @@ fun extractMdZipToCache(
         val contentDir = File(cacheDir, "content").apply { mkdirs() }
         zip.extractAll(contentDir.path)
         tmpZip.delete()
-        val target = findOrCreateRenderableFile(contentDir, isRstZip)
+        val target = findOrCreateRenderableFile(context, contentDir, isRstZip)
         if (target == null) {
             Log.w(TAG, "extractMdZipToCache: no files found in $zipUri")
         }
@@ -1564,12 +1572,12 @@ private fun parseEpubContainer(contentDir: File): String? {
 
 /** 解析 OPF 文件获取书籍信息和章节列表。 */
 @Suppress("UNUSED_PARAMETER")
-private fun parseEpubOpf(opfFile: File, opfDir: File): Pair<EpubBookInfo, List<EpubChapter>>? {
+private fun parseEpubOpf(context: Context, opfFile: File, opfDir: File): Pair<EpubBookInfo, List<EpubChapter>>? {
     if (!opfFile.exists()) return null
     val content = opfFile.readText()
 
     // 解析 metadata
-    var title = if (Locale.getDefault().language.startsWith("zh")) "未知书名" else "Unknown Title"
+    var title = context.getString(R.string.zip_unknown_book_title)
     var author: String? = null
     var language: String? = null
 
@@ -1775,7 +1783,7 @@ fun extractEpubToCache(
         val opfDir = opfFile.parentFile ?: contentDir
 
         onLog(context.getString(R.string.zip_log_parse_opf))
-        val parseResult = parseEpubOpf(opfFile, opfDir)
+        val parseResult = parseEpubOpf(context, opfFile, opfDir)
         if (parseResult == null) {
             return EpubParseResult.Error(context.getString(R.string.zip_error_opf_parse_failed), context.getString(R.string.zip_error_file_path, opfFile.absolutePath))
         }
@@ -1826,7 +1834,7 @@ fun loadEpubFromCache(context: Context, cacheDir: File): EpubExtractResult? {
     val opfFile = File(contentDir, opfRelativePath)
     val opfDir = opfFile.parentFile ?: contentDir
 
-    val parseResult = parseEpubOpf(opfFile, opfDir) ?: return null
+    val parseResult = parseEpubOpf(context, opfFile, opfDir) ?: return null
     val (bookInfo, rawChapters) = parseResult
     var chapters = parseEpubNavigation(context, contentDir, opfDir, rawChapters)
     val titleMap = loadChapterTitles(cacheDir)
@@ -2210,7 +2218,7 @@ fun extractLlmZipToCache(
             File(effectiveRawDir, ".index")
         ).firstOrNull { it.exists() && it.isFile }
         val sourceFiles = if (indexFile != null) {
-            loadIndexedChapterFiles(indexFile, listOf(rawDir, effectiveRawDir).distinctBy { it.absolutePath })
+            loadIndexedChapterFiles(context, indexFile, listOf(rawDir, effectiveRawDir).distinctBy { it.absolutePath })
         } else {
             val txtFiles = collectFilesWithExtension(effectiveRawDir, "txt")
             val llmFiles = collectFilesWithExtension(effectiveRawDir, "llm")

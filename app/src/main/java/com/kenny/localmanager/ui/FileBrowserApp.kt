@@ -1909,7 +1909,7 @@ private fun FileBrowserAppScreen(
                     (contentDir.listFiles()?.isNotEmpty() == true)
                 if (hasContent) {
                     val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
-                    val cachedTarget = findMdZipCacheTarget(cacheDir, isRstZip)
+                    val cachedTarget = findMdZipCacheTarget(context, cacheDir, isRstZip)
                     mdZipTarget = null
                     mdZipViewState = MdZipViewState(
                         targetFile = cachedTarget,
@@ -4227,7 +4227,7 @@ private fun FileBrowserAppScreen(
                                             MdZipExtractResult(
                                                 cacheDir = cacheDir,
                                                 contentDir = contentDir,
-                                                targetFile = findMdZipCacheTarget(cacheDir, isRstZip),
+                                                targetFile = findMdZipCacheTarget(context, cacheDir, isRstZip),
                                                 isEncrypted = true
                                             )
                                         } else {

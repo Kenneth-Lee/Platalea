@@ -134,22 +134,28 @@ fun cloneToTree(
     }
 }
 
-fun deriveRepoUrlFromBaseRepo(baseRepoUrl: String, projectName: String): Result<String> {
+fun deriveRepoUrlFromBaseRepo(context: Context, baseRepoUrl: String, projectName: String): Result<String> {
     val base = baseRepoUrl.trim()
     val normalizedProjectName = projectName.trim().removeSuffix(".git").trim()
     if (base.isBlank() || normalizedProjectName.isBlank()) {
-        return Result.failure(IllegalArgumentException("基础仓库地址或项目名为空，无法推导项目仓库地址"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_base_or_project_empty)))
     }
     if (!isValidHttpsRepoUrl(base)) {
-        return Result.failure(IllegalArgumentException("基础仓库地址不是有效的 HTTPS Git 地址：$base"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_invalid_base_url, base)))
     }
     return runCatching {
         val uri = Uri.parse(base)
         val segments = uri.pathSegments.filter { it.isNotBlank() }
-        require(segments.size >= 2) { "基础仓库地址路径层级不足，无法识别用户/项目：$base" }
+        require(segments.size >= 2) {
+            context.getString(R.string.git_managed_error_base_path_insufficient, base)
+        }
         val inputSegments = normalizedProjectName.split('/').map { it.trim() }.filter { it.isNotBlank() }
-        require(inputSegments.isNotEmpty()) { "项目名为空，无法推导项目仓库地址" }
-        require(inputSegments.none { it == "." || it == ".." }) { "项目路径不合法：$normalizedProjectName" }
+        require(inputSegments.isNotEmpty()) {
+            context.getString(R.string.git_managed_error_project_name_empty)
+        }
+        require(inputSegments.none { it == "." || it == ".." }) {
+            context.getString(R.string.git_managed_error_invalid_project_path, normalizedProjectName)
+        }
         val pathSegments = if (inputSegments.size >= 2) {
             segments.dropLast(2) + inputSegments
         } else {
@@ -188,6 +194,7 @@ private fun currentManagedBranchName(git: Git): String? {
 }
 
 private fun ensureManagedProjectBranchCheckedOut(
+    context: Context,
     git: Git,
     requestedBranchName: String?,
     log: ((String) -> Unit)? = null
@@ -201,11 +208,17 @@ private fun ensureManagedProjectBranchCheckedOut(
         }
         .toSet()
     if (normalizedBranch !in localBranches && normalizedBranch !in remoteBranches) {
-        throw IllegalArgumentException("远程仓库中不存在分支：$normalizedBranch。可选分支：${(localBranches + remoteBranches).sorted().joinToString(", ")}")
+        throw IllegalArgumentException(
+            context.getString(
+                R.string.git_managed_error_branch_not_found,
+                normalizedBranch,
+                (localBranches + remoteBranches).sorted().joinToString(", ")
+            )
+        )
     }
     val currentBranch = currentManagedBranchName(git)
     if (currentBranch == normalizedBranch) return normalizedBranch
-    log?.invoke("正在切换到分支: $normalizedBranch")
+    log?.invoke(context.getString(R.string.git_managed_log_switch_branch, normalizedBranch))
     if (normalizedBranch in localBranches) {
         git.checkout().setName(normalizedBranch).call()
     } else {
@@ -255,14 +268,14 @@ private fun syncFromTreeChildDirToLocal(
     val normalizedPath = normalizeManagedProjectPath(childDirName)
     val repoDir = getLocalGitCacheDir(context, repoUrl)
     if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
-        log?.invoke("本地缓存仓库不存在：${repoDir.absolutePath}")
+        log?.invoke(context.getString(R.string.git_managed_log_local_cache_missing, repoDir.absolutePath))
         return false
     }
     val childDoc = resolveManagedProjectDir(context, treeRootUri, normalizedPath) ?: run {
-        log?.invoke("根目录下不存在受管项目目录：${managedProjectDisplayPath(normalizedPath)}")
+        log?.invoke(context.getString(R.string.git_managed_error_tree_dir_missing, managedProjectDisplayPath(normalizedPath)))
         return false
     }
-    log?.invoke("正在从根目录${managedProjectDisplayPath(normalizedPath)} 同步到本地缓存...")
+    log?.invoke(context.getString(R.string.git_managed_log_sync_tree_to_cache, managedProjectDisplayPath(normalizedPath)))
     return copyTreeDirToLocal(context, childDoc, repoDir, log)
 }
 
@@ -278,11 +291,11 @@ fun syncManagedProjectToTree(
     log: ((String) -> Unit)? = null
 ): Result<String> {
     if (treeRootUri.isBlank() || repoUrl.isBlank() || localDirName.isBlank()) {
-        return Result.failure(IllegalArgumentException("根目录、仓库地址或本地目录名为空，无法同步受管项目"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_sync_params_empty)))
     }
     val normalizedPath = normalizeManagedProjectPath(localDirName)
     if (normalizedPath.isBlank()) {
-        return Result.failure(IllegalArgumentException("项目路径为空，无法同步受管项目"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_project_path_empty)))
     }
     if (!isValidHttpsRepoUrl(repoUrl)) {
         return Result.failure(IllegalArgumentException(context.getString(R.string.git_error_invalid_https_url)))
@@ -299,20 +312,20 @@ fun syncManagedProjectToTree(
             val localProjectExists = resolveManagedProjectDir(context, treeRootUri, normalizedPath)?.isDirectory == true
             if (localProjectExists) {
                 if (!syncFromTreeChildDirToLocal(context, treeRootUri, repoUrl, normalizedPath, log)) {
-                    return Result.failure(IllegalStateException("无法先把根目录${managedProjectDisplayPath(normalizedPath)} 回写到本地缓存，已停止同步，避免覆盖本地修改"))
+                    return Result.failure(IllegalStateException(context.getString(R.string.git_managed_error_pre_sync_failed, managedProjectDisplayPath(normalizedPath))))
                 }
                 if (hasLocalGitChanges(repoDir)) {
-                    return Result.failure(IllegalStateException("根目录${managedProjectDisplayPath(normalizedPath)} 存在未提交的本地修改，请先执行“提交并推送”，再执行下载同步，避免覆盖本地内容"))
+                    return Result.failure(IllegalStateException(context.getString(R.string.git_managed_error_uncommitted_local, managedProjectDisplayPath(normalizedPath))))
                 }
             }
-            log?.invoke("正在拉取远程更新: $repoUrl")
+            log?.invoke(context.getString(R.string.git_log_pulling, repoUrl))
             Git.open(repoDir).use { git ->
                 git.checkout().setAllPaths(true).call()
-                ensureManagedProjectBranchCheckedOut(git, branchName, log)
+                ensureManagedProjectBranchCheckedOut(context, git, branchName, log)
                 git.pull().setCredentialsProvider(creds).call()
             }
         } else {
-            log?.invoke("正在克隆远程项目: $repoUrl")
+            log?.invoke(context.getString(R.string.git_managed_log_cloning_project, repoUrl))
             if (repoDir.exists()) repoDir.deleteRecursively()
             val cloneCommand = Git.cloneRepository()
                 .setURI(repoUrl.trim())
@@ -322,7 +335,7 @@ fun syncManagedProjectToTree(
             cloneCommand.call().close()
             if (!branchName.isNullOrBlank()) {
                 Git.open(repoDir).use { git ->
-                    ensureManagedProjectBranchCheckedOut(git, branchName, log)
+                    ensureManagedProjectBranchCheckedOut(context, git, branchName, log)
                 }
             }
         }
@@ -334,7 +347,7 @@ fun syncManagedProjectToTree(
                 cfg.save()
             }
         }
-        log?.invoke("正在写入根目录项目路径: ${managedProjectDisplayPath(normalizedPath)}")
+        log?.invoke(context.getString(R.string.git_managed_log_writing_tree, managedProjectDisplayPath(normalizedPath)))
         deleteTreeRelativeDirIfExists(context, treeUri, normalizedPath)
         val copied = if (normalizedPath.contains('/')) {
             copyLocalDirToTreePath(context, treeUri, repoDir, normalizedPath, log)
@@ -342,12 +355,16 @@ fun syncManagedProjectToTree(
             copyLocalDirToTree(context, treeUri, repoDir, normalizedPath, log)
         }
         return if (copied) {
-            Result.success(if (alreadyCloned) "已同步远程更新到根目录${managedProjectDisplayPath(normalizedPath)}" else "已下载项目到根目录${managedProjectDisplayPath(normalizedPath)}")
+            val path = managedProjectDisplayPath(normalizedPath)
+            Result.success(
+                if (alreadyCloned) context.getString(R.string.git_managed_success_synced, path)
+                else context.getString(R.string.git_managed_success_downloaded, path)
+            )
         } else {
-            Result.failure(RuntimeException("远程项目已获取成功，但写入根目录${managedProjectDisplayPath(normalizedPath)} 失败"))
+            Result.failure(RuntimeException(context.getString(R.string.git_managed_error_write_tree_failed, managedProjectDisplayPath(normalizedPath))))
         }
     } catch (e: Throwable) {
-        log?.invoke("错误: ${e.message ?: e.javaClass.simpleName}")
+        log?.invoke(context.getString(R.string.git_log_error, e.message ?: e.javaClass.simpleName))
         return Result.failure(e)
     }
 }
@@ -371,7 +388,7 @@ fun listManagedProjectBranches(
 ): Result<List<ManagedGitBranchInfo>> {
     val repoDir = getLocalGitCacheDir(context, repoUrl)
     if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
-        return Result.failure(IllegalStateException("本地缓存仓库不存在，请先执行下载同步后再切换分支"))
+        return Result.failure(IllegalStateException(context.getString(R.string.git_managed_error_cache_missing_branch)))
     }
     return runCatching {
         Git.open(repoDir).use { git ->
@@ -386,7 +403,7 @@ fun listManagedProjectBranches(
                 }
             }.sorted()
             if (branchNames.isEmpty()) {
-                throw IllegalStateException("仓库中没有可切换的分支")
+                throw IllegalStateException(context.getString(R.string.git_managed_error_no_branches))
             }
             branchNames.map { ManagedGitBranchInfo(name = it, isCurrent = it == current) }
         }
@@ -404,42 +421,42 @@ fun commitAndPushManagedProject(
     log: ((String) -> Unit)? = null
 ): Result<String> {
     if (treeRootUri.isBlank() || repoUrl.isBlank() || localDirName.isBlank()) {
-        return Result.failure(IllegalArgumentException("根目录、仓库地址或本地目录名为空，无法提交受管项目"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_commit_params_empty)))
     }
     val normalizedPath = normalizeManagedProjectPath(localDirName)
     if (normalizedPath.isBlank()) {
-        return Result.failure(IllegalArgumentException("项目路径为空，无法提交受管项目"))
+        return Result.failure(IllegalArgumentException(context.getString(R.string.git_managed_error_project_path_empty)))
     }
     val repoDir = getLocalGitCacheDir(context, repoUrl)
     if (!repoDir.isDirectory || !File(repoDir, ".git").exists()) {
-        return Result.failure(IllegalStateException("本地缓存仓库不存在，请先执行下载同步：$repoUrl"))
+        return Result.failure(IllegalStateException(context.getString(R.string.git_managed_error_cache_missing_commit, repoUrl)))
     }
     if (!syncFromTreeChildDirToLocal(context, treeRootUri, repoUrl, normalizedPath, log)) {
-        return Result.failure(RuntimeException("无法把根目录${managedProjectDisplayPath(normalizedPath)} 的内容同步回本地缓存，已停止提交"))
+        return Result.failure(RuntimeException(context.getString(R.string.git_managed_error_sync_back_failed, managedProjectDisplayPath(normalizedPath))))
     }
     val creds = UsernamePasswordCredentialsProvider(userName ?: "", httpsPassword ?: "")
     return try {
         Git.open(repoDir).use { git ->
             val initialStatus = git.status().call()
             if (initialStatus.isClean) {
-                return Result.success("根目录${managedProjectDisplayPath(normalizedPath)} 没有需要提交的改动")
+                return Result.success(context.getString(R.string.git_managed_success_no_commit, managedProjectDisplayPath(normalizedPath)))
             }
-            log?.invoke("正在添加变更...")
+            log?.invoke(context.getString(R.string.git_log_adding_changes))
             git.add().addFilepattern(".").call()
             git.add().addFilepattern(".").setUpdate(true).call()
             val statusAfterAdd = git.status().call()
             if (statusAfterAdd.isClean) {
-                return Result.success("根目录${managedProjectDisplayPath(normalizedPath)} 没有需要推送的改动")
+                return Result.success(context.getString(R.string.git_managed_success_no_push, managedProjectDisplayPath(normalizedPath)))
             }
-            log?.invoke("正在提交...")
+            log?.invoke(context.getString(R.string.git_log_committing))
             git.commit().setMessage(commitMessage).setAllowEmpty(false).call()
-            log?.invoke("正在推送...")
+            log?.invoke(context.getString(R.string.git_log_pushing))
             git.push().setCredentialsProvider(creds).call()
         }
-        log?.invoke("推送成功")
-        Result.success("已提交并推送根目录${managedProjectDisplayPath(normalizedPath)} 的修改")
+        log?.invoke(context.getString(R.string.git_log_push_success))
+        Result.success(context.getString(R.string.git_managed_success_commit_push, managedProjectDisplayPath(normalizedPath)))
     } catch (e: Throwable) {
-        log?.invoke("错误: ${e.message ?: e.javaClass.simpleName}")
+        log?.invoke(context.getString(R.string.git_log_error, e.message ?: e.javaClass.simpleName))
         Result.failure(e)
     }
 }

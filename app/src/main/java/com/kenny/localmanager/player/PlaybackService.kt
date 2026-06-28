@@ -917,7 +917,11 @@ class PlaybackService : Service() {
     private fun buildPlaybackDiagnostics(): PlaybackDiagnostics {
         val outputDevice = describeCurrentOutputDevice()
         return currentDiagnosticsMetadata.copy(
-            engine = if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) "Media3 ExoPlayer" else "系统 MediaPlayer",
+            engine = if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) {
+                getString(R.string.player_diag_engine_exo_player)
+            } else {
+                getString(R.string.player_diag_engine_media_player)
+            },
             sourceUri = currentPlaybackSourceUri?.toString().orEmpty(),
             playbackUri = currentPlaybackUri?.toString().orEmpty(),
             playbackSource = currentPlaybackSource,
@@ -929,12 +933,16 @@ class PlaybackService : Service() {
             lastError = lastPlayerError,
             sourceQuality = describeSourceQuality(currentDiagnosticsMetadata.mimeType),
             audioEffects = describeAudioEffects(),
-            highQualityOutput = if (playerAudioSettings.highQualityOutput) "开启" else "关闭"
+            highQualityOutput = if (playerAudioSettings.highQualityOutput) {
+                getString(R.string.common_enabled)
+            } else {
+                getString(R.string.common_disabled)
+            }
         )
     }
 
     private fun describeCurrentOutputDevice(): Pair<String, String> {
-        val manager = audioManager ?: return "未知输出" to "AudioManager 不可用"
+        val manager = audioManager ?: return getString(R.string.player_diag_unknown_output) to getString(R.string.player_diag_audio_manager_unavailable)
         return try {
             val mediaRouteDevices = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 val mediaAttributes = AudioAttributes.Builder()
@@ -946,38 +954,38 @@ class PlaybackService : Service() {
                 emptyList()
             }
             if (mediaRouteDevices.isNotEmpty()) {
-                return describeAudioDevice(mediaRouteDevices.first()) to "媒体音频路由"
+                return describeAudioDevice(mediaRouteDevices.first()) to getString(R.string.player_diag_media_route)
             }
             val outputDevices = manager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
                 .sortedWith(compareBy { audioDeviceFallbackPriority(it.type) })
-            outputDevices.firstOrNull()?.let { describeAudioDevice(it) to "可用输出优先级" }
-                ?: ("未知输出" to "未发现可用输出设备")
+            outputDevices.firstOrNull()?.let { describeAudioDevice(it) to getString(R.string.player_diag_output_priority) }
+                ?: (getString(R.string.player_diag_unknown_output) to getString(R.string.player_diag_no_output_device))
         } catch (e: Exception) {
             Log.w(TAG, "Failed to describe current audio output device", e)
-            "未知输出" to "查询失败：${e.javaClass.simpleName}"
+            getString(R.string.player_diag_unknown_output) to getString(R.string.player_diag_query_failed, e.javaClass.simpleName)
         }
     }
 
     private fun describeSourceQuality(mimeType: String?): String? = when (mimeType?.lowercase()) {
-        "audio/mpeg" -> "有损压缩（MP3）"
-        "audio/aac", "audio/aac-adts", "audio/mp4", "audio/x-m4a" -> "有损压缩（AAC/MP4）"
-        "audio/ogg", "audio/vorbis", "audio/opus" -> "有损压缩（Ogg/Opus）"
-        "audio/flac" -> "无损压缩（FLAC）"
-        "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave" -> "PCM/无压缩"
+        "audio/mpeg" -> getString(R.string.player_diag_quality_mp3)
+        "audio/aac", "audio/aac-adts", "audio/mp4", "audio/x-m4a" -> getString(R.string.player_diag_quality_aac)
+        "audio/ogg", "audio/vorbis", "audio/opus" -> getString(R.string.player_diag_quality_ogg)
+        "audio/flac" -> getString(R.string.player_diag_quality_flac)
+        "audio/wav", "audio/x-wav", "audio/wave", "audio/vnd.wave" -> getString(R.string.player_diag_quality_pcm)
         else -> null
     }
 
     private fun describeAudioEffects(): String {
-        if (!playerAudioSettings.audioEffectsEnabled) return "关闭"
-        return "开启：${audioEffectPresetLabel(playerAudioSettings.effectPreset)}"
+        if (!playerAudioSettings.audioEffectsEnabled) return getString(R.string.common_disabled)
+        return getString(R.string.player_diag_effects_on, audioEffectPresetLabel(playerAudioSettings.effectPreset))
     }
 
     private fun audioEffectPresetLabel(preset: String): String = when (preset) {
-        PLAYER_AUDIO_PRESET_VOCAL -> "人声"
-        PLAYER_AUDIO_PRESET_BASS -> "低音"
-        PLAYER_AUDIO_PRESET_CAR -> "车载"
-        PLAYER_AUDIO_PRESET_HEADPHONE -> "耳机"
-        else -> "平直"
+        PLAYER_AUDIO_PRESET_VOCAL -> getString(R.string.player_diag_preset_vocal)
+        PLAYER_AUDIO_PRESET_BASS -> getString(R.string.player_diag_preset_bass)
+        PLAYER_AUDIO_PRESET_CAR -> getString(R.string.player_diag_preset_car)
+        PLAYER_AUDIO_PRESET_HEADPHONE -> getString(R.string.player_diag_preset_headphone)
+        else -> getString(R.string.player_diag_preset_flat)
     }
 
     private fun describeAudioDevice(device: AudioDeviceInfo): String {
@@ -999,18 +1007,18 @@ class PlaybackService : Service() {
     }
 
     private fun audioDeviceTypeLabel(type: Int): String = when (type) {
-        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "听筒"
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "扬声器"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> getString(R.string.player_diag_device_earpiece)
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> getString(R.string.player_diag_device_speaker)
         AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "有线耳机"
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "蓝牙 A2DP"
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "蓝牙通话"
-        AudioDeviceInfo.TYPE_BLE_HEADSET -> "蓝牙 LE 耳机"
-        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "蓝牙 LE 音箱"
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> getString(R.string.player_diag_device_wired)
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> getString(R.string.player_diag_device_bt_a2dp)
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> getString(R.string.player_diag_device_bt_sco)
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> getString(R.string.player_diag_device_bt_le_headset)
+        AudioDeviceInfo.TYPE_BLE_SPEAKER -> getString(R.string.player_diag_device_bt_le_speaker)
         AudioDeviceInfo.TYPE_USB_DEVICE,
-        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB 音频"
-        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
-        else -> "输出$type"
+        AudioDeviceInfo.TYPE_USB_HEADSET -> getString(R.string.player_diag_device_usb)
+        AudioDeviceInfo.TYPE_HDMI -> getString(R.string.player_diag_device_hdmi)
+        else -> getString(R.string.player_diag_output_type, type)
     }
 
     private fun applyAudioEffectsToCurrentPlayer() {

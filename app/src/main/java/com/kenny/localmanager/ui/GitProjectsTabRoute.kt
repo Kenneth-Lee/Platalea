@@ -168,7 +168,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
         createProjectName = ""
         scope.launch {
             appendLog(context.getString(R.string.git_projects_log_derive_url))
-            val repoUrlResult = deriveRepoUrlFromBaseRepo(normalizedBaseRepoUrl, projectName)
+            val repoUrlResult = deriveRepoUrlFromBaseRepo(context, normalizedBaseRepoUrl, projectName)
             val repoUrl = repoUrlResult.getOrElse {
                 creatingProject = false
                 val message = it.message ?: context.getString(R.string.git_projects_error_derive_url)
