@@ -694,7 +694,7 @@ fun QuickNoteScreen(
             text = {
                 Column {
                     Text(
-                        stringResource(R.string.quick_note_ignored_desc),
+                        stringResource(R.string.quick_note_ignored_desc, stringResource(R.string.quick_note_section_title)),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(12.dp))

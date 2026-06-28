@@ -529,7 +529,7 @@
 
 %1$s</string>
     <string name="quick_note_ignored_title">发现未接管的数据</string>
-    <string name="quick_note_ignored_desc">“思想火花”章节里有一些不符合当前记录协议的文本。它们不会被读入为记录，退出功能时会被整段覆盖。请先复制保存。</string>
+    <string name="quick_note_ignored_desc">「%1$s」章节里有一些不符合当前记录协议的文本。它们不会被读入为记录，退出功能时会被整段覆盖。请先复制保存。</string>
     <string name="quick_note_ignored_label">将被覆盖的原始内容</string>
     <string name="quick_note_ignored_clip_label">快速笔记未接管内容</string>
     <string name="quick_note_ignored_copied">已复制未接管内容</string>
@@ -886,13 +886,14 @@ OPF目录文件: %2$s</string>
     <string name="book_note_persist_reason_update">更新记录</string>
     <string name="book_note_persist_reason_background">进入后台</string>
     <string name="book_note_section_heading_markdown">## 读书笔记</string>
+    <string name="book_note_section_title">读书笔记</string>
     <string name="book_note_file_chapter_line">* 章节：%1$s</string>
     <string name="book_note_file_quote_line">* 引文：%1$s</string>
     <string name="book_note_add_desc">新增读书笔记</string>
     <string name="book_note_delete_title">删除读书笔记</string>
     <string name="book_note_delete_confirm">确定删除「%1$s」下的这条笔记吗？</string>
     <string name="book_note_ignored_title">发现未接管的读书笔记数据</string>
-    <string name="book_note_ignored_desc">「读书笔记」章节里有一些不符合当前协议的文本。它们不会被读入为笔记，后续保存时会整段覆盖，请先复制保存。</string>
+    <string name="book_note_ignored_desc">「%1$s」章节里有一些不符合当前协议的文本。它们不会被读入为笔记，后续保存时会整段覆盖，请先复制保存。</string>
     <string name="book_note_ignored_label">将被覆盖的原始内容</string>
     <string name="book_note_ignored_clip_label">读书笔记未接管内容</string>
     <string name="book_note_ignored_copied">已复制未接管内容</string>
