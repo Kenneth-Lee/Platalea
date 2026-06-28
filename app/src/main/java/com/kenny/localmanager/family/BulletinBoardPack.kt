@@ -168,7 +168,7 @@ object BulletinBoardPack {
             ?: throw IllegalStateException("无法创建导出目录")
         val safeName = sanitizePackFileName(fileName)
         exportDir.findFile(safeName)?.takeIf { !it.isDirectory }?.delete()
-        val created = exportDir.createFile("application/zip", safeName)
+        val created = exportDir.createFile("application/octet-stream", safeName)
             ?: throw IllegalStateException("无法创建 boardpack 文件")
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
             output.write(data)
@@ -181,6 +181,9 @@ object BulletinBoardPack {
             output.write(data)
         } ?: throw IllegalStateException("无法写入文件")
     }
+
+    fun readFromDocumentFile(context: Context, file: com.kenny.localmanager.file.DocumentFileModel): Result<ByteArray> =
+        readFromUri(context, file.uri)
 
     fun readFromUri(context: Context, uri: Uri): Result<ByteArray> = runCatching {
         context.contentResolver.openInputStream(uri)?.use { it.readBytes() }

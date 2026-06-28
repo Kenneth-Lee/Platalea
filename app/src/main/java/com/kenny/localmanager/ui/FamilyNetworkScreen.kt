@@ -7,8 +7,6 @@ import android.content.Context
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -36,8 +35,7 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Attachment
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -50,6 +48,8 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -87,6 +87,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
+import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.family.BulletinAttachmentKind
 import com.kenny.localmanager.family.BulletinAttachmentDownloadConflict
 import com.kenny.localmanager.family.BulletinAttachmentDownloader
@@ -94,7 +95,6 @@ import com.kenny.localmanager.family.BulletinAttachmentDownloadProgress
 import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
 import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
-import com.kenny.localmanager.family.BulletinBoardPack
 import com.kenny.localmanager.family.BulletinBoardInfo
 import com.kenny.localmanager.family.BulletinBoardMention
 import com.kenny.localmanager.family.BulletinMentionTextField
@@ -143,6 +143,9 @@ fun FamilyNetworkScreen(
     var pendingBoardAccess by remember { mutableStateOf<PendingBoardAccess?>(null) }
     var boardPickerLoading by remember { mutableStateOf(false) }
     var showClearPasswordsDialog by remember { mutableStateOf(false) }
+    var showBoardMenu by remember { mutableStateOf(false) }
+    var showDeleteBoardDialog by remember { mutableStateOf(false) }
+    var deleteBoardInProgress by remember { mutableStateOf(false) }
 
     LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
         manager.configure(
@@ -374,6 +377,7 @@ fun FamilyNetworkScreen(
             accessPassword = access.accessPassword,
             canManageBoards = access.canManageBoards,
             rootUri = rootUri,
+            hideDotFiles = hideDotFiles,
             manager = manager,
             onDismiss = { pendingBoardAccess = null },
             onSelectBoard = { board ->
@@ -383,6 +387,65 @@ fun FamilyNetworkScreen(
                     boardId = board.id,
                     accessPassword = access.accessPassword
                 )
+            }
+        )
+    }
+
+    if (showDeleteBoardDialog && boardSession != null) {
+        val session = boardSession
+        AlertDialog(
+            onDismissRequest = {
+                if (!deleteBoardInProgress) showDeleteBoardDialog = false
+            },
+            title = { Text(stringResource(R.string.family_board_delete_board_title)) },
+            text = {
+                Text(stringResource(R.string.family_board_delete_board_confirm, session.boardName))
+            },
+            confirmButton = {
+                Button(
+                    enabled = !deleteBoardInProgress,
+                    onClick = {
+                        scope.launch {
+                            deleteBoardInProgress = true
+                            val boardCount = manager.fetchBoardList(session.service, session.accessPassword)
+                                .getOrNull()?.boards?.size ?: 0
+                            if (boardCount <= 1) {
+                                deleteBoardInProgress = false
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_delete_last_board),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                showDeleteBoardDialog = false
+                                return@launch
+                            }
+                            manager.deleteBoardEntry(
+                                service = session.service,
+                                accessPassword = session.accessPassword,
+                                canManage = session.canManageBoard,
+                                boardId = session.boardId
+                            ) { result ->
+                                deleteBoardInProgress = false
+                                showDeleteBoardDialog = false
+                                result.onSuccess {
+                                    manager.closeBulletinBoard()
+                                }.onFailure { error ->
+                                    Toast.makeText(
+                                        context,
+                                        error.message ?: error.javaClass.simpleName,
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_delete)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !deleteBoardInProgress,
+                    onClick = { showDeleteBoardDialog = false }
+                ) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -410,85 +473,115 @@ fun FamilyNetworkScreen(
                 },
                 actions = {
                     if (boardSession != null) {
-                        if (!rootUri.isNullOrBlank()) {
-                            IconButton(onClick = {
-                                val session = boardSession
-                                manager.exportBoardpack(
-                                    service = session.service,
-                                    board = BulletinBoardInfo(
-                                        id = session.boardId,
-                                        name = session.boardName,
-                                        revision = session.revision,
-                                        messageCount = session.messages.count { it.isConversationMessage }
-                                    ),
-                                    accessPassword = session.accessPassword
-                                ) { packResult ->
-                                    packResult.onSuccess { bytes ->
-                                        manager.saveBoardpackToRoot(rootUri, session.boardName, bytes) { saveResult ->
-                                            saveResult.onSuccess { path ->
-                                                Toast.makeText(
-                                                    context,
-                                                    context.getString(R.string.family_board_pack_export_success, path),
-                                                    Toast.LENGTH_SHORT
-                                                ).show()
-                                            }.onFailure { error ->
-                                                Toast.makeText(
-                                                    context,
-                                                    context.getString(
-                                                        R.string.family_board_pack_failed,
-                                                        error.message ?: error.javaClass.simpleName
-                                                    ),
-                                                    Toast.LENGTH_LONG
-                                                ).show()
-                                            }
-                                        }
-                                    }.onFailure { error ->
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(
-                                                R.string.family_board_pack_failed,
-                                                error.message ?: error.javaClass.simpleName
-                                            ),
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            }) {
-                                Icon(
-                                    Icons.Default.Download,
-                                    contentDescription = stringResource(R.string.family_board_export_pack)
-                                )
-                            }
-                            IconButton(onClick = {
-                                manager.exportOpenBoard(rootUri) { result ->
-                                    result.onSuccess { path ->
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.family_board_export_success, path),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }.onFailure { error ->
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(
-                                                R.string.family_board_export_failed,
-                                                error.message ?: error.javaClass.simpleName
-                                            ),
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                }
-                            }) {
-                                Icon(
-                                    Icons.Default.Description,
-                                    contentDescription = stringResource(R.string.family_board_export)
-                                )
-                            }
-                        }
+                        val session = boardSession
+                        val canManageBoard = session.canManageBoard
+                        val hasRoot = !rootUri.isNullOrBlank()
                         IconButton(onClick = {
-                            manager.refreshOpenBoard(showLoadingIndicator = boardSession.messages.isEmpty())
+                            manager.refreshOpenBoard(showLoadingIndicator = session.messages.isEmpty())
                         }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                        }
+                        if (hasRoot || canManageBoard) {
+                            Box {
+                                IconButton(onClick = { showBoardMenu = true }) {
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = stringResource(R.string.family_board_menu)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showBoardMenu,
+                                    onDismissRequest = { showBoardMenu = false }
+                                ) {
+                                    if (hasRoot) {
+                                        val exportRoot = rootUri!!
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_export)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                manager.exportOpenBoard(exportRoot) { result ->
+                                                    result.onSuccess { path ->
+                                                        Toast.makeText(
+                                                            context,
+                                                            context.getString(R.string.family_board_export_success, path),
+                                                            Toast.LENGTH_SHORT
+                                                        ).show()
+                                                    }.onFailure { error ->
+                                                        Toast.makeText(
+                                                            context,
+                                                            context.getString(
+                                                                R.string.family_board_export_failed,
+                                                                error.message ?: error.javaClass.simpleName
+                                                            ),
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_export_pack)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                manager.exportBoardpack(
+                                                    service = session.service,
+                                                    board = BulletinBoardInfo(
+                                                        id = session.boardId,
+                                                        name = session.boardName,
+                                                        revision = session.revision,
+                                                        messageCount = session.messages.count { it.isConversationMessage }
+                                                    ),
+                                                    accessPassword = session.accessPassword
+                                                ) { packResult ->
+                                                    packResult.onSuccess { bytes ->
+                                                        manager.saveBoardpackToRoot(exportRoot, session.boardName, bytes) { saveResult ->
+                                                            saveResult.onSuccess { path ->
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(R.string.family_board_pack_export_success, path),
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }.onFailure { error ->
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(
+                                                                        R.string.family_board_pack_failed,
+                                                                        error.message ?: error.javaClass.simpleName
+                                                                    ),
+                                                                    Toast.LENGTH_LONG
+                                                                ).show()
+                                                            }
+                                                        }
+                                                    }.onFailure { error ->
+                                                        Toast.makeText(
+                                                            context,
+                                                            context.getString(
+                                                                R.string.family_board_pack_failed,
+                                                                error.message ?: error.javaClass.simpleName
+                                                            ),
+                                                            Toast.LENGTH_LONG
+                                                        ).show()
+                                                    }
+                                                }
+                                            }
+                                        )
+                                    }
+                                    if (canManageBoard) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(R.string.family_board_delete_board_title),
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                showDeleteBoardDialog = true
+                                            }
+                                        )
+                                    }
+                                }
+                            }
                         }
                     } else {
                         if (state.rememberedBoardAccessCount > 0) {
@@ -550,6 +643,7 @@ private fun BoardPickerDialog(
     accessPassword: String?,
     canManageBoards: Boolean,
     rootUri: String?,
+    hideDotFiles: Boolean,
     manager: FamilyNetworkManager,
     onDismiss: () -> Unit,
     onSelectBoard: (BulletinBoardInfo) -> Unit
@@ -561,9 +655,11 @@ private fun BoardPickerDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newBoardName by remember { mutableStateOf("") }
-    var boardToDelete by remember { mutableStateOf<BulletinBoardInfo?>(null) }
     var actionInProgress by remember { mutableStateOf(false) }
-    var pendingExportBoard by remember { mutableStateOf<BulletinBoardInfo?>(null) }
+    var showBoardpackPickDialog by remember { mutableStateOf(false) }
+    var pendingImportFile by remember { mutableStateOf<DocumentFileModel?>(null) }
+
+    val targetDeviceLabel = service.displayHostName.ifBlank { service.serviceName }
 
     val reloadBoards: () -> Unit = {
         scope.launch {
@@ -578,163 +674,82 @@ private fun BoardPickerDialog(
         }
     }
 
-    val importPackLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        actionInProgress = true
-        if (service.isSelf) {
-            manager.importBoardpackFromUri(uri) { result ->
-                actionInProgress = false
-                result.onSuccess { board ->
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.family_board_pack_import_success, board.name),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    reloadBoards()
-                }.onFailure { err ->
-                    Toast.makeText(
-                        context,
-                        context.getString(
-                            R.string.family_board_pack_failed,
-                            err.message ?: err.javaClass.simpleName
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        } else {
-            scope.launch {
-                val bytesResult = withContext(Dispatchers.IO) {
-                    BulletinBoardPack.readFromUri(context, uri)
-                }
-                bytesResult.onSuccess { bytes ->
-                    manager.importBoardpackRemote(
-                        service = service,
-                        data = bytes,
-                        accessPassword = accessPassword
-                    ) { result ->
-                        actionInProgress = false
-                        result.onSuccess { board ->
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.family_board_pack_import_success, board.name),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            reloadBoards()
-                        }.onFailure { err ->
-                            Toast.makeText(
-                                context,
-                                context.getString(
-                                    R.string.family_board_pack_failed,
-                                    err.message ?: err.javaClass.simpleName
-                                ),
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                }.onFailure { err ->
-                    actionInProgress = false
-                    Toast.makeText(
-                        context,
-                        context.getString(
-                            R.string.family_board_pack_failed,
-                            err.message ?: err.javaClass.simpleName
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        }
-    }
-
-    val exportPackLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.CreateDocument("application/zip")
-    ) { uri ->
-        val board = pendingExportBoard
-        pendingExportBoard = null
-        if (board == null || uri == null) return@rememberLauncherForActivityResult
-        actionInProgress = true
-        manager.exportBoardpack(service, board, accessPassword) { packResult ->
-            packResult.onSuccess { bytes ->
-                manager.saveBoardpack(uri, bytes) {
-                    actionInProgress = false
-                    it.onSuccess {
-                        Toast.makeText(
-                            context,
-                            context.getString(R.string.family_board_pack_export_success, board.name),
-                            Toast.LENGTH_SHORT
-                        ).show()
-                    }.onFailure { err ->
-                        Toast.makeText(
-                            context,
-                            context.getString(
-                                R.string.family_board_pack_failed,
-                                err.message ?: err.javaClass.simpleName
-                            ),
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                }
-            }.onFailure { err ->
-                actionInProgress = false
-                Toast.makeText(
-                    context,
-                    context.getString(
-                        R.string.family_board_pack_failed,
-                        err.message ?: err.javaClass.simpleName
-                    ),
-                    Toast.LENGTH_LONG
-                ).show()
-            }
-        }
-    }
-
-    fun exportBoardPack(board: BulletinBoardInfo) {
-        if (!rootUri.isNullOrBlank()) {
-            actionInProgress = true
-            manager.exportBoardpack(service, board, accessPassword) { packResult ->
-                packResult.onSuccess { bytes ->
-                    manager.saveBoardpackToRoot(rootUri, board.name, bytes) { saveResult ->
-                        actionInProgress = false
-                        saveResult.onSuccess { path ->
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.family_board_pack_export_success, path),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        }.onFailure { err ->
-                            Toast.makeText(
-                                context,
-                                context.getString(
-                                    R.string.family_board_pack_failed,
-                                    err.message ?: err.javaClass.simpleName
-                                ),
-                                Toast.LENGTH_LONG
-                            ).show()
-                        }
-                    }
-                }.onFailure { err ->
-                    actionInProgress = false
-                    Toast.makeText(
-                        context,
-                        context.getString(
-                            R.string.family_board_pack_failed,
-                            err.message ?: err.javaClass.simpleName
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-            }
-        } else {
-            pendingExportBoard = board
-            exportPackLauncher.launch(BulletinBoardPack.defaultPackFileName(board.name))
-        }
-    }
-
     LaunchedEffect(service.deviceKey, accessPassword) {
         reloadBoards()
+    }
+
+    if (showBoardpackPickDialog && !rootUri.isNullOrBlank()) {
+        DirectoryPickDialog(
+            rootUri = rootUri,
+            hideDotFiles = hideDotFiles,
+            policy = DirectoryPickPurpose.BULLETIN_BOARDPACK.defaultPolicy(),
+            titleRes = R.string.family_board_import_pick_title,
+            hintRes = R.string.family_board_import_pick_hint,
+            invalidPickHintRes = R.string.family_board_import_pick_invalid,
+            noMatchingFilesHintRes = R.string.family_board_import_pick_empty_dir,
+            onDismiss = { showBoardpackPickDialog = false },
+            onPicked = { file ->
+                showBoardpackPickDialog = false
+                pendingImportFile = file
+            }
+        )
+    }
+
+    pendingImportFile?.let { file ->
+        AlertDialog(
+            onDismissRequest = {
+                if (!actionInProgress) pendingImportFile = null
+            },
+            title = { Text(stringResource(R.string.family_board_import_pack_confirm_title)) },
+            text = {
+                Text(
+                    stringResource(
+                        R.string.family_board_import_pack_confirm_message,
+                        file.name,
+                        targetDeviceLabel
+                    )
+                )
+            },
+            confirmButton = {
+                Button(
+                    enabled = !actionInProgress,
+                    onClick = {
+                        actionInProgress = true
+                        manager.importBoardpackFromFile(
+                            file = file,
+                            service = service,
+                            accessPassword = accessPassword
+                        ) { result ->
+                            actionInProgress = false
+                            pendingImportFile = null
+                            result.onSuccess { board ->
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_pack_import_success, board.name),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                reloadBoards()
+                            }.onFailure { err ->
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.family_board_pack_failed,
+                                        err.message ?: err.javaClass.simpleName
+                                    ),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !actionInProgress,
+                    onClick = { pendingImportFile = null }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
     }
 
     if (showCreateDialog) {
@@ -784,53 +799,6 @@ private fun BoardPickerDialog(
                         showCreateDialog = false
                         newBoardName = ""
                     }
-                ) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    boardToDelete?.let { board ->
-        AlertDialog(
-            onDismissRequest = {
-                if (!actionInProgress) boardToDelete = null
-            },
-            title = { Text(stringResource(R.string.family_board_delete_board_title)) },
-            text = {
-                Text(stringResource(R.string.family_board_delete_board_confirm, board.name))
-            },
-            confirmButton = {
-                Button(
-                    enabled = !actionInProgress,
-                    onClick = {
-                        if (boards.size <= 1) {
-                            Toast.makeText(
-                                context,
-                                context.getString(R.string.family_board_delete_last_board),
-                                Toast.LENGTH_SHORT
-                            ).show()
-                            boardToDelete = null
-                            return@Button
-                        }
-                        actionInProgress = true
-                        manager.deleteBoardEntry(
-                            service = service,
-                            accessPassword = accessPassword,
-                            canManage = canManageBoards,
-                            boardId = board.id
-                        ) { result ->
-                            actionInProgress = false
-                            result.onSuccess {
-                                boardToDelete = null
-                                reloadBoards()
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.common_delete)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !actionInProgress,
-                    onClick = { boardToDelete = null }
                 ) { Text(stringResource(R.string.common_cancel)) }
             }
         )
@@ -899,26 +867,6 @@ private fun BoardPickerDialog(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    if (canManageBoards && boards.size > 1) {
-                                        IconButton(
-                                            enabled = !actionInProgress,
-                                            onClick = { boardToDelete = board }
-                                        ) {
-                                            Icon(
-                                                Icons.Default.Delete,
-                                                contentDescription = stringResource(R.string.common_delete)
-                                            )
-                                        }
-                                    }
-                                    IconButton(
-                                        enabled = !actionInProgress,
-                                        onClick = { exportBoardPack(board) }
-                                    ) {
-                                        Icon(
-                                            Icons.Default.Download,
-                                            contentDescription = stringResource(R.string.family_board_export_pack)
-                                        )
-                                    }
                                 }
                             }
                         }
@@ -932,7 +880,15 @@ private fun BoardPickerDialog(
                     TextButton(
                         enabled = !actionInProgress,
                         onClick = {
-                            importPackLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                            if (rootUri.isNullOrBlank()) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_import_pack_no_root),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                showBoardpackPickDialog = true
+                            }
                         }
                     ) { Text(stringResource(R.string.family_board_import_pack)) }
                     Button(

@@ -1271,10 +1271,8 @@ private fun PlaybackBottomControlBar(
     }
 }
 
-internal fun normalizeContentUriString(s: String): String {
-    if (!s.startsWith("content://")) return s
-    return s.replace("android ", "android.")
-}
+internal fun normalizeContentUriString(s: String): String =
+    com.kenny.localmanager.file.normalizeContentUriString(s)
 
 private fun fileExtensionKey(name: String): String? {
     val dotIndex = name.lastIndexOf('.')

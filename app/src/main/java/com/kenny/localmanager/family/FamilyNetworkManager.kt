@@ -610,48 +610,33 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    fun importBoardpackFromUri(
-        uri: android.net.Uri,
-        name: String? = null,
-        roleIds: List<String>? = null,
+    fun importBoardpackFromFile(
+        file: DocumentFileModel,
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = BulletinBoardPack.readFromUri(appContext, uri).getOrThrow()
-                    boardStore.importBoardpack(bytes, name, roleIds)
+                    val bytes = BulletinBoardPack.readFromDocumentFile(appContext, file).getOrThrow()
+                    if (service.isSelf) {
+                        boardStore.importBoardpack(bytes)
+                    } else {
+                        importBoardpackViaApi(
+                            service = service,
+                            data = bytes,
+                            accessPassword = accessPassword?.trim()?.ifEmpty { null },
+                            name = null,
+                            roleIds = null,
+                        ).getOrThrow()
+                    }
                 }
             }
             result.onSuccess { board ->
-                appendLog("已导入留言板：${board.name}")
+                appendLog("已从归档包导入留言板：${board.name}")
             }.onFailure { error ->
-                appendError("导入 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
-            }
-            onComplete(result)
-        }
-    }
-
-    fun importBoardpackRemote(
-        service: FamilyDiscoveredService,
-        data: ByteArray,
-        accessPassword: String?,
-        name: String? = null,
-        roleIds: List<String>? = null,
-        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
-    ) {
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching { boardStore.importBoardpack(data, name, roleIds) }
-                } else {
-                    importBoardpackViaApi(service, data, accessPassword, name, roleIds)
-                }
-            }
-            result.onSuccess { board ->
-                appendLog("已导入留言板：${board.name}")
-            }.onFailure { error ->
-                appendError("导入 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+                appendError("导入归档包失败：${error.message ?: error.javaClass.simpleName}")
             }
             onComplete(result)
         }

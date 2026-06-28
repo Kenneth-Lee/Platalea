@@ -65,9 +65,16 @@ fun isMusicFileName(name: String): Boolean {
     return extension in MUSIC_FILE_EXTENSIONS
 }
 
+/** 修正部分设备/历史数据里 content URI authority 中的 `android ` → `android.` */
+fun normalizeContentUriString(s: String): String {
+    if (!s.startsWith("content://")) return s
+    return s.replace("android ", "android.")
+}
+
 fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileModel> {
-    val treeUri = Uri.parse(treeUriStr)
-    val docId = if (treeUriStr.contains("/document/")) {
+    val normalizedUriStr = normalizeContentUriString(treeUriStr)
+    val treeUri = Uri.parse(normalizedUriStr)
+    val docId = if (normalizedUriStr.contains("/document/")) {
         DocumentsContract.getDocumentId(treeUri)
     } else {
         DocumentsContract.getTreeDocumentId(treeUri)
@@ -126,6 +133,7 @@ fun searchFilesRecursively(
     rootUriStr: String,
     criteria: RecursiveFileSearchCriteria
 ): List<RecursiveFileSearchHit> {
+    val normalizedRoot = normalizeContentUriString(rootUriStr)
     fun matches(model: DocumentFileModel): Boolean {
         if (model.isDirectory) return false
         val nameRegex = criteria.nameRegex
@@ -143,7 +151,7 @@ fun searchFilesRecursively(
 
     val pendingDirs = ArrayDeque<Pair<String, String>>()
     val results = mutableListOf<RecursiveFileSearchHit>()
-    pendingDirs.addLast(rootUriStr to "")
+    pendingDirs.addLast(normalizedRoot to "")
     while (pendingDirs.isNotEmpty()) {
         val (dirUri, relativeDir) = pendingDirs.removeLast()
         val children = listChildrenFast(context, dirUri)

@@ -17,6 +17,10 @@ enum class DirectoryPickPurpose(
         titleRes = R.string.directory_pick_purpose_bulletin_attachment,
         confirmLabelRes = R.string.directory_pick_confirm_bulletin_attachment
     ),
+    BULLETIN_BOARDPACK(
+        titleRes = R.string.directory_pick_purpose_generic,
+        confirmLabelRes = R.string.directory_pick_confirm_generic
+    ),
     GIT_SHARE(
         titleRes = R.string.directory_pick_purpose_git_share,
         confirmLabelRes = R.string.directory_pick_confirm_generic
@@ -29,6 +33,7 @@ enum class DirectoryPickPurpose(
 
 data class DirectoryPickPolicy(
     val allowFiles: Boolean = true,
+    /** 是否允许将目录作为拣选结果；为 false 时仍可单击目录进入浏览。 */
     val allowDirectories: Boolean = true,
     val multiSelect: Boolean = true,
     val maxItems: Int? = null,
@@ -46,6 +51,13 @@ fun DirectoryPickPurpose.defaultPolicy(): DirectoryPickPolicy = when (this) {
         allowFiles = true,
         allowDirectories = true,
         multiSelect = true
+    )
+    DirectoryPickPurpose.BULLETIN_BOARDPACK -> DirectoryPickPolicy(
+        allowFiles = true,
+        allowDirectories = false,
+        multiSelect = false,
+        maxItems = 1,
+        allowedExtensions = setOf("boardpack")
     )
     DirectoryPickPurpose.GIT_SHARE -> DirectoryPickPolicy(
         allowFiles = true,
