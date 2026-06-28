@@ -2569,7 +2569,7 @@ fun MarkdownViewerScreen(
         Log.d(MD_DEBUG, "[内链] resolvedUri=$resolvedUri 使用 resolved=$resolved")
         val targetUri = Uri.parse(resolved)
         val doc = DocumentFile.fromSingleUri(context, targetUri)
-        val name = doc?.name ?: targetUri.lastPathSegment ?: "文件"
+        val name = doc?.name ?: targetUri.lastPathSegment ?: context.getString(R.string.common_file)
         val isRenderable = name.endsWith(".md", ignoreCase = true) || name.endsWith(".rst", ignoreCase = true)
         Log.d(MD_DEBUG, "[内链] doc.exists=${doc?.exists()} name=$name isRenderable=$isRenderable")
         if (isRenderable) {
@@ -3977,27 +3977,27 @@ private fun MdZipNoTargetScreen(
         ) {
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "未找到可打开的文件",
+                text = stringResource(R.string.md_viewer_zip_no_openable),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.error
             )
             Spacer(Modifier.height(8.dp))
             val ext = if (isRstZip) ".rst" else ".md"
             Text(
-                text = "压缩包中未找到 index${ext}、README${ext} 文件，也没有其他 ${ext} 文件可生成索引。",
+                text = stringResource(R.string.md_viewer_zip_no_index_md, ext, ext, ext),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "压缩包内容：",
+                text = stringResource(R.string.md_viewer_zip_contents),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(8.dp))
             if (fileList.isEmpty()) {
                 Text(
-                    text = "（空目录）",
+                    text = stringResource(R.string.common_empty_directory),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -4271,6 +4271,7 @@ fun HtmlZipViewerScreen(
 }
 
 private class RemoteHtmlWebViewClient(
+    private val context: Context,
     private val onExternalUrl: (String) -> Unit,
     private val onError: (String) -> Unit,
     private val onPageFinished: ((WebView) -> Unit)? = null
@@ -4291,7 +4292,7 @@ private class RemoteHtmlWebViewClient(
     override fun onReceivedError(view: WebView?, errorCode: Int, description: String?, failingUrl: String?) {
         super.onReceivedError(view, errorCode, description, failingUrl)
         if (view == null || failingUrl != view.url) return
-        onError("网页加载失败：${description ?: "未知错误"}（错误码：$errorCode）")
+        onError(context.getString(R.string.md_viewer_web_load_failed, description ?: context.getString(R.string.common_unknown_error), errorCode))
     }
 
     override fun onPageFinished(view: WebView?, url: String?) {
@@ -4689,6 +4690,7 @@ fun HtmlViewerScreen(
                                     settings.allowFileAccess = true
                                     settings.allowContentAccess = true
                                     webViewClient = RemoteHtmlWebViewClient(
+                                        context,
                                         onExternalUrl = { url -> pendingExternalUrl = url },
                                         onError = { error ->
                                             loadError = error
@@ -4726,7 +4728,7 @@ fun HtmlViewerScreen(
                             Card {
                                 Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
                                     Text(
-                                        if (loading) "正在准备 HTML" else "正在准备页面",
+                                        if (loading) context.getString(R.string.md_viewer_preparing_html) else context.getString(R.string.md_viewer_preparing_page),
                                         color = MaterialTheme.colorScheme.onSurface,
                                         style = MaterialTheme.typography.titleSmall
                                     )
@@ -4841,26 +4843,26 @@ private fun HtmlZipNoIndexScreen(
         ) {
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "未找到 index.html",
+                text = stringResource(R.string.md_viewer_no_index_html),
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.error
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "压缩包中未找到 index.html、README.html 或其它 .html 文件。",
+                text = stringResource(R.string.md_viewer_no_index_html_detail),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(16.dp))
             Text(
-                text = "压缩包内容：",
+                text = stringResource(R.string.md_viewer_zip_contents),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.height(8.dp))
             if (fileList.isEmpty()) {
                 Text(
-                    text = "（空目录）",
+                    text = stringResource(R.string.common_empty_directory),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -5053,7 +5055,7 @@ fun EpubViewerScreen(
     fun resolveLookupResult(word: String): DictLookupResult {
         val loaded = dictLoaded
         if (loaded == null) {
-            return DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            return DictLookupResult(word, null, context.getString(R.string.dict_no_dictionary))
         }
 
         // 尝试精确匹配
@@ -5073,7 +5075,7 @@ fun EpubViewerScreen(
         }
 
         if (found == null) {
-            return DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            return DictLookupResult(word, null, context.getString(R.string.dict_word_not_found, word))
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
         return DictLookupResult(matchedWord, definition, null)
@@ -5191,7 +5193,7 @@ fun EpubViewerScreen(
 
     fun currentChapterLocationLabel(): String {
         val chapter = chapters.getOrNull(currentChapterIndex)
-        return "第${currentChapterIndex + 1}章 - ${chapter?.title ?: ""} · ${formatEpubChapterProgressCompact(currentScrollRatio)}"
+        return context.getString(R.string.epub_chapter_location_label, currentChapterIndex + 1, chapter?.title ?: "", formatEpubChapterProgressCompact(context, currentScrollRatio))
     }
 
     fun decodeEvaluateJavascriptString(result: String?): String {
@@ -5287,7 +5289,7 @@ fun EpubViewerScreen(
         val targetChapterIndex = entry.chapterIndex
         val targetScrollRatio = entry.scrollRatio
         if (targetChapterIndex == null || targetScrollRatio == null || targetChapterIndex !in chapters.indices) {
-            Toast.makeText(context, "这条读书笔记没有可跳转的位置", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.epub_no_jump_target), Toast.LENGTH_SHORT).show()
             return
         }
         chapterScrollRatios[currentChapterIndex] = currentScrollRatio.coerceIn(0f, 1f)
@@ -5310,7 +5312,7 @@ fun EpubViewerScreen(
                 merged += BookNoteEntry(
                     id = (merged.maxOfOrNull { entry -> entry.id } ?: 0L) + 1L,
                     bookTitle = currentBookTitle,
-                    chapterInfo = "第${bookmark.chapterIndex + 1}章 - ${bookmark.chapterTitle.ifBlank { "未命名章节" }} · ${formatEpubBookmarkPosition(bookmark.scrollRatio)}",
+                    chapterInfo = context.getString(R.string.epub_bookmark_chapter_info, bookmark.chapterIndex + 1, bookmark.chapterTitle.ifBlank { context.getString(R.string.epub_unnamed_chapter) }, formatEpubBookmarkPosition(context, bookmark.scrollRatio)),
                     quote = bookmark.highlightText.takeIf { it.isNotBlank() },
                     content = bookmark.note,
                     chapterIndex = bookmark.chapterIndex,
@@ -5477,7 +5479,7 @@ fun EpubViewerScreen(
                 title.contains(query, ignoreCase = true) ||
                 chapter.href.contains(query, ignoreCase = true) ||
                 (index + 1).toString().contains(query) ||
-                "第${index + 1}章".contains(query, ignoreCase = true)
+                context.getString(R.string.epub_chapter_number_compact, index + 1).contains(query, ignoreCase = true)
             if (matches) index to chapter else null
         }
     }
@@ -5619,7 +5621,7 @@ fun EpubViewerScreen(
         }
         pendingTtsStartChapterIndex = null
         ttsPendingRefreshAttempted = false
-        val chapterTitle = currentChapter?.title ?: "第${targetChapterIndex + 1}章"
+        val chapterTitle = currentChapter?.title ?: context.getString(R.string.epub_chapter_with_title_fallback, targetChapterIndex + 1)
         val utteranceId = "epub_${epubUri.hashCode()}_${targetChapterIndex}_${System.currentTimeMillis()}"
         val speakLocale = effectiveTtsVoice
             ?.localeTag
@@ -5819,22 +5821,22 @@ fun EpubViewerScreen(
         }
         AlertDialog(
             onDismissRequest = { showGoToPositionDialog = false },
-            title = { Text("跳转位置（近似）") },
+            title = { Text(stringResource(R.string.epub_jump_position_title)) },
             text = {
                 Column {
                     Text(
-                        text = "仅在当前章节跳转，使用章节内进度%近似定位。",
+                        text = stringResource(R.string.epub_jump_position_hint),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        text = "当前章节：第 ${currentChapterIndex + 1} 章",
+                        text = stringResource(R.string.epub_jump_current_chapter, currentChapterIndex + 1),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "目标进度：${targetPercent.toInt()}%",
+                        text = stringResource(R.string.epub_jump_target_progress, targetPercent.toInt()),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -5853,10 +5855,10 @@ fun EpubViewerScreen(
                     currentScrollRatio = targetRatio
                     pendingProgrammaticScrollRatio = targetRatio
                     showGoToPositionDialog = false
-                }) { Text("跳转") }
+                }) { Text(stringResource(R.string.common_jump)) }
             },
             dismissButton = {
-                TextButton(onClick = { showGoToPositionDialog = false }) { Text("取消") }
+                TextButton(onClick = { showGoToPositionDialog = false }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -5977,7 +5979,7 @@ fun EpubViewerScreen(
         }
         AlertDialog(
             onDismissRequest = { showToc = false },
-            title = { Text("目录 - ${extractResult.bookInfo.title}") },
+            title = { Text(stringResource(R.string.epub_toc_title_with_book, extractResult.bookInfo.title)) },
             text = {
                 Column(
                     modifier = Modifier
@@ -5989,16 +5991,16 @@ fun EpubViewerScreen(
                         onValueChange = { tocQuery = it },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        label = { Text("筛选章节") },
-                        placeholder = { Text("输入章节号、标题或文件名") },
+                        label = { Text(stringResource(R.string.epub_toc_filter_label)) },
+                        placeholder = { Text(stringResource(R.string.epub_toc_filter_placeholder)) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
                         text = if (tocQuery.isBlank()) {
-                            "当前第 ${currentChapterIndex + 1} 章，共 ${chapters.size} 章"
+                            context.getString(R.string.epub_toc_current_summary, currentChapterIndex + 1, chapters.size)
                         } else {
-                            "匹配到 ${filteredTocEntries.size} / ${chapters.size} 章"
+                            context.getString(R.string.epub_toc_match_summary, filteredTocEntries.size, chapters.size)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -6012,7 +6014,7 @@ fun EpubViewerScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "没有匹配的章节",
+                                text = stringResource(R.string.epub_toc_no_match),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium
                             )
@@ -6038,7 +6040,7 @@ fun EpubViewerScreen(
                                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "第 ${index + 1} 章${if (index == currentChapterIndex) " · 当前位置" else ""}",
+                                            text = context.getString(R.string.epub_chapter_number, index + 1) + if (index == currentChapterIndex) stringResource(R.string.epub_chapter_current_marker) else "",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = if (index == currentChapterIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 1,
@@ -6052,7 +6054,7 @@ fun EpubViewerScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showToc = false }) { Text("关闭") }
+                TextButton(onClick = { showToc = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -6077,7 +6079,7 @@ fun EpubViewerScreen(
         }
         AlertDialog(
             onDismissRequest = { showBookmarks = false },
-            title = { Text("收藏夹 - $zipFileName") },
+            title = { Text(stringResource(R.string.epub_bookmarks_title, zipFileName)) },
             text = {
                 if (bookNoteLoadedData == null && bookNoteInProgress) {
                     Box(
@@ -6102,12 +6104,12 @@ fun EpubViewerScreen(
                         )
                         Spacer(Modifier.height(16.dp))
                         Text(
-                            "暂无收藏",
+                            stringResource(R.string.epub_bookmarks_empty),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "点击下方“新增当前位置收藏”可创建带定位的读书笔记",
+                            stringResource(R.string.epub_bookmarks_empty_hint),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -6119,16 +6121,16 @@ fun EpubViewerScreen(
                             onValueChange = { bookmarkFilterQuery = it },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            label = { Text("过滤当前书收藏") },
-                            placeholder = { Text("输入章节、引文或感想") },
+                            label = { Text(stringResource(R.string.epub_bookmarks_filter_label)) },
+                            placeholder = { Text(stringResource(R.string.epub_bookmarks_filter_placeholder)) },
                             leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
                             text = if (bookmarkFilterQuery.isBlank()) {
-                                "共 ${currentBookBookmarkEntries.size} 条定位笔记"
+                                context.getString(R.string.epub_bookmarks_total, currentBookBookmarkEntries.size)
                             } else {
-                                "匹配到 ${filteredBookmarkEntries.size} / ${currentBookBookmarkEntries.size} 条"
+                                context.getString(R.string.epub_bookmarks_match, filteredBookmarkEntries.size, currentBookBookmarkEntries.size)
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -6142,7 +6144,7 @@ fun EpubViewerScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    text = "没有匹配的收藏",
+                                    text = stringResource(R.string.epub_bookmarks_no_match),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
@@ -6164,7 +6166,7 @@ fun EpubViewerScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = bookmark.chapterIndex?.let { "第${it + 1}章" } ?: "整本书",
+                                            text = bookmark.chapterIndex?.let { context.getString(R.string.epub_chapter_number_compact, it + 1) } ?: stringResource(R.string.common_whole_book),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.primary
                                         )
@@ -6176,21 +6178,21 @@ fun EpubViewerScreen(
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        text = bookmark.chapterTitle ?: bookmark.chapterInfo ?: "未命名章节",
+                                        text = bookmark.chapterTitle ?: bookmark.chapterInfo ?: stringResource(R.string.epub_unnamed_chapter),
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Spacer(Modifier.height(2.dp))
                                     Text(
-                                        text = bookmark.scrollRatio?.let { formatEpubBookmarkPosition(it) } ?: "未绑定具体位置",
+                                        text = bookmark.scrollRatio?.let { formatEpubBookmarkPosition(context, it) } ?: stringResource(R.string.epub_unbound_position),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     bookmark.quote?.takeIf { it.isNotBlank() }?.let { quote ->
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            text = "引文：$quote",
+                                            text = stringResource(R.string.epub_quote_prefix, quote),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             maxLines = 3,
@@ -6226,16 +6228,16 @@ fun EpubViewerScreen(
                                                 createdAt = bookmark.createdAt
                                             )
                                         }) {
-                                            Icon(Icons.Default.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.common_edit), modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("编辑")
+                                            Text(stringResource(R.string.common_edit))
                                         }
                                         TextButton(onClick = {
                                             deleteBookNoteConfirm = bookmark
                                         }) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.common_delete), modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("删除")
+                                            Text(stringResource(R.string.common_delete))
                                         }
                                     }
                                 }
@@ -6252,10 +6254,10 @@ fun EpubViewerScreen(
                         onRequestOpenBookNotes()
                     }
                     requestAddBookmark()
-                }) { Text("新增当前位置收藏") }
+                }) { Text(stringResource(R.string.epub_add_current_bookmark)) }
             },
             dismissButton = {
-                TextButton(onClick = { showBookmarks = false }) { Text("关闭") }
+                TextButton(onClick = { showBookmarks = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -6266,18 +6268,18 @@ fun EpubViewerScreen(
         var quoteText by remember(showAddBookmark, currentChapterIndex, currentScrollRatio) { mutableStateOf(pendingBookmarkQuote) }
         AlertDialog(
             onDismissRequest = { showAddBookmark = false },
-            title = { Text("添加收藏") },
+            title = { Text(stringResource(R.string.epub_action_add_bookmark)) },
             text = {
                 Column {
                     Text(
-                        "当前位置：${currentChapterLocationLabel()}",
+                        stringResource(R.string.epub_current_location, currentChapterLocationLabel()),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = quoteText,
                         onValueChange = { quoteText = it },
-                        label = { Text("引文（优先使用当前选中内容，否则抓取当前段落，长文本会截断）") },
+                        label = { Text(stringResource(R.string.epub_quote_field_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
                         maxLines = 4
@@ -6286,7 +6288,7 @@ fun EpubViewerScreen(
                     OutlinedTextField(
                         value = noteText,
                         onValueChange = { noteText = it },
-                        label = { Text("感想（可选）") },
+                        label = { Text(stringResource(R.string.epub_note_field_optional)) },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 3,
                         maxLines = 6
@@ -6310,7 +6312,7 @@ fun EpubViewerScreen(
                             scrollRatio = currentScrollRatio,
                             createdAt = existing.createdAt
                         )
-                        Toast.makeText(context, "该位置已收藏，已转为编辑", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.epub_bookmark_exists_edit), Toast.LENGTH_SHORT).show()
                     } else {
                         upsertBookNoteEntry(
                             buildCurrentPositionBookNote(
@@ -6319,13 +6321,13 @@ fun EpubViewerScreen(
                                 quote = quoteText
                             )
                         )
-                        Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.epub_bookmark_added), Toast.LENGTH_SHORT).show()
                     }
                     showAddBookmark = false
-                }) { Text("添加") }
+                }) { Text(stringResource(R.string.common_add)) }
             },
             dismissButton = {
-                TextButton(onClick = { showAddBookmark = false }) { Text("取消") }
+                TextButton(onClick = { showAddBookmark = false }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -6377,7 +6379,7 @@ fun EpubViewerScreen(
                     createdAt = updated.createdAt
                 )
                 upsertBookNoteEntry(updatedEntry)
-                Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.common_updated), Toast.LENGTH_SHORT).show()
                 editingBookNote = null
             }
         )
@@ -6386,8 +6388,8 @@ fun EpubViewerScreen(
     deleteBookNoteConfirm?.let { entry ->
         AlertDialog(
             onDismissRequest = { deleteBookNoteConfirm = null },
-            title = { Text("删除读书笔记") },
-            text = { Text("确定删除这条读书笔记吗？") },
+            title = { Text(stringResource(R.string.book_note_delete_title)) },
+            text = { Text(stringResource(R.string.book_note_delete_confirm_entry)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -6396,12 +6398,12 @@ fun EpubViewerScreen(
                     },
                     enabled = !bookNoteInProgress
                 ) {
-                    Text("删除")
+                    Text(stringResource(R.string.common_delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deleteBookNoteConfirm = null }, enabled = !bookNoteInProgress) {
-                    Text("取消")
+                    Text(stringResource(R.string.common_cancel))
                 }
             }
         )
@@ -6438,7 +6440,7 @@ fun EpubViewerScreen(
                 actions = {
                     // 目录按钮
                     IconButton(onClick = { showToc = true }) {
-                        Icon(Icons.Default.Menu, contentDescription = "目录")
+                        Icon(Icons.Default.Menu, contentDescription = stringResource(R.string.epub_toc_menu_desc))
                     }
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
@@ -6481,7 +6483,7 @@ fun EpubViewerScreen(
                                     } else {
                                         ttsPendingRefreshAttempted = false
                                         pendingTtsStartChapterIndex = currentChapterIndex
-                                        publishTtsStatus(context.getString(R.string.epub_tts_start_requested, currentChapter?.title ?: "第${currentChapterIndex + 1}章"))
+                                        publishTtsStatus(context.getString(R.string.epub_tts_start_requested, currentChapter?.title ?: context.getString(R.string.epub_chapter_with_title_fallback, currentChapterIndex + 1)))
                                     }
                                 },
                                 leadingIcon = {
@@ -6508,7 +6510,7 @@ fun EpubViewerScreen(
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text("全文查找") },
+                                text = { Text(stringResource(R.string.md_viewer_fulltext_find_title)) },
                                 onClick = {
                                     showMoreMenu = false
                                     if (fullTextQuery.isBlank() && regexQuery.isNotBlank()) {
@@ -6620,7 +6622,7 @@ fun EpubViewerScreen(
                                 ) {
                                     Icon(
                                         Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "上一章",
+                                        contentDescription = stringResource(R.string.epub_prev_chapter),
                                         tint = if (currentChapterIndex > 0)
                                             MaterialTheme.colorScheme.primary
                                         else
@@ -6629,7 +6631,7 @@ fun EpubViewerScreen(
                                     if (dictAreaExpanded) {
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            "上一章",
+                                            stringResource(R.string.epub_prev_chapter),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = if (currentChapterIndex > 0)
                                                 MaterialTheme.colorScheme.primary
@@ -6657,7 +6659,7 @@ fun EpubViewerScreen(
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        "${currentChapterIndex + 1} / ${chapters.size} · ${formatEpubChapterProgressCompact(currentScrollRatio)}",
+                                        "${currentChapterIndex + 1} / ${chapters.size} · ${formatEpubChapterProgressCompact(context, currentScrollRatio)}",
                                         modifier = Modifier.clickable { showGoToPositionDialog = true },
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -6684,7 +6686,7 @@ fun EpubViewerScreen(
                                     ) {
                                         Icon(
                                             if (dictAreaExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowUp,
-                                            contentDescription = if (dictAreaExpanded) "收起" else "展开",
+                                            contentDescription = if (dictAreaExpanded) stringResource(R.string.common_collapse) else stringResource(R.string.common_expand),
                                             tint = MaterialTheme.colorScheme.primary
                                         )
                                     }
@@ -6709,7 +6711,7 @@ fun EpubViewerScreen(
                                             verticalAlignment = Alignment.CenterVertically
                                         ) {
                                             Text(
-                                                result.word.ifBlank { "取词结果" },
+                                                result.word.ifBlank { stringResource(R.string.epub_dict_lookup_result) },
                                                 style = MaterialTheme.typography.labelLarge,
                                                 color = if (result.error != null)
                                                     MaterialTheme.colorScheme.error
@@ -6727,7 +6729,7 @@ fun EpubViewerScreen(
                                                 ) {
                                                     Icon(
                                                         Icons.AutoMirrored.Filled.ArrowBack,
-                                                        contentDescription = "回退到上一个单词",
+                                                        contentDescription = stringResource(R.string.epub_dict_fallback_word),
                                                         tint = MaterialTheme.colorScheme.primary,
                                                         modifier = Modifier.size(18.dp)
                                                     )
@@ -6765,7 +6767,7 @@ fun EpubViewerScreen(
                                         verticalArrangement = Arrangement.Center
                                     ) {
                                         Text(
-                                            "选择文字并复制到剪贴板查询",
+                                            stringResource(R.string.epub_dict_select_copy_hint),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -6795,7 +6797,7 @@ fun EpubViewerScreen(
                                 ) {
                                     Icon(
                                         Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = "下一章",
+                                        contentDescription = stringResource(R.string.epub_next_chapter),
                                         tint = if (currentChapterIndex < chapters.size - 1)
                                             MaterialTheme.colorScheme.primary
                                         else
@@ -6804,7 +6806,7 @@ fun EpubViewerScreen(
                                     if (dictAreaExpanded) {
                                         Spacer(Modifier.height(4.dp))
                                         Text(
-                                            "下一章",
+                                            stringResource(R.string.epub_next_chapter),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = if (currentChapterIndex < chapters.size - 1)
                                                 MaterialTheme.colorScheme.primary
@@ -6828,7 +6830,7 @@ fun EpubViewerScreen(
             when {
                 chapterFile == null || !chapterFile.exists() -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("无法加载章节内容", color = MaterialTheme.colorScheme.error)
+                        Text(stringResource(R.string.epub_chapter_load_failed), color = MaterialTheme.colorScheme.error)
                     }
                 }
                 else -> {
@@ -6986,7 +6988,7 @@ fun EpubViewerScreen(
                                     </head>
                                     <body>$htmlContent
                                     <script>
-                                        ${buildEpubBookmarkMarkerScript(currentChapterBookmarks, currentChapterRestoredMarker)}
+                                        ${buildEpubBookmarkMarkerScript(context, currentChapterBookmarks, currentChapterRestoredMarker)}
                                     </script>
                                     </body>
                                     </html>
@@ -7016,7 +7018,7 @@ fun EpubViewerScreen(
                     )
                     if (!hideReaderFloatingNextButton) {
                         DraggableNextReadButton(
-                            contentDescription = "下一页",
+                            contentDescription = stringResource(R.string.epub_next_page_desc),
                             enabled = true,
                             onClick = { (webViewRef.value as? GestureWebView)?.scrollNextPage() },
                             onDoubleClick = { isFullscreen = !isFullscreen },
@@ -7099,6 +7101,7 @@ private class EpubWebViewClient(
 private fun <T> List<T>.getOrNull(index: Int): T? = if (index in indices) this[index] else null
 
 private fun buildEpubBookmarkMarkerScript(
+    context: Context,
     bookmarks: List<EpubBookmark>,
     restoredProgress: EpubReadingProgress? = null
 ): String {
@@ -7111,8 +7114,8 @@ private fun buildEpubBookmarkMarkerScript(
         """.trimIndent()
     }
     val markersJson = bookmarks.joinToString(prefix = "[", postfix = "]") { bookmark ->
-        val note = bookmark.note.ifBlank { bookmark.chapterTitle.ifBlank { "书签" } }
-        val label = if (bookmark.note.isBlank()) "签" else bookmark.note.take(2)
+        val note = bookmark.note.ifBlank { bookmark.chapterTitle.ifBlank { context.getString(R.string.epub_bookmark_default_note) } }
+        val label = if (bookmark.note.isBlank()) context.getString(R.string.epub_bookmark_default_label) else bookmark.note.take(2)
         """{
             ratio:${bookmark.scrollRatio.coerceIn(0f, 1f)},
             note:${org.json.JSONObject.quote(note)},
@@ -7122,8 +7125,8 @@ private fun buildEpubBookmarkMarkerScript(
     val restoredMarkerJson = restoredProgress?.let {
         """{
             ratio:${it.scrollRatio.coerceIn(0f, 1f)},
-            note:${org.json.JSONObject.quote("上次阅读到这里")},
-            label:${org.json.JSONObject.quote("上次")}
+            note:${org.json.JSONObject.quote(context.getString(R.string.epub_reading_progress_note))},
+            label:${org.json.JSONObject.quote(context.getString(R.string.epub_reading_progress_label))}
         }""".trimIndent()
     } ?: "null"
     return """
@@ -7182,32 +7185,32 @@ private fun buildEpubBookmarkMarkerScript(
     """.trimIndent()
 }
 
-private fun formatEpubBookmarkPosition(scrollRatio: Float): String {
+private fun formatEpubBookmarkPosition(context: Context, scrollRatio: Float): String {
     val percent = (scrollRatio.coerceIn(0f, 1f) * 100f).toInt().coerceIn(0, 100)
     val section = when {
-        percent <= 5 -> "开头"
-        percent <= 25 -> "前段"
-        percent <= 45 -> "前中段"
-        percent <= 65 -> "中段"
-        percent <= 85 -> "后中段"
-        percent <= 97 -> "后段"
-        else -> "末尾"
+        percent <= 5 -> context.getString(R.string.epub_section_start)
+        percent <= 25 -> context.getString(R.string.epub_section_early)
+        percent <= 45 -> context.getString(R.string.epub_section_early_mid)
+        percent <= 65 -> context.getString(R.string.epub_section_mid)
+        percent <= 85 -> context.getString(R.string.epub_section_late_mid)
+        percent <= 97 -> context.getString(R.string.epub_section_late)
+        else -> context.getString(R.string.epub_section_end)
     }
-    return "章节内$section ($percent%)"
+    return context.getString(R.string.epub_position_in_chapter, section, percent)
 }
 
-private fun formatEpubChapterProgressCompact(scrollRatio: Float): String {
+private fun formatEpubChapterProgressCompact(context: Context, scrollRatio: Float): String {
     val percent = (scrollRatio.coerceIn(0f, 1f) * 100f).toInt().coerceIn(0, 100)
     val section = when {
-        percent <= 5 -> "开头"
-        percent <= 25 -> "前段"
-        percent <= 45 -> "前中段"
-        percent <= 65 -> "中段"
-        percent <= 85 -> "后中段"
-        percent <= 97 -> "后段"
-        else -> "末尾"
+        percent <= 5 -> context.getString(R.string.epub_section_start)
+        percent <= 25 -> context.getString(R.string.epub_section_early)
+        percent <= 45 -> context.getString(R.string.epub_section_early_mid)
+        percent <= 65 -> context.getString(R.string.epub_section_mid)
+        percent <= 85 -> context.getString(R.string.epub_section_late_mid)
+        percent <= 97 -> context.getString(R.string.epub_section_late)
+        else -> context.getString(R.string.epub_section_end)
     }
-    return "本章$section $percent%"
+    return context.getString(R.string.epub_chapter_progress_compact, section, percent)
 }
 
 @Composable
@@ -7441,7 +7444,7 @@ private class StandaloneWebViewTtsController(
     private val ttsSession = EpubTtsSession(context)
     private var contentToken: String? = null
     private var contentInitialized = false
-    private var documentTitleProvider: () -> String = { "当前页面" }
+    private var documentTitleProvider: () -> String = { context.getString(R.string.common_current_page) }
     private var webViewProvider: () -> WebView? = { null }
     private var scrollRatioProvider: () -> Float = { 0f }
 
@@ -7497,7 +7500,7 @@ private class StandaloneWebViewTtsController(
     }
 
     fun start() {
-        val title = documentTitleProvider().ifBlank { "当前页面" }
+        val title = documentTitleProvider().ifBlank { context.getString(R.string.common_current_page) }
         publishStatus(context.getString(R.string.epub_tts_start_requested, title))
         startInternal(title)
     }
@@ -8723,7 +8726,7 @@ fun PdfViewerScreen(
             .sortedByDescending { it.createdAt }
     }
 
-    fun currentPageLocationLabel(): String = "第${currentPage + 1}页 / 共${pageCount}页"
+    fun currentPageLocationLabel(): String = context.getString(R.string.pdf_page_location, currentPage + 1, pageCount)
 
     fun upsertBookNoteEntry(updatedEntry: BookNoteEntry) {
         onBookNoteEntriesChanged(
@@ -8738,7 +8741,7 @@ fun PdfViewerScreen(
     fun goToBookNote(entry: BookNoteEntry) {
         val targetPage = entry.chapterIndex
         if (targetPage == null || targetPage !in 0 until pageCount) {
-            Toast.makeText(context, "这条读书笔记没有可跳转的位置", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.epub_no_jump_target), Toast.LENGTH_SHORT).show()
             return
         }
         currentPage = targetPage
@@ -8789,11 +8792,11 @@ fun PdfViewerScreen(
                     fitToWidthZoom = screenWidthPx / result.second.toFloat()
                 }
             } else {
-                errorMsg = "PDF 文件为空"
+                errorMsg = context.getString(R.string.pdf_empty)
             }
         } catch (e: Exception) {
             Log.e("PdfViewer", "加载 PDF 失败", e)
-            errorMsg = "加载失败: ${e.message}"
+            errorMsg = context.getString(R.string.md_viewer_load_failed_detail, e.message ?: "")
         }
         isLoading = false
     }
@@ -8891,7 +8894,7 @@ fun PdfViewerScreen(
     if (showBookmarks) {
         AlertDialog(
             onDismissRequest = { showBookmarks = false },
-            title = { Text("收藏夹 - $fileName") },
+            title = { Text(stringResource(R.string.epub_bookmarks_title, fileName)) },
             text = {
                 if (bookNoteLoadedData == null && bookNoteInProgress) {
                     Box(
@@ -8909,12 +8912,12 @@ fun PdfViewerScreen(
                     ) {
                         Spacer(Modifier.height(24.dp))
                         Text(
-                            "暂无收藏",
+                            stringResource(R.string.epub_bookmarks_empty),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Text(
-                            "点击下方“新增当前位置收藏”可创建定位笔记",
+                            stringResource(R.string.epub_bookmarks_empty_hint_pdf),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -8935,7 +8938,7 @@ fun PdfViewerScreen(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = bookmark.chapterIndex?.let { "第${it + 1}页" } ?: "整本书",
+                                            text = bookmark.chapterIndex?.let { context.getString(R.string.pdf_page_title, it + 1) } ?: stringResource(R.string.common_whole_book),
                                             style = MaterialTheme.typography.labelSmall,
                                             color = MaterialTheme.colorScheme.primary
                                         )
@@ -8947,7 +8950,7 @@ fun PdfViewerScreen(
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        text = bookmark.chapterInfo ?: "未绑定位置",
+                                        text = bookmark.chapterInfo ?: stringResource(R.string.epub_unbound_position_short),
                                         style = MaterialTheme.typography.bodyMedium,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis
@@ -8981,14 +8984,14 @@ fun PdfViewerScreen(
                                                 createdAt = bookmark.createdAt
                                             )
                                         }) {
-                                            Icon(Icons.Default.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.common_edit), modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("编辑")
+                                            Text(stringResource(R.string.common_edit))
                                         }
                                         TextButton(onClick = { deleteBookNoteConfirm = bookmark }) {
-                                            Icon(Icons.Default.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp))
+                                            Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.common_delete), modifier = Modifier.size(18.dp))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("删除")
+                                            Text(stringResource(R.string.common_delete))
                                         }
                                     }
                                 }
@@ -8998,10 +9001,10 @@ fun PdfViewerScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { requestAddBookmark() }) { Text("新增当前位置收藏") }
+                TextButton(onClick = { requestAddBookmark() }) { Text(stringResource(R.string.epub_add_current_bookmark)) }
             },
             dismissButton = {
-                TextButton(onClick = { showBookmarks = false }) { Text("关闭") }
+                TextButton(onClick = { showBookmarks = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -9011,11 +9014,11 @@ fun PdfViewerScreen(
         var inputError by remember { mutableStateOf<String?>(null) }
         AlertDialog(
             onDismissRequest = { showGoToPage = false },
-            title = { Text("跳转到指定页") },
+            title = { Text(stringResource(R.string.pdf_go_to_page_title)) },
             text = {
                 Column {
                     Text(
-                        "当前第 ${currentPage + 1} 页，共 $pageCount 页",
+                        context.getString(R.string.pdf_current_page_summary, currentPage + 1, pageCount),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(12.dp))
@@ -9025,7 +9028,7 @@ fun PdfViewerScreen(
                             inputText = it
                             inputError = null
                         },
-                        label = { Text("目标页码（1 - $pageCount）") },
+                        label = { Text(stringResource(R.string.pdf_target_page_label, pageCount)) },
                         isError = inputError != null,
                         supportingText = inputError?.let { { Text(it) } },
                         singleLine = true,
@@ -9040,17 +9043,17 @@ fun PdfViewerScreen(
                 TextButton(onClick = {
                     val target = inputText.trim().toIntOrNull()
                     if (target == null) {
-                        inputError = "请输入有效的数字"
+                        inputError = context.getString(R.string.pdf_invalid_number)
                     } else if (target < 1 || target > pageCount) {
-                        inputError = "页码范围：1 - $pageCount"
+                        inputError = context.getString(R.string.pdf_page_range_error, pageCount)
                     } else {
                         currentPage = target - 1
                         showGoToPage = false
                     }
-                }) { Text("跳转") }
+                }) { Text(stringResource(R.string.common_jump)) }
             },
             dismissButton = {
-                TextButton(onClick = { showGoToPage = false }) { Text("取消") }
+                TextButton(onClick = { showGoToPage = false }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -9059,18 +9062,18 @@ fun PdfViewerScreen(
         var noteText by remember(showAddBookmark, currentPage) { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showAddBookmark = false },
-            title = { Text("添加收藏") },
+            title = { Text(stringResource(R.string.epub_action_add_bookmark)) },
             text = {
                 Column {
                     Text(
-                        "当前位置：${currentPageLocationLabel()}",
+                        stringResource(R.string.epub_current_location, currentPageLocationLabel()),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
                         value = noteText,
                         onValueChange = { noteText = it },
-                        label = { Text("感想（可选）") },
+                        label = { Text(stringResource(R.string.epub_note_field_optional)) },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 3,
                         maxLines = 6
@@ -9088,11 +9091,11 @@ fun PdfViewerScreen(
                             quote = "",
                             content = if (noteText.isNotBlank()) noteText else existing.content,
                             chapterIndex = currentPage,
-                            chapterTitle = "第${currentPage + 1}页",
+                            chapterTitle = context.getString(R.string.pdf_page_title, currentPage + 1),
                             scrollRatio = null,
                             createdAt = existing.createdAt
                         )
-                        Toast.makeText(context, "该位置已收藏，已转为编辑", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.epub_bookmark_exists_edit), Toast.LENGTH_SHORT).show()
                     } else {
                         upsertBookNoteEntry(
                             BookNoteEntry(
@@ -9102,18 +9105,18 @@ fun PdfViewerScreen(
                                 quote = null,
                                 content = noteText.trimEnd(),
                                 chapterIndex = currentPage,
-                                chapterTitle = "第${currentPage + 1}页",
+                                chapterTitle = context.getString(R.string.pdf_page_title, currentPage + 1),
                                 scrollRatio = null,
                                 createdAt = System.currentTimeMillis()
                             )
                         )
-                        Toast.makeText(context, "已添加收藏", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.epub_bookmark_added), Toast.LENGTH_SHORT).show()
                     }
                     showAddBookmark = false
-                }) { Text("添加") }
+                }) { Text(stringResource(R.string.common_add)) }
             },
             dismissButton = {
-                TextButton(onClick = { showAddBookmark = false }) { Text("取消") }
+                TextButton(onClick = { showAddBookmark = false }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -9127,7 +9130,7 @@ fun PdfViewerScreen(
                 editingBookNote = state.copy(
                     chapterInfo = currentPageLocationLabel(),
                     chapterIndex = currentPage,
-                    chapterTitle = "第${currentPage + 1}页",
+                    chapterTitle = context.getString(R.string.pdf_page_title, currentPage + 1),
                     scrollRatio = null
                 )
             },
@@ -9163,7 +9166,7 @@ fun PdfViewerScreen(
                     createdAt = updated.createdAt
                 )
                 upsertBookNoteEntry(updatedEntry)
-                Toast.makeText(context, "已更新", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.common_updated), Toast.LENGTH_SHORT).show()
                 editingBookNote = null
             }
         )
@@ -9172,8 +9175,8 @@ fun PdfViewerScreen(
     deleteBookNoteConfirm?.let { entry ->
         AlertDialog(
             onDismissRequest = { deleteBookNoteConfirm = null },
-            title = { Text("删除读书笔记") },
-            text = { Text("确定删除这条读书笔记吗？") },
+            title = { Text(stringResource(R.string.book_note_delete_title)) },
+            text = { Text(stringResource(R.string.book_note_delete_confirm_entry)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -9182,12 +9185,12 @@ fun PdfViewerScreen(
                     },
                     enabled = !bookNoteInProgress
                 ) {
-                    Text("删除")
+                    Text(stringResource(R.string.common_delete))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { deleteBookNoteConfirm = null }, enabled = !bookNoteInProgress) {
-                    Text("取消")
+                    Text(stringResource(R.string.common_cancel))
                 }
             }
         )
@@ -9206,14 +9209,14 @@ fun PdfViewerScreen(
                     actions = {
                         Box {
                             IconButton(onClick = { showMoreMenu = true }) {
-                                Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                                Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.main_tab_more))
                             }
                             DropdownMenu(
                                 expanded = showMoreMenu,
                                 onDismissRequest = { showMoreMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("添加收藏") },
+                                    text = { Text(stringResource(R.string.epub_action_add_bookmark)) },
                                     onClick = {
                                         showMoreMenu = false
                                         requestAddBookmark()
@@ -9221,7 +9224,7 @@ fun PdfViewerScreen(
                                     leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("查看收藏") },
+                                    text = { Text(stringResource(R.string.epub_action_view_bookmarks)) },
                                     onClick = {
                                         showMoreMenu = false
                                         if (bookNoteLoadedData == null && !bookNoteInProgress) {
@@ -9232,7 +9235,7 @@ fun PdfViewerScreen(
                                     leadingIcon = { Icon(Icons.Default.Bookmarks, contentDescription = null) }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("全屏") },
+                                    text = { Text(stringResource(R.string.epub_action_fullscreen)) },
                                     onClick = {
                                         showMoreMenu = false
                                         isFullscreen = true
@@ -9270,7 +9273,7 @@ fun PdfViewerScreen(
                         onClick = { if (currentPage > 0) currentPage-- },
                         enabled = currentPage > 0
                     ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "上一页")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.pdf_prev_page_desc))
                     }
                     Text(
                         "${currentPage + 1} / $pageCount",
@@ -9289,7 +9292,7 @@ fun PdfViewerScreen(
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = "下一页",
+                            contentDescription = stringResource(R.string.epub_next_page_desc),
                             tint = if (currentPage < pageCount - 1)
                                 MaterialTheme.colorScheme.primary
                             else
@@ -9311,14 +9314,14 @@ fun PdfViewerScreen(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         androidx.compose.material3.CircularProgressIndicator()
                         Spacer(Modifier.height(8.dp))
-                        Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                        Text(stringResource(R.string.common_loading_ellipsis), style = MaterialTheme.typography.bodyLarge)
                     }
                 }
                 errorMsg != null -> {
                     Text(errorMsg!!, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.error)
                 }
                 pageLoading && currentPageBitmap == null -> {
-                    Text("正在渲染页面...", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(R.string.pdf_rendering), style = MaterialTheme.typography.bodyLarge)
                 }
                 currentPageBitmap != null -> {
                     var boxSizePx by remember { mutableStateOf(androidx.compose.ui.geometry.Size.Zero) }
@@ -9340,7 +9343,7 @@ fun PdfViewerScreen(
                                     onLongPress = {
                                         Toast.makeText(
                                             context,
-                                            "提示：PDF 页面渲染为图像，暂不支持文字选择。\n如需选择文字，请使用专业 PDF 阅读器。",
+                                            context.getString(R.string.pdf_text_selection_hint),
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
@@ -9357,7 +9360,7 @@ fun PdfViewerScreen(
                         ) {
                             Image(
                                 bitmap = currentPageBitmap!!.asImageBitmap(),
-                                contentDescription = "第 ${currentPage + 1} 页",
+                                contentDescription = stringResource(R.string.pdf_page_desc, currentPage + 1),
                                 modifier = Modifier.wrapContentSize()
                             )
                         }
@@ -9370,7 +9373,7 @@ fun PdfViewerScreen(
                         }
                         if (!hideReaderFloatingNextButton) {
                             DraggableNextReadButton(
-                                contentDescription = "下一页",
+                                contentDescription = stringResource(R.string.epub_next_page_desc),
                                 enabled = true,
                                 onClick = {
                                     if (currentPage < pageCount - 1) {
@@ -9390,7 +9393,7 @@ fun PdfViewerScreen(
                     }
                 }
                 pageCount == 0 -> {
-                    Text("PDF 为空", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(R.string.pdf_empty_short), style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }
