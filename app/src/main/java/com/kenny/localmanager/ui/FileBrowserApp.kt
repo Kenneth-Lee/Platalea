@@ -6229,6 +6229,7 @@ private fun FileSearchResultsDialog(
     onAddOne: (DocumentFileModel) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     val timeFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -6276,7 +6277,7 @@ private fun FileSearchResultsDialog(
                                     }
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "大小 ${item.model.displaySize.ifBlank { "未知" }} · 修改 ${timeFormatter.format(Date(item.model.lastModified))}",
+                                        context.getString(R.string.browser_search_result_size_modified, item.model.displaySize.ifBlank { context.getString(R.string.browser_unknown) }, timeFormatter.format(Date(item.model.lastModified))),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -8554,7 +8555,7 @@ fun PlaybackScreen(
                                 context.getString(R.string.browser_source_value, if (diagnostics.playbackSource == "direct") context.getString(R.string.browser_source_direct) else diagnostics.playbackSource),
                                 context.getString(R.string.browser_output_value, diagnostics.outputDevice.ifBlank { context.getString(R.string.common_unknown_error) }),
                                 diagnostics.outputDeviceSource.takeIf { it.isNotBlank() }?.let { context.getString(R.string.browser_output_based_on, it) },
-                                "Offload：${if (diagnostics.exoOffloadActive) "已进入" else "未进入/不适用"}",
+                                context.getString(R.string.browser_offload_status, if (diagnostics.exoOffloadActive) context.getString(R.string.browser_offload_active) else context.getString(R.string.browser_offload_inactive)),
                                 context.getString(R.string.browser_hq_output_value, diagnostics.highQualityOutput.ifBlank { context.getString(R.string.common_unknown_error) }),
                                 context.getString(R.string.browser_effects_value, diagnostics.audioEffects.ifBlank { context.getString(R.string.common_unknown_error) }),
                                 context.getString(R.string.browser_buffer_events, diagnostics.bufferEvents),
@@ -9566,7 +9567,7 @@ private fun PasswordConfirmationFields(
         ) {
             if (showMismatch) {
                 Text(
-                    "两次输入的密码不一致",
+                    stringResource(R.string.browser_password_mismatch),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -9670,7 +9671,7 @@ private fun ReliablePasswordInputField(
                 .padding(horizontal = 12.dp, vertical = 10.dp)
         ) {
             Text(
-                text = if (maskedValue.isEmpty()) "(空)" else maskedValue,
+                text = if (maskedValue.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedValue,
                 color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium
             )
@@ -9731,7 +9732,7 @@ private fun ReliablePasswordInputField(
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 Text(
-                                    text = if (maskedValue.isEmpty()) "(空)" else maskedValue,
+                                    text = if (maskedValue.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedValue,
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                 )
@@ -9741,19 +9742,19 @@ private fun ReliablePasswordInputField(
                                     onClick = {
                                         val pasted = readClipboardPassword(context)
                                         if (pasted == null) {
-                                            Toast.makeText(context, "剪贴板为空，未粘贴", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.pwd_kb_clipboard_empty), Toast.LENGTH_SHORT).show()
                                         } else {
                                             onValueChange(pasted)
-                                            Toast.makeText(context, "已从剪贴板粘贴密码", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.pwd_kb_pasted), Toast.LENGTH_SHORT).show()
                                         }
                                     },
                                     enabled = enabled,
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                 ) {
-                                    Text("粘贴")
+                                    Text(stringResource(R.string.pwd_kb_paste))
                                 }
                                 TextButton(onClick = { keyboardVisible = false }, enabled = enabled) {
-                                    Text("完成")
+                                    Text(stringResource(R.string.pwd_kb_done))
                                 }
                             }
                         }
@@ -9766,25 +9767,25 @@ private fun ReliablePasswordInputField(
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("数字", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_digits), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("大写", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_upper), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("小写", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_lower), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("符号", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_symbols), style = MaterialTheme.typography.labelSmall) }
                         }
 
                         if (pages.size > 1) {
@@ -9801,7 +9802,7 @@ private fun ReliablePasswordInputField(
                                         contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                                     ) {
                                         Text(
-                                            text = if (idx == pageIndex) "子类${idx + 1}*" else "子类${idx + 1}",
+                                            text = if (idx == pageIndex) stringResource(R.string.pwd_kb_subclass_active, idx + 1) else stringResource(R.string.pwd_kb_subclass, idx + 1),
                                             style = MaterialTheme.typography.labelSmall
                                         )
                                     }
@@ -9826,19 +9827,19 @@ private fun ReliablePasswordInputField(
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("空格", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_space), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
                                 enabled = enabled && value.isNotEmpty(),
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("退格", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_backspace), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
                                 onClick = { onValueChange("") },
                                 enabled = enabled && value.isNotEmpty(),
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text("清空", style = MaterialTheme.typography.labelSmall) }
+                            ) { Text(stringResource(R.string.pwd_kb_clear), style = MaterialTheme.typography.labelSmall) }
                         }
                     }
                 }
@@ -10164,17 +10165,7 @@ fun GpgPublicKeyPickerDialog(
     }
 }
 
-private val ABOUT_USAGE_TIPS = listOf(
-    "你可以随时同步一个git库到本地，应用的很多其他功能也可以依靠这个库完成共享方面的功能",
-    "内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。",
-    "可以用markdown渲染器直接查看markdown文件（.md或者.rst文件）。",
-    "在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。",
-    "双击文件可以把文件加入待处理列表进行批处理。",
-    "混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。",
-    "在配置中打开「显示过滤条件」，可以用正则表达式过滤文件名，还可以把所有过滤结果加入待处理列表。",
-    "FTP数据交换功能可以启动一个ftp服务器，而且保持手机不休眠，所以记得主动退出它，或者设置一个自动退出时间。",
-    "FTP传输（就算有密码保护）也是不安全的，请不要在不可靠的网络环境中使用。",
-)
+
 
 @Composable
 fun AboutDialog(onDismiss: () -> Unit) {
@@ -10187,7 +10178,8 @@ fun AboutDialog(onDismiss: () -> Unit) {
     val versionWarn = remember(versionName) {
         versionName.replace(Regex("[^0-9.]"), "").takeIf { s -> s.isNotEmpty() }?.toFloatOrNull()?.let { v -> v <= 1.0f } == true
     }
-    val tip = remember { ABOUT_USAGE_TIPS.random() }
+    val tips = remember { context.resources.getStringArray(R.array.about_usage_tips) }
+    val tip = remember { tips.random() }
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -10197,18 +10189,18 @@ fun AboutDialog(onDismiss: () -> Unit) {
             Column(Modifier.padding(24.dp)) {
                 Text("Local Manager", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(8.dp))
-                Text("作者：柱子哥 <Kenneth-Lee-2012@qq.com>", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("版本：$versionName", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.about_author), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.about_version, versionName), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (versionWarn) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "本软件没有经过严肃的测试，请自担使用风险，作者不对任何数据破坏负责。",
+                        stringResource(R.string.about_disclaimer),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
                 }
                 Spacer(Modifier.height(16.dp))
-                Text("随机提示（每次打开都更新）", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                Text(stringResource(R.string.about_random_tips_title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(4.dp))
                 Text(tip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(24.dp))
@@ -10246,7 +10238,7 @@ fun CacheManagementDialog(
                     .padding(24.dp)
                     .widthIn(max = 400.dp)
             ) {
-                Text("缓存管理", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.cache_management_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 if (loading) {
                     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -10277,10 +10269,10 @@ fun CacheManagementDialog(
                                         scope.launch {
                                             withContext(Dispatchers.IO) { clearCacheEntry(context, entry) }
                                             refresh()
-                                            Toast.makeText(context, "已清空 ${entry.displayName}", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.cache_cleared_entry, entry.displayName), Toast.LENGTH_SHORT).show()
                                         }
                                     }
-                                ) { Text("清空") }
+                                ) { Text(stringResource(R.string.cache_clear_entry)) }
                             }
                         }
                     }
@@ -10294,11 +10286,11 @@ fun CacheManagementDialog(
                                     entries.forEach { clearCacheEntry(context, it) }
                                 }
                                 refresh()
-                                Toast.makeText(context, "已清理全部缓存", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.cache_clear_all_done), Toast.LENGTH_SHORT).show()
                             }
                         },
                         modifier = Modifier.fillMaxWidth()
-                    ) { Text("清理全部") }
+                    ) { Text(stringResource(R.string.cache_clear_all)) }
                     Spacer(Modifier.height(8.dp))
                 }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
@@ -10342,19 +10334,19 @@ fun KeyManagementDialog(
                         val bytes = input.readBytes()
                         if (asPriv) {
                             parseSecretKeyRingFromStream(bytes.inputStream())?.let { saveSecretKeyRing(context, it) }
-                                ?: Pair(false, "无法解析私钥")
+                                ?: Pair(false, context.getString(R.string.gpg_parse_secret_failed))
                         } else {
                             parsePublicKeyRingFromStream(bytes.inputStream())?.let { mergePublicKeyRing(context, it) }
-                                ?: Pair(false, "无法解析公钥")
+                                ?: Pair(false, context.getString(R.string.gpg_parse_public_failed))
                         }
-                    } ?: Pair(false, "无法读取文件")
+                    } ?: Pair(false, context.getString(R.string.gpg_read_file_failed))
                 }
                 if (ok) {
-                    Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.gpg_import_success), Toast.LENGTH_SHORT).show()
                     refreshTrigger++
                     onKeysChanged()
                 } else {
-                    Toast.makeText(context, "导入失败: $err", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.gpg_import_failed, err), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -10373,9 +10365,9 @@ fun KeyManagementDialog(
                     withContext(Dispatchers.IO) {
                         context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
                     }
-                    Toast.makeText(context, "导出成功", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.gpg_export_success), Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.gpg_export_failed), Toast.LENGTH_SHORT).show()
                 }
                 pendingExportFilename = ""
                 pendingExportKeyId = null
@@ -10401,13 +10393,13 @@ fun KeyManagementDialog(
             tonalElevation = 6.dp
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text("GnuPG 密钥管理", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text("私钥仅保留一个；公钥可多个。生成密钥对或导入。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.gpg_keys_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.gpg_keys_subtitle), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(12.dp))
-                Button(onClick = { showGenerateKeyDialog = true }, modifier = Modifier.fillMaxWidth()) { Text("生成密钥对") }
+                Button(onClick = { showGenerateKeyDialog = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.gpg_generate_keypair)) }
                 if (onOpenPubkeyShare != null) {
                     Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { onDismiss(); onOpenPubkeyShare() }, modifier = Modifier.fillMaxWidth()) { Text("公钥分享 (Git 同步)") }
+                    OutlinedButton(onClick = { onDismiss(); onOpenPubkeyShare() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.gpg_pubkey_share_git)) }
                 }
                 Spacer(Modifier.height(16.dp))
                 if (loading) {
@@ -10417,21 +10409,21 @@ fun KeyManagementDialog(
                 } else {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("公钥", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.gpg_public_keys_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                             Row {
-                                TextButton(onClick = { importAsPrivate = false; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text("导入公钥") }
+                                TextButton(onClick = { importAsPrivate = false; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text(stringResource(R.string.gpg_import_public_key)) }
                                 if (publicKeys.isNotEmpty()) {
-                                    TextButton(onClick = { pendingDelete = PendingDelete.AllPublic; deleteConfirmInput = "" }) { Text("删除全部") }
+                                    TextButton(onClick = { pendingDelete = PendingDelete.AllPublic; deleteConfirmInput = "" }) { Text(stringResource(R.string.gpg_delete_all_public_keys)) }
                                     TextButton(onClick = {
                                         pendingExportFilename = "pubring.asc"
                                         pendingExportSecret = false
                                         pendingExportKeyId = null
                                         keyExportLauncher.launch("pubring.asc")
-                                    }) { Text("导出全部") }
+                                    }) { Text(stringResource(R.string.gpg_export_all_public_keys)) }
                                 }
                             }
                         }
-                        if (publicKeys.isEmpty()) Text("无", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (publicKeys.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         else publicKeys.forEachIndexed { _, k ->
                             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                 Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
@@ -10441,35 +10433,35 @@ fun KeyManagementDialog(
                                         pendingExportSecret = false
                                         pendingExportKeyId = keyId
                                         keyExportLauncher.launch(pendingExportFilename)
-                                }) { Text("导出", style = MaterialTheme.typography.labelSmall) }
+                                }) { Text(stringResource(R.string.gpg_export_key), style = MaterialTheme.typography.labelSmall) }
                                 if (publicKeys.size > 1) {
-                                    TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text("删", style = MaterialTheme.typography.labelSmall) }
+                                    TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text(stringResource(R.string.gpg_delete_key_short), style = MaterialTheme.typography.labelSmall) }
                                 }
                             }
                         }
                         Spacer(Modifier.height(12.dp))
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text("私钥", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.gpg_secret_keys_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
                             Row {
-                                TextButton(onClick = { importAsPrivate = true; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text("导入私钥") }
+                                TextButton(onClick = { importAsPrivate = true; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text(stringResource(R.string.gpg_import_secret_key)) }
                                 if (secretKeys.isNotEmpty()) {
                                     TextButton(onClick = {
                                         pendingExportFilename = "secring.asc"
                                         pendingExportSecret = true
                                         pendingExportKeyId = null
                                         keyExportLauncher.launch("secring.asc")
-                                    }) { Text("导出私钥") }
-                                    TextButton(onClick = { pendingDelete = PendingDelete.Secret; deleteConfirmInput = "" }) { Text("删除") }
+                                    }) { Text(stringResource(R.string.gpg_export_secret_key)) }
+                                    TextButton(onClick = { pendingDelete = PendingDelete.Secret; deleteConfirmInput = "" }) { Text(stringResource(R.string.common_delete)) }
                                 }
                             }
                         }
-                        if (secretKeys.isEmpty()) Text("无", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (secretKeys.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         else secretKeys.forEach { k ->
                             Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
                         Spacer(Modifier.height(12.dp))
-                        Text("密钥文件", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                        if (keyFiles.isEmpty()) Text("无", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.gpg_key_files_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                        if (keyFiles.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         else for (pair in keyFiles) {
                             Text("${pair.first} (${pair.second} B)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
                         }
@@ -10482,9 +10474,9 @@ fun KeyManagementDialog(
     }
     pendingDelete?.let { pending ->
         val (title, message) = when (pending) {
-            is PendingDelete.Secret -> "确认删除私钥" to "将删除当前私钥，且无法恢复。这可能导致此前使用该私钥保护的文件无法再解密。请输入 yes 确认删除。"
-            is PendingDelete.AllPublic -> "确认删除所有公钥" to "将删除全部公钥，且无法恢复。这可能导致依赖这些公钥的加密/验证流程失败。请输入 yes 确认删除。"
-            is PendingDelete.SinglePublic -> "确认删除公钥" to "将删除该公钥，且无法恢复。这可能导致与该公钥相关的加密/验证流程失败。请输入 yes 确认删除。"
+            is PendingDelete.Secret -> context.getString(R.string.gpg_confirm_delete_secret_title) to context.getString(R.string.gpg_confirm_delete_secret_message)
+            is PendingDelete.AllPublic -> context.getString(R.string.gpg_confirm_delete_all_public_title) to context.getString(R.string.gpg_confirm_delete_all_public_message)
+            is PendingDelete.SinglePublic -> context.getString(R.string.gpg_confirm_delete_public_title) to context.getString(R.string.gpg_confirm_delete_public_message)
         }
         AlertDialog(
             onDismissRequest = { pendingDelete = null; deleteConfirmInput = "" },
@@ -10497,7 +10489,7 @@ fun KeyManagementDialog(
                         value = deleteConfirmInput,
                         onValueChange = { deleteConfirmInput = it },
                         modifier = Modifier.fillMaxWidth(),
-                        label = { Text("输入 yes") },
+                        label = { Text(stringResource(R.string.gpg_confirm_delete_input_label)) },
                         singleLine = true
                     )
                 }
@@ -10515,18 +10507,18 @@ fun KeyManagementDialog(
                                 }
                             }
                             if (ok) {
-                                Toast.makeText(context, "已删除", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.browser_deleted), Toast.LENGTH_SHORT).show()
                                 refreshTrigger++
                                 onKeysChanged()
                             } else {
-                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.common_delete_failed), Toast.LENGTH_SHORT).show()
                             }
                             pendingDelete = null
                             deleteConfirmInput = ""
                         }
                     },
                     enabled = deleteConfirmInput.trim().lowercase() == "yes"
-                ) { Text("确认删除") }
+                ) { Text(stringResource(R.string.gpg_confirm_delete_action)) }
             },
             dismissButton = { TextButton(onClick = { pendingDelete = null; deleteConfirmInput = "" }) { Text(stringResource(R.string.common_cancel)) } }
         )
@@ -10562,13 +10554,13 @@ fun GenerateKeyDialog(
             tonalElevation = 6.dp
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text("生成密钥对", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.gpg_generate_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 OutlinedTextField(
                     value = identity,
                     onValueChange = { if (!generatingInProgress) identity = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("用户标识（如：姓名 <email@example.com>）") },
+                    label = { Text(stringResource(R.string.gpg_user_id_label)) },
                     singleLine = true,
                     enabled = !generatingInProgress
                 )
@@ -10578,15 +10570,15 @@ fun GenerateKeyDialog(
                     confirmPassword = confirmPassphrase,
                     onPasswordChange = { if (!generatingInProgress) passphrase = it },
                     onConfirmPasswordChange = { if (!generatingInProgress) confirmPassphrase = it },
-                    passwordLabel = "密钥保护密码（可留空表示无密码）",
-                    confirmLabel = "再次输入密钥保护密码",
+                    passwordLabel = context.getString(R.string.gpg_key_protect_password_label),
+                    confirmLabel = context.getString(R.string.gpg_key_protect_password_confirm),
                     enabled = !generatingInProgress,
                     allowBlank = true
                 )
                 if (hasExistingKeys) {
                     Spacer(Modifier.height(12.dp))
                     Text(
-                        "检测到现有密钥。继续生成可能覆盖或替换当前默认密钥，导致历史加密文件无法解密。",
+                        stringResource(R.string.gpg_generate_overwrite_warning),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error
                     )
@@ -10598,7 +10590,7 @@ fun GenerateKeyDialog(
                             enabled = !generatingInProgress
                         )
                         Text(
-                            "我已知晓风险，并同意继续",
+                            stringResource(R.string.gpg_generate_risk_ack),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -10608,7 +10600,7 @@ fun GenerateKeyDialog(
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
-                    Text("生成中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.gpg_generating), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -10623,17 +10615,17 @@ fun GenerateKeyDialog(
                                     }
                                     generatingInProgress = false
                                     if (ok) {
-                                        Toast.makeText(context, "密钥已生成", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.gpg_key_generated), Toast.LENGTH_SHORT).show()
                                         onSuccess()
                                         onDismiss()
                                     } else {
-                                        Toast.makeText(context, "生成失败: ${errMsg ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(context, context.getString(R.string.gpg_generate_failed, errMsg ?: context.getString(R.string.common_unknown_error)), Toast.LENGTH_LONG).show()
                                     }
                                 }
                             }
                         },
                         enabled = !generatingInProgress && passphraseConfirmed && (!hasExistingKeys || confirmKeyRisk)
-                    ) { Text("生成") }
+                    ) { Text(stringResource(R.string.gpg_generate_action)) }
                 }
             }
         }

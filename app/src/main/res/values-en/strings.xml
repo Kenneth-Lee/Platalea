@@ -1363,4 +1363,128 @@ It will sync, copy, and push automatically.</string>
     <string name="context_gpg_decrypt">GnuPG decrypt</string>
     <string name="browser_search_result_size_modified">Size %1$s · modified %2$s</string>
     <string name="browser_unknown">Unknown</string>
+    <string name="about_random_tips_title">Random tip (updates each time you open this)</string>
+    <string name="cache_management_title">Cache management</string>
+    <string name="cache_cleared_entry">Cleared %1$s</string>
+    <string name="cache_clear_entry">Clear</string>
+    <string name="cache_clear_all_done">All cache cleared</string>
+    <string name="cache_clear_all">Clear all</string>
+    <string name="gpg_keys_title">GnuPG key management</string>
+    <string name="gpg_keys_subtitle">Keep one secret key; multiple public keys allowed. Generate or import key pairs.</string>
+    <string name="gpg_generate_keypair">Generate key pair</string>
+    <string name="gpg_pubkey_share_git">Public key sharing (Git sync)</string>
+    <string name="gpg_public_keys_section">Public keys</string>
+    <string name="gpg_import_public_key">Import public key</string>
+    <string name="gpg_delete_all_public_keys">Delete all</string>
+    <string name="gpg_export_all_public_keys">Export all</string>
+    <string name="gpg_none">None</string>
+    <string name="gpg_export_key">Export</string>
+    <string name="gpg_delete_key_short">Del</string>
+    <string name="gpg_secret_keys_section">Secret keys</string>
+    <string name="gpg_import_secret_key">Import secret key</string>
+    <string name="gpg_export_secret_key">Export secret key</string>
+    <string name="gpg_key_files_section">Key files</string>
+    <string name="gpg_import_success">Import succeeded</string>
+    <string name="gpg_import_failed">Import failed: %1$s</string>
+    <string name="gpg_export_success">Export succeeded</string>
+    <string name="gpg_export_failed">Export failed</string>
+    <string name="gpg_parse_secret_failed">Unable to parse secret key</string>
+    <string name="gpg_parse_public_failed">Unable to parse public key</string>
+    <string name="gpg_read_file_failed">Unable to read file</string>
+    <string name="gpg_confirm_delete_secret_title">Confirm delete secret key</string>
+    <string name="gpg_confirm_delete_secret_message">The current secret key will be deleted permanently. Files encrypted with it may become unreadable. Type yes to confirm.</string>
+    <string name="gpg_confirm_delete_all_public_title">Confirm delete all public keys</string>
+    <string name="gpg_confirm_delete_all_public_message">All public keys will be deleted permanently. Encryption/verification that depends on them may fail. Type yes to confirm.</string>
+    <string name="gpg_confirm_delete_public_title">Confirm delete public key</string>
+    <string name="gpg_confirm_delete_public_message">This public key will be deleted permanently. Related encryption/verification may fail. Type yes to confirm.</string>
+    <string name="gpg_confirm_delete_input_label">Type yes</string>
+    <string name="gpg_confirm_delete_action">Confirm delete</string>
+    <string name="gpg_generate_title">Generate key pair</string>
+    <string name="gpg_user_id_label">User ID (e.g. Name &lt;email@example.com&gt;)</string>
+    <string name="gpg_key_protect_password_label">Key protection password (leave blank for none)</string>
+    <string name="gpg_key_protect_password_confirm">Re-enter key protection password</string>
+    <string name="gpg_generate_overwrite_warning">Existing keys detected. Continuing may overwrite the default key pair and make older encrypted files unreadable.</string>
+    <string name="gpg_generate_risk_ack">I understand the risk and agree to continue</string>
+    <string name="gpg_generating">Generating…</string>
+    <string name="gpg_generate_action">Generate</string>
+    <string name="gpg_key_generated">Key pair generated</string>
+    <string name="gpg_generate_failed">Generation failed: %1$s</string>
+    <string name="pwd_kb_clipboard_empty">Clipboard is empty; nothing pasted</string>
+    <string name="pwd_kb_pasted">Password pasted from clipboard</string>
+    <string name="pwd_kb_paste">Paste</string>
+    <string name="pwd_kb_done">Done</string>
+    <string name="pwd_kb_digits">Digits</string>
+    <string name="pwd_kb_upper">Uppercase</string>
+    <string name="pwd_kb_lower">Lowercase</string>
+    <string name="pwd_kb_symbols">Symbols</string>
+    <string name="pwd_kb_subclass_active">Set %1$d*</string>
+    <string name="pwd_kb_subclass">Set %1$d</string>
+    <string name="pwd_kb_space">Space</string>
+    <string name="pwd_kb_backspace">Backspace</string>
+    <string name="pwd_kb_clear">Clear</string>
+    <string name="browser_offload_status">Offload: %1$s</string>
+    <string name="browser_offload_active">Active</string>
+    <string name="browser_offload_inactive">Inactive / N/A</string>
+    <string name="md_viewer_regex_placeholder">Regex, e.g. /error|warn/i</string>
+    <string name="md_viewer_close_find">Close find</string>
+    <string name="md_viewer_regex_match_with_bar">Match %1$d / %2$d; navigation avoids the bottom find bar.</string>
+    <string name="md_viewer_regex_hint_flags">Supports /pattern/flags and (?i)pattern.</string>
+    <string name="md_viewer_fulltext_find_title">Find in full text</string>
+    <string name="md_viewer_close_fulltext_find">Close full-text find</string>
+    <string name="md_viewer_fulltext_search_placeholder">Enter text to search</string>
+    <string name="md_viewer_fulltext_searching">Searching...</string>
+    <string name="md_viewer_fulltext_scanning">Scanning all chapters, please wait...</string>
+    <string name="md_viewer_fulltext_hint">Enter text to search across all chapters.</string>
+    <string name="md_viewer_fulltext_no_match">No matching chapters found.</string>
+    <string name="md_viewer_fulltext_summary">Found %1$d matches across %2$d chapters.</string>
+    <string name="md_viewer_chapter_hit">Chapter %1$d · %2$s</string>
+    <string name="md_viewer_hit_count">%1$d matches</string>
+    <string name="md_viewer_loading_default">Loading…</string>
+    <string name="md_viewer_restore_page_scripts">Restoring page scripts and styles…</string>
+    <string name="md_viewer_reuse_cached_page">Reusing cached page…</string>
+    <string name="md_viewer_reading_encrypted">Reading and decrypting file…</string>
+    <string name="md_viewer_reading_file">Reading file content…</string>
+    <string name="md_viewer_parsing_rst">Parsing RST structure…</string>
+    <string name="md_viewer_parsing_markdown">Parsing Markdown structure…</string>
+    <string name="md_viewer_init_page_scripts">Initializing page styles and scripts…</string>
+    <string name="md_viewer_load_done_showing">Done, displaying page…</string>
+    <string name="md_viewer_page_ready">Page is ready</string>
+    <string name="md_viewer_preparing_document">Preparing document</string>
+    <string name="md_viewer_preparing_page">Preparing page</string>
+    <string name="md_viewer_preparing_document_ellipsis">Preparing document…</string>
+    <string name="md_viewer_link_title">Link</string>
+    <string name="md_viewer_link_hint">Copy the link or open it in a browser.</string>
+    <string name="md_viewer_link_clip_label">Link</string>
+    <string name="md_viewer_link_copied">Link copied</string>
+    <string name="md_viewer_copy_link">Copy link</string>
+    <string name="md_viewer_open_in_browser">Open in browser</string>
+    <string name="md_viewer_open_in_browser_chooser">Open in browser</string>
+    <string name="md_viewer_reading_archive_doc">Reading document from archive…</string>
+    <string name="md_viewer_file_not_found">File not found: %1$s</string>
+    <string name="md_viewer_load_failed_detail">Load failed: %1$s</string>
+    <string name="md_viewer_reading_html">Reading HTML…</string>
+    <string name="md_viewer_loading_webpage">Loading webpage…</string>
+    <string name="md_viewer_html_link_unsupported">This HTML viewer only supports following HTML/HTM links</string>
+    <string name="md_viewer_html_link_parse_failed">Unable to parse HTML link: %1$s</string>
+    <string name="md_viewer_html_open_failed">Unable to open HTML file: %1$s</string>
+    <string name="md_viewer_init_page">Initializing page…</string>
+    <string name="md_viewer_preparing_html">Preparing HTML</string>
+    <string name="md_viewer_regex_parse_failed">Failed to parse find results</string>
+    <string name="md_viewer_page_not_ready">Page is not ready yet</string>
+    <string name="md_viewer_chapter_text_read_failed">Failed to read chapter text: %1$s %2$s</string>
+    <string name="md_viewer_chapter_file_missing">Chapter file missing: index=%1$d href=%2$s file=%3$s</string>
+    <string name="dict_word_not_found">Word not found in dictionary: "%1$s"</string>
+    <string name="md_viewer_fulltext_query_required">Enter text to search.</string>
+    <string name="md_viewer_fulltext_search_failed">Full-text search failed: %1$s</string>
+    <string-array name="about_usage_tips">
+        <item>You can sync a Git repository locally at any time; many sharing features rely on it.</item>
+        <item>The built-in viewer supports text and binary viewing, plus text and binary editing.</item>
+        <item>Use the Markdown renderer to view .md or .rst files directly.</item>
+        <item>When another app opens a file with this app, you can save it to the app\'s root directory.</item>
+        <item>Double-tap a file to add it to the pending list for batch operations.</item>
+        <item>Obfuscation is fast but not cryptographically strong; it only encrypts file headers for temporary use on large files.</item>
+        <item>Enable "Show filters" in settings to filter file names with regex and add all matches to the pending list.</item>
+        <item>The FTP feature starts a server and keeps the device awake—exit manually or set an auto-timeout.</item>
+        <item>FTP transfers are insecure even with a password; do not use on untrusted networks.</item>
+    </string-array>
 </resources>

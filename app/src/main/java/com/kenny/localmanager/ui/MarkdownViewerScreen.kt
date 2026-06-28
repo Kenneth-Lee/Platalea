@@ -102,6 +102,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
@@ -1762,11 +1763,11 @@ private fun htmlToSearchableText(html: String): String {
         .trim()
 }
 
-private fun readTextForEpubSearch(file: File): String {
+private fun readTextForEpubSearch(context: Context, file: File): String {
     return runCatching { file.readText() }
         .getOrElse {
             runCatching { file.readBytes().decodeToString() }
-                .getOrElse { error -> throw IllegalStateException("读取章节文本失败：${file.absolutePath} ${error.message}", error) }
+                .getOrElse { error -> throw IllegalStateException(context.getString(R.string.md_viewer_chapter_text_read_failed, file.absolutePath, error.message ?: ""), error) }
         }
 }
 
@@ -1794,6 +1795,7 @@ private fun buildLiteralMatchSnippet(text: String, query: String, radius: Int = 
 }
 
 private suspend fun searchEpubAcrossChapters(
+    context: Context,
     extractResult: EpubExtractResult,
     query: String
 ): List<EpubFullTextSearchResult> = withContext(Dispatchers.IO) {
@@ -1803,9 +1805,9 @@ private suspend fun searchEpubAcrossChapters(
         val chapterFile = getEpubChapterFile(extractResult, chapter)
             ?: return@mapIndexedNotNull null
         if (!chapterFile.exists() || !chapterFile.isFile) {
-            throw IllegalStateException("章节文件不存在：index=$index href=${chapter.href} file=${chapterFile.absolutePath}")
+            throw IllegalStateException(context.getString(R.string.md_viewer_chapter_file_missing, index, chapter.href, chapterFile.absolutePath))
         }
-        val plainText = htmlToSearchableText(readTextForEpubSearch(chapterFile))
+        val plainText = htmlToSearchableText(readTextForEpubSearch(context, chapterFile))
         val matchCount = countLiteralMatches(plainText, normalizedQuery)
         if (matchCount <= 0) {
             null
@@ -2107,8 +2109,8 @@ private fun decodeJsStringResult(rawResult: String?): String? {
     }
 }
 
-private fun parseRegexFindUiState(rawResult: String?): RegexFindUiState {
-    val decoded = decodeJsStringResult(rawResult) ?: return RegexFindUiState(error = "查找结果解析失败")
+private fun parseRegexFindUiState(context: Context, rawResult: String?): RegexFindUiState {
+    val decoded = decodeJsStringResult(rawResult) ?: return RegexFindUiState(error = context.getString(R.string.md_viewer_regex_parse_failed))
     return try {
         val json = org.json.JSONObject(decoded)
         val errorValue = json.opt("error")
@@ -2122,7 +2124,7 @@ private fun parseRegexFindUiState(rawResult: String?): RegexFindUiState {
             },
         )
     } catch (_: Exception) {
-        RegexFindUiState(error = "查找结果解析失败")
+        RegexFindUiState(error = context.getString(R.string.md_viewer_regex_parse_failed))
     }
 }
 
@@ -2139,12 +2141,13 @@ private fun installRegexFindBridge(view: WebView?, onInstalled: (() -> Unit)? = 
 }
 
 private fun runRegexFindCommand(
+    context: Context,
     view: WebView?,
     command: String,
     onResult: (RegexFindUiState) -> Unit
 ) {
     if (view == null) {
-        onResult(RegexFindUiState(error = "页面尚未就绪"))
+        onResult(RegexFindUiState(error = context.getString(R.string.md_viewer_page_not_ready)))
         return
     }
     installRegexFindBridge(view) {
@@ -2158,13 +2161,14 @@ private fun runRegexFindCommand(
                     }
                 })();""".trimIndent()
             ) { rawResult ->
-                onResult(parseRegexFindUiState(rawResult))
+                onResult(parseRegexFindUiState(context, rawResult))
             }
         }
     }
 }
 
 private fun searchInWebViewByRegex(
+    context: Context,
     view: WebView?,
     pattern: String,
     onResult: (RegexFindUiState) -> Unit
@@ -2174,22 +2178,24 @@ private fun searchInWebViewByRegex(
     } catch (_: Exception) {
         "\"${pattern.replace("\\", "\\\\").replace("\"", "\\\"")}\""
     }
-    runRegexFindCommand(view, "window.__lmRegexFind.search($quotedPattern)", onResult)
+    runRegexFindCommand(context, view, "window.__lmRegexFind.search($quotedPattern)", onResult)
 }
 
 private fun moveRegexFindMatch(
+    context: Context,
     view: WebView?,
     forward: Boolean,
     onResult: (RegexFindUiState) -> Unit
 ) {
-    runRegexFindCommand(view, if (forward) "window.__lmRegexFind.next()" else "window.__lmRegexFind.prev()", onResult)
+    runRegexFindCommand(context, view, if (forward) "window.__lmRegexFind.next()" else "window.__lmRegexFind.prev()", onResult)
 }
 
 private fun clearRegexFind(
+    context: Context,
     view: WebView?,
     onResult: (RegexFindUiState) -> Unit
 ) {
-    runRegexFindCommand(view, "window.__lmRegexFind.clear()", onResult)
+    runRegexFindCommand(context, view, "window.__lmRegexFind.clear()", onResult)
 }
 
 @Composable
@@ -2198,7 +2204,7 @@ private fun WebViewRegexFindAction(
     onClick: () -> Unit
 ) {
     IconButton(onClick = onClick, enabled = enabled) {
-        Icon(Icons.Default.Search, contentDescription = "查找")
+        Icon(Icons.Default.Search, contentDescription = stringResource(R.string.viewer_find_desc))
     }
 }
 
@@ -2237,20 +2243,20 @@ private fun WebViewRegexFindDialog(
                             value = query,
                             onValueChange = onQueryChange,
                             modifier = Modifier.weight(1f),
-                            placeholder = { Text("正则，例如 /error|warn/i") },
+                            placeholder = { Text(stringResource(R.string.md_viewer_regex_placeholder)) },
                             singleLine = true
                         )
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.Default.Close, contentDescription = "关闭查找")
+                            Icon(Icons.Default.Close, contentDescription = stringResource(R.string.md_viewer_close_find))
                         }
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
                         text = when {
                             result.error != null -> result.error
-                            result.hasMatches -> "第 ${result.currentIndex + 1} / ${result.count} 处，定位时会自动避开底部查找栏。"
-                            query.isNotBlank() -> "未找到匹配"
-                            else -> "支持 /pattern/flags 与 (?i)pattern。"
+                            result.hasMatches -> stringResource(R.string.md_viewer_regex_match_with_bar, result.currentIndex + 1, result.count)
+                            query.isNotBlank() -> stringResource(R.string.viewer_regex_no_match)
+                            else -> stringResource(R.string.md_viewer_regex_hint_flags)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = when {
@@ -2269,10 +2275,10 @@ private fun WebViewRegexFindDialog(
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(onClick = onSearch) { Text("查找") }
-                        TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
-                        TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
-                        TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                        TextButton(onClick = onSearch) { Text(stringResource(R.string.viewer_regex_search)) }
+                        TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text(stringResource(R.string.viewer_regex_previous)) }
+                        TextButton(onClick = onNext, enabled = result.hasMatches) { Text(stringResource(R.string.viewer_regex_next)) }
+                        TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text(stringResource(R.string.viewer_regex_clear)) }
                     }
                 }
             }
@@ -2309,16 +2315,16 @@ private fun EpubFullTextSearchDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("全文查找", style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.md_viewer_fulltext_find_title), style = MaterialTheme.typography.titleMedium)
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "关闭全文查找")
+                        Icon(Icons.Default.Close, contentDescription = stringResource(R.string.md_viewer_close_fulltext_find))
                     }
                 }
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("输入要搜索的文字") },
+                    placeholder = { Text(stringResource(R.string.md_viewer_fulltext_search_placeholder)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
@@ -2329,13 +2335,13 @@ private fun EpubFullTextSearchDialog(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     TextButton(onClick = onSearch, enabled = !searching) {
-                        Text(if (searching) "搜索中..." else "搜索")
+                        Text(if (searching) stringResource(R.string.md_viewer_fulltext_searching) else stringResource(R.string.dict_search))
                     }
                     TextButton(
                         onClick = onClear,
                         enabled = query.isNotBlank() || results.isNotEmpty() || error != null
                     ) {
-                        Text("清除")
+                        Text(stringResource(R.string.viewer_regex_clear))
                     }
                 }
                 Spacer(Modifier.height(8.dp))
@@ -2344,17 +2350,17 @@ private fun EpubFullTextSearchDialog(
                         Text(error, color = MaterialTheme.colorScheme.error)
                     }
                     searching -> {
-                        Text("正在扫描全部章节，请稍候...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.md_viewer_fulltext_scanning), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     query.isBlank() -> {
-                        Text("输入文字后可在全部章节中查找。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.md_viewer_fulltext_hint), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     results.isEmpty() -> {
-                        Text("未找到匹配章节。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.md_viewer_fulltext_no_match), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     else -> {
                         Text(
-                            "找到 ${results.sumOf { it.matchCount }} 处命中，分布在 ${results.size} 个章节。",
+                            stringResource(R.string.md_viewer_fulltext_summary, results.sumOf { it.matchCount }, results.size),
                             color = MaterialTheme.colorScheme.primary,
                             style = MaterialTheme.typography.bodySmall
                         )
@@ -2372,7 +2378,7 @@ private fun EpubFullTextSearchDialog(
                             ) {
                                 Column(Modifier.padding(12.dp)) {
                                     Text(
-                                        "第 ${item.chapterIndex + 1} 章 · ${item.chapterTitle}",
+                                        stringResource(R.string.md_viewer_chapter_hit, item.chapterIndex + 1, item.chapterTitle),
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary,
                                         maxLines = 1,
@@ -2380,7 +2386,7 @@ private fun EpubFullTextSearchDialog(
                                     )
                                     Spacer(Modifier.height(4.dp))
                                     Text(
-                                        "命中 ${item.matchCount} 次",
+                                        stringResource(R.string.md_viewer_hit_count, item.matchCount),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -2423,7 +2429,7 @@ fun MarkdownViewerScreen(
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var loadingMessage by remember { mutableStateOf(context.getString(R.string.md_viewer_loading_default)) }
     var pageLoading by remember { mutableStateOf(false) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var pendingInternalUri by remember { mutableStateOf<String?>(null) }
@@ -2459,12 +2465,12 @@ fun MarkdownViewerScreen(
     fun lookupWord(word: String) {
         val loaded = dictLoaded
         if (loaded == null) {
-            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_no_dictionary))
             return
         }
         val found = lookupExactWord(loaded, word)
         if (found == null) {
-            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_word_not_found, word))
             return
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
@@ -2505,7 +2511,7 @@ fun MarkdownViewerScreen(
             htmlContent = cached
             loading = false
             pageLoading = sessionCache.pageReadyMap[cacheKey] != true
-            loadingMessage = if (pageLoading) "正在恢复页面脚本与样式…" else "正在复用已缓存页面…"
+            loadingMessage = if (pageLoading) context.getString(R.string.md_viewer_restore_page_scripts) else context.getString(R.string.md_viewer_reuse_cached_page)
             Log.d(MD_DEBUG, "[加载] 使用缓存 currentUri=$currentUri")
             return@LaunchedEffect
         }
@@ -2513,20 +2519,20 @@ fun MarkdownViewerScreen(
         pageLoading = false
         loadError = null
         htmlContent = null
-        loadingMessage = if (currentEncrypted) "正在读取并解密文件…" else "正在读取文件内容…"
+        loadingMessage = if (currentEncrypted) context.getString(R.string.md_viewer_reading_encrypted) else context.getString(R.string.md_viewer_reading_file)
         Log.d(MD_DEBUG, "[加载] 开始 currentUri=$currentUri")
         val uri = Uri.parse(currentUri)
         val decoded = withContext(Dispatchers.IO) {
             val stream = context.contentResolver.openInputStreamSafe(uri)
             if (stream == null) {
                 Log.d(MD_DEBUG, "[加载] 失败 openInputStreamSafe 返回 null uri=$currentUri")
-                loadError = "无法打开文件"
+                loadError = context.getString(R.string.viewer_open_failed)
                 return@withContext null
             }
             stream.use { raw ->
                 val bytes = if (currentEncrypted) {
                     GpgHelper.decryptStream(raw) ?: run {
-                        loadError = "解密失败或需要密码"
+                        loadError = context.getString(R.string.viewer_decrypt_failed)
                         Log.d(MD_DEBUG, "[加载] 解密失败")
                         return@withContext null
                     }
@@ -2542,14 +2548,14 @@ fun MarkdownViewerScreen(
             return@LaunchedEffect
         }
         val isRst = currentName.endsWith(".rst", ignoreCase = true)
-        loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
+        loadingMessage = if (isRst) context.getString(R.string.md_viewer_parsing_rst) else context.getString(R.string.md_viewer_parsing_markdown)
         val renderedHtml = withContext(Dispatchers.IO) {
             if (isRst) rstToHtml(trimmed) else markdownToHtml(trimmed)
         }
         htmlContent = renderedHtml
         sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
         pageLoading = sessionCache.pageReadyMap[cacheKey] != true
-        loadingMessage = if (pageLoading) "正在初始化页面样式与脚本…" else "已完成，正在显示页面…"
+        loadingMessage = if (pageLoading) context.getString(R.string.md_viewer_init_page_scripts) else context.getString(R.string.md_viewer_load_done_showing)
         Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
         loading = false
     }
@@ -2627,33 +2633,33 @@ fun MarkdownViewerScreen(
         val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("链接") },
+            title = { Text(stringResource(R.string.md_viewer_link_title)) },
             text = {
                 Column {
                     Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.md_viewer_link_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     try {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
-                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                        clip?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.md_viewer_link_clip_label), urlToShow))
+                        Toast.makeText(context, context.getString(R.string.md_viewer_link_copied), Toast.LENGTH_SHORT).show()
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.md_viewer_copy_link)) }
                 TextButton(onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
-                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        context.startActivity(Intent.createChooser(intent, context.getString(R.string.md_viewer_open_in_browser_chooser)))
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("用浏览器打开") }
+                }) { Text(stringResource(R.string.md_viewer_open_in_browser)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -2668,15 +2674,15 @@ fun MarkdownViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
             onClear = {
-                clearRegexFind(webViewRef.value) {
+                clearRegexFind(context, webViewRef.value) {
                     regexFindUiState = it
                 }
             },
@@ -2716,7 +2722,7 @@ fun MarkdownViewerScreen(
                             onBack()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -2730,7 +2736,7 @@ fun MarkdownViewerScreen(
                                 webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             }
                         ) {
-                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                            Icon(Icons.Default.ZoomOut, contentDescription = stringResource(R.string.epub_action_zoom_out))
                         }
                         IconButton(
                             onClick = {
@@ -2738,7 +2744,7 @@ fun MarkdownViewerScreen(
                                 webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             }
                         ) {
-                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                            Icon(Icons.Default.ZoomIn, contentDescription = stringResource(R.string.epub_action_zoom_in))
                         }
                         Box {
                             IconButton(onClick = { showMoreMenu = true }) {
@@ -2843,7 +2849,7 @@ fun MarkdownViewerScreen(
                                                     evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                                     if (isCurrent) {
                                                         pageLoading = false
-                                                        loadingMessage = "页面已准备完成"
+                                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                                     }
                                                 }, "androidPageReady")
                                                 webViewClient = LinkInterceptClient(
@@ -2855,7 +2861,7 @@ fun MarkdownViewerScreen(
                                                     w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                                     if (isCurrent) {
                                                         pageLoading = false
-                                                        loadingMessage = "页面已准备完成"
+                                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                                     }
                                                 }
                                                 settings.domStorageEnabled = false
@@ -2883,7 +2889,7 @@ fun MarkdownViewerScreen(
                             Card {
                                 Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
                                     Text(
-                                        if (loading) "正在准备文档" else "正在准备页面",
+                                        if (loading) context.getString(R.string.md_viewer_preparing_document) else context.getString(R.string.md_viewer_preparing_page),
                                         color = MaterialTheme.colorScheme.onSurface,
                                         style = MaterialTheme.typography.titleSmall
                                     )
@@ -2901,7 +2907,7 @@ fun MarkdownViewerScreen(
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Card {
                         Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-                            Text("正在准备文档", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Text(stringResource(R.string.md_viewer_preparing_document), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(8.dp))
                             Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -3011,12 +3017,12 @@ fun PassContentViewerScreen(
     fun lookupWord(word: String) {
         val loaded = dictLoaded
         if (loaded == null) {
-            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_no_dictionary))
             return
         }
         val found = lookupExactWord(loaded, word)
         if (found == null) {
-            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_word_not_found, word))
             return
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
@@ -3076,14 +3082,14 @@ fun PassContentViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
-            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(context, webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
         )
     }
@@ -3110,7 +3116,7 @@ fun PassContentViewerScreen(
                 title = { Text(innerFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { doBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -3123,7 +3129,7 @@ fun PassContentViewerScreen(
                             webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                         }
                     ) {
-                        Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                        Icon(Icons.Default.ZoomOut, contentDescription = stringResource(R.string.epub_action_zoom_out))
                     }
                     IconButton(
                         onClick = {
@@ -3131,7 +3137,7 @@ fun PassContentViewerScreen(
                             webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                         }
                     ) {
-                        Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                        Icon(Icons.Default.ZoomIn, contentDescription = stringResource(R.string.epub_action_zoom_in))
                     }
                     Box {
                         IconButton(onClick = { showMoreMenu = true }) {
@@ -3357,7 +3363,7 @@ fun MdZipViewerScreen(
     var htmlContent by remember { mutableStateOf<String?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var loadingMessage by remember { mutableStateOf(context.getString(R.string.md_viewer_loading_default)) }
     var pageLoading by remember { mutableStateOf(false) }
     var showPageLoadingHint by remember { mutableStateOf(false) }
     var pendingInternalFile by remember { mutableStateOf<File?>(null) }
@@ -3390,19 +3396,19 @@ fun MdZipViewerScreen(
     fun lookupWord(word: String) {
         val loaded = dictLoaded
         if (loaded == null) {
-            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_no_dictionary))
             return
         }
         val found = lookupExactWord(loaded, word)
         if (found == null) {
-            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_word_not_found, word))
             return
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
         dictLookupResult = DictLookupResult(word, definition, null)
     }
 
-    fun resetCurrentPageState(message: String = "正在准备文档…") {
+    fun resetCurrentPageState(message: String = context.getString(R.string.md_viewer_preparing_document_ellipsis)) {
         webViewRef.value = null
         htmlContent = null
         loadError = null
@@ -3462,7 +3468,7 @@ fun MdZipViewerScreen(
             htmlContent = cached
             loading = false
             pageLoading = true
-            loadingMessage = "正在初始化页面样式与脚本…"
+            loadingMessage = context.getString(R.string.md_viewer_init_page_scripts)
             Log.d(MDZIP_DEBUG, "[MDZIP] 使用缓存 path=$cacheKey")
             logDebug?.invoke("[MDZIP] 使用缓存 path=$cacheKey")
             return@LaunchedEffect
@@ -3475,11 +3481,11 @@ fun MdZipViewerScreen(
         pageLoading = false
         loadError = null
         htmlContent = null
-        loadingMessage = "正在读取压缩包中的文档…"
+        loadingMessage = context.getString(R.string.md_viewer_reading_archive_doc)
         withContext(Dispatchers.IO) {
             try {
                 if (!currentFile.exists()) {
-                    loadError = "文件不存在: ${currentFile.absolutePath}"
+                    loadError = context.getString(R.string.md_viewer_file_not_found, currentFile.absolutePath)
                     Log.e(MDZIP_DEBUG, "文件不存在: ${currentFile.absolutePath}")
                     logDebug?.invoke("[MDZIP] 文件不存在!")
                     return@withContext
@@ -3494,7 +3500,7 @@ fun MdZipViewerScreen(
                 logDebug?.invoke("[MDZIP] 文件内容前200字符:")
                 logDebug?.invoke(trimmed.take(200))
                 val isRst = currentFile.name.endsWith(".rst", ignoreCase = true)
-                loadingMessage = if (isRst) "正在解析 RST 结构…" else "正在解析 Markdown 结构…"
+                loadingMessage = if (isRst) context.getString(R.string.md_viewer_parsing_rst) else context.getString(R.string.md_viewer_parsing_markdown)
                 val renderedHtml = if (isRst) {
                     rstToHtml(trimmed)
                 } else {
@@ -3503,11 +3509,11 @@ fun MdZipViewerScreen(
                 htmlContent = renderedHtml
                 sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
                 pageLoading = true
-                loadingMessage = "正在初始化页面样式与脚本…"
+                loadingMessage = context.getString(R.string.md_viewer_init_page_scripts)
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
                 logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
             } catch (e: Exception) {
-                loadError = "加载失败: ${e.message}"
+                loadError = context.getString(R.string.md_viewer_load_failed_detail, e.message ?: "")
                 Log.e(MDZIP_DEBUG, "加载异常: ${e.javaClass.name}: ${e.message}", e)
                 logDebug?.invoke("[MDZIP] 加载异常: ${e.javaClass.name}: ${e.message}")
             }
@@ -3612,33 +3618,33 @@ fun MdZipViewerScreen(
         val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("链接") },
+            title = { Text(stringResource(R.string.md_viewer_link_title)) },
             text = {
                 Column {
                     Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.md_viewer_link_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     try {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
-                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                        clip?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.md_viewer_link_clip_label), urlToShow))
+                        Toast.makeText(context, context.getString(R.string.md_viewer_link_copied), Toast.LENGTH_SHORT).show()
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.md_viewer_copy_link)) }
                 TextButton(onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
-                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        context.startActivity(Intent.createChooser(intent, context.getString(R.string.md_viewer_open_in_browser_chooser)))
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("用浏览器打开") }
+                }) { Text(stringResource(R.string.md_viewer_open_in_browser)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -3653,14 +3659,14 @@ fun MdZipViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
-            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(context, webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
         )
     }
@@ -3687,7 +3693,7 @@ fun MdZipViewerScreen(
                 title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { doBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -3701,7 +3707,7 @@ fun MdZipViewerScreen(
                                 webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             }
                         ) {
-                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                            Icon(Icons.Default.ZoomOut, contentDescription = stringResource(R.string.epub_action_zoom_out))
                         }
                         IconButton(
                             onClick = {
@@ -3709,7 +3715,7 @@ fun MdZipViewerScreen(
                                 webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                             }
                         ) {
-                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                            Icon(Icons.Default.ZoomIn, contentDescription = stringResource(R.string.epub_action_zoom_in))
                         }
                         Box {
                             IconButton(onClick = { showMoreMenu = true }) {
@@ -3806,7 +3812,7 @@ fun MdZipViewerScreen(
                                         installRegexFindBridge(this)
                                         evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                         pageLoading = false
-                                        loadingMessage = "页面已准备完成"
+                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                     }, "androidPageReady")
                                     @SuppressLint("SetJavaScriptEnabled")
                                     settings.javaScriptEnabled = true
@@ -3817,7 +3823,7 @@ fun MdZipViewerScreen(
                                         installRegexFindBridge(w)
                                         w.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                         pageLoading = false
-                                        loadingMessage = "页面已准备完成"
+                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                     }
                                     val loadKey = "$baseUrl|${fullHtml.hashCode()}"
                                     tag = loadKey
@@ -3830,7 +3836,7 @@ fun MdZipViewerScreen(
                                 val loadKey = "$baseUrl|${fullHtml.hashCode()}"
                                 if (webView.tag != loadKey) {
                                     pageLoading = true
-                                    loadingMessage = "正在初始化页面样式与脚本…"
+                                    loadingMessage = context.getString(R.string.md_viewer_init_page_scripts)
                                     webView.tag = loadKey
                                     webView.loadDataWithBaseURL(baseUrl, fullHtml, "text/html", "UTF-8", null)
                                 }
@@ -3843,7 +3849,7 @@ fun MdZipViewerScreen(
                             Card {
                                 Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
                                     Text(
-                                        if (loading) "正在准备文档" else "正在准备页面",
+                                        if (loading) context.getString(R.string.md_viewer_preparing_document) else context.getString(R.string.md_viewer_preparing_page),
                                         color = MaterialTheme.colorScheme.onSurface,
                                         style = MaterialTheme.typography.titleSmall
                                     )
@@ -3861,7 +3867,7 @@ fun MdZipViewerScreen(
                 loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Card {
                         Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-                            Text("正在准备文档", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                            Text(stringResource(R.string.md_viewer_preparing_document), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                             Spacer(Modifier.height(8.dp))
                             Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -3953,7 +3959,7 @@ private fun MdZipNoTargetScreen(
                 title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -4070,12 +4076,12 @@ fun HtmlZipViewerScreen(
     fun lookupWord(word: String) {
         val loaded = dictLoaded
         if (loaded == null) {
-            dictLookupResult = DictLookupResult(word, null, "没有可用的词典，请先导入词典")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_no_dictionary))
             return
         }
         val found = lookupExactWord(loaded, word)
         if (found == null) {
-            dictLookupResult = DictLookupResult(word, null, "词典中未找到 \"$word\"")
+            dictLookupResult = DictLookupResult(word, null, context.getString(R.string.dict_word_not_found, word))
             return
         }
         val definition = readStarDictExplanation(context, loaded.summary.id, loaded, found)
@@ -4093,33 +4099,33 @@ fun HtmlZipViewerScreen(
         val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("链接") },
+            title = { Text(stringResource(R.string.md_viewer_link_title)) },
             text = {
                 Column {
                     Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.md_viewer_link_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     try {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
-                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                        clip?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.md_viewer_link_clip_label), urlToShow))
+                        Toast.makeText(context, context.getString(R.string.md_viewer_link_copied), Toast.LENGTH_SHORT).show()
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.md_viewer_copy_link)) }
                 TextButton(onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
-                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        context.startActivity(Intent.createChooser(intent, context.getString(R.string.md_viewer_open_in_browser_chooser)))
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("用浏览器打开") }
+                }) { Text(stringResource(R.string.md_viewer_open_in_browser)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -4134,14 +4140,14 @@ fun HtmlZipViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
-            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(context, webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
         )
     }
@@ -4171,7 +4177,7 @@ fun HtmlZipViewerScreen(
                         val w = webViewRef.value
                         if (w != null && w.canGoBack()) w.goBack() else onBack()
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -4309,7 +4315,7 @@ fun HtmlViewerScreen(
     var loadError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(initialLocation.localFileUri != null) }
     var pageLoading by remember { mutableStateOf(initialLocation.localFileUri == null) }
-    var loadingMessage by remember { mutableStateOf("加载中…") }
+    var loadingMessage by remember { mutableStateOf(context.getString(R.string.md_viewer_loading_default)) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
@@ -4338,11 +4344,11 @@ fun HtmlViewerScreen(
         if (location.localFileUri != null) {
             loading = true
             pageLoading = false
-            loadingMessage = "正在读取 HTML…"
+            loadingMessage = context.getString(R.string.md_viewer_reading_html)
         } else {
             loading = false
             pageLoading = true
-            loadingMessage = "正在加载网页…"
+            loadingMessage = context.getString(R.string.md_viewer_loading_webpage)
         }
     }
 
@@ -4382,7 +4388,7 @@ fun HtmlViewerScreen(
                             }
                         } else {
                             mainHandler.post {
-                                Toast.makeText(context, "当前 HTML 查看器只支持继续打开 HTML/HTM 链接", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.md_viewer_html_link_unsupported), Toast.LENGTH_SHORT).show()
                             }
                         }
                     } else if (MdLinkUtils.looksLikeExternalUrl(url)) {
@@ -4392,7 +4398,7 @@ fun HtmlViewerScreen(
                         }
                     } else {
                         mainHandler.post {
-                            Toast.makeText(context, "无法解析 HTML 链接：$url", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.md_viewer_html_link_parse_failed, url), Toast.LENGTH_SHORT).show()
                         }
                     }
                 }
@@ -4406,19 +4412,19 @@ fun HtmlViewerScreen(
             loadError = null
             loading = false
             pageLoading = true
-            loadingMessage = "正在加载网页…"
+            loadingMessage = context.getString(R.string.md_viewer_loading_webpage)
             return@LaunchedEffect
         }
         regexFindUiState = RegexFindUiState()
         loading = true
         pageLoading = false
-        loadingMessage = "正在读取 HTML…"
+        loadingMessage = context.getString(R.string.md_viewer_reading_html)
         localHtmlContent = null
         loadError = null
         val decoded = withContext(Dispatchers.IO) {
             val stream = context.contentResolver.openInputStreamSafe(Uri.parse(localUri))
             if (stream == null) {
-                loadError = "无法打开 HTML 文件：$localUri"
+                loadError = context.getString(R.string.md_viewer_html_open_failed, localUri)
                 return@withContext null
             }
             stream.use { raw ->
@@ -4428,7 +4434,7 @@ fun HtmlViewerScreen(
         localHtmlContent = decoded
         loading = false
         pageLoading = decoded != null
-        loadingMessage = if (decoded != null) "正在初始化页面…" else loadingMessage
+        loadingMessage = if (decoded != null) context.getString(R.string.md_viewer_init_page) else loadingMessage
     }
 
     BackHandler {
@@ -4449,35 +4455,35 @@ fun HtmlViewerScreen(
         val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("链接") },
+            title = { Text(stringResource(R.string.md_viewer_link_title)) },
             text = {
                 Column {
                     Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.md_viewer_link_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     try {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
-                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                        clip?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.md_viewer_link_clip_label), urlToShow))
+                        Toast.makeText(context, context.getString(R.string.md_viewer_link_copied), Toast.LENGTH_SHORT).show()
                     } catch (_: Exception) {
                     }
                     pendingExternalUrl = null
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.md_viewer_copy_link)) }
                 TextButton(onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
-                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        context.startActivity(Intent.createChooser(intent, context.getString(R.string.md_viewer_open_in_browser_chooser)))
                     } catch (_: Exception) {
                     }
                     pendingExternalUrl = null
-                }) { Text("用浏览器打开") }
+                }) { Text(stringResource(R.string.md_viewer_open_in_browser)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -4492,14 +4498,14 @@ fun HtmlViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
-            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(context, webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
         )
     }
@@ -4540,7 +4546,7 @@ fun HtmlViewerScreen(
                             else -> onBack()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -4612,7 +4618,7 @@ fun HtmlViewerScreen(
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Card {
                             Column(Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-                                Text("正在准备 HTML", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
+                                Text(stringResource(R.string.md_viewer_preparing_html), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                                 Spacer(Modifier.height(8.dp))
                                 Text(loadingMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
@@ -4634,7 +4640,7 @@ fun HtmlViewerScreen(
                                         installRegexFindBridge(this)
                                         installEpubTtsBridge(this)
                                         pageLoading = false
-                                        loadingMessage = "页面已准备完成"
+                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                         currentPageToken = currentLocation.localFileUri ?: currentLocation.initialUrl
                                         pendingAnchor?.let { anchor ->
                                             scrollToAnchor(this, anchor)
@@ -4648,7 +4654,7 @@ fun HtmlViewerScreen(
                                         installRegexFindBridge(view)
                                         installEpubTtsBridge(view)
                                         pageLoading = false
-                                        loadingMessage = "页面已准备完成"
+                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                         currentPageToken = currentLocation.localFileUri ?: currentLocation.initialUrl
                                         pendingAnchor?.let { anchor ->
                                             scrollToAnchor(view, anchor)
@@ -4666,7 +4672,7 @@ fun HtmlViewerScreen(
                                 val loadKey = "html-local|$localFileUri|${htmlContent.hashCode()}"
                                 if (webView.tag != loadKey) {
                                     pageLoading = true
-                                    loadingMessage = "正在初始化页面…"
+                                    loadingMessage = context.getString(R.string.md_viewer_init_page)
                                     webView.tag = loadKey
                                     webView.loadDataWithBaseURL(MD_VIEWER_BASE_URL, htmlContent, "text/html", "UTF-8", null)
                                 }
@@ -4693,7 +4699,7 @@ fun HtmlViewerScreen(
                                         installRegexFindBridge(view)
                                         installEpubTtsBridge(view)
                                         pageLoading = false
-                                        loadingMessage = "页面已准备完成"
+                                        loadingMessage = context.getString(R.string.md_viewer_page_ready)
                                         loadError = null
                                         currentPageToken = view.url ?: remoteUrl
                                     }
@@ -4708,7 +4714,7 @@ fun HtmlViewerScreen(
                                 if (webView.tag != loadKey) {
                                     loadError = null
                                     pageLoading = true
-                                    loadingMessage = "正在加载网页…"
+                                    loadingMessage = context.getString(R.string.md_viewer_loading_webpage)
                                     webView.tag = loadKey
                                     webView.loadUrl(remoteUrl)
                                 }
@@ -4817,7 +4823,7 @@ private fun HtmlZipNoIndexScreen(
                 title = { Text(zipFileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -5365,24 +5371,24 @@ fun EpubViewerScreen(
     fun applyLiteralFindToCurrentChapter(rawQuery: String, targetView: WebView? = webViewRef.value) {
         if (rawQuery.isBlank()) return
         regexQuery = rawQuery
-        searchInWebViewByRegex(targetView, Regex.escape(rawQuery)) { regexFindUiState = it }
+        searchInWebViewByRegex(context, targetView, Regex.escape(rawQuery)) { regexFindUiState = it }
     }
 
     fun runFullTextSearch() {
         val query = fullTextQuery.trim()
         if (query.isBlank()) {
             fullTextSearchResults = emptyList()
-            fullTextSearchError = "请输入要搜索的文字"
+            fullTextSearchError = context.getString(R.string.md_viewer_fulltext_query_required)
             return
         }
         scope.launch {
             fullTextSearching = true
             fullTextSearchError = null
             try {
-                fullTextSearchResults = searchEpubAcrossChapters(extractResult, query)
+                fullTextSearchResults = searchEpubAcrossChapters(context, extractResult, query)
             } catch (error: Exception) {
                 fullTextSearchResults = emptyList()
-                fullTextSearchError = "全文查找失败：${error.message ?: error.javaClass.simpleName}"
+                fullTextSearchError = context.getString(R.string.md_viewer_fulltext_search_failed, error.message ?: error.javaClass.simpleName)
             } finally {
                 fullTextSearching = false
             }
@@ -5754,33 +5760,33 @@ fun EpubViewerScreen(
         val urlToShow = pendingExternalUrl!!
         AlertDialog(
             onDismissRequest = { pendingExternalUrl = null },
-            title = { Text("链接") },
+            title = { Text(stringResource(R.string.md_viewer_link_title)) },
             text = {
                 Column {
                     Text(urlToShow, style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    Text("可选择复制链接或用浏览器打开。", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.md_viewer_link_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             },
             confirmButton = {
                 TextButton(onClick = {
                     try {
                         val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                        clip?.setPrimaryClip(ClipData.newPlainText("链接", urlToShow))
-                        Toast.makeText(context, "已复制链接", Toast.LENGTH_SHORT).show()
+                        clip?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.md_viewer_link_clip_label), urlToShow))
+                        Toast.makeText(context, context.getString(R.string.md_viewer_link_copied), Toast.LENGTH_SHORT).show()
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("复制链接") }
+                }) { Text(stringResource(R.string.md_viewer_copy_link)) }
                 TextButton(onClick = {
                     try {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlToShow))
-                        context.startActivity(Intent.createChooser(intent, "用浏览器打开"))
+                        context.startActivity(Intent.createChooser(intent, context.getString(R.string.md_viewer_open_in_browser_chooser)))
                     } catch (_: Exception) {}
                     pendingExternalUrl = null
-                }) { Text("用浏览器打开") }
+                }) { Text(stringResource(R.string.md_viewer_open_in_browser)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingExternalUrl = null }) { Text("取消") }
+                TextButton(onClick = { pendingExternalUrl = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -5795,14 +5801,14 @@ fun EpubViewerScreen(
             },
             onSearch = {
                 if (regexQuery.isBlank()) {
-                    clearRegexFind(webViewRef.value) { regexFindUiState = it }
+                    clearRegexFind(context, webViewRef.value) { regexFindUiState = it }
                 } else {
-                    searchInWebViewByRegex(webViewRef.value, regexQuery) { regexFindUiState = it }
+                    searchInWebViewByRegex(context, webViewRef.value, regexQuery) { regexFindUiState = it }
                 }
             },
-            onPrevious = { moveRegexFindMatch(webViewRef.value, forward = false) { regexFindUiState = it } },
-            onNext = { moveRegexFindMatch(webViewRef.value, forward = true) { regexFindUiState = it } },
-            onClear = { clearRegexFind(webViewRef.value) { regexFindUiState = it } },
+            onPrevious = { moveRegexFindMatch(context, webViewRef.value, forward = false) { regexFindUiState = it } },
+            onNext = { moveRegexFindMatch(context, webViewRef.value, forward = true) { regexFindUiState = it } },
+            onClear = { clearRegexFind(context, webViewRef.value) { regexFindUiState = it } },
             onDismiss = { showFindDialog = false }
         )
     }
@@ -6426,7 +6432,7 @@ fun EpubViewerScreen(
                             onBack()
                         }
                     }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -9194,7 +9200,7 @@ fun PdfViewerScreen(
                     title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
                         IconButton(onClick = onBack) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     },
                     actions = {
@@ -9239,13 +9245,13 @@ fun PdfViewerScreen(
                         IconButton(onClick = {
                             zoom = (zoom - 0.25f).coerceAtLeast(0.5f)
                         }) {
-                            Icon(Icons.Default.ZoomOut, contentDescription = "缩小")
+                            Icon(Icons.Default.ZoomOut, contentDescription = stringResource(R.string.epub_action_zoom_out))
                         }
                         Text("${(zoom * 100).toInt()}%", style = MaterialTheme.typography.bodyMedium)
                         IconButton(onClick = {
                             zoom = (zoom + 0.25f).coerceAtMost(3f)
                         }) {
-                            Icon(Icons.Default.ZoomIn, contentDescription = "放大")
+                            Icon(Icons.Default.ZoomIn, contentDescription = stringResource(R.string.epub_action_zoom_in))
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(

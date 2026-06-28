@@ -1363,4 +1363,128 @@ OPF目录文件: %2$s</string>
     <string name="context_gpg_decrypt">GnuPG 解密</string>
     <string name="browser_search_result_size_modified">大小 %1$s · 修改 %2$s</string>
     <string name="browser_unknown">未知</string>
+    <string name="about_random_tips_title">随机提示（每次打开都更新）</string>
+    <string name="cache_management_title">缓存管理</string>
+    <string name="cache_cleared_entry">已清空 %1$s</string>
+    <string name="cache_clear_entry">清空</string>
+    <string name="cache_clear_all_done">已清理全部缓存</string>
+    <string name="cache_clear_all">清理全部</string>
+    <string name="gpg_keys_title">GnuPG 密钥管理</string>
+    <string name="gpg_keys_subtitle">私钥仅保留一个；公钥可多个。生成密钥对或导入。</string>
+    <string name="gpg_generate_keypair">生成密钥对</string>
+    <string name="gpg_pubkey_share_git">公钥分享 (Git 同步)</string>
+    <string name="gpg_public_keys_section">公钥</string>
+    <string name="gpg_import_public_key">导入公钥</string>
+    <string name="gpg_delete_all_public_keys">删除全部</string>
+    <string name="gpg_export_all_public_keys">导出全部</string>
+    <string name="gpg_none">无</string>
+    <string name="gpg_export_key">导出</string>
+    <string name="gpg_delete_key_short">删</string>
+    <string name="gpg_secret_keys_section">私钥</string>
+    <string name="gpg_import_secret_key">导入私钥</string>
+    <string name="gpg_export_secret_key">导出私钥</string>
+    <string name="gpg_key_files_section">密钥文件</string>
+    <string name="gpg_import_success">导入成功</string>
+    <string name="gpg_import_failed">导入失败: %1$s</string>
+    <string name="gpg_export_success">导出成功</string>
+    <string name="gpg_export_failed">导出失败</string>
+    <string name="gpg_parse_secret_failed">无法解析私钥</string>
+    <string name="gpg_parse_public_failed">无法解析公钥</string>
+    <string name="gpg_read_file_failed">无法读取文件</string>
+    <string name="gpg_confirm_delete_secret_title">确认删除私钥</string>
+    <string name="gpg_confirm_delete_secret_message">将删除当前私钥，且无法恢复。这可能导致此前使用该私钥保护的文件无法再解密。请输入 yes 确认删除。</string>
+    <string name="gpg_confirm_delete_all_public_title">确认删除所有公钥</string>
+    <string name="gpg_confirm_delete_all_public_message">将删除全部公钥，且无法恢复。这可能导致依赖这些公钥的加密/验证流程失败。请输入 yes 确认删除。</string>
+    <string name="gpg_confirm_delete_public_title">确认删除公钥</string>
+    <string name="gpg_confirm_delete_public_message">将删除该公钥，且无法恢复。这可能导致与该公钥相关的加密/验证流程失败。请输入 yes 确认删除。</string>
+    <string name="gpg_confirm_delete_input_label">输入 yes</string>
+    <string name="gpg_confirm_delete_action">确认删除</string>
+    <string name="gpg_generate_title">生成密钥对</string>
+    <string name="gpg_user_id_label">用户标识（如：姓名 &lt;email@example.com&gt;）</string>
+    <string name="gpg_key_protect_password_label">密钥保护密码（可留空表示无密码）</string>
+    <string name="gpg_key_protect_password_confirm">再次输入密钥保护密码</string>
+    <string name="gpg_generate_overwrite_warning">检测到现有密钥。继续生成可能覆盖或替换当前默认密钥，导致历史加密文件无法解密。</string>
+    <string name="gpg_generate_risk_ack">我已知晓风险，并同意继续</string>
+    <string name="gpg_generating">生成中…</string>
+    <string name="gpg_generate_action">生成</string>
+    <string name="gpg_key_generated">密钥已生成</string>
+    <string name="gpg_generate_failed">生成失败: %1$s</string>
+    <string name="pwd_kb_clipboard_empty">剪贴板为空，未粘贴</string>
+    <string name="pwd_kb_pasted">已从剪贴板粘贴密码</string>
+    <string name="pwd_kb_paste">粘贴</string>
+    <string name="pwd_kb_done">完成</string>
+    <string name="pwd_kb_digits">数字</string>
+    <string name="pwd_kb_upper">大写</string>
+    <string name="pwd_kb_lower">小写</string>
+    <string name="pwd_kb_symbols">符号</string>
+    <string name="pwd_kb_subclass_active">子类%1$d*</string>
+    <string name="pwd_kb_subclass">子类%1$d</string>
+    <string name="pwd_kb_space">空格</string>
+    <string name="pwd_kb_backspace">退格</string>
+    <string name="pwd_kb_clear">清空</string>
+    <string name="browser_offload_status">Offload：%1$s</string>
+    <string name="browser_offload_active">已进入</string>
+    <string name="browser_offload_inactive">未进入/不适用</string>
+    <string name="md_viewer_regex_placeholder">正则，例如 /error|warn/i</string>
+    <string name="md_viewer_close_find">关闭查找</string>
+    <string name="md_viewer_regex_match_with_bar">第 %1$d / %2$d 处，定位时会自动避开底部查找栏。</string>
+    <string name="md_viewer_regex_hint_flags">支持 /pattern/flags 与 (?i)pattern。</string>
+    <string name="md_viewer_fulltext_find_title">全文查找</string>
+    <string name="md_viewer_close_fulltext_find">关闭全文查找</string>
+    <string name="md_viewer_fulltext_search_placeholder">输入要搜索的文字</string>
+    <string name="md_viewer_fulltext_searching">搜索中...</string>
+    <string name="md_viewer_fulltext_scanning">正在扫描全部章节，请稍候...</string>
+    <string name="md_viewer_fulltext_hint">输入文字后可在全部章节中查找。</string>
+    <string name="md_viewer_fulltext_no_match">未找到匹配章节。</string>
+    <string name="md_viewer_fulltext_summary">找到 %1$d 处命中，分布在 %2$d 个章节。</string>
+    <string name="md_viewer_chapter_hit">第 %1$d 章 · %2$s</string>
+    <string name="md_viewer_hit_count">命中 %1$d 次</string>
+    <string name="md_viewer_loading_default">加载中…</string>
+    <string name="md_viewer_restore_page_scripts">正在恢复页面脚本与样式…</string>
+    <string name="md_viewer_reuse_cached_page">正在复用已缓存页面…</string>
+    <string name="md_viewer_reading_encrypted">正在读取并解密文件…</string>
+    <string name="md_viewer_reading_file">正在读取文件内容…</string>
+    <string name="md_viewer_parsing_rst">正在解析 RST 结构…</string>
+    <string name="md_viewer_parsing_markdown">正在解析 Markdown 结构…</string>
+    <string name="md_viewer_init_page_scripts">正在初始化页面样式与脚本…</string>
+    <string name="md_viewer_load_done_showing">已完成，正在显示页面…</string>
+    <string name="md_viewer_page_ready">页面已准备完成</string>
+    <string name="md_viewer_preparing_document">正在准备文档</string>
+    <string name="md_viewer_preparing_page">正在准备页面</string>
+    <string name="md_viewer_preparing_document_ellipsis">正在准备文档…</string>
+    <string name="md_viewer_link_title">链接</string>
+    <string name="md_viewer_link_hint">可选择复制链接或用浏览器打开。</string>
+    <string name="md_viewer_link_clip_label">链接</string>
+    <string name="md_viewer_link_copied">已复制链接</string>
+    <string name="md_viewer_copy_link">复制链接</string>
+    <string name="md_viewer_open_in_browser">用浏览器打开</string>
+    <string name="md_viewer_open_in_browser_chooser">用浏览器打开</string>
+    <string name="md_viewer_reading_archive_doc">正在读取压缩包中的文档…</string>
+    <string name="md_viewer_file_not_found">文件不存在: %1$s</string>
+    <string name="md_viewer_load_failed_detail">加载失败: %1$s</string>
+    <string name="md_viewer_reading_html">正在读取 HTML…</string>
+    <string name="md_viewer_loading_webpage">正在加载网页…</string>
+    <string name="md_viewer_html_link_unsupported">当前 HTML 查看器只支持继续打开 HTML/HTM 链接</string>
+    <string name="md_viewer_html_link_parse_failed">无法解析 HTML 链接：%1$s</string>
+    <string name="md_viewer_html_open_failed">无法打开 HTML 文件：%1$s</string>
+    <string name="md_viewer_init_page">正在初始化页面…</string>
+    <string name="md_viewer_preparing_html">正在准备 HTML</string>
+    <string name="md_viewer_regex_parse_failed">查找结果解析失败</string>
+    <string name="md_viewer_page_not_ready">页面尚未就绪</string>
+    <string name="md_viewer_chapter_text_read_failed">读取章节文本失败：%1$s %2$s</string>
+    <string name="md_viewer_chapter_file_missing">章节文件不存在：index=%1$d href=%2$s file=%3$s</string>
+    <string name="dict_word_not_found">词典中未找到 "%1$s"</string>
+    <string name="md_viewer_fulltext_query_required">请输入要搜索的文字</string>
+    <string name="md_viewer_fulltext_search_failed">全文查找失败：%1$s</string>
+    <string-array name="about_usage_tips">
+        <item>你可以随时同步一个git库到本地，应用的很多其他功能也可以依靠这个库完成共享方面的功能</item>
+        <item>内置的查看器可以同时看文本和二进制，也可以做文本和二进制编辑。</item>
+        <item>可以用markdown渲染器直接查看markdown文件（.md或者.rst文件）。</item>
+        <item>在其他应用中用本程序打开文件，可以把该文件保存到本程序的根目录中。</item>
+        <item>双击文件可以把文件加入待处理列表进行批处理。</item>
+        <item>混淆是一种不那么可靠，但速度极快的加解密功能，它仅加密文件头的内容，适合用于很大的文件的临时加解密。</item>
+        <item>在配置中打开「显示过滤条件」，可以用正则表达式过滤文件名，还可以把所有过滤结果加入待处理列表。</item>
+        <item>FTP数据交换功能可以启动一个ftp服务器，而且保持手机不休眠，所以记得主动退出它，或者设置一个自动退出时间。</item>
+        <item>FTP传输（就算有密码保护）也是不安全的，请不要在不可靠的网络环境中使用。</item>
+    </string-array>
 </resources>
