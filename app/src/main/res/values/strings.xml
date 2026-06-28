@@ -11,6 +11,8 @@
     <string name="common_copy_content">复制内容</string>
     <string name="common_current">当前</string>
     <string name="common_ok">确定</string>
+    <string name="common_unknown_error">未知错误</string>
+    <string name="common_select_root_first">请先选择根目录</string>
     <string name="common_create">创建</string>
     <string name="common_delete">删除</string>
     <string name="common_delete_failed">删除失败</string>
@@ -788,4 +790,24 @@ OPF目录文件: %2$s</string>
     <string name="zip_error_parse_exception">解析异常: %1$s</string>
     <string name="zip_empty_placeholder">(空)</string>
     <string name="zip_spine_not_found">(未找到spine)</string>
+    <string name="about_author">作者：柱子哥 &lt;Kenneth-Lee-2012@qq.com&gt;</string>
+    <string name="about_version">版本：%1$s</string>
+    <string name="about_disclaimer">本软件没有经过严肃的测试，请自担使用风险，作者不对任何数据破坏负责。</string>
+    <string name="about_try_luck">试试运气</string>
+    <string name="about_no_tips">暂无提示</string>
+    <string name="about_readme_title">项目 README.md</string>
+    <string name="about_readme_loading">正在读取 README.md…</string>
+    <string name="about_readme_read_failed">无法读取 README.md：%1$s</string>
+    <string name="about_tips_read_failed">无法读取提示文件：%1$s</string>
+    <string name="about_tips_empty">提示文件为空：%1$s</string>
+    <string name="about_tip_dialog_title">提示</string>
+    <string name="tab_password_label">密钥密码</string>
+    <string name="quick_note_opening">正在打开快速笔记…</string>
+    <string name="quick_note_auto_save_failed">快速笔记自动保存失败（%1$s）：%2$s</string>
+    <string name="quick_note_persist_reason_tab_switch">切换标签</string>
+    <string name="quick_note_persist_reason_background">进入后台</string>
+    <string name="book_note_opening">正在打开读书笔记…</string>
+    <string name="book_note_auto_save_failed">读书笔记自动保存失败（%1$s）：%2$s</string>
+    <string name="book_note_persist_reason_update">更新记录</string>
+    <string name="book_note_persist_reason_background">进入后台</string>
 </resources>

@@ -11,8 +11,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.kenny.localmanager.R
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,7 +86,15 @@ fun rememberBookNoteTabController(
                 bookNoteLastSavedHash = saved.entries.hashCode()
                 onFinished?.invoke(true)
             }.onFailure { throwable ->
-                Toast.makeText(context, "读书笔记自动保存失败（$reason）：${throwable.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    context,
+                    context.getString(
+                        R.string.book_note_auto_save_failed,
+                        reason,
+                        throwable.message ?: context.getString(R.string.common_unknown_error)
+                    ),
+                    Toast.LENGTH_LONG
+                ).show()
                 onFinished?.invoke(false)
             }
         }
@@ -93,7 +103,7 @@ fun rememberBookNoteTabController(
     fun requestOpenBookNote(password: String? = null) {
         val root = rootUri?.let { normalizeContentUriString(it) }
         if (root == null) {
-            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return
         }
         bookNoteLoadRequested = true
@@ -134,19 +144,22 @@ fun rememberBookNoteTabController(
         }
     }
 
-    LaunchedEffect(bookNoteData, bookNoteEntriesSnapshot, bookNoteInProgress) {
+    val persistReasonUpdate = context.getString(R.string.book_note_persist_reason_update)
+    val persistReasonBackground = context.getString(R.string.book_note_persist_reason_background)
+
+    LaunchedEffect(bookNoteData, bookNoteEntriesSnapshot, bookNoteInProgress, persistReasonUpdate) {
         if (bookNoteData == null || bookNoteInProgress) return@LaunchedEffect
         val snapshotHash = bookNoteEntriesSnapshot.hashCode()
         if (bookNoteLastSavedHash != snapshotHash) {
-            persistBookNoteIfNeeded("更新记录")
+            persistBookNoteIfNeeded(persistReasonUpdate)
         }
     }
 
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, persistReasonBackground) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_STOP && bookNoteData != null) {
-                persistBookNoteIfNeeded("进入后台")
+                persistBookNoteIfNeeded(persistReasonBackground)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -193,7 +206,7 @@ fun rememberBookNoteTabController(
 fun BookNoteTabRoute(controller: BookNoteTabController) {
     TabRouteContent(
         controller = controller,
-        loadingText = "正在打开读书笔记…"
+        loadingText = stringResource(R.string.book_note_opening)
     ) { data ->
         BookNoteScreen(
             loadedData = data,

@@ -35,8 +35,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.kenny.localmanager.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.commonmark.parser.Parser
@@ -66,6 +68,7 @@ fun AboutTabRoute() {
     var currentTip by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
+        val unknownError = context.getString(R.string.common_unknown_error)
         readmeError = null
         tipsError = null
         readmeMarkdown = null
@@ -74,16 +77,26 @@ fun AboutTabRoute() {
         runCatching {
             withContext(Dispatchers.IO) { loadAssetText(context, ABOUT_README_ASSET) }
         }.onSuccess { readmeMarkdown = it }
-            .onFailure { readmeError = "无法读取 README.md：${it.message ?: "未知错误"}" }
+            .onFailure {
+                readmeError = context.getString(
+                    R.string.about_readme_read_failed,
+                    it.message ?: unknownError
+                )
+            }
 
         runCatching {
             withContext(Dispatchers.IO) { loadAssetText(context, ABOUT_TIPS_ASSET) }
         }.onSuccess { loadedTips ->
             tips = parseTips(loadedTips)
             if (tips.isEmpty()) {
-                tipsError = "提示文件为空：$ABOUT_TIPS_ASSET"
+                tipsError = context.getString(R.string.about_tips_empty, ABOUT_TIPS_ASSET)
             }
-        }.onFailure { tipsError = "无法读取提示文件：${it.message ?: "未知错误"}" }
+        }.onFailure {
+            tipsError = context.getString(
+                R.string.about_tips_read_failed,
+                it.message ?: unknownError
+            )
+        }
     }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -101,18 +114,18 @@ fun AboutTabRoute() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("关于") },
+                title = { Text(stringResource(R.string.main_menu_about)) },
                 actions = {
                     TextButton(onClick = {
                         val pool = tips
                         currentTip = when {
                             pool.isNotEmpty() -> pool.random()
                             tipsError != null -> tipsError
-                            else -> "暂无提示"
+                            else -> context.getString(R.string.about_no_tips)
                         }
                         showTipDialog = true
                     }) {
-                        Text("试试运气")
+                        Text(stringResource(R.string.about_try_luck))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -134,11 +147,19 @@ fun AboutTabRoute() {
             ) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("Local Manager", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                    Text("作者：柱子哥 <Kenneth-Lee-2012@qq.com>", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("版本：$versionName", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        stringResource(R.string.about_author),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.about_version, versionName),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                     if (versionWarn) {
                         Text(
-                            "本软件没有经过严肃的测试，请自担使用风险，作者不对任何数据破坏负责。",
+                            stringResource(R.string.about_disclaimer),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -164,7 +185,7 @@ fun AboutTabRoute() {
             ) {
                 Column(Modifier.fillMaxSize()) {
                     Text(
-                        "项目 README.md",
+                        stringResource(R.string.about_readme_title),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
@@ -199,7 +220,10 @@ fun AboutTabRoute() {
                                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                         CircularProgressIndicator()
                                         Spacer(Modifier.height(12.dp))
-                                        Text("正在读取 README.md…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(
+                                            stringResource(R.string.about_readme_loading),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                 }
                             }
@@ -213,11 +237,11 @@ fun AboutTabRoute() {
     if (showTipDialog) {
         AlertDialog(
             onDismissRequest = { showTipDialog = false },
-            title = { Text("提示") },
+            title = { Text(stringResource(R.string.about_tip_dialog_title)) },
             text = { Text(currentTip.orEmpty()) },
             confirmButton = {
                 Button(onClick = { showTipDialog = false }) {
-                    Text("关闭")
+                    Text(stringResource(R.string.common_close))
                 }
             }
         )

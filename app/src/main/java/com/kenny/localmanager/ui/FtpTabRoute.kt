@@ -7,6 +7,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.kenny.localmanager.R
 import com.kenny.localmanager.ftp.FtpServerManager
 
 data class FtpTabRouteState(
@@ -35,7 +37,7 @@ fun FtpTabRoute(state: FtpTabRouteState) {
         )
     } else {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("请先选择根目录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(stringResource(R.string.common_select_root_first), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

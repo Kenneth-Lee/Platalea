@@ -11,6 +11,8 @@
     <string name="common_copy_content">Copy Content</string>
     <string name="common_current">Current</string>
     <string name="common_ok">OK</string>
+    <string name="common_unknown_error">Unknown error</string>
+    <string name="common_select_root_first">Please select a root directory first.</string>
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_delete_failed">Delete failed</string>
@@ -665,4 +667,24 @@ OPF directory files: %2$s</string>
     <string name="zip_error_parse_exception">Parse exception: %1$s</string>
     <string name="zip_empty_placeholder">(empty)</string>
     <string name="zip_spine_not_found">(spine not found)</string>
+    <string name="about_author">Author: Kenneth Lee &lt;Kenneth-Lee-2012@qq.com&gt;</string>
+    <string name="about_version">Version: %1$s</string>
+    <string name="about_disclaimer">This app has not been rigorously tested. Use it at your own risk. The author is not responsible for any data loss.</string>
+    <string name="about_try_luck">Try your luck</string>
+    <string name="about_no_tips">No tips available</string>
+    <string name="about_readme_title">Project README.md</string>
+    <string name="about_readme_loading">Loading README.md…</string>
+    <string name="about_readme_read_failed">Failed to read README.md: %1$s</string>
+    <string name="about_tips_read_failed">Failed to read tips file: %1$s</string>
+    <string name="about_tips_empty">Tips file is empty: %1$s</string>
+    <string name="about_tip_dialog_title">Tip</string>
+    <string name="tab_password_label">Key password</string>
+    <string name="quick_note_opening">Opening quick notes…</string>
+    <string name="quick_note_auto_save_failed">Quick note auto-save failed (%1$s): %2$s</string>
+    <string name="quick_note_persist_reason_tab_switch">tab switch</string>
+    <string name="quick_note_persist_reason_background">background</string>
+    <string name="book_note_opening">Opening book notes…</string>
+    <string name="book_note_auto_save_failed">Book note auto-save failed (%1$s): %2$s</string>
+    <string name="book_note_persist_reason_update">record update</string>
+    <string name="book_note_persist_reason_background">background</string>
 </resources>

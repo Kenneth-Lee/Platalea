@@ -8,6 +8,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.kenny.localmanager.R
 
 data class TabPasswordPromptState(
     val required: Boolean,
@@ -49,14 +51,15 @@ fun <T> TabRouteContent(
 fun TabPasswordPromptDialog(
     state: TabPasswordPromptState,
     fileName: String,
-    passwordLabel: String = "密钥密码"
+    passwordLabel: String? = null
 ) {
     if (!state.required) return
+    val resolvedPasswordLabel = passwordLabel ?: stringResource(R.string.tab_password_label)
     GpgPasswordDialog(
         isDecrypt = true,
         fileName = fileName,
         password = state.password,
-        passwordLabel = passwordLabel,
+        passwordLabel = resolvedPasswordLabel,
         inProgress = state.inProgress,
         onPasswordChange = state.onPasswordChange,
         onConfirm = state.onConfirm,
