@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from bulletin_ai_internal import is_ai_status_message
+from .bulletin_ai_internal import is_ai_status_message
 
 AGENT_DEVICE_PREFIX = "agent:"
 

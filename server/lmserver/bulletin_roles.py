@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from family_common import PASSWORD_HEADER
+from .family_common import PASSWORD_HEADER
 
 ADMIN_ROLE_ID = "admin"
 LEGACY_GUEST_ROLE_ID = "guest"

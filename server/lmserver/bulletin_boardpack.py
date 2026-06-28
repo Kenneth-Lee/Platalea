@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bulletin_ai_internal import is_conversation_message
-from bulletin_roles import normalize_stored_role_ids
+from .bulletin_ai_internal import is_conversation_message
+from .bulletin_roles import normalize_stored_role_ids
 
 BOARDPACK_FORMAT = "localmanager.boardpack"
 BOARDPACK_VERSION = 1

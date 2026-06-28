@@ -3,14 +3,14 @@ from __future__ import annotations
 
 import unittest
 
-from bulletin_ai_internal import (
+from lmserver.bulletin_ai_internal import (
     MESSAGE_KIND_AI_STATUS,
     format_ai_status_content,
     is_ai_status_message,
     is_conversation_message,
     parse_ai_control_command,
 )
-from bulletin_store import BulletinBoardStore, BulletinMessage
+from lmserver.bulletin_store import BulletinBoardStore, BulletinMessage
 
 
 class AiInternalTest(unittest.TestCase):

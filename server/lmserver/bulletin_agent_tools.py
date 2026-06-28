@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from bulletin_store import BulletinBoardStore, BulletinMessage
+from .bulletin_store import BulletinBoardStore, BulletinMessage
 
 if TYPE_CHECKING:
-    from bulletin_agent_status import AgentStatusReporter
+    from .bulletin_agent_status import AgentStatusReporter
 
 DEFAULT_MAX_ATTACHMENT_READ_BYTES = 100_000
 DEFAULT_MAX_WEB_FETCH_BYTES = 200_000

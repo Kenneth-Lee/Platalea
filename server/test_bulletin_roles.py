@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from bulletin_roles import (
+from lmserver.bulletin_roles import (
     ADMIN_ROLE_ID,
     AuthContext,
     can_access_board,

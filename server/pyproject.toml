@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmserver"
+description = "LocalManager PC bulletin board server and CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+authors = [{ name = "Kenny" }]
+dynamic = ["version"]
+dependencies = [
+    "zeroconf>=0.147,<1",
+]
+
+[project.scripts]
+lmserver = "lmserver.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Kenneth-Lee-2025/local_manager"
+
+[tool.setuptools.dynamic]
+version = { file = "VERSION" }
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lmserver*"]
+
+[tool.setuptools.package-data]
+lmserver = ["py.typed", "bundled_tls/*.pem"]

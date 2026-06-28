@@ -9,21 +9,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bulletin_ai_internal import (
+from .bulletin_ai_internal import (
     MESSAGE_KIND_AI_STATUS,
     MESSAGE_KIND_MESSAGE,
     format_ai_status_content,
     is_ai_status_message,
     is_conversation_message,
 )
-from bulletin_attachment_store import BulletinAttachmentStore
-from bulletin_boardpack import (
+from .bulletin_attachment_store import BulletinAttachmentStore
+from .bulletin_boardpack import (
     BoardpackError,
     BoardpackImportOptions,
     export_boardpack_from_board_dir,
     import_boardpack_bytes,
 )
-from bulletin_roles import board_role_ids_from_meta, normalize_stored_role_ids
+from .bulletin_roles import board_role_ids_from_meta, normalize_stored_role_ids
 
 DEFAULT_BOARD_ID = "default"
 DEFAULT_BOARD_NAME = "默认留言板"

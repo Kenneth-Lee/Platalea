@@ -4,8 +4,8 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
 
-from bulletin_ai_internal import format_ai_status_content
-from bulletin_store import BulletinBoardStore
+from .bulletin_ai_internal import format_ai_status_content
+from .bulletin_store import BulletinBoardStore
 
 
 @dataclass

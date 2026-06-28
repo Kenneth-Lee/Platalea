@@ -1,3 +1,14 @@
+Metadata-Version: 2.4
+Name: lmserver
+Version: 0.21rc0
+Summary: LocalManager PC bulletin board server and CLI
+Author: Kenny
+License: Proprietary
+Project-URL: Homepage, https://github.com/Kenneth-Lee-2025/local_manager
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: zeroconf<1,>=0.147
+
 # LocalManager PC / mDNS 服务端
 
 本目录提供 PC 端家庭网络留言板服务，以及与 Android 客户端兼容的 mDNS 发现、HTTPS API 和 TLS 证书工具。

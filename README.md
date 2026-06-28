@@ -23,7 +23,7 @@
 
 本项目也上传到华为市场了，但只有国际版本，国内版本
 
-最新一个发布版本在这里：[LocalManager-V0.20](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.20/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.21](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.21/app-release.apk)
 
 ## 设计思路
 
@@ -481,7 +481,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.18 About独立成tab，并包含README进去（以便可以直接看使用文档），优化阅读器的一些使用细节功能，快密功能可以选择公钥。
 * V0.19 播放器支持显示音乐的metadata信息，支持目录列表，修正阅读器翻页到剩下不足一页直接跳转到下一页的问题。
 * V0.20 播放器增加音质优化，列表管理（互相拷贝、移动，排序，自动除重，去缺失等），阅读器支持全屏。
-* V0.21 开发中：初步完成家庭分享功能
+* V0.21 初步完成家庭分享功能，全面完成多语言支持改造。
+* V0.22 开发中
 
 ### 已知问题
 

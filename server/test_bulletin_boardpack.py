@@ -8,14 +8,14 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from bulletin_boardpack import (
+from lmserver.bulletin_boardpack import (
     BOARDPACK_FORMAT,
     BOARDPACK_VERSION,
     BoardpackError,
     export_boardpack_from_board_dir,
     import_boardpack_bytes,
 )
-from bulletin_store import BulletinBoardStore
+from lmserver.bulletin_store import BulletinBoardStore
 
 
 class BulletinBoardpackTests(unittest.TestCase):

@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from bulletin_agent import extract_mention_for_models, format_board_context
-from bulletin_agent_tools import (
+from lmserver.bulletin_agent import extract_mention_for_models, format_board_context
+from lmserver.bulletin_agent_tools import (
     AgentToolExecutor,
     AgentToolsConfig,
     collect_board_attachments,
@@ -15,8 +15,8 @@ from bulletin_agent_tools import (
     parse_tool_arguments,
     read_attachment_text,
 )
-from bulletin_attachment_store import BulletinAttachmentStore
-from bulletin_store import BulletinBoardStore, BulletinMessage
+from lmserver.bulletin_attachment_store import BulletinAttachmentStore
+from lmserver.bulletin_store import BulletinBoardStore, BulletinMessage
 
 
 class AgentToolsTest(unittest.TestCase):
@@ -73,7 +73,7 @@ class AgentToolsTest(unittest.TestCase):
         self.assertIn("hello bulletin", read_back["content"])
 
     def test_read_directory_attachment(self) -> None:
-        from bulletin_attachment_store import DirectoryEntry
+        from lmserver.bulletin_attachment_store import DirectoryEntry
 
         att_store = self.store.attachments
         init = att_store.init_directory_upload(
@@ -180,7 +180,7 @@ class AgentToolsTest(unittest.TestCase):
         self.assertNotIn("消息1 ", context)
 
     def test_load_agent_config_model_name_list(self) -> None:
-        from bulletin_agent import load_agent_config
+        from lmserver.bulletin_agent import load_agent_config
 
         cfg = load_agent_config(
             {
@@ -195,7 +195,7 @@ class AgentToolsTest(unittest.TestCase):
         )
 
     def test_load_agent_config_models_list(self) -> None:
-        from bulletin_agent import load_agent_config
+        from lmserver.bulletin_agent import load_agent_config
 
         cfg = load_agent_config(
             {

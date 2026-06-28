@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from bulletin_agent_status import AgentRunHandle, AgentStatusReporter
-from bulletin_agent_tools import (
+from .bulletin_agent_status import AgentRunHandle, AgentStatusReporter
+from .bulletin_agent_tools import (
     AgentToolExecutor,
     AgentToolsConfig,
     build_tool_definitions,
@@ -22,13 +22,13 @@ from bulletin_agent_tools import (
     parse_tool_arguments,
     tools_system_prompt_suffix,
 )
-from bulletin_ai_internal import (
+from .bulletin_ai_internal import (
     DEFAULT_AGENT_COMMANDS,
     agent_commands_for_board,
     is_ai_status_message,
 )
-from bulletin_mention import AGENT_DEVICE_PREFIX
-from bulletin_store import BulletinBoardStore, BulletinMessage
+from .bulletin_mention import AGENT_DEVICE_PREFIX
+from .bulletin_store import BulletinBoardStore, BulletinMessage
 
 LOGGER = logging.getLogger("local_manager.bulletin_agent")
 

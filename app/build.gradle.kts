@@ -11,6 +11,8 @@ val syncAboutReadme by tasks.registering(Copy::class) {
     into(layout.buildDirectory.dir("generated/aboutAssets"))
 }
 
+val appVersionName = rootProject.file("VERSION").readText().trim()
+
 android {
     namespace = "com.kenny.localmanager"
     compileSdk = 34
@@ -19,7 +21,7 @@ android {
         minSdk = 24
         targetSdk = 34
         versionCode = 21
-        versionName = "0.21-preview"
+        versionName = appVersionName
     }
     signingConfigs {
         create("release") {
