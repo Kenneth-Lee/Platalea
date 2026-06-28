@@ -46,7 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.git.SharedFileInfo
 import com.kenny.localmanager.git.cloneToTree
@@ -81,6 +83,8 @@ fun FileShareScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val logErrorPrefix = remember { context.getString(R.string.git_log_error, "").trimEnd() }
+    val logDebugPrefix = remember { context.getString(R.string.git_log_debug_prefix) }
 
     var repoUrl by remember { mutableStateOf("") }
     var userName by remember { mutableStateOf("") }
@@ -119,20 +123,20 @@ fun FileShareScreen(
         if (!autoRefreshOnEnter) {
             loading = false
             if (cached.isNotEmpty()) {
-                syncState = ShareSyncState.Success("已显示缓存内容")
+                syncState = ShareSyncState.Success(context.getString(R.string.file_share_cache_shown))
             }
         }
     }
 
     fun syncAndLoad() {
         if (rootUri.isNullOrBlank() || repoUrl.isBlank()) {
-            syncState = ShareSyncState.Error("请先配置 Git 仓库")
+            syncState = ShareSyncState.Error(context.getString(R.string.file_share_git_not_configured))
             loading = false
             return
         }
         syncState = ShareSyncState.Syncing
         syncLogs.clear()
-        syncLogs.add("正在同步...")
+        syncLogs.add(context.getString(R.string.pubkey_share_syncing_log))
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -146,14 +150,14 @@ fun FileShareScreen(
                 )
             }
             if (result.isSuccess) {
-                syncState = ShareSyncState.Success("同步成功")
-                syncLogs.add("同步成功")
+                syncState = ShareSyncState.Success(context.getString(R.string.file_share_sync_success))
+                syncLogs.add(context.getString(R.string.file_share_sync_success))
                 withContext(Dispatchers.IO) {
                     sharedFiles = listSharedFiles(context, rootUri)
                 }
             } else {
                 syncState = ShareSyncState.Error(
-                    result.exceptionOrNull()?.message ?: "同步失败"
+                    result.exceptionOrNull()?.message ?: context.getString(R.string.file_share_sync_failed)
                 )
             }
             loading = false
@@ -167,7 +171,7 @@ fun FileShareScreen(
         }
         syncState = ShareSyncState.Syncing
         syncLogs.clear()
-        syncLogs.add("正在提交...")
+        syncLogs.add(context.getString(R.string.pubkey_share_committing))
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 commitAndPush(
@@ -181,11 +185,11 @@ fun FileShareScreen(
                 )
             }
             if (result.isSuccess) {
-                syncState = ShareSyncState.Success("已推送")
+                syncState = ShareSyncState.Success(context.getString(R.string.file_share_pushed))
                 onComplete(true)
             } else {
                 syncState = ShareSyncState.Error(
-                    result.exceptionOrNull()?.message ?: "推送失败"
+                    result.exceptionOrNull()?.message ?: context.getString(R.string.file_share_push_failed)
                 )
                 onComplete(false)
             }
@@ -204,11 +208,11 @@ fun FileShareScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("文件共享") },
+                title = { Text(stringResource(R.string.file_share_title)) },
                 navigationIcon = {
                     if (showBackButton) {
                         IconButton(onClick = onDismiss) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     }
                 },
@@ -232,12 +236,12 @@ fun FileShareScreen(
             ) {
                 when (val state = syncState) {
                     is ShareSyncState.Idle -> {
-                        Text("准备就绪", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.file_share_ready), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     is ShareSyncState.Syncing -> {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("同步中…", color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.file_share_syncing), color = MaterialTheme.colorScheme.primary)
                     }
                     is ShareSyncState.Success -> {
                         Text(state.message, color = MaterialTheme.colorScheme.primary)
@@ -251,7 +255,7 @@ fun FileShareScreen(
                     onClick = { refreshTrigger++ },
                     enabled = syncState !is ShareSyncState.Syncing
                 ) {
-                    Text("刷新")
+                    Text(stringResource(R.string.file_share_refresh))
                 }
             }
 
@@ -272,7 +276,7 @@ fun FileShareScreen(
                         Text(
                             line,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                            color = if (line.startsWith(logErrorPrefix) || line.startsWith(logDebugPrefix))
                                 MaterialTheme.colorScheme.error
                             else
                                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -291,7 +295,11 @@ fun FileShareScreen(
                 if (sharedFiles.isEmpty()) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
-                            if (!autoRefreshOnEnter && refreshTrigger == 0) "点击右上角刷新加载共享文件" else "暂无共享文件",
+                            if (!autoRefreshOnEnter && refreshTrigger == 0) {
+                                stringResource(R.string.file_share_tap_refresh)
+                            } else {
+                                stringResource(R.string.file_share_empty)
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -303,7 +311,7 @@ fun FileShareScreen(
                     ) {
                         item {
                             Text(
-                                ".sysgit/share/ (${sharedFiles.size} 个文件)",
+                                stringResource(R.string.file_share_section_header, sharedFiles.size),
                                 style = MaterialTheme.typography.titleMedium,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -336,10 +344,10 @@ fun FileShareScreen(
                     doCopyToRoot(
                         scope, context, rootUri, file, false,
                         onSuccess = {
-                            Toast.makeText(context, "已复制到根目录", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.file_share_copied_to_root), Toast.LENGTH_SHORT).show()
                         },
                         onFailure = {
-                            Toast.makeText(context, "复制失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.file_share_copy_failed), Toast.LENGTH_SHORT).show()
                         }
                     )
                 }
@@ -351,8 +359,8 @@ fun FileShareScreen(
     pendingCopyOverwrite?.let { file ->
         AlertDialog(
             onDismissRequest = { pendingCopyOverwrite = null },
-            title = { Text("文件已存在") },
-            text = { Text("根目录下已存在「${file.filename}」，是否覆盖？") },
+            title = { Text(stringResource(R.string.file_share_exists_title)) },
+            text = { Text(stringResource(R.string.file_share_exists_confirm, file.filename)) },
             confirmButton = {
                 TextButton(onClick = {
                     val f = file
@@ -360,16 +368,16 @@ fun FileShareScreen(
                     doCopyToRoot(
                         scope, context, rootUri, f, true,
                         onSuccess = {
-                            Toast.makeText(context, "已覆盖", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.file_share_overwritten), Toast.LENGTH_SHORT).show()
                         },
                         onFailure = {
-                            Toast.makeText(context, "复制失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.file_share_copy_failed), Toast.LENGTH_SHORT).show()
                         }
                     )
-                }) { Text("覆盖") }
+                }) { Text(stringResource(R.string.file_share_overwrite_action)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingCopyOverwrite = null }) { Text("取消") }
+                TextButton(onClick = { pendingCopyOverwrite = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -378,8 +386,8 @@ fun FileShareScreen(
     pendingDelete?.let { file ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("删除共享文件") },
-            text = { Text("确定要删除「${file.filename}」吗？\n删除后会自动提交并推送。") },
+            title = { Text(stringResource(R.string.file_share_delete_title)) },
+            text = { Text(stringResource(R.string.file_share_delete_confirm, file.filename)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -390,24 +398,32 @@ fun FileShareScreen(
                                 deleteSharedFile(context, rootUri ?: "", f.filename)
                             }
                             if (deleted) {
-                                commitAndPushChanges("删除共享文件: ${f.filename}") { success ->
+                                commitAndPushChanges(context.getString(R.string.file_share_commit_delete, f.filename)) { success ->
                                     if (success) {
                                         sharedFiles = sharedFiles.filter { it.filename != f.filename }
-                                        Toast.makeText(context, "已删除并推送", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.file_share_deleted_pushed),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 }
                             } else {
-                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.common_delete_failed),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                     },
                     colors = ButtonDefaults.textButtonColors(
                         contentColor = MaterialTheme.colorScheme.error
                     )
-                ) { Text("删除") }
+                ) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+                TextButton(onClick = { pendingDelete = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -469,14 +485,14 @@ private fun SharedFileItem(
             IconButton(onClick = onCopy, enabled = enabled) {
                 Icon(
                     Icons.Default.Download,
-                    contentDescription = "复制到根目录",
+                    contentDescription = stringResource(R.string.file_share_copy_to_root_desc),
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
             IconButton(onClick = onDelete, enabled = enabled) {
                 Icon(
                     Icons.Default.Delete,
-                    contentDescription = "删除",
+                    contentDescription = stringResource(R.string.common_delete),
                     tint = MaterialTheme.colorScheme.error
                 )
             }

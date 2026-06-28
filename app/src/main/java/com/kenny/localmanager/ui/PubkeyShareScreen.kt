@@ -50,7 +50,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.git.RemotePubkeyInfo
 import com.kenny.localmanager.git.cloneToTree
@@ -85,6 +87,8 @@ fun PubkeyShareScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val logErrorPrefix = remember { context.getString(R.string.git_log_error, "").trimEnd() }
+    val logDebugPrefix = remember { context.getString(R.string.git_log_debug_prefix) }
 
     var repoUrl by remember { mutableStateOf("") }
     var userName by remember { mutableStateOf("") }
@@ -114,13 +118,13 @@ fun PubkeyShareScreen(
     // 同步并加载公钥列表
     fun syncAndLoad() {
         if (rootUri.isNullOrBlank() || repoUrl.isBlank()) {
-            syncState = SyncState.Error("请先配置 Git 仓库")
+            syncState = SyncState.Error(context.getString(R.string.pubkey_share_git_not_configured))
             loading = false
             return
         }
         syncState = SyncState.Syncing
         syncLogs.clear()
-        syncLogs.add("正在同步...")
+        syncLogs.add(context.getString(R.string.pubkey_share_syncing_log))
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -135,38 +139,45 @@ fun PubkeyShareScreen(
             }
             if (result.isSuccess) {
                 // 去重公钥文件
-                syncLogs.add("检查重复公钥...")
+                syncLogs.add(context.getString(R.string.pubkey_share_check_duplicates))
                 val deletedCount = withContext(Dispatchers.IO) {
                     deduplicateRemotePubkeys(context, rootUri) { msg -> syncLogs.add(msg) }
                 }
                 if (deletedCount > 0) {
-                    syncLogs.add("清理了 $deletedCount 个重复公钥，正在推送...")
+                    syncLogs.add(context.getString(R.string.pubkey_share_cleaned_duplicates, deletedCount))
                     val pushResult = withContext(Dispatchers.IO) {
                         commitAndPush(
                             context = context,
                             treeRootUri = rootUri,
                             repoUrl = repoUrl,
-                            commitMessage = "清理重复公钥",
+                            commitMessage = context.getString(R.string.pubkey_share_commit_clean_duplicates),
                             userName = userName.ifBlank { null },
                             httpsPassword = httpsPassword.ifBlank { null },
                             log = { msg -> syncLogs.add(msg) }
                         )
                     }
                     if (pushResult.isFailure) {
-                        syncState = SyncState.Error("清理推送失败: ${pushResult.exceptionOrNull()?.message}")
+                        syncState = SyncState.Error(
+                            context.getString(
+                                R.string.pubkey_share_clean_push_failed,
+                                pushResult.exceptionOrNull()?.message ?: context.getString(R.string.common_unknown_error)
+                            )
+                        )
                         loading = false
                         return@launch
                     }
                 }
-                syncState = SyncState.Success("同步成功")
-                syncLogs.add("同步成功")
+                syncState = SyncState.Success(context.getString(R.string.pubkey_share_sync_success))
+                syncLogs.add(context.getString(R.string.pubkey_share_sync_success))
                 // 加载公钥列表
                 withContext(Dispatchers.IO) {
                     remotePubkeys = listRemotePubkeys(context, rootUri)
                     localPubkeys = listPublicKeyInfos(loadPublicKeyRings(context))
                 }
             } else {
-                syncState = SyncState.Error(result.exceptionOrNull()?.message ?: "同步失败")
+                syncState = SyncState.Error(
+                    result.exceptionOrNull()?.message ?: context.getString(R.string.pubkey_share_sync_failed)
+                )
             }
             loading = false
         }
@@ -180,7 +191,7 @@ fun PubkeyShareScreen(
         }
         syncState = SyncState.Syncing
         syncLogs.clear()
-        syncLogs.add("正在提交...")
+        syncLogs.add(context.getString(R.string.pubkey_share_committing))
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 commitAndPush(
@@ -194,10 +205,12 @@ fun PubkeyShareScreen(
                 )
             }
             if (result.isSuccess) {
-                syncState = SyncState.Success("已推送")
+                syncState = SyncState.Success(context.getString(R.string.pubkey_share_pushed))
                 onComplete(true)
             } else {
-                syncState = SyncState.Error(result.exceptionOrNull()?.message ?: "推送失败")
+                syncState = SyncState.Error(
+                    result.exceptionOrNull()?.message ?: context.getString(R.string.pubkey_share_push_failed)
+                )
                 onComplete(false)
             }
         }
@@ -212,10 +225,10 @@ fun PubkeyShareScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("公钥分享") },
+                title = { Text(stringResource(R.string.pubkey_share_title)) },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -238,12 +251,12 @@ fun PubkeyShareScreen(
             ) {
                 when (val state = syncState) {
                     is SyncState.Idle -> {
-                        Text("准备就绪", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.pubkey_share_ready), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     is SyncState.Syncing -> {
                         CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(8.dp))
-                        Text("同步中…", color = MaterialTheme.colorScheme.primary)
+                        Text(stringResource(R.string.pubkey_share_syncing), color = MaterialTheme.colorScheme.primary)
                     }
                     is SyncState.Success -> {
                         Text(state.message, color = MaterialTheme.colorScheme.primary)
@@ -257,7 +270,7 @@ fun PubkeyShareScreen(
                     onClick = { refreshTrigger++ },
                     enabled = syncState !is SyncState.Syncing
                 ) {
-                    Text("刷新")
+                    Text(stringResource(R.string.pubkey_share_refresh))
                 }
             }
 
@@ -278,7 +291,7 @@ fun PubkeyShareScreen(
                         Text(
                             line,
                             style = MaterialTheme.typography.bodySmall,
-                            color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                            color = if (line.startsWith(logErrorPrefix) || line.startsWith(logDebugPrefix))
                                 MaterialTheme.colorScheme.error
                             else
                                 MaterialTheme.colorScheme.onSurfaceVariant
@@ -301,13 +314,13 @@ fun PubkeyShareScreen(
                     // 远程公钥
                     item {
                         Text(
-                            "远程公钥 (.sysgit/pubkey/)",
+                            stringResource(R.string.pubkey_share_remote_section),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         if (remotePubkeys.isEmpty()) {
                             Text(
-                                "暂无远程公钥",
+                                stringResource(R.string.pubkey_share_remote_empty),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -328,13 +341,13 @@ fun PubkeyShareScreen(
                     // 本地公钥
                     item {
                         Text(
-                            "本地公钥",
+                            stringResource(R.string.pubkey_share_local_section),
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         if (localPubkeys.isEmpty()) {
                             Text(
-                                "暂无本地公钥",
+                                stringResource(R.string.pubkey_share_local_empty),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(vertical = 8.dp)
@@ -358,8 +371,8 @@ fun PubkeyShareScreen(
     pendingImport?.let { pk ->
         AlertDialog(
             onDismissRequest = { pendingImport = null },
-            title = { Text("导入公钥") },
-            text = { Text("确定要将「${pk.userId}」导入到本地公钥库吗？") },
+            title = { Text(stringResource(R.string.pubkey_share_import_title)) },
+            text = { Text(stringResource(R.string.pubkey_share_import_confirm, pk.userId)) },
             confirmButton = {
                 TextButton(onClick = {
                     scope.launch {
@@ -367,19 +380,23 @@ fun PubkeyShareScreen(
                             mergePublicKeyRing(context, pk.ring)
                         }
                         if (ok) {
-                            Toast.makeText(context, "导入成功", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.pubkey_share_import_success), Toast.LENGTH_SHORT).show()
                             localPubkeys = withContext(Dispatchers.IO) {
                                 listPublicKeyInfos(loadPublicKeyRings(context))
                             }
                         } else {
-                            Toast.makeText(context, "导入失败: $err", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.pubkey_share_import_failed, err),
+                                Toast.LENGTH_SHORT
+                            ).show()
                         }
                     }
                     pendingImport = null
-                }) { Text("导入") }
+                }) { Text(stringResource(R.string.pubkey_share_import_action)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingImport = null }) { Text("取消") }
+                TextButton(onClick = { pendingImport = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -388,8 +405,8 @@ fun PubkeyShareScreen(
     pendingDeleteRemote?.let { pk ->
         AlertDialog(
             onDismissRequest = { pendingDeleteRemote = null },
-            title = { Text("删除远程公钥") },
-            text = { Text("确定要删除远程公钥「${pk.userId}」吗？\n删除后会自动提交并推送。") },
+            title = { Text(stringResource(R.string.pubkey_share_delete_remote_title)) },
+            text = { Text(stringResource(R.string.pubkey_share_delete_remote_confirm, pk.userId)) },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -398,23 +415,31 @@ fun PubkeyShareScreen(
                                 deleteRemotePubkey(context, rootUri ?: "", pk.filename)
                             }
                             if (deleted) {
-                                commitAndPushChanges("删除公钥: ${pk.userId}") { success ->
+                                commitAndPushChanges(context.getString(R.string.pubkey_share_commit_delete, pk.userId)) { success ->
                                     if (success) {
                                         remotePubkeys = remotePubkeys.filter { it.filename != pk.filename }
-                                        Toast.makeText(context, "已删除并推送", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.pubkey_share_deleted_pushed),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 }
                             } else {
-                                Toast.makeText(context, "删除失败", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.pubkey_share_delete_failed),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
                         pendingDeleteRemote = null
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("删除") }
+                ) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDeleteRemote = null }) { Text("取消") }
+                TextButton(onClick = { pendingDeleteRemote = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -426,17 +451,17 @@ fun PubkeyShareScreen(
         if (alreadyExported) {
             AlertDialog(
                 onDismissRequest = { pendingExport = null },
-                title = { Text("已导出") },
-                text = { Text("「${pk.primaryUserId}」已经存在于远程公钥库中。") },
+                title = { Text(stringResource(R.string.pubkey_share_already_exported_title)) },
+                text = { Text(stringResource(R.string.pubkey_share_already_exported_message, pk.primaryUserId)) },
                 confirmButton = {
-                    TextButton(onClick = { pendingExport = null }) { Text("确定") }
+                    TextButton(onClick = { pendingExport = null }) { Text(stringResource(R.string.common_ok)) }
                 }
             )
         } else {
             AlertDialog(
                 onDismissRequest = { pendingExport = null },
-                title = { Text("导出到远程") },
-                text = { Text("确定要将「${pk.primaryUserId}」导出到 .sysgit/pubkey/ 吗？\n导出后会自动提交并推送。") },
+                title = { Text(stringResource(R.string.pubkey_share_export_title)) },
+                text = { Text(stringResource(R.string.pubkey_share_export_confirm, pk.primaryUserId)) },
                 confirmButton = {
                     TextButton(onClick = {
                         val pkToExport = pk
@@ -450,7 +475,9 @@ fun PubkeyShareScreen(
                                     exportPubkeyToSysgit(context, rootUri ?: "", pkToExport.keyIdHex, armored, pkToExport.keyId)
                                 }
                                 if (exported) {
-                                    commitAndPushChanges("添加公钥: ${pkToExport.primaryUserId}") { success ->
+                                    commitAndPushChanges(
+                                        context.getString(R.string.pubkey_share_commit_add, pkToExport.primaryUserId)
+                                    ) { success ->
                                         if (success) {
                                             // 重新加载远程列表
                                             scope.launch {
@@ -458,21 +485,33 @@ fun PubkeyShareScreen(
                                                     listRemotePubkeys(context, rootUri ?: "")
                                                 }
                                                 remotePubkeys = newRemote
-                                                Toast.makeText(context, "已导出并推送", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.pubkey_share_exported_pushed),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
                                             }
                                         }
                                     }
                                 } else {
-                                    Toast.makeText(context, "导出失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.pubkey_share_export_failed),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
                                 }
                             } else {
-                                Toast.makeText(context, "找不到公钥", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.pubkey_share_key_not_found),
+                                    Toast.LENGTH_SHORT
+                                ).show()
                             }
                         }
-                    }) { Text("导出") }
+                    }) { Text(stringResource(R.string.pubkey_share_export_action)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { pendingExport = null }) { Text("取消") }
+                    TextButton(onClick = { pendingExport = null }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -507,10 +546,18 @@ private fun RemotePubkeyItem(
                 )
             }
             IconButton(onClick = onImport, enabled = enabled) {
-                Icon(Icons.Default.Download, contentDescription = "导入本地", tint = MaterialTheme.colorScheme.primary)
+                Icon(
+                    Icons.Default.Download,
+                    contentDescription = stringResource(R.string.pubkey_share_import_local_desc),
+                    tint = MaterialTheme.colorScheme.primary
+                )
             }
             IconButton(onClick = onDelete, enabled = enabled) {
-                Icon(Icons.Default.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.common_delete),
+                    tint = MaterialTheme.colorScheme.error
+                )
             }
         }
     }
@@ -545,14 +592,18 @@ private fun LocalPubkeyItem(
             }
             if (alreadyExported) {
                 Text(
-                    "已导出",
+                    stringResource(R.string.pubkey_share_exported_badge),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 8.dp)
                 )
             } else {
                 IconButton(onClick = onExport, enabled = enabled) {
-                    Icon(Icons.Default.Upload, contentDescription = "导出到远程", tint = MaterialTheme.colorScheme.primary)
+                    Icon(
+                        Icons.Default.Upload,
+                        contentDescription = stringResource(R.string.pubkey_share_export_remote_desc),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }

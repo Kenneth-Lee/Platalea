@@ -64,10 +64,10 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-private const val BOOK_NOTE_SECTION_HEADING = "## 读书笔记"
+private val BOOK_NOTE_SECTION_HEADINGS = setOf("## 读书笔记", "## Book Notes")
 private val BOOK_NOTE_SECTION_BOUNDARY_REGEX = Regex("^#{1,2}\\s+.+$")
-private val BOOK_NOTE_CHAPTER_REGEX = Regex("^\\*\\s*章节[：:]\\s*(.*)$")
-private val BOOK_NOTE_QUOTE_REGEX = Regex("^\\*\\s*引文[：:]\\s*(.*)$")
+private val BOOK_NOTE_CHAPTER_REGEX = Regex("^\\*\\s*(?:章节|Chapter)[：:]\\s*(.*)$", RegexOption.IGNORE_CASE)
+private val BOOK_NOTE_QUOTE_REGEX = Regex("^\\*\\s*(?:引文|Quote)[：:]\\s*(.*)$", RegexOption.IGNORE_CASE)
 
 data class BookNoteEntry(
     val id: Long,
@@ -87,10 +87,10 @@ data class BookNoteEntry(
 fun BookNoteEntry.hasLocation(): Boolean =
     chapterIndex != null || scrollRatio != null || !chapterInfo.isNullOrBlank()
 
-fun BookNoteEntry.displayLocation(): String = when {
+fun BookNoteEntry.displayLocation(wholeBookLabel: String): String = when {
     !chapterInfo.isNullOrBlank() -> chapterInfo
     !chapterTitle.isNullOrBlank() -> chapterTitle
-    else -> "整本书"
+    else -> wholeBookLabel
 }
 
 fun BookNoteEntry.matchesBookTitle(title: String): Boolean =
@@ -199,7 +199,7 @@ suspend fun saveBookNoteData(
 ): Result<BookNoteLoadedData> {
     val latestRawText = readBookNoteRawText(context, currentData.fileInfo, currentData.sourcePassword)
         .getOrElse { return Result.failure(it) }
-    val mergedText = mergeBookNoteSection(latestRawText, entries)
+    val mergedText = mergeBookNoteSection(context, latestRawText, entries)
     val outBytes = mergedText.toByteArray(Charsets.UTF_8)
     val ok = if (currentData.fileInfo.isEncrypted) {
         val secretKeys = loadSecretKeyRings(context)
@@ -269,7 +269,7 @@ private fun parseBookNoteSectionContent(fullText: String): BookNoteParseResult {
     for (line in sectionLines) {
         val trimmed = line.trim()
         when {
-            trimmed == BOOK_NOTE_SECTION_HEADING -> Unit
+            trimmed in BOOK_NOTE_SECTION_HEADINGS -> Unit
             line.trimStart().startsWith("### ") -> {
                 flushCurrent()
                 currentBookTitle = line.trimStart().removePrefix("### ").trim()
@@ -336,9 +336,9 @@ private fun parseBookNoteEntry(id: Long, bookTitle: String, rawLines: List<Strin
     )
 }
 
-private fun mergeBookNoteSection(fullText: String, entries: List<BookNoteEntry>): String {
+private fun mergeBookNoteSection(context: Context, fullText: String, entries: List<BookNoteEntry>): String {
     val normalized = fullText.replace("\r\n", "\n")
-    val sectionText = buildBookNoteSection(entries)
+    val sectionText = buildBookNoteSection(context, entries)
     val range = findBookNoteSectionRange(normalized)
     if (range == null) {
         return if (normalized.isBlank()) {
@@ -365,12 +365,12 @@ private fun mergeBookNoteSection(fullText: String, entries: List<BookNoteEntry>)
     }
 }
 
-private fun buildBookNoteSection(entries: List<BookNoteEntry>): String {
+private fun buildBookNoteSection(context: Context, entries: List<BookNoteEntry>): String {
     return buildString {
-        append(BOOK_NOTE_SECTION_HEADING)
+        append(context.getString(R.string.book_note_section_heading_markdown))
         if (entries.isNotEmpty()) append("\n\n")
         entries.forEachIndexed { index, entry ->
-            append(serializeBookNoteEntry(entry))
+            append(serializeBookNoteEntry(context, entry))
             if (index != entries.lastIndex) {
                 append("\n\n")
             }
@@ -378,7 +378,7 @@ private fun buildBookNoteSection(entries: List<BookNoteEntry>): String {
     }.trimEnd()
 }
 
-private fun serializeBookNoteEntry(entry: BookNoteEntry): String {
+private fun serializeBookNoteEntry(context: Context, entry: BookNoteEntry): String {
     val normalizedBookTitle = entry.bookTitle.trim()
     val normalizedChapter = entry.chapterInfo?.trim()?.takeIf { it.isNotEmpty() }
     val normalizedQuote = entry.quote?.trim()?.takeIf { it.isNotEmpty() }
@@ -388,13 +388,11 @@ private fun serializeBookNoteEntry(entry: BookNoteEntry): String {
         append(normalizedBookTitle)
         append("\n\n")
         if (normalizedChapter != null) {
-            append("* 章节：")
-            append(normalizedChapter)
+            append(context.getString(R.string.book_note_file_chapter_line, normalizedChapter))
             append("\n")
         }
         if (normalizedQuote != null) {
-            append("* 引文：")
-            append(normalizedQuote)
+            append(context.getString(R.string.book_note_file_quote_line, normalizedQuote))
             append("\n")
         }
         append(buildBookNoteMetadataComment(entry))
@@ -429,7 +427,7 @@ private fun findBookNoteSectionRange(fullText: String): BookNoteSectionRange? {
     val lines = fullText.replace("\r\n", "\n").split("\n")
     var startIndex = -1
     for (index in lines.indices) {
-        if (lines[index].trim() == BOOK_NOTE_SECTION_HEADING) {
+        if (lines[index].trim() in BOOK_NOTE_SECTION_HEADINGS) {
             startIndex = index
             break
         }
@@ -534,7 +532,7 @@ fun BookNoteScreen(
                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
                 contentColor = MaterialTheme.colorScheme.onPrimary
             ) {
-                Icon(Icons.Default.Add, contentDescription = "新增读书笔记")
+                Icon(Icons.Default.Add, contentDescription = stringResource(R.string.book_note_add_desc))
             }
         }
     ) { padding ->
@@ -703,10 +701,10 @@ fun BookNoteScreen(
     deleteConfirmEntry?.let { entry ->
         AlertDialog(
             onDismissRequest = { deleteConfirmEntry = null },
-            title = { Text("删除读书笔记") },
+            title = { Text(stringResource(R.string.book_note_delete_title)) },
             text = {
                 Text(
-                    "确定删除「${entry.bookTitle}」下的这条笔记吗？",
+                    stringResource(R.string.book_note_delete_confirm, entry.bookTitle),
                     maxLines = 4,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -720,7 +718,7 @@ fun BookNoteScreen(
                     },
                     enabled = !inProgress
                 ) {
-                    Text("删除")
+                    Text(stringResource(R.string.common_delete))
                 }
             },
             dismissButton = {
@@ -734,11 +732,11 @@ fun BookNoteScreen(
     if (showIgnoredContentDialog && loadedData.ignoredSectionContent.isNotBlank()) {
         AlertDialog(
             onDismissRequest = { showIgnoredContentDialog = false },
-            title = { Text("发现未接管的读书笔记数据") },
+            title = { Text(stringResource(R.string.book_note_ignored_title)) },
             text = {
                 Column {
                     Text(
-                        "“读书笔记”章节里有一些不符合当前协议的文本。它们不会被读入为笔记，后续保存时会整段覆盖，请先复制保存。",
+                        stringResource(R.string.book_note_ignored_desc),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(12.dp))
@@ -750,7 +748,7 @@ fun BookNoteScreen(
                             .height(180.dp),
                         readOnly = true,
                         enabled = false,
-                        label = { Text("将被覆盖的原始内容") }
+                        label = { Text(stringResource(R.string.book_note_ignored_label)) }
                     )
                 }
             },
@@ -758,13 +756,20 @@ fun BookNoteScreen(
                 Button(
                     onClick = {
                         clipboardManager?.setPrimaryClip(
-                            ClipData.newPlainText("读书笔记未接管内容", loadedData.ignoredSectionContent)
+                            ClipData.newPlainText(
+                                composeContext.getString(R.string.book_note_ignored_clip_label),
+                                loadedData.ignoredSectionContent
+                            )
                         )
-                        Toast.makeText(composeContext, "已复制未接管内容", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            composeContext,
+                            composeContext.getString(R.string.book_note_ignored_copied),
+                            Toast.LENGTH_SHORT
+                        ).show()
                         showIgnoredContentDialog = false
                     }
                 ) {
-                    Text("复制并继续")
+                    Text(stringResource(R.string.book_note_copy_and_continue))
                 }
             },
             dismissButton = {
@@ -789,13 +794,13 @@ fun BookNoteManagerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("本书笔记") },
+        title = { Text(stringResource(R.string.book_note_manager_title)) },
         text = {
             Column {
                 Text(bookTitle, style = MaterialTheme.typography.titleSmall)
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "当前位置：$currentChapterInfo",
+                    stringResource(R.string.book_note_current_location, currentChapterInfo),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -807,7 +812,7 @@ fun BookNoteManagerDialog(
                     )
                 } else if (entries.isEmpty()) {
                     Text(
-                        "当前书籍还没有笔记，点击下方按钮可按当前章节新增。",
+                        stringResource(R.string.book_note_manager_empty),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
@@ -832,7 +837,7 @@ fun BookNoteManagerDialog(
         },
         confirmButton = {
             TextButton(onClick = onAddCurrent, enabled = !inProgress) {
-                Text("新增当前章节笔记")
+                Text(stringResource(R.string.book_note_add_current_chapter))
             }
         },
         dismissButton = {
@@ -859,14 +864,22 @@ fun BookNoteEditorDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (state.editingId == null) "新增读书笔记" else "编辑读书笔记") },
+        title = {
+            Text(
+                if (state.editingId == null) {
+                    stringResource(R.string.book_note_add_title)
+                } else {
+                    stringResource(R.string.book_note_edit_title)
+                }
+            )
+        },
         text = {
             Column {
                 OutlinedTextField(
                     value = bookTitle,
                     onValueChange = { bookTitle = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("书名") },
+                    label = { Text(stringResource(R.string.book_note_field_book_title)) },
                     enabled = !inProgress,
                     singleLine = true
                 )
@@ -875,7 +888,7 @@ fun BookNoteEditorDialog(
                     value = chapterInfo,
                     onValueChange = { chapterInfo = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("章节与定位（可选）") },
+                    label = { Text(stringResource(R.string.book_note_field_chapter)) },
                     enabled = !inProgress,
                     singleLine = true
                 )
@@ -884,7 +897,7 @@ fun BookNoteEditorDialog(
                     value = quote,
                     onValueChange = { quote = it },
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("引文（可选）") },
+                    label = { Text(stringResource(R.string.book_note_field_quote)) },
                     enabled = !inProgress,
                     minLines = 2,
                     maxLines = 4
@@ -896,7 +909,7 @@ fun BookNoteEditorDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(180.dp),
-                    label = { Text("感想") },
+                    label = { Text(stringResource(R.string.book_note_field_content)) },
                     enabled = !inProgress,
                     minLines = 6,
                     maxLines = 10
@@ -906,12 +919,12 @@ fun BookNoteEditorDialog(
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         onReassociateCurrentPosition?.let { callback ->
                             TextButton(onClick = callback, enabled = !inProgress) {
-                                Text("重新关联当前位置")
+                                Text(stringResource(R.string.book_note_reassociate_position))
                             }
                         }
                         onClearLocation?.let { callback ->
                             TextButton(onClick = callback, enabled = !inProgress) {
-                                Text("清除位置")
+                                Text(stringResource(R.string.book_note_clear_location))
                             }
                         }
                     }
@@ -951,6 +964,7 @@ private fun BookNoteEntryCard(
     onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val wholeBookLabel = stringResource(R.string.book_note_whole_book)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -974,7 +988,7 @@ private fun BookNoteEntryCard(
                     )
                 }
                 Text(
-                    entry.displayLocation(),
+                    entry.displayLocation(wholeBookLabel),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -996,16 +1010,16 @@ private fun BookNoteEntryCard(
                 }
             }
             IconButton(onClick = onEdit, enabled = enabled) {
-                Icon(Icons.Default.Edit, contentDescription = "编辑")
+                Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.book_note_edit_desc))
             }
             IconButton(onClick = onDelete, enabled = enabled) {
-                Icon(Icons.Default.Delete, contentDescription = "删除")
+                Icon(Icons.Default.Delete, contentDescription = stringResource(R.string.common_delete))
             }
         }
         entry.quote?.takeIf { it.isNotBlank() }?.let { quote ->
             Spacer(Modifier.height(4.dp))
             Text(
-                "引文：$quote",
+                stringResource(R.string.book_note_quote_display, quote),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 4,
@@ -1017,7 +1031,11 @@ private fun BookNoteEntryCard(
             Text(entry.content, style = MaterialTheme.typography.bodyMedium)
         } else if (entry.hasLocation()) {
             Spacer(Modifier.height(6.dp))
-            Text("仅位置书签", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                stringResource(R.string.book_note_location_only),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

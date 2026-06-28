@@ -50,11 +50,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.readBytesFromOffset
 import com.kenny.localmanager.file.writeBytesAtOffset
@@ -79,7 +81,7 @@ private data class TextRegexFindUiState(
     val count: Int get() = matches.size
 }
 
-private fun buildTextFindRegex(pattern: String): Regex {
+private fun buildTextFindRegex(context: android.content.Context, pattern: String): Regex {
     val slashForm = Regex("^/((?:\\\\.|[^/])*)/([a-zA-Z]*)$").matchEntire(pattern)
     if (slashForm != null) {
         val source = slashForm.groupValues[1]
@@ -91,7 +93,7 @@ private fun buildTextFindRegex(pattern: String): Regex {
                     'm' -> add(RegexOption.MULTILINE)
                     's' -> add(RegexOption.DOT_MATCHES_ALL)
                     'u', 'g' -> Unit
-                    else -> throw IllegalArgumentException("不支持的正则标志: $flag")
+                    else -> throw IllegalArgumentException(context.getString(R.string.viewer_regex_invalid_flag, flag))
                 }
             }
         }
@@ -100,10 +102,10 @@ private fun buildTextFindRegex(pattern: String): Regex {
     return Regex(pattern)
 }
 
-private fun findTextRegexMatches(text: String, pattern: String): TextRegexFindUiState {
+private fun findTextRegexMatches(context: android.content.Context, text: String, pattern: String): TextRegexFindUiState {
     if (pattern.isBlank()) return TextRegexFindUiState()
     return try {
-        val regex = buildTextFindRegex(pattern)
+        val regex = buildTextFindRegex(context, pattern)
         val matches = regex.findAll(text)
             .mapNotNull { match ->
                 if (match.value.isEmpty()) null else match.range
@@ -111,7 +113,7 @@ private fun findTextRegexMatches(text: String, pattern: String): TextRegexFindUi
             .toList()
         TextRegexFindUiState(matches = matches, currentIndex = if (matches.isNotEmpty()) 0 else -1)
     } catch (e: Exception) {
-        TextRegexFindUiState(error = e.message ?: "无效正则")
+        TextRegexFindUiState(error = e.message ?: context.getString(R.string.viewer_regex_invalid))
     }
 }
 
@@ -132,44 +134,59 @@ private fun TextRegexFindDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("正则查找") },
+        title = { Text(stringResource(R.string.viewer_regex_find_title)) },
         text = {
             Column {
                 OutlinedTextField(
                     value = query,
                     onValueChange = onQueryChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("正则表达式") },
-                    placeholder = { Text("例如 /error|warn/i 或 (?i)error") },
+                    label = { Text(stringResource(R.string.viewer_regex_pattern_label)) },
+                    placeholder = { Text(stringResource(R.string.viewer_regex_pattern_placeholder)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = "只在文本编辑模式下查找，匹配后会直接选中对应文本。",
+                    text = stringResource(R.string.viewer_regex_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
                 when {
                     result.error != null -> Text(result.error, color = MaterialTheme.colorScheme.error)
-                    result.hasMatches -> Text("第 ${result.currentIndex + 1} / ${result.count} 处", color = MaterialTheme.colorScheme.primary)
-                    query.isNotBlank() -> Text("未找到匹配", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    else -> Text("输入正则后点击“查找”。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    result.hasMatches -> Text(
+                        stringResource(R.string.viewer_regex_match_count, result.currentIndex + 1, result.count),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    query.isNotBlank() -> Text(
+                        stringResource(R.string.viewer_regex_no_match),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    else -> Text(
+                        stringResource(R.string.viewer_regex_enter_query),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    TextButton(onClick = onSearch) { Text("查找") }
-                    TextButton(onClick = onPrevious, enabled = result.hasMatches) { Text("上一个") }
-                    TextButton(onClick = onNext, enabled = result.hasMatches) { Text("下一个") }
-                    TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) { Text("清除") }
+                    TextButton(onClick = onSearch) { Text(stringResource(R.string.viewer_regex_search)) }
+                    TextButton(onClick = onPrevious, enabled = result.hasMatches) {
+                        Text(stringResource(R.string.viewer_regex_previous))
+                    }
+                    TextButton(onClick = onNext, enabled = result.hasMatches) {
+                        Text(stringResource(R.string.viewer_regex_next))
+                    }
+                    TextButton(onClick = onClear, enabled = result.hasMatches || query.isNotBlank()) {
+                        Text(stringResource(R.string.viewer_regex_clear))
+                    }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
         }
     )
 }
@@ -185,6 +202,9 @@ fun ViewerScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val loadingLabel = stringResource(R.string.viewer_loading)
+    val decryptFailedLabel = stringResource(R.string.viewer_decrypt_failed)
+    val openFailedLabel = stringResource(R.string.viewer_open_failed)
     var viewMode by remember { mutableStateOf(0) } // 0 = text, 1 = hex
     var bytesState by remember { mutableStateOf<ByteArray?>(null) }
     var loadError by remember { mutableStateOf<String?>(null) }
@@ -207,7 +227,7 @@ fun ViewerScreen(
     val canEdit = !isEncrypted
 
     // 初始加载 / 刷新
-    LaunchedEffect(fileUri, isEncrypted, refreshKey) {
+    LaunchedEffect(fileUri, isEncrypted, refreshKey, decryptFailedLabel, openFailedLabel) {
         if (isEditMode) return@LaunchedEffect
         bytesState = null
         loadError = null
@@ -216,14 +236,14 @@ fun ViewerScreen(
             cr.openInputStreamSafe(uri)?.use { raw ->
                 val bytes = if (isEncrypted) {
                     GpgHelper.decryptStream(raw) ?: run {
-                        loadError = "解密失败或需要密码"
+                        loadError = decryptFailedLabel
                         return@withContext
                     }
                 } else {
                     raw.readBytes(MAX_PREVIEW_BYTES)
                 }
                 bytesState = bytes
-            } ?: run { loadError = "无法打开文件" }
+            } ?: run { loadError = openFailedLabel }
         }
     }
 
@@ -272,7 +292,7 @@ fun ViewerScreen(
             Result.success(trimmed)
         }
             ?: loadError?.let { Result.failure<String>(IllegalStateException(it)) }
-            ?: Result.failure(IllegalStateException("加载中…"))
+            ?: Result.failure(IllegalStateException(loadingLabel))
     }
     val hexLines = remember(bytesState) { bytesState?.toHexLines() ?: emptyList() }
 
@@ -296,7 +316,7 @@ fun ViewerScreen(
             },
             onSearch = {
                 val value = textEditValue ?: return@TextRegexFindDialog
-                applyTextFindState(findTextRegexMatches(value.text, textFindQuery))
+                applyTextFindState(findTextRegexMatches(context, value.text, textFindQuery))
             },
             onPrevious = {
                 if (!textFindState.hasMatches) return@TextRegexFindDialog
@@ -324,7 +344,7 @@ fun ViewerScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -334,7 +354,7 @@ fun ViewerScreen(
                                 onClick = { showTextFindDialog = true },
                                 enabled = !textEditLoading && textEditValue != null
                             ) {
-                                Icon(Icons.Default.Search, contentDescription = "查找")
+                                Icon(Icons.Default.Search, contentDescription = stringResource(R.string.viewer_find_desc))
                             }
                         }
                         TextButton(
@@ -345,7 +365,7 @@ fun ViewerScreen(
                                 textFindQuery = ""
                                 textFindState = TextRegexFindUiState()
                             }
-                        ) { Text("放弃") }
+                        ) { Text(stringResource(R.string.viewer_discard)) }
                         TextButton(
                             onClick = {
                                 saveInProgress = true
@@ -361,7 +381,7 @@ fun ViewerScreen(
                                     }
                                     saveInProgress = false
                                     if (ok) {
-                                        Toast.makeText(context, "已保存", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.viewer_saved), Toast.LENGTH_SHORT).show()
                                         isEditMode = false
                                         textEditValue = null
                                         hexPageBytes = null
@@ -370,11 +390,19 @@ fun ViewerScreen(
                                         refreshKey++
                                         bytesState = null
                                     } else {
-                                        Toast.makeText(context, "保存失败", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
-                        ) { Text(if (saveInProgress) "保存中…" else "保存") }
+                        ) {
+                            Text(
+                                if (saveInProgress) {
+                                    stringResource(R.string.viewer_saving)
+                                } else {
+                                    stringResource(R.string.viewer_save)
+                                }
+                            )
+                        }
                     } else {
                         SingleChoiceSegmentedButtonRow(modifier = Modifier.padding(end = 4.dp)) {
                             SegmentedButton(
@@ -382,20 +410,20 @@ fun ViewerScreen(
                                 onClick = { viewMode = 0 },
                                 shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
                                 icon = {}
-                            ) { Text("文本") }
+                            ) { Text(stringResource(R.string.viewer_mode_text)) }
                             SegmentedButton(
                                 selected = viewMode == 1,
                                 onClick = { viewMode = 1 },
                                 shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                                 icon = {}
-                            ) { Text("十六进制") }
+                            ) { Text(stringResource(R.string.viewer_mode_hex)) }
                         }
                         if (onOpenMarkdownView != null) {
-                            TextButton(onClick = onOpenMarkdownView) { Text("Markdown渲染") }
+                            TextButton(onClick = onOpenMarkdownView) { Text(stringResource(R.string.viewer_open_markdown)) }
                         }
                         if (canEdit) {
                             IconButton(onClick = { isEditMode = true }) {
-                                Icon(Icons.Default.Edit, contentDescription = "编辑")
+                                Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.viewer_edit_desc))
                             }
                         }
                     }
@@ -417,7 +445,7 @@ fun ViewerScreen(
                 isEditMode && viewMode == 0 -> {
                     if (textEditLoading) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(loadingLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
                         val textValue = textEditValue ?: TextFieldValue("")
@@ -435,7 +463,7 @@ fun ViewerScreen(
                                     }
                                     textEditValue = new.copy(text = nextText)
                                     if (textFindQuery.isNotBlank()) {
-                                        textFindState = findTextRegexMatches(nextText, textFindQuery)
+                                        textFindState = findTextRegexMatches(context, nextText, textFindQuery)
                                     }
                                 },
                                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -445,7 +473,7 @@ fun ViewerScreen(
                             )
                             if (text.isEmpty()) {
                                 Text(
-                                    "（空文件）",
+                                    stringResource(R.string.viewer_empty_file),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -456,7 +484,7 @@ fun ViewerScreen(
                 isEditMode && viewMode == 1 -> {
                     if (hexPageLoading) {
                         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("加载中…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(loadingLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     } else {
                         Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -465,7 +493,10 @@ fun ViewerScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("页（每页 ${PAGE_SIZE} 字节）", style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    stringResource(R.string.viewer_page_info, PAGE_SIZE),
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(
                                         onClick = { if (hexPageIndex > 0) hexPageIndex-- },
@@ -522,7 +553,7 @@ fun ViewerScreen(
                                     if (bytesState != null && bytesState!!.size >= MAX_PREVIEW_BYTES) {
                                         Spacer(Modifier.height(8.dp))
                                         Text(
-                                            "（仅显示前 $MAX_PREVIEW_BYTES 字节）",
+                                            stringResource(R.string.viewer_preview_truncated, MAX_PREVIEW_BYTES),
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -532,7 +563,7 @@ fun ViewerScreen(
                         },
                         onFailure = { e ->
                             Text(
-                                e.message ?: "无法加载",
+                                e.message ?: stringResource(R.string.viewer_load_failed),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.error,
                                 modifier = Modifier.padding(16.dp)

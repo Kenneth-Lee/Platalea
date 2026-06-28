@@ -141,6 +141,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -594,10 +595,10 @@ private fun doCopyPendingToCurrentDir(
     onRefreshDone: () -> Unit
 ) {
     val targetDirUri = normalizeContentUriString(displayUri)
-    copyMoveLog?.invoke("[拷贝] 目标: $targetDirUri")
+    copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_target, targetDirUri))
     val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
     scope.launch {
-        runWithProgress("拷贝", pendingList.size) { setProgress ->
+        runWithProgress(context.getString(R.string.pending_list_action_copy), pendingList.size) { setProgress ->
             val (ok, fail) = withContext(Dispatchers.IO) {
                 var o = 0
                 var f = 0
@@ -608,14 +609,14 @@ private fun doCopyPendingToCurrentDir(
                 }
                 Pair(o, f)
             }
-            copyMoveLog?.invoke("[拷贝] 结果: ok=$ok fail=$fail")
+            copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_result, ok, fail))
             if (fail == 0 && ok > 0) {
                 onSuccessAll()
-                Toast.makeText(context, "已拷贝 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_copy_all_ok, ok), Toast.LENGTH_SHORT).show()
             } else if (ok > 0) {
-                Toast.makeText(context, "拷贝 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_copy_partial, ok, fail), Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "拷贝失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_copy_failed), Toast.LENGTH_SHORT).show()
             }
             onRefreshDone()
         }
@@ -634,10 +635,10 @@ private fun doMovePendingToCurrentDir(
     onRefreshDone: () -> Unit
 ) {
     val targetDirUri = normalizeContentUriString(displayUri)
-    copyMoveLog?.invoke("[移动] 目标: $targetDirUri")
+    copyMoveLog?.invoke(context.getString(R.string.browser_log_move_target, targetDirUri))
     val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
     scope.launch {
-        runWithProgress("移动", pendingList.size) { setProgress ->
+        runWithProgress(context.getString(R.string.pending_list_action_move), pendingList.size) { setProgress ->
             val (ok, fail) = withContext(Dispatchers.IO) {
                 var o = 0
                 var f = 0
@@ -648,14 +649,14 @@ private fun doMovePendingToCurrentDir(
                 }
                 Pair(o, f)
             }
-            copyMoveLog?.invoke("[移动] 结果: ok=$ok fail=$fail")
+            copyMoveLog?.invoke(context.getString(R.string.browser_log_move_result, ok, fail))
             if (fail == 0 && ok > 0) {
                 onSuccessAll()
-                Toast.makeText(context, "已移动 $ok 项到本目录", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_move_all_ok, ok), Toast.LENGTH_SHORT).show()
             } else if (ok > 0) {
-                Toast.makeText(context, "移动 $ok 项成功，$fail 项失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_move_partial, ok, fail), Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(context, "移动失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_move_failed), Toast.LENGTH_SHORT).show()
             }
             onRefreshDone()
         }
@@ -720,7 +721,7 @@ private suspend fun removePlaylistTrackAt(
     if (deleteSourceFile && pl.isDirectorySource) {
         val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[trackIndex]))
         if (!deleted) {
-            Toast.makeText(context, "删除源文件失败", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_delete_source_failed), Toast.LENGTH_SHORT).show()
             return
         }
     }
@@ -1207,13 +1208,13 @@ private fun formatPlaybackTime(ms: Int): String {
     }
 }
 
-private fun formatTrackMetadata(metadata: TrackMetadata): String {
+private fun formatTrackMetadata(context: Context, metadata: TrackMetadata): String {
     val parts = buildList {
-        metadata.artist?.takeIf { it.isNotBlank() }?.let { add("艺术家：$it") }
-        metadata.album?.takeIf { it.isNotBlank() }?.let { add("专辑：$it") }
+        metadata.artist?.takeIf { it.isNotBlank() }?.let { add(context.getString(R.string.browser_metadata_artist, it)) }
+        metadata.album?.takeIf { it.isNotBlank() }?.let { add(context.getString(R.string.browser_metadata_album, it)) }
         metadata.albumArtist
             ?.takeIf { it.isNotBlank() && it != metadata.artist }
-            ?.let { add("专辑艺术家：$it") }
+            ?.let { add(context.getString(R.string.browser_metadata_album_artist, it)) }
         metadata.year?.takeIf { it.isNotBlank() }?.let { add(it) }
         metadata.genre?.takeIf { it.isNotBlank() }?.let { add(it) }
     }
@@ -1500,13 +1501,13 @@ private fun FileBrowserAppScreen(
     suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
         val targetRoot = rootUri?.let { normalizeContentUriString(it) }
         if (targetRoot == null) {
-            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return false
         }
         val bytes = withContext(Dispatchers.IO) {
             runCatching { sourceFile.readBytes() }.getOrNull()
         } ?: run {
-            Toast.makeText(context, "保存失败：无法读取图片", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_save_image_read_failed), Toast.LENGTH_SHORT).show()
             return false
         }
         val targetUri = Uri.parse(targetRoot)
@@ -1530,7 +1531,7 @@ private fun FileBrowserAppScreen(
         val ok = withContext(Dispatchers.IO) {
             createFileWithBytes(context, targetUri, targetUri, outName, mimeType, bytes)
         }
-        Toast.makeText(context, if (ok) "已保存到根目录：$outName" else "保存失败", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, if (ok) context.getString(R.string.browser_saved_to_root, outName) else context.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
         return ok
     }
 
@@ -1543,12 +1544,12 @@ private fun FileBrowserAppScreen(
             .filter { !it.isDirectory && isGalleryImageFile(it.name) }
             .distinctBy { it.uri.toString() }
         if (normalizedImages.isEmpty()) {
-            Toast.makeText(context, "当前目录没有可查看的图片文件", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_no_images_in_dir), Toast.LENGTH_SHORT).show()
             return
         }
         val initialIndex = normalizedImages.indexOfFirst { it.uri == currentItem.uri }
         if (initialIndex < 0) {
-            Toast.makeText(context, "无法定位当前图片在目录中的位置：${currentItem.name}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_image_position_failed, currentItem.name), Toast.LENGTH_SHORT).show()
             return
         }
         val galleryRoot = File(context.cacheDir, "pic_dir_gallery")
@@ -1563,7 +1564,7 @@ private fun FileBrowserAppScreen(
             normalizedImages.forEachIndexed { index, model ->
                 val targetFile = File(contentDir, model.name)
                 val bytes = context.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException("无法读取第 ${index + 1} 张图片：${model.name} uri=${model.uri}")
+                    ?: throw IllegalStateException(context.getString(R.string.browser_image_read_failed, index + 1, model.name, model.uri))
                 targetFile.outputStream().use { it.write(bytes) }
             }
             File(cacheDir, ".last_index").writeText(initialIndex.toString())
@@ -1624,12 +1625,12 @@ private fun FileBrowserAppScreen(
         val sourceUri = Uri.parse(sourceUriStr)
         val sourceDoc = DocumentFile.fromSingleUri(ctx, sourceUri) ?: run {
             pendingSaveFileUri = null
-            Toast.makeText(ctx, "无法读取文件", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, ctx.getString(R.string.browser_cannot_read_file), Toast.LENGTH_SHORT).show()
             return@LaunchedEffect
         }
         val fileName = sourceDoc.name ?: run {
             pendingSaveFileUri = null
-            Toast.makeText(ctx, "无法获取文件名", Toast.LENGTH_SHORT).show()
+            Toast.makeText(ctx, ctx.getString(R.string.browser_cannot_get_filename), Toast.LENGTH_SHORT).show()
             return@LaunchedEffect
         }
         val targetUri = Uri.parse(targetRoot)
@@ -1649,9 +1650,9 @@ private fun FileBrowserAppScreen(
                 initialDirUri = dir
                 currentUri = dir
                 saveCompletedToken++
-                Toast.makeText(ctx, "已保存到当前目录", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, ctx.getString(R.string.browser_saved_to_current_dir), Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(ctx, "保存失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(ctx, ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -1686,10 +1687,10 @@ private fun FileBrowserAppScreen(
         fun requestExitApp() {
             if (activeMainTab == MainTab.QUICK_NOTE) {
                 if (quickNoteController.inProgress) {
-                    Toast.makeText(context, "快速笔记仍在处理中，请稍后再试", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_quick_note_busy), Toast.LENGTH_SHORT).show()
                     return
                 }
-                quickNoteController.persistIfNeeded("退出应用") { saved ->
+                quickNoteController.persistIfNeeded(context.getString(R.string.quick_note_persist_reason_exit)) { saved ->
                     if (saved) {
                         finishCurrentActivity()
                     }
@@ -1703,7 +1704,7 @@ private fun FileBrowserAppScreen(
                 if (now - lastBackPressTime < 2000) finishCurrentActivity()
                 else {
                     lastBackPressTime = now
-                    Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1887,7 +1888,7 @@ private fun FileBrowserAppScreen(
             if (target.name.endsWith(".rar", ignoreCase = true)) {
                 val rarV5 = withContext(Dispatchers.IO) { isRarV5Archive(context, target.uri) }
                 if (rarV5) {
-                    Toast.makeText(context, "暂不支持 RAR5 解压，请转为 ZIP 或 RAR4", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.browser_rar5_unsupported), Toast.LENGTH_LONG).show()
                     zipUnzipTarget = null
                     return@LaunchedEffect
                 }
@@ -1938,7 +1939,7 @@ private fun FileBrowserAppScreen(
                         isEncrypted = false
                     )
                 } else {
-                    Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
                 }
             }
         }
@@ -1946,7 +1947,7 @@ private fun FileBrowserAppScreen(
             htmlZipEncrypted = null
             htmlZipPassword = ""
             htmlZipInProgress = false
-            htmlZipLog = "准备加载: ${htmlZipTarget?.name ?: ""}\n"
+            htmlZipLog = context.getString(R.string.browser_html_zip_preparing, htmlZipTarget?.name ?: "")
             htmlZipLoadError = null
             val target = htmlZipTarget ?: return@LaunchedEffect
             val cacheDir = getHtmlZipCacheDir(context, target.uri)
@@ -1967,9 +1968,9 @@ private fun FileBrowserAppScreen(
                 }
                 cacheDir.deleteRecursively()
             }
-            htmlZipLog += "检查是否加密...\n"
+            htmlZipLog += context.getString(R.string.browser_checking_encryption)
             htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            htmlZipLog += "加密状态: $htmlZipEncrypted\n"
+            htmlZipLog += context.getString(R.string.browser_encryption_status, htmlZipEncrypted.toString())
             if (htmlZipEncrypted == false) {
                 htmlZipInProgress = true
                 val result = withContext(Dispatchers.IO) {
@@ -1991,12 +1992,12 @@ private fun FileBrowserAppScreen(
                     }
                     is HtmlZipParseResult.Error -> {
                         val detail = result.detail?.let { "\n$it" } ?: ""
-                        htmlZipLog += "\n错误: ${result.message}$detail\n"
+                        htmlZipLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
                         htmlZipLoadError = "${result.message}$detail"
                     }
                 }
             } else if (htmlZipEncrypted == true) {
-                htmlZipLog += "文件已加密，需要密码\n"
+                htmlZipLog += context.getString(R.string.browser_file_encrypted_need_password)
             }
         }
         LaunchedEffect(llmZipTarget) {
@@ -2036,7 +2037,7 @@ private fun FileBrowserAppScreen(
                         isEncrypted = false
                     )
                 } else {
-                    Toast.makeText(context, "未找到可读的 .txt/.llm 文件或解压失败", Toast.LENGTH_LONG).show()
+                    Toast.makeText(context, context.getString(R.string.browser_no_txt_llm_found), Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -2045,24 +2046,24 @@ private fun FileBrowserAppScreen(
             epubEncrypted = null
             epubPassword = ""
             epubInProgress = true
-            epubLog = "准备加载: ${target.name}\n"
+            epubLog = context.getString(R.string.browser_html_zip_preparing, target.name)
             epubLoadError = null
             try {
                 var cachedResult: EpubExtractResult? = null
                 var encrypted: Boolean? = null
                 withContext(Dispatchers.IO) {
-                    epubLog += "检查缓存...\n"
+                    epubLog += context.getString(R.string.browser_checking_cache)
                     val cacheDir = getEpubCacheDir(context, target.uri)
                     val cacheTs = getEpubCacheTimestamp(cacheDir)
                     if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
                         cachedResult = loadEpubFromCache(context, cacheDir)
                         if (cachedResult != null) {
-                            epubLog += "使用缓存\n"
+                            epubLog += context.getString(R.string.browser_using_cache)
                             return@withContext
                         }
                         cacheDir.deleteRecursively()
                     }
-                    epubLog += "检查是否加密...\n"
+                    epubLog += context.getString(R.string.browser_checking_encryption)
                     encrypted = isArchiveEncrypted(context, target.uri, target.name)
                 }
                 val cached = cachedResult
@@ -2097,18 +2098,18 @@ private fun FileBrowserAppScreen(
                         }
                         is EpubParseResult.Error -> {
                             val detail = result.detail?.let { "\n$it" } ?: ""
-                            epubLog += "\n错误: ${result.message}$detail\n"
+                            epubLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
                             epubLoadError = "${result.message}$detail"
                             epubInProgress = false
                             // 保留 epubTarget 以便显示错误对话框
                         }
                     }
                 } else {
-                    epubLog += "文件已加密，需要密码\n"
+                    epubLog += context.getString(R.string.browser_file_encrypted_need_password)
                     epubInProgress = false
                 }
             } catch (e: Exception) {
-                epubLog += "\n异常: ${e.javaClass.simpleName}: ${e.message}\n"
+                epubLog += context.getString(R.string.browser_log_exception, e.javaClass.simpleName, e.message ?: "")
                 epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
                 epubInProgress = false
             }
@@ -2149,7 +2150,7 @@ private fun FileBrowserAppScreen(
                     )
                     txtTarget = null
                 } else {
-                    txtLoadError = "无法解析 TXT 文件"
+                    txtLoadError = context.getString(R.string.browser_txt_parse_failed)
                 }
             } catch (e: Exception) {
                 Log.e("FileBrowserApp", "TXT processing failed", e)
@@ -2194,7 +2195,7 @@ private fun FileBrowserAppScreen(
                     )
                     llmTarget = null
                 } else {
-                    llmLoadError = "无法解析 LLM 对话文件"
+                    llmLoadError = context.getString(R.string.browser_llm_parse_failed)
                 }
             } catch (e: Exception) {
                 Log.e("FileBrowserApp", "LLM processing failed", e)
@@ -2247,7 +2248,7 @@ private fun FileBrowserAppScreen(
                     )
                 } else {
                     picZipTarget = null
-                    Toast.makeText(context, "解压失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
                 }
                 picZipInProgress = false
             }
@@ -2386,13 +2387,13 @@ private fun FileBrowserAppScreen(
             switchMainTab(MainTab.PLAYER)
             showPendingList = false
             clearPendingPlaybackTargetState()
-            Toast.makeText(context, "已创建播放列表并加入 ${audioList.size} 首", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_playlist_created, audioList.size), Toast.LENGTH_SHORT).show()
         }
 
         suspend fun appendToPlaybackPlaylist(target: Playlist, audioList: List<DocumentFileModel>) {
             val msg = appendToPlaybackPlaylistAndStart(context, prefs, target, audioList)
             if (msg == null) {
-                Toast.makeText(context, "加入播放列表失败", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_add_to_playlist_failed), Toast.LENGTH_SHORT).show()
                 return
             }
             recordRecentOpen(
@@ -2473,14 +2474,14 @@ private fun FileBrowserAppScreen(
             )
             refreshTrigger++
             val msg = when {
-                !ok -> "导入失败：无法解析 JSON"
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> "配置已导入（播放列表已追加，含密钥）"
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && importKeys -> "配置已导入（播放列表已覆盖，含密钥）"
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 -> "配置已导入（播放列表已覆盖）"
-                ConfigExportCategory.GPG in categories && importKeys -> "配置已导入（含密钥）"
-                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> "配置已导入（播放列表已追加）"
-                else -> "配置已导入"
+                !ok -> context.getString(R.string.browser_config_import_json_failed)
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> context.getString(R.string.browser_config_imported_music_append_keys)
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> context.getString(R.string.browser_config_imported_music_append)
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && importKeys -> context.getString(R.string.browser_config_imported_music_replace_keys)
+                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 -> context.getString(R.string.browser_config_imported_music_replace)
+                ConfigExportCategory.GPG in categories && importKeys -> context.getString(R.string.browser_config_imported_with_keys)
+                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> context.getString(R.string.browser_config_imported_playlist_append)
+                else -> context.getString(R.string.browser_config_imported)
             }
             clearPendingConfigImportState()
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
@@ -2515,12 +2516,12 @@ private fun FileBrowserAppScreen(
 
         fun startConfigImport(jsonString: String) {
             if (jsonString.isBlank()) {
-                Toast.makeText(context, "导入失败：无法读取文件", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_config_import_read_failed), Toast.LENGTH_SHORT).show()
                 return
             }
             val categories = configJsonCategories(jsonString)
             if (categories.isEmpty()) {
-                Toast.makeText(context, "导入失败：文件中没有可识别的配置类别", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.browser_config_import_no_category), Toast.LENGTH_SHORT).show()
                 return
             }
             pendingImportJson = jsonString
@@ -2572,7 +2573,7 @@ private fun FileBrowserAppScreen(
         Column(Modifier.fillMaxSize()) {
             if (gpgPubEncryptInProgress || saveInProgress) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text("保存中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+                Text(stringResource(R.string.viewer_saving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
             }
             progressOp?.let { OperationProgressDialog(it) }
             Box(Modifier.weight(1f)) {
@@ -2663,13 +2664,13 @@ private fun FileBrowserAppScreen(
                                     {
                                         scope.launch {
                                             val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress("清空回收站", null) { _ ->
+                                            runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
                                                 val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
                                                 if (ok) {
-                                                    Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
                                                     refreshTrigger++
                                                 } else {
-                                                    Toast.makeText(context, "清空失败", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.browser_empty_trash_failed), Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
@@ -2680,13 +2681,13 @@ private fun FileBrowserAppScreen(
                                     { model ->
                                         scope.launch {
                                             val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress("恢复", null) { _ ->
+                                            runWithProgress(context.getString(R.string.context_restore), null) { _ ->
                                                 val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
                                                 if (ok) {
-                                                    Toast.makeText(context, "已恢复到根目录", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.browser_restored_to_root), Toast.LENGTH_SHORT).show()
                                                     refreshTrigger++
                                                 } else {
-                                                    Toast.makeText(context, "恢复失败", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, context.getString(R.string.browser_restore_failed), Toast.LENGTH_SHORT).show()
                                                 }
                                             }
                                         }
@@ -2718,9 +2719,9 @@ private fun FileBrowserAppScreen(
                                         val extension = fileExtensionKey(name)
                                         if (!packageName.isNullOrBlank() && extension != null) {
                                             scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                            Toast.makeText(context, "记住的外部应用不可用，已恢复默认打开方式", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_external_app_unavailable), Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                     opened
@@ -2750,7 +2751,7 @@ private fun FileBrowserAppScreen(
                                             createDirectoryPlaybackPlaylistAndStart(context, prefs, uri, name)
                                         }
                                         if (playlist == null) {
-                                            Toast.makeText(context, "目录中没有可播放的音乐文件", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_no_music_in_dir), Toast.LENGTH_SHORT).show()
                                         } else {
                                             recordRecentOpen(
                                                 type = RECENT_TYPE_PLAYLIST,
@@ -2759,7 +2760,7 @@ private fun FileBrowserAppScreen(
                                                 playlistId = playlist.id
                                             )
                                             switchMainTab(MainTab.PLAYER)
-                                            Toast.makeText(context, "已从目录生成播放列表并开始播放", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_playlist_from_dir_started), Toast.LENGTH_SHORT).show()
                                         }
                                     }
                                 },
@@ -2787,7 +2788,7 @@ private fun FileBrowserAppScreen(
                                 },
                                 onConfirmDelete = { model, deletePermanently ->
                                     scope.launch {
-                                        val label = if (deletePermanently) "删除" else "移到回收站"
+                                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
                                         runWithProgress(label, null) { _ ->
                                             val ok = withContext(Dispatchers.IO) {
                                                 if (deletePermanently) {
@@ -2798,9 +2799,9 @@ private fun FileBrowserAppScreen(
                                                 }
                                             }
                                             if (ok) {
-                                                Toast.makeText(context, if (deletePermanently) "已删除" else "已移到回收站", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted) else context.getString(R.string.browser_moved_to_trash), Toast.LENGTH_SHORT).show()
                                             } else {
-                                                Toast.makeText(context, "操作失败", Toast.LENGTH_SHORT).show()
+                                                Toast.makeText(context, context.getString(R.string.browser_operation_failed), Toast.LENGTH_SHORT).show()
                                             }
                                             refreshTrigger++
                                         }
@@ -2852,7 +2853,7 @@ private fun FileBrowserAppScreen(
                                         }.onFailure { error ->
                                             Toast.makeText(
                                                 context,
-                                                "打开目录图片失败：${error.message ?: error.javaClass.simpleName}",
+                                                context.getString(R.string.browser_open_dir_images_failed, error.message ?: error.javaClass.simpleName),
                                                 Toast.LENGTH_LONG
                                             ).show()
                                         }
@@ -2890,13 +2891,13 @@ private fun FileBrowserAppScreen(
                                         }
                                         result.onSuccess {
                                             val message = if (it.evicted != null) {
-                                                "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）；已移除最旧词典：${it.evicted.name}"
+                                                context.getString(R.string.browser_dict_imported_evicted, it.imported.name, it.imported.wordCount, it.evicted.name)
                                             } else {
-                                                "词典已导入：${it.imported.name}（${it.imported.wordCount} 词条）"
+                                                context.getString(R.string.browser_dict_imported, it.imported.name, it.imported.wordCount)
                                             }
                                             Toast.makeText(context, message, Toast.LENGTH_LONG).show()
                                         }.onFailure {
-                                            Toast.makeText(context, "导入失败：${it.message ?: "未知错误"}", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_dict_import_failed, it.message ?: context.getString(R.string.common_unknown_error)), Toast.LENGTH_LONG).show()
                                         }
                                     }
                                 },
@@ -3079,27 +3080,27 @@ private fun FileBrowserAppScreen(
                 onRequestDelete = { showPendingDeleteConfirm = true },
                 onRequestForwardToBulletin = {
                     if (pendingList.isEmpty()) {
-                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
                         bulletinForwardPayload = BulletinForwardPayload.Files(pendingList.toList())
                     }
                 },
                 onRequestBatchObfuscate = {
                     val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
-                    if (list.isEmpty()) Toast.makeText(context, "没有可混淆的文件（请勿选已 .qx 或文件夹）", Toast.LENGTH_SHORT).show()
+                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_obfuscate_candidates), Toast.LENGTH_SHORT).show()
                     else batchObfuscateOp = list to true
                 },
                 onRequestBatchDeobfuscate = {
                     val list = pendingList.filter { !it.isDirectory && isQuickObfuscatedFileName(it.name) }
-                    if (list.isEmpty()) Toast.makeText(context, "没有可去混淆的文件（请只选 .qx 文件）", Toast.LENGTH_SHORT).show()
+                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_deobfuscate_candidates), Toast.LENGTH_SHORT).show()
                     else batchObfuscateOp = list to false
                 },
                 onRequestBatchGpgEncrypt = {
                     if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
-                        Toast.makeText(context, "列表中存在 .gpg 文件，无法批量加密", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_batch_encrypt_has_gpg), Toast.LENGTH_SHORT).show()
                     } else {
                         val list = pendingList.filter { !it.isDirectory }
-                        if (list.isEmpty()) Toast.makeText(context, "没有可加密的文件", Toast.LENGTH_SHORT).show()
+                        if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_encrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
                             gpgPassword = ""
                             gpgDecryptMode = null
@@ -3111,10 +3112,10 @@ private fun FileBrowserAppScreen(
                 },
                 onRequestBatchGpgDecrypt = {
                     if (pendingList.any { !it.name.endsWith(".gpg", ignoreCase = true) }) {
-                        Toast.makeText(context, "列表中存在非 .gpg 文件，无法批量解密", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_batch_decrypt_has_non_gpg), Toast.LENGTH_SHORT).show()
                     } else {
                         val list = pendingList.filter { !it.isDirectory }
-                        if (list.isEmpty()) Toast.makeText(context, "没有可解密的文件", Toast.LENGTH_SHORT).show()
+                        if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_decrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
                             gpgPassword = ""
                             gpgDecryptMode = null
@@ -3126,7 +3127,7 @@ private fun FileBrowserAppScreen(
                 },
                 onRequestCompressToZip = {
                     if (pendingList.isEmpty()) {
-                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                         pendingCompressZipName = "archive_$ts.zip"
@@ -3136,7 +3137,7 @@ private fun FileBrowserAppScreen(
                 },
                 onRequestCompressTo7z = {
                     if (pendingList.isEmpty()) {
-                        Toast.makeText(context, "列表为空", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
                         pendingCompress7zName = "archive_$ts.7z"
@@ -3209,7 +3210,7 @@ private fun FileBrowserAppScreen(
                         }
                         if (manualPlaylists.isEmpty()) {
                             Text(
-                                "没有可移入的普通播放列表。目录列表不能作为加入目标，请新建普通播放列表。",
+                                context.getString(R.string.browser_no_normal_playlist_target),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -3232,10 +3233,10 @@ private fun FileBrowserAppScreen(
             val hasRoot = rootUri != null
             AlertDialog(
                 onDismissRequest = { showPendingDeleteConfirm = false },
-                title = { Text("确认删除") },
+                title = { Text(stringResource(R.string.browser_confirm_delete_title)) },
                 text = {
                     Column(Modifier.verticalScroll(rememberScrollState())) {
-                        Text("确定要删除以下 ${toDelete.size} 项吗？", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.browser_confirm_delete_count, toDelete.size), color = MaterialTheme.colorScheme.onSurface)
                         if (hasRoot) {
                             Spacer(Modifier.height(12.dp))
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -3244,7 +3245,7 @@ private fun FileBrowserAppScreen(
                                     onClick = { deletePermanently = false }
                                 )
                                 Spacer(Modifier.size(8.dp))
-                                Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
+                                Text(stringResource(R.string.browser_move_to_trash_recoverable), style = MaterialTheme.typography.bodyMedium)
                             }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 androidx.compose.material3.RadioButton(
@@ -3252,11 +3253,11 @@ private fun FileBrowserAppScreen(
                                     onClick = { deletePermanently = true }
                                 )
                                 Spacer(Modifier.size(8.dp))
-                                Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                                Text(stringResource(R.string.browser_delete_permanently), style = MaterialTheme.typography.bodyMedium)
                             }
                         } else {
                             Spacer(Modifier.height(8.dp))
-                            Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_no_trash_permanent_delete), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Spacer(Modifier.height(12.dp))
                         toDelete.forEach { item ->
@@ -3277,7 +3278,7 @@ private fun FileBrowserAppScreen(
                     Button(
                         onClick = {
                             scope.launch {
-                                val label = if (deletePermanently) "删除" else "移到回收站"
+                                val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
                                 val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                                 runWithProgress(label, toDelete.size) { setProgress ->
                                     withContext(Dispatchers.IO) {
@@ -3294,13 +3295,13 @@ private fun FileBrowserAppScreen(
                                 refreshTrigger++
                                 showPendingDeleteConfirm = false
                                 finishPendingListAndReturn()
-                                Toast.makeText(context, if (deletePermanently) "已删除 ${toDelete.size} 项" else "已移到回收站 ${toDelete.size} 项", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted_count, toDelete.size) else context.getString(R.string.browser_moved_to_trash_count, toDelete.size), Toast.LENGTH_SHORT).show()
                             }
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "确定删除") }
+                    ) { Text(if (hasRoot && !deletePermanently) stringResource(R.string.browser_moved_to_trash) else stringResource(R.string.browser_confirm_delete_action)) }
                 },
-                dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text("取消") } }
+                dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text(stringResource(R.string.common_cancel)) } }
             )
         }
         if (showImportCategoryDialog && pendingImportJson != null) {
@@ -3399,10 +3400,10 @@ private fun FileBrowserAppScreen(
         if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
             AlertDialog(
                 onDismissRequest = { clearPendingConfigImportState() },
-                title = { Text("导入播放列表") },
+                title = { Text(stringResource(R.string.browser_import_playlist_title)) },
                 text = {
                     Text(
-                        "导入配置包含 ${pendingImportPlaylistCount} 个播放列表。当前已有播放列表，导入时要覆盖当前列表，还是追加到当前列表？",
+                        stringResource(R.string.browser_import_playlist_prompt, pendingImportPlaylistCount),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 },
@@ -3411,7 +3412,7 @@ private fun FileBrowserAppScreen(
                         showImportPlaylistConfirmDialog = false
                         pendingImportPlaylistMode = ConfigPlaylistImportMode.APPEND
                         continueConfigImportAfterPlaylistChoice()
-                    }) { Text("追加") }
+                    }) { Text(stringResource(R.string.browser_append)) }
                 },
                 dismissButton = {
                     Row {
@@ -3419,8 +3420,8 @@ private fun FileBrowserAppScreen(
                             showImportPlaylistConfirmDialog = false
                             pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
                             continueConfigImportAfterPlaylistChoice()
-                        }) { Text("覆盖") }
-                        TextButton(onClick = { clearPendingConfigImportState() }) { Text("取消") }
+                        }) { Text(stringResource(R.string.file_share_overwrite_action)) }
+                        TextButton(onClick = { clearPendingConfigImportState() }) { Text(stringResource(R.string.common_cancel)) }
                     }
                 }
             )
@@ -3431,10 +3432,10 @@ private fun FileBrowserAppScreen(
                 onDismissRequest = {
                     clearPendingConfigImportState()
                 },
-                title = { Text("导入配置") },
+                title = { Text(stringResource(R.string.config_import_category_title)) },
                 text = {
                     Text(
-                        "导入的配置包含公钥/私钥，会覆盖本机现有密钥。请选择：",
+                        stringResource(R.string.browser_import_config_keys_prompt),
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 },
@@ -3446,7 +3447,7 @@ private fun FileBrowserAppScreen(
                                 performConfigImport(jsonToImport, importKeys = true, categories = pendingImportSelectedCategories)
                             }
                         }
-                    ) { Text("全部替换") }
+                    ) { Text(stringResource(R.string.browser_replace_all)) }
                 },
                 dismissButton = {
                     TextButton(
@@ -3456,7 +3457,7 @@ private fun FileBrowserAppScreen(
                                 performConfigImport(jsonToImport, importKeys = false, categories = pendingImportSelectedCategories)
                             }
                         }
-                    ) { Text("跳过密钥（保留本机密钥）") }
+                    ) { Text(stringResource(R.string.browser_skip_keys)) }
                 }
             )
         }
@@ -3526,10 +3527,10 @@ private fun FileBrowserAppScreen(
                                 else treeLauncher.launch(null)
                             }
                         }
-                    }) { Text("选择新目录") }
+                    }) { Text(stringResource(R.string.browser_select_new_root)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showRootSwitchDialog = false }) { Text("取消") }
+                    TextButton(onClick = { showRootSwitchDialog = false }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -3658,15 +3659,15 @@ private fun FileBrowserAppScreen(
         shareFileToGitTarget?.let { model ->
             AlertDialog(
                 onDismissRequest = { shareFileToGitTarget = null },
-                title = { Text("共享到 Git") },
-                text = { Text("确定要将「${model.name}」共享到 .sysgit/share/ 吗？\n将自动同步、复制并推送。") },
+                title = { Text(stringResource(R.string.browser_share_to_git_title)) },
+                text = { Text(stringResource(R.string.browser_share_to_git_confirm, model.name)) },
                 confirmButton = {
                     TextButton(onClick = {
                         val target = model
                         shareFileToGitTarget = null
                         val r = rootUri?.let { normalizeContentUriString(it) }
                         if (r == null) {
-                            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
                             return@TextButton
                         }
                         shareGitLogs.clear()
@@ -3677,13 +3678,13 @@ private fun FileBrowserAppScreen(
                             val userName = prefs.gitUserName.first() ?: ""
                             val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
                             if (repoUrl.isBlank()) {
-                                shareGitLogs.add("错误: 请先配置 Git 仓库")
+                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_configure))
                                 shareGitInProgress = false
                                 shareGitDone = true
                                 return@launch
                             }
                             // 同步
-                            shareGitLogs.add("正在同步仓库...")
+                            shareGitLogs.add(context.getString(R.string.browser_share_git_syncing))
                             val syncResult = withContext(Dispatchers.IO) {
                                 cloneToTree(context, r, repoUrl,
                                     userName = userName.ifBlank { null },
@@ -3691,44 +3692,44 @@ private fun FileBrowserAppScreen(
                                     log = { msg -> shareGitLogs.add(msg) })
                             }
                             if (syncResult.isFailure) {
-                                shareGitLogs.add("错误: 同步失败 - ${syncResult.exceptionOrNull()?.message}")
+                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_sync, syncResult.exceptionOrNull()?.message ?: ""))
                                 shareGitInProgress = false
                                 shareGitDone = true
                                 return@launch
                             }
                             // 复制到 share
-                            shareGitLogs.add("正在复制文件到 share 目录...")
+                            shareGitLogs.add(context.getString(R.string.browser_share_git_copying))
                             val copied = withContext(Dispatchers.IO) {
                                 copyFileToShare(context, r, target.uri, target.name)
                             }
                             if (!copied) {
-                                shareGitLogs.add("错误: 复制到 share 目录失败")
+                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_copy))
                                 shareGitInProgress = false
                                 shareGitDone = true
                                 return@launch
                             }
-                            shareGitLogs.add("文件已复制到 .sysgit/share/")
+                            shareGitLogs.add(context.getString(R.string.browser_share_git_copied))
                             // 提交推送
-                            shareGitLogs.add("正在提交并推送...")
+                            shareGitLogs.add(context.getString(R.string.browser_git_committing_pushing))
                             val pushResult = withContext(Dispatchers.IO) {
                                 commitAndPush(context, r, repoUrl,
-                                    commitMessage = "共享文件: ${target.name}",
+                                    commitMessage = context.getString(R.string.browser_share_git_commit_message, target.name),
                                     userName = userName.ifBlank { null },
                                     httpsPassword = httpsPassword.ifBlank { null },
                                     log = { msg -> shareGitLogs.add(msg) })
                             }
                             if (pushResult.isSuccess) {
-                                shareGitLogs.add("已共享并推送成功")
+                                shareGitLogs.add(context.getString(R.string.browser_share_git_success))
                             } else {
-                                shareGitLogs.add("错误: 推送失败 - ${pushResult.exceptionOrNull()?.message}")
+                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_push, pushResult.exceptionOrNull()?.message ?: ""))
                             }
                             shareGitInProgress = false
                             shareGitDone = true
                         }
-                    }) { Text("共享") }
+                    }) { Text(stringResource(R.string.browser_share_action)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { shareFileToGitTarget = null }) { Text("取消") }
+                    TextButton(onClick = { shareFileToGitTarget = null }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -3736,7 +3737,7 @@ private fun FileBrowserAppScreen(
         if (shareGitLogs.isNotEmpty() && (shareGitInProgress || shareGitDone)) {
             AlertDialog(
                 onDismissRequest = { if (!shareGitInProgress) { shareGitDone = false; shareGitLogs.clear() } },
-                title = { Text("共享到 Git") },
+                title = { Text(stringResource(R.string.browser_share_to_git_title)) },
                 text = {
                     val logScrollState = rememberScrollState()
                     LaunchedEffect(shareGitLogs.size) {
@@ -3752,7 +3753,7 @@ private fun FileBrowserAppScreen(
                             Text(
                                 line,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                color = if (line.startsWith(context.getString(R.string.browser_error_prefix)) || line.startsWith(context.getString(R.string.browser_debug_prefix)))
                                     MaterialTheme.colorScheme.error
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -3764,7 +3765,7 @@ private fun FileBrowserAppScreen(
                     if (shareGitInProgress) {
                         CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
                     } else {
-                        TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text("关闭") }
+                        TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text(stringResource(R.string.common_close)) }
                     }
                 }
             )
@@ -3790,10 +3791,10 @@ private fun FileBrowserAppScreen(
                         quickObfuscatePassword = ""
                         quickObfuscatePasswordConfirm = ""
                         if (ok) {
-                            Toast.makeText(context, if (isObfuscate) "已混淆" else "已去混淆", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscated_badge) else context.getString(R.string.pending_list_action_deobfuscate), Toast.LENGTH_SHORT).show()
                             refreshTrigger++
                         } else {
-                            Toast.makeText(context, if (isObfuscate) "混淆失败" else "去混淆失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscate_failed) else context.getString(R.string.browser_deobfuscate_failed), Toast.LENGTH_SHORT).show()
                         }
                     }
                 },
@@ -3807,7 +3808,7 @@ private fun FileBrowserAppScreen(
         batchObfuscateOp?.let { (list, isObfuscate) ->
             QuickObfuscatePasswordDialog(
                 isObfuscate = isObfuscate,
-                fileName = "共 ${list.size} 个文件",
+                fileName = context.getString(R.string.browser_file_count, list.size),
                 password = batchObfuscatePassword,
                 confirmPassword = batchObfuscatePasswordConfirm,
                 inProgress = batchObfuscateInProgress,
@@ -3816,7 +3817,7 @@ private fun FileBrowserAppScreen(
                 onConfirm = { pwd ->
                     batchObfuscateInProgress = true
                     scope.launch {
-                        runWithProgress(if (isObfuscate) "混淆" else "去混淆", list.size) { setProgress ->
+                        runWithProgress(if (isObfuscate) context.getString(R.string.pending_list_action_obfuscate) else context.getString(R.string.pending_list_action_deobfuscate), list.size) { setProgress ->
                             withContext(Dispatchers.IO) {
                                 list.forEachIndexed { index, model ->
                                     if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
@@ -3829,7 +3830,7 @@ private fun FileBrowserAppScreen(
                         batchObfuscateOp = null
                         batchObfuscatePassword = ""
                         batchObfuscatePasswordConfirm = ""
-                        Toast.makeText(context, if (isObfuscate) "已混淆 ${list.size} 个文件" else "已去混淆 ${list.size} 个文件", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscated_count, list.size) else context.getString(R.string.browser_deobfuscated_count, list.size), Toast.LENGTH_SHORT).show()
                         finishPendingListAndReturn()
                         refreshTrigger++
                     }
@@ -3845,8 +3846,8 @@ private fun FileBrowserAppScreen(
         passProtectTarget?.let { model ->
             AlertDialog(
                 onDismissRequest = { if (!passProtectInProgress) passProtectTarget = null },
-                title = { Text("密码保护") },
-                text = { Text("将 ${model.name} 用默认公钥加密为 ${model.name}.pass，原文件将被删除。") },
+                title = { Text(stringResource(R.string.context_pass_protect)) },
+                text = { Text(stringResource(R.string.browser_pass_protect_confirm, model.name, model.name)) },
                 confirmButton = {
                     Button(
                         onClick = {
@@ -3859,14 +3860,14 @@ private fun FileBrowserAppScreen(
                                     val secRings = loadSecretKeyRings(ctx)
                                     if (secRings == null) {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, "未找到默认密钥，请先生成密钥对", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_key_generate), Toast.LENGTH_LONG).show()
                                         }
                                         return@withContext false
                                     }
                                     val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID
                                     if (defaultKeyId == null) {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, "未找到默认密钥", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_key), Toast.LENGTH_LONG).show()
                                         }
                                         return@withContext false
                                     }
@@ -3874,7 +3875,7 @@ private fun FileBrowserAppScreen(
                                     val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId)
                                     if (pubKeyRing == null) {
                                         withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, "未找到默认公钥", Toast.LENGTH_LONG).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_public_key), Toast.LENGTH_LONG).show()
                                         }
                                         return@withContext false
                                     }
@@ -3892,21 +3893,21 @@ private fun FileBrowserAppScreen(
                                 passProtectInProgress = false
                                 passProtectTarget = null
                                 if (ok) {
-                                    Toast.makeText(ctx, "已加密为 ${model.name}.pass", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(ctx, ctx.getString(R.string.browser_encrypted_as_pass, model.name), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(ctx, "密码保护失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(ctx, ctx.getString(R.string.browser_pass_protect_failed), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         },
                         enabled = !passProtectInProgress
-                    ) { Text(if (passProtectInProgress) "加密中…" else "确定") }
+                    ) { Text(if (passProtectInProgress) stringResource(R.string.browser_encrypting) else stringResource(R.string.common_ok)) }
                 },
                 dismissButton = {
                     TextButton(
                         onClick = { passProtectTarget = null },
                         enabled = !passProtectInProgress
-                    ) { Text("取消") }
+                    ) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -3916,10 +3917,10 @@ private fun FileBrowserAppScreen(
             if (secRings == null) {
                 AlertDialog(
                     onDismissRequest = { passViewTarget = null },
-                    title = { Text("查看密码") },
-                    text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                    title = { Text(stringResource(R.string.context_view_password)) },
+                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
                     confirmButton = {
-                        Button(onClick = { passViewTarget = null }) { Text("确定") }
+                        Button(onClick = { passViewTarget = null }) { Text(stringResource(R.string.common_ok)) }
                     }
                 )
             } else {
@@ -3940,7 +3941,7 @@ private fun FileBrowserAppScreen(
                         val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
                         passContentView = PassDecryptedContent(innerName, decrypted)
                     } else {
-                        Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
                     }
                 }
                 if (SecretKeyPasswordCache.get() == null || passViewTriedCache) {
@@ -3948,7 +3949,7 @@ private fun FileBrowserAppScreen(
                     isDecrypt = true,
                     fileName = model.name,
                     password = passViewPassword,
-                    passwordLabel = "密钥密码",
+                    passwordLabel = context.getString(R.string.browser_key_password_label),
                     inProgress = passViewInProgress,
                     onPasswordChange = { if (!passViewInProgress) passViewPassword = it },
                     onConfirm = { pwd ->
@@ -3972,7 +3973,7 @@ private fun FileBrowserAppScreen(
                                 val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
                                 passContentView = PassDecryptedContent(innerName, decrypted)
                             } else {
-                                Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
@@ -3992,10 +3993,10 @@ private fun FileBrowserAppScreen(
             if (secRings == null) {
                 AlertDialog(
                     onDismissRequest = { passEditRequest = null },
-                    title = { Text("直接编辑") },
-                    text = { Text("未找到默认私钥，无法解密。请先生成密钥对。") },
+                    title = { Text(stringResource(R.string.context_edit_directly)) },
+                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
                     confirmButton = {
-                        Button(onClick = { passEditRequest = null }) { Text("确定") }
+                        Button(onClick = { passEditRequest = null }) { Text(stringResource(R.string.common_ok)) }
                     }
                 )
             } else {
@@ -4017,7 +4018,7 @@ private fun FileBrowserAppScreen(
                         val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                         passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
                     } else {
-                        Toast.makeText(context, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
                     }
                 }
                 if (SecretKeyPasswordCache.get() == null || passEditTriedCache) {
@@ -4025,7 +4026,7 @@ private fun FileBrowserAppScreen(
                     isDecrypt = true,
                     fileName = model.name,
                     password = passEditPassword,
-                    passwordLabel = "密钥密码",
+                    passwordLabel = context.getString(R.string.browser_key_password_label),
                     inProgress = passEditInProgress,
                     onPasswordChange = { if (!passEditInProgress) passEditPassword = it },
                     onConfirm = { pwd ->
@@ -4048,7 +4049,7 @@ private fun FileBrowserAppScreen(
                                 val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                                 passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
                             } else {
-                                Toast.makeText(ctx, "解密失败，请检查密码", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
                             }
                         }
                     },
@@ -4075,10 +4076,10 @@ private fun FileBrowserAppScreen(
             val encrypted = zipUnzipEncrypted
             AlertDialog(
                 onDismissRequest = { zipUnzipTarget = null; zipUnzipPassword = "" },
-                title = { Text("解压压缩包") },
+                title = { Text(stringResource(R.string.browser_extract_archive_title)) },
                 text = {
                     Column {
-                        Text("确定将 ${target.name} 解压到当前目录？", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.browser_extract_archive_confirm, target.name), color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(8.dp))
                         Box(
                             modifier = Modifier
@@ -4087,12 +4088,12 @@ private fun FileBrowserAppScreen(
                         ) {
                             when (encrypted) {
                                 true -> Text(
-                                    "该压缩包已加密，请输入密码。",
+                                    context.getString(R.string.browser_archive_encrypted_prompt),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 null -> Text(
-                                    "正在检测是否加密…",
+                                    context.getString(R.string.browser_detecting_encryption),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -4104,7 +4105,7 @@ private fun FileBrowserAppScreen(
                             ReliablePasswordInputField(
                                 value = zipUnzipPassword,
                                 onValueChange = { zipUnzipPassword = it },
-                                label = { Text("密码（加密压缩包）") },
+                                label = { Text(stringResource(R.string.browser_archive_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = encrypted == true
                             )
@@ -4116,7 +4117,7 @@ private fun FileBrowserAppScreen(
                         onClick = {
                             if (encrypted == true && zipUnzipPassword.isBlank()) return@Button
                             scope.launch {
-                                progressOp = OperationProgress("解压", 0, null)
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_extract), 0, null)
                                 delay(50)
                                 val pwd = if (encrypted == true) zipUnzipPassword.toCharArray() else null
                                 val result = withContext(Dispatchers.IO) {
@@ -4128,7 +4129,7 @@ private fun FileBrowserAppScreen(
                                         target.name,
                                         pwd
                                     ) { cur, tot ->
-                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("解压", cur, tot) }
+                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_extract), cur, tot) }
                                     }
                                 }
                                 // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
@@ -4139,44 +4140,44 @@ private fun FileBrowserAppScreen(
                                         zipUnzipTarget = null
                                         zipUnzipPassword = ""
                                         zipUnzipEncrypted = null
-                                        Toast.makeText(context, "解压完成", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_complete), Toast.LENGTH_SHORT).show()
                                         refreshTrigger++
                                     }
                                     is UnzipResult.PasswordRequired -> {
                                         // 需要密码但未提供，显示密码输入框让用户重试
                                         zipUnzipEncrypted = true
-                                        Toast.makeText(context, "请输入密码", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_enter_password), Toast.LENGTH_SHORT).show()
                                     }
                                     is UnzipResult.WrongPassword -> {
                                         // 密码错误，保留对话框让用户重试
                                         zipUnzipEncrypted = true
-                                        Toast.makeText(context, "密码错误，请重试", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_wrong_password_retry), Toast.LENGTH_SHORT).show()
                                     }
                                     is UnzipResult.CorruptedFile -> {
                                         zipUnzipTarget = null
                                         zipUnzipPassword = ""
                                         zipUnzipEncrypted = null
-                                        Toast.makeText(context, "解压失败：文件已损坏", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_corrupt), Toast.LENGTH_SHORT).show()
                                     }
                                     is UnzipResult.UnsupportedFormat -> {
                                         zipUnzipTarget = null
                                         zipUnzipPassword = ""
                                         zipUnzipEncrypted = null
-                                        Toast.makeText(context, "解压失败：不支持的压缩格式", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_format), Toast.LENGTH_SHORT).show()
                                     }
                                     is UnzipResult.IOError -> {
                                         zipUnzipTarget = null
                                         zipUnzipPassword = ""
                                         zipUnzipEncrypted = null
-                                        val msg = result.message ?: "未知错误"
-                                        Toast.makeText(context, "解压失败：$msg", Toast.LENGTH_SHORT).show()
+                                        val msg = result.message ?: context.getString(R.string.common_unknown_error)
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_detail, msg), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
                         }
-                    ) { Text("解压") }
+                    ) { Text(stringResource(R.string.browser_extract_action)) }
                 },
-                dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text("取消") } }
+                dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text(stringResource(R.string.common_cancel)) } }
             )
         }
         // ---- .md.zip 密码输入对话框（仅加密 zip 时弹出） ----
@@ -4185,15 +4186,15 @@ private fun FileBrowserAppScreen(
             if (encrypted == true) {
                 AlertDialog(
                     onDismissRequest = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } },
-                    title = { Text("查看压缩 Markdown") },
+                    title = { Text(stringResource(R.string.context_view_zip_markdown)) },
                     text = {
                         Column {
-                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
                             ReliablePasswordInputField(
                                 value = mdZipPassword,
                                 onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
-                                label = { Text("ZIP 密码") },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = !mdZipInProgress
                             )
@@ -4245,26 +4246,26 @@ private fun FileBrowserAppScreen(
                                             isEncrypted = true
                                         )
                                     } else {
-                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     },
                     dismissButton = {
                         TextButton(
                             onClick = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
-                        ) { Text("取消") }
+                        ) { Text(stringResource(R.string.common_cancel)) }
                     }
                 )
             } else if (encrypted == null) {
                 // 正在检测加密状态或正在解压非加密 zip
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("查看压缩 Markdown") },
+                    title = { Text(stringResource(R.string.context_view_zip_markdown)) },
                     text = {
                         Column {
-                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -4279,15 +4280,15 @@ private fun FileBrowserAppScreen(
             if (encrypted == true) {
                 AlertDialog(
                     onDismissRequest = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } },
-                    title = { Text("查看压缩 HTML") },
+                    title = { Text(stringResource(R.string.context_view_zip_html)) },
                     text = {
                         Column {
-                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
                             ReliablePasswordInputField(
                                 value = htmlZipPassword,
                                 onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
-                                label = { Text("ZIP 密码") },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = !htmlZipInProgress
                             )
@@ -4338,23 +4339,23 @@ private fun FileBrowserAppScreen(
                                             isEncrypted = true
                                         )
                                     } else {
-                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     },
                     dismissButton = {
                         TextButton(
                             onClick = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
-                        ) { Text("取消") }
+                        ) { Text(stringResource(R.string.common_cancel)) }
                     }
                 )
             } else if (encrypted == null) {
                 // 加载中或显示错误
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("查看压缩 HTML") },
+                    title = { Text(stringResource(R.string.context_view_zip_html)) },
                     text = {
                         Column(
                             modifier = Modifier
@@ -4366,7 +4367,7 @@ private fun FileBrowserAppScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                    Text(stringResource(R.string.browser_loading_dots), style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -4380,7 +4381,7 @@ private fun FileBrowserAppScreen(
                     confirmButton = {
                         if (htmlZipLoadError != null) {
                             TextButton(onClick = { htmlZipTarget = null; htmlZipLoadError = null; htmlZipLog = "" }) {
-                                Text("关闭")
+                                Text(stringResource(R.string.common_close))
                             }
                         }
                     }
@@ -4393,15 +4394,15 @@ private fun FileBrowserAppScreen(
             if (encrypted == true) {
                 AlertDialog(
                     onDismissRequest = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } },
-                    title = { Text("查看压缩 LLM") },
+                    title = { Text(stringResource(R.string.context_view_zip_llm)) },
                     text = {
                         Column {
-                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
                             ReliablePasswordInputField(
                                 value = llmZipPassword,
                                 onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
-                                label = { Text("ZIP 密码") },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = !llmZipInProgress
                             )
@@ -4443,25 +4444,25 @@ private fun FileBrowserAppScreen(
                                             isEncrypted = true
                                         )
                                     } else {
-                                        Toast.makeText(context, "解压失败（请检查密码或文件内容）", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password_content), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     },
                     dismissButton = {
                         TextButton(
                             onClick = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
-                        ) { Text("取消") }
+                        ) { Text(stringResource(R.string.common_cancel)) }
                     }
                 )
             } else if (encrypted == null) {
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("查看压缩 LLM") },
+                    title = { Text(stringResource(R.string.context_view_zip_llm)) },
                     text = {
                         Column {
-                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -4476,15 +4477,15 @@ private fun FileBrowserAppScreen(
             if (encrypted == true) {
                 AlertDialog(
                     onDismissRequest = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } },
-                    title = { Text("查看 EPUB 电子书") },
+                    title = { Text(stringResource(R.string.browser_view_epub_title)) },
                     text = {
                         Column {
-                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
                             ReliablePasswordInputField(
                                 value = epubPassword,
                                 onValueChange = { if (!epubInProgress) epubPassword = it },
-                                label = { Text("ZIP 密码") },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = !epubInProgress
                             )
@@ -4499,7 +4500,7 @@ private fun FileBrowserAppScreen(
                             onClick = {
                                 if (epubInProgress || epubPassword.isBlank()) return@Button
                                 epubInProgress = true
-                                epubLog = "开始解压加密EPUB...\n"
+                                epubLog = context.getString(R.string.browser_epub_decrypt_start)
                                 val pwd = epubPassword.toCharArray()
                                 scope.launch {
                                     val result = withContext(Dispatchers.IO) {
@@ -4535,25 +4536,25 @@ private fun FileBrowserAppScreen(
                                         }
                                         is EpubParseResult.Error -> {
                                             val detail = result.detail?.let { "\n$it" } ?: ""
-                                            epubLog += "\n错误: ${result.message}$detail\n"
+                                            epubLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
                                             epubLoadError = "${result.message}$detail"
                                         }
                                     }
                                 }
                             }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     },
                     dismissButton = {
                         TextButton(
                             onClick = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
-                        ) { Text("取消") }
+                        ) { Text(stringResource(R.string.common_cancel)) }
                     }
                 )
             } else {
                 // encrypted == null 或 encrypted == false，都显示加载对话框
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("打开 EPUB") },
+                    title = { Text(stringResource(R.string.browser_open_epub_title)) },
                     text = {
                         Column(
                             modifier = Modifier
@@ -4565,7 +4566,7 @@ private fun FileBrowserAppScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("加载中...", style = MaterialTheme.typography.bodyMedium)
+                                    Text(stringResource(R.string.browser_loading_dots), style = MaterialTheme.typography.bodyMedium)
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
@@ -4579,7 +4580,7 @@ private fun FileBrowserAppScreen(
                     confirmButton = {
                         if (epubLoadError != null) {
                             TextButton(onClick = { epubTarget = null; epubLoadError = null; epubLog = "" }) {
-                                Text("关闭")
+                                Text(stringResource(R.string.common_close))
                             }
                         }
                     }
@@ -4591,7 +4592,7 @@ private fun FileBrowserAppScreen(
             if (epubTarget == null) {
                 AlertDialog(
                     onDismissRequest = { epubLoadError = null; epubLog = "" },
-                    title = { Text("EPUB 解析失败") },
+                    title = { Text(stringResource(R.string.browser_epub_parse_failed_title)) },
                     text = {
                         Column(
                             modifier = Modifier
@@ -4607,7 +4608,7 @@ private fun FileBrowserAppScreen(
                         }
                     },
                     confirmButton = {
-                        TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text("确定") }
+                        TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text(stringResource(R.string.common_ok)) }
                     }
                 )
             }
@@ -4616,7 +4617,7 @@ private fun FileBrowserAppScreen(
         txtLoadError?.let { error ->
             AlertDialog(
                 onDismissRequest = { txtLoadError = null; txtTarget = null },
-                title = { Text("TXT 文件解析失败") },
+                title = { Text(stringResource(R.string.browser_txt_parse_failed_title)) },
                 text = {
                     Column(
                         modifier = Modifier
@@ -4631,7 +4632,7 @@ private fun FileBrowserAppScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text("确定") }
+                    TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text(stringResource(R.string.common_ok)) }
                 }
             )
         }
@@ -4639,7 +4640,7 @@ private fun FileBrowserAppScreen(
         llmLoadError?.let { error ->
             AlertDialog(
                 onDismissRequest = { llmLoadError = null; llmTarget = null },
-                title = { Text("LLM 对话文件解析失败") },
+                title = { Text(stringResource(R.string.browser_llm_parse_failed_title)) },
                 text = {
                     Column(
                         modifier = Modifier
@@ -4654,7 +4655,7 @@ private fun FileBrowserAppScreen(
                     }
                 },
                 confirmButton = {
-                    TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text("确定") }
+                    TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text(stringResource(R.string.common_ok)) }
                 }
             )
         }
@@ -4664,15 +4665,15 @@ private fun FileBrowserAppScreen(
             if (encrypted == true) {
                 AlertDialog(
                     onDismissRequest = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } },
-                    title = { Text("查看图片压缩包") },
+                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
                     text = {
                         Column {
-                            Text("${target.name} 已加密，请输入密码。", color = MaterialTheme.colorScheme.onSurface)
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
                             Spacer(Modifier.height(12.dp))
                             ReliablePasswordInputField(
                                 value = picZipPassword,
                                 onValueChange = { if (!picZipInProgress) picZipPassword = it },
-                                label = { Text("ZIP 密码") },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
                                 modifier = Modifier.fillMaxWidth(),
                                 enabled = !picZipInProgress
                             )
@@ -4719,26 +4720,26 @@ private fun FileBrowserAppScreen(
                                             initialIndex = cachedInitialIndex
                                         )
                                     } else {
-                                        Toast.makeText(context, "解压失败（请检查密码）", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
                                     }
                                     picZipInProgress = false
                                 }
                             }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     },
                     dismissButton = {
                         TextButton(
                             onClick = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
-                        ) { Text("取消") }
+                        ) { Text(stringResource(R.string.common_cancel)) }
                     }
                 )
             } else if (encrypted == null) {
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("查看图片压缩包") },
+                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
                     text = {
                         Column {
-                            Text("正在处理 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -4748,10 +4749,10 @@ private fun FileBrowserAppScreen(
             } else if (encrypted == false && picZipInProgress) {
                 AlertDialog(
                     onDismissRequest = {},
-                    title = { Text("查看图片压缩包") },
+                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
                     text = {
                         Column {
-                            Text("正在解压 ${target.name}…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_extracting_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Spacer(Modifier.height(8.dp))
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         }
@@ -4771,10 +4772,10 @@ private fun FileBrowserAppScreen(
                     zipCompressPassword = ""
                     zipCompressPasswordConfirm = ""
                 },
-                title = { Text("压缩为 ZIP") },
+                title = { Text(stringResource(R.string.context_compress_zip)) },
                 text = {
                     Column {
-                        Text("确定将 ${target.name} 压缩为 $suggestedZipName？", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.browser_compress_zip_confirm, target.name, suggestedZipName), color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
                         PasswordConfirmationFields(
                             password = zipCompressPassword,
@@ -4784,8 +4785,8 @@ private fun FileBrowserAppScreen(
                                 if (it.isEmpty()) zipCompressPasswordConfirm = ""
                             },
                             onConfirmPasswordChange = { zipCompressPasswordConfirm = it },
-                            passwordLabel = "密码（留空则不加密）",
-                            confirmLabel = "再次输入密码",
+                            passwordLabel = context.getString(R.string.browser_password_optional_label),
+                            confirmLabel = context.getString(R.string.browser_password_confirm_label),
                             enabled = true,
                             allowBlank = true
                         )
@@ -4796,7 +4797,7 @@ private fun FileBrowserAppScreen(
                         enabled = zipCompressPasswordReady,
                         onClick = {
                             scope.launch {
-                                progressOp = OperationProgress("压缩", 0, 1)
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, 1)
                                 delay(50)
                                 val pwd = zipCompressPassword.ifBlank { null }?.toCharArray()
                                 val ok = withContext(Dispatchers.IO) {
@@ -4808,7 +4809,7 @@ private fun FileBrowserAppScreen(
                                         suggestedZipName,
                                         pwd
                                     ) { cur, tot ->
-                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
                                     }
                                 }
                                 delay(120)
@@ -4817,21 +4818,21 @@ private fun FileBrowserAppScreen(
                                 zipCompressPassword = ""
                                 zipCompressPasswordConfirm = ""
                                 if (ok) {
-                                    Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_complete), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_failed), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
-                    ) { Text("压缩") }
+                    ) { Text(stringResource(R.string.browser_compress_action)) }
                 },
                 dismissButton = {
                     TextButton(onClick = {
                         zipCompressTarget = null
                         zipCompressPassword = ""
                         zipCompressPasswordConfirm = ""
-                    }) { Text("取消") }
+                    }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -4846,10 +4847,10 @@ private fun FileBrowserAppScreen(
                     sevenZCompressPassword = ""
                     sevenZCompressPasswordConfirm = ""
                 },
-                title = { Text("压缩为 7Z") },
+                title = { Text(stringResource(R.string.context_compress_7z)) },
                 text = {
                     Column {
-                        Text("确定将 ${target.name} 压缩为 $suggested7zName？", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.browser_compress_7z_confirm, target.name, suggested7zName), color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
                         PasswordConfirmationFields(
                             password = sevenZCompressPassword,
@@ -4859,8 +4860,8 @@ private fun FileBrowserAppScreen(
                                 if (it.isEmpty()) sevenZCompressPasswordConfirm = ""
                             },
                             onConfirmPasswordChange = { sevenZCompressPasswordConfirm = it },
-                            passwordLabel = "密码（留空则不加密）",
-                            confirmLabel = "再次输入密码",
+                            passwordLabel = context.getString(R.string.browser_password_optional_label),
+                            confirmLabel = context.getString(R.string.browser_password_confirm_label),
                             enabled = true,
                             allowBlank = true
                         )
@@ -4871,7 +4872,7 @@ private fun FileBrowserAppScreen(
                         enabled = sevenZCompressPasswordReady,
                         onClick = {
                             scope.launch {
-                                progressOp = OperationProgress("压缩", 0, 1)
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, 1)
                                 delay(50)
                                 val pwd = sevenZCompressPassword.ifBlank { null }?.toCharArray()
                                 var timeout = false
@@ -4887,7 +4888,7 @@ private fun FileBrowserAppScreen(
                                                 suggested7zName,
                                                 pwd
                                             ) { cur, tot ->
-                                                scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress("压缩", cur, tot) }
+                                                scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
                                             }
                                         }
                                         future.get(2, TimeUnit.MINUTES)
@@ -4904,21 +4905,21 @@ private fun FileBrowserAppScreen(
                                 sevenZCompressPassword = ""
                                 sevenZCompressPasswordConfirm = ""
                                 if (ok) {
-                                    Toast.makeText(context, "压缩完成", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_complete), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (timeout) context.getString(R.string.browser_compress_timeout) else context.getString(R.string.browser_compress_failed), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
-                    ) { Text("压缩") }
+                    ) { Text(stringResource(R.string.browser_compress_action)) }
                 },
                 dismissButton = {
                     TextButton(onClick = {
                         sevenZCompressTarget = null
                         sevenZCompressPassword = ""
                         sevenZCompressPasswordConfirm = ""
-                    }) { Text("取消") }
+                    }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -4928,11 +4929,11 @@ private fun FileBrowserAppScreen(
             val pendingZipPasswordReady = isOptionalPasswordConfirmed(pendingCompressPassword, pendingCompressPasswordConfirm)
             AlertDialog(
                 onDismissRequest = { showPendingCompressToZip = false },
-                title = { Text("压缩待处理列表为 ZIP") },
+                title = { Text(stringResource(R.string.browser_compress_pending_zip_title)) },
                 text = {
                     Column {
                         Text(
-                            "将待处理列表中 ${pendingList.size} 项压缩为一个 ZIP 文件，保存到当前目录。",
+                            stringResource(R.string.browser_pending_compress_zip_desc, pendingList.size),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
@@ -4940,7 +4941,7 @@ private fun FileBrowserAppScreen(
                             value = pendingCompressZipName,
                             onValueChange = { pendingCompressZipName = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("文件名") },
+                            label = { Text(stringResource(R.string.browser_filename_label)) },
                             singleLine = true
                         )
                         Spacer(Modifier.height(8.dp))
@@ -4951,7 +4952,7 @@ private fun FileBrowserAppScreen(
                                 if (it.isEmpty()) pendingCompressPasswordConfirm = ""
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("密码（留空则不加密）") },
+                            label = { Text(stringResource(R.string.browser_password_optional_label)) },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation()
                         )
@@ -4961,14 +4962,14 @@ private fun FileBrowserAppScreen(
                                 value = pendingCompressPasswordConfirm,
                                 onValueChange = { pendingCompressPasswordConfirm = it },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("再次输入密码") },
+                                label = { Text(stringResource(R.string.browser_password_confirm_label)) },
                                 singleLine = true,
                                 isError = pendingCompressPasswordConfirm.isNotEmpty() && pendingCompressPassword != pendingCompressPasswordConfirm,
                                 visualTransformation = PasswordVisualTransformation()
                             )
                             if (pendingCompressPasswordConfirm.isNotEmpty() && pendingCompressPassword != pendingCompressPasswordConfirm) {
                                 Spacer(Modifier.height(4.dp))
-                                Text("两次输入的密码不一致", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.browser_password_mismatch), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -4984,7 +4985,7 @@ private fun FileBrowserAppScreen(
                             val pwd = pendingCompressPassword.ifBlank { null }?.toCharArray()
                             showPendingCompressToZip = false
                             scope.launch {
-                                progressOp = OperationProgress("压缩", 0, items.size)
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
                                 delay(50)
                                 val ok = withContext(Dispatchers.IO) {
                                     compressToZip(
@@ -4996,7 +4997,7 @@ private fun FileBrowserAppScreen(
                                         pwd
                                     ) { cur, tot ->
                                         scope.launch(Dispatchers.Main.immediate) {
-                                            progressOp = OperationProgress("压缩", cur, tot)
+                                            progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot)
                                         }
                                     }
                                 }
@@ -5007,17 +5008,17 @@ private fun FileBrowserAppScreen(
                                 pendingCompressPasswordConfirm = ""
                                 if (ok) {
                                     finishPendingListAndReturn()
-                                    Toast.makeText(context, "压缩完成：$zipName", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_done, zipName), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(context, "压缩失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_failed), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
-                    ) { Text("压缩") }
+                    ) { Text(stringResource(R.string.browser_compress_action)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showPendingCompressToZip = false }) { Text("取消") }
+                    TextButton(onClick = { showPendingCompressToZip = false }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -5027,11 +5028,11 @@ private fun FileBrowserAppScreen(
             val pendingSevenZPasswordReady = isOptionalPasswordConfirmed(pendingCompress7zPassword, pendingCompress7zPasswordConfirm)
             AlertDialog(
                 onDismissRequest = { showPendingCompressTo7z = false },
-                title = { Text("压缩待处理列表为 7Z") },
+                title = { Text(stringResource(R.string.browser_compress_pending_7z_title)) },
                 text = {
                     Column {
                         Text(
-                            "将待处理列表中 ${pendingList.size} 项压缩为一个 7Z 文件，保存到当前目录。",
+                            stringResource(R.string.browser_pending_compress_7z_desc, pendingList.size),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(Modifier.height(12.dp))
@@ -5039,7 +5040,7 @@ private fun FileBrowserAppScreen(
                             value = pendingCompress7zName,
                             onValueChange = { pendingCompress7zName = it },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("文件名") },
+                            label = { Text(stringResource(R.string.browser_filename_label)) },
                             singleLine = true
                         )
                         Spacer(Modifier.height(8.dp))
@@ -5050,7 +5051,7 @@ private fun FileBrowserAppScreen(
                                 if (it.isEmpty()) pendingCompress7zPasswordConfirm = ""
                             },
                             modifier = Modifier.fillMaxWidth(),
-                            label = { Text("密码（留空则不加密）") },
+                            label = { Text(stringResource(R.string.browser_password_optional_label)) },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation()
                         )
@@ -5060,14 +5061,14 @@ private fun FileBrowserAppScreen(
                                 value = pendingCompress7zPasswordConfirm,
                                 onValueChange = { pendingCompress7zPasswordConfirm = it },
                                 modifier = Modifier.fillMaxWidth(),
-                                label = { Text("再次输入密码") },
+                                label = { Text(stringResource(R.string.browser_password_confirm_label)) },
                                 singleLine = true,
                                 isError = pendingCompress7zPasswordConfirm.isNotEmpty() && pendingCompress7zPassword != pendingCompress7zPasswordConfirm,
                                 visualTransformation = PasswordVisualTransformation()
                             )
                             if (pendingCompress7zPasswordConfirm.isNotEmpty() && pendingCompress7zPassword != pendingCompress7zPasswordConfirm) {
                                 Spacer(Modifier.height(4.dp))
-                                Text("两次输入的密码不一致", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.browser_password_mismatch), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                         }
                     }
@@ -5083,7 +5084,7 @@ private fun FileBrowserAppScreen(
                             val pwd = pendingCompress7zPassword.ifBlank { null }?.toCharArray()
                             showPendingCompressTo7z = false
                             scope.launch {
-                                progressOp = OperationProgress("压缩", 0, items.size)
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
                                 delay(50)
                                 var timeout = false
                                 val ok = withContext(Dispatchers.IO) {
@@ -5099,7 +5100,7 @@ private fun FileBrowserAppScreen(
                                                 pwd
                                             ) { cur, tot ->
                                                 scope.launch(Dispatchers.Main.immediate) {
-                                                    progressOp = OperationProgress("压缩", cur, tot)
+                                                    progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot)
                                                 }
                                             }
                                         }
@@ -5119,17 +5120,17 @@ private fun FileBrowserAppScreen(
                                 if (ok) {
                                     pendingList.clear()
                                     showPendingList = false
-                                    Toast.makeText(context, "压缩完成：$sevenZName", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_done, sevenZName), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(context, if (timeout) "压缩超时，请重试" else "压缩失败", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, if (timeout) context.getString(R.string.browser_compress_timeout) else context.getString(R.string.browser_compress_failed), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
-                    ) { Text("压缩") }
+                    ) { Text(stringResource(R.string.browser_compress_action)) }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showPendingCompressTo7z = false }) { Text("取消") }
+                    TextButton(onClick = { showPendingCompressTo7z = false }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
         }
@@ -5138,28 +5139,28 @@ private fun FileBrowserAppScreen(
             val root = Uri.parse(normalizeContentUriString(r))
             AlertDialog(
                 onDismissRequest = { showChangeRootConfirm = false },
-                title = { Text("更换根目录") },
-                text = { Text("当前根目录的回收站不为空，是否清空后再更换？") },
+                title = { Text(stringResource(R.string.browser_change_root_title)) },
+                text = { Text(stringResource(R.string.browser_change_root_trash_prompt)) },
                 confirmButton = {
                     Button(onClick = {
                         scope.launch {
                             showChangeRootConfirm = false
-                            runWithProgress("清空回收站", null) { _ ->
+                            runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
                                 val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                if (ok) Toast.makeText(context, "回收站已清空", Toast.LENGTH_SHORT).show()
+                                if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
                                 treeLauncher.launch(null)
                                 refreshTrigger++
                             }
                         }
-                    }) { Text("清空后更换") }
+                    }) { Text(stringResource(R.string.browser_empty_then_change)) }
                 },
                 dismissButton = {
                     Row {
                         TextButton(onClick = {
                             showChangeRootConfirm = false
                             treeLauncher.launch(null)
-                        }) { Text("直接更换") }
-                        TextButton(onClick = { showChangeRootConfirm = false }) { Text("取消") }
+                        }) { Text(stringResource(R.string.browser_change_directly)) }
+                        TextButton(onClick = { showChangeRootConfirm = false }) { Text(stringResource(R.string.common_cancel)) }
                     }
                 }
             )
@@ -5193,7 +5194,7 @@ private fun FileBrowserAppScreen(
                         val ok = when (op) {
                             is GpgOpState.BatchDecrypt -> {
                                 var allOk = true
-                                runWithProgress("解密", op.list.size) { setProgress ->
+                                runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
                                     op.list.forEachIndexed { index, fileModel ->
                                         if (!decryptGpgFileToDir(context, fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
                                             allOk = false
@@ -5213,9 +5214,9 @@ private fun FileBrowserAppScreen(
                             if (op is GpgOpState.BatchDecrypt) {
                                 pendingList.clear()
                                 showPendingList = false
-                                Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
                             } else {
-                                Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
                             }
                         }
                     }
@@ -5228,9 +5229,9 @@ private fun FileBrowserAppScreen(
                         fileName = op.displayName,
                         password = gpgPassword,
                         passwordLabel = when (decryptMode) {
-                            GpgDecryptUiMode.SECRET_KEY -> "密钥密码"
-                            GpgDecryptUiMode.MIXED -> "密码（公钥文件会自动尝试私钥）"
-                            GpgDecryptUiMode.SYMMETRIC -> "密码"
+                            GpgDecryptUiMode.SECRET_KEY -> context.getString(R.string.browser_key_password_label)
+                            GpgDecryptUiMode.MIXED -> context.getString(R.string.browser_password_gpg_auto)
+                            GpgDecryptUiMode.SYMMETRIC -> context.getString(R.string.browser_enter_password)
                         },
                         inProgress = gpgInProgress,
                         onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
@@ -5242,7 +5243,7 @@ private fun FileBrowserAppScreen(
                                     val pwdChars = pwd.toCharArray()
                                     val ok = when (op) {
                                         is GpgOpState.BatchDecrypt -> {
-                                            runWithProgress("解密", op.list.size) { setProgress ->
+                                            runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
                                                 op.list.forEachIndexed { index, fileModel ->
                                                     decryptGpgFileToDir(
                                                         context,
@@ -5279,14 +5280,14 @@ private fun FileBrowserAppScreen(
                                         if (op is GpgOpState.BatchDecrypt) {
                                             pendingList.clear()
                                             showPendingList = false
-                                            Toast.makeText(ctx, "已解密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(ctx, "解密完成", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
                                         }
                                         resetGpgUiState()
                                         refreshTrigger++
                                     } else {
-                                        Toast.makeText(ctx, "解密失败", Toast.LENGTH_LONG).show()
+                                        Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_failed), Toast.LENGTH_LONG).show()
                                     }
                                 } finally {
                                     gpgInProgress = false
@@ -5340,7 +5341,7 @@ private fun FileBrowserAppScreen(
                                 val pwdChars = password.toCharArray()
                                 val ok = when (op) {
                                     is GpgOpState.BatchEncrypt -> {
-                                        runWithProgress(if (keyId != null) "公钥加密" else "加密", op.list.size) { setProgress ->
+                                        runWithProgress(if (keyId != null) context.getString(R.string.browser_op_public_key_encrypt) else context.getString(R.string.quick_crypto_action_encrypt_short), op.list.size) { setProgress ->
                                             op.list.forEachIndexed { index, fileModel ->
                                                 encryptGpgFileToDir(
                                                     context,
@@ -5369,15 +5370,15 @@ private fun FileBrowserAppScreen(
                                     if (op is GpgOpState.BatchEncrypt) {
                                         pendingList.clear()
                                         showPendingList = false
-                                        Toast.makeText(ctx, if (keyId != null) "已公钥加密 ${op.list.size} 个文件" else "已加密 ${op.list.size} 个文件", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_public_key_encrypted_count, op.list.size) else ctx.getString(R.string.browser_encrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(ctx, if (keyId != null) "公钥加密完成" else "加密完成", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_op_public_key_encrypt) else ctx.getString(R.string.browser_encrypt_complete), Toast.LENGTH_SHORT).show()
                                     }
                                     resetGpgUiState()
                                     gpgPasswordConfirm = ""
                                     refreshTrigger++
                                 } else {
-                                    Toast.makeText(ctx, "加密失败", Toast.LENGTH_LONG).show()
+                                    Toast.makeText(ctx, ctx.getString(R.string.browser_encrypt_failed), Toast.LENGTH_LONG).show()
                                 }
                             } finally {
                                 gpgInProgress = false
@@ -5397,15 +5398,15 @@ private fun FileBrowserAppScreen(
             title = { Text(dialog.title) },
             text = {
                 Text(
-                    "是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可复用已有缓存并保留阅读进度。",
+                    stringResource(R.string.browser_delete_cache_exit_prompt),
                     color = MaterialTheme.colorScheme.onSurface
                 )
             },
             confirmButton = {
-                Button(onClick = dialog.onDelete) { Text("删除缓存并退出") }
+                Button(onClick = dialog.onDelete) { Text(stringResource(R.string.browser_delete_cache_and_exit)) }
             },
             dismissButton = {
-                TextButton(onClick = dialog.onKeep) { Text("保留缓存并退出") }
+                TextButton(onClick = dialog.onKeep) { Text(stringResource(R.string.browser_keep_cache_and_exit)) }
             }
         )
     }
@@ -5427,19 +5428,19 @@ private fun FileBrowserAppScreen(
                 ) {
                     Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
                     Text(
-                        "启动解密密钥已开启",
+                        stringResource(R.string.browser_startup_decrypt_enabled),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground
                     )
                     Text(
-                        "请输入私钥密码以解锁应用",
+                        stringResource(R.string.browser_enter_private_key_unlock),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     ReliablePasswordInputField(
                         value = unlockPwd,
                         onValueChange = { unlockPwd = it; unlockError = null },
-                        label = { Text("私钥密码") },
+                        label = { Text(stringResource(R.string.browser_private_key_password_label)) },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !unlockInProgress
                     )
@@ -5460,7 +5461,7 @@ private fun FileBrowserAppScreen(
                                     SecretKeyPasswordCache.set(unlockPwd.toCharArray())
                                     unlockedByStartup = true
                                 } else {
-                                    unlockError = "密码错误或解密失败"
+                                    unlockError = context.getString(R.string.browser_password_wrong_or_decrypt_failed)
                                 }
                             }
                         },
@@ -5470,7 +5471,7 @@ private fun FileBrowserAppScreen(
                         if (unlockInProgress) {
                             CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
                         } else {
-                            Text("解锁")
+                            Text(stringResource(R.string.browser_unlock_action))
                         }
                     }
                 }
@@ -5483,7 +5484,7 @@ private fun FileBrowserAppScreen(
                 if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
                 else {
                     lastBackPressTime = now
-                    Toast.makeText(context, "再按一次退出", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
                 }
             }
             Box(
@@ -5492,7 +5493,7 @@ private fun FileBrowserAppScreen(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        if (pendingSaveFileUri != null) "从其他应用打开文件，请选择保存位置" else "选择根目录以浏览文件",
+                        if (pendingSaveFileUri != null) stringResource(R.string.browser_external_open_save_prompt) else stringResource(R.string.browser_select_root_prompt),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -5500,7 +5501,7 @@ private fun FileBrowserAppScreen(
                     Button(onClick = { treeLauncher.launch(null) }) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, Modifier.size(20.dp))
                         Spacer(Modifier.size(8.dp))
-                        Text(if (pendingSaveFileUri != null) "选择保存位置" else "选择根目录")
+                        Text(if (pendingSaveFileUri != null) stringResource(R.string.browser_select_save_location) else stringResource(R.string.browser_select_root_button))
                     }
                 }
             }
@@ -5569,7 +5570,7 @@ private fun FileBrowserAppScreen(
             BackHandler {
                 if (state.isEncrypted) {
                     encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = "退出加密压缩 Markdown",
+                        title = context.getString(R.string.browser_exit_encrypted_md),
                         onDelete = {
                             cleanMdZipCache(context, state.zipUri)
                             mdZipViewState = null
@@ -5592,7 +5593,7 @@ private fun FileBrowserAppScreen(
                 onBack = {
                     if (state.isEncrypted) {
                         encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = "退出加密压缩 Markdown",
+                            title = context.getString(R.string.browser_exit_encrypted_md),
                             onDelete = {
                                 cleanMdZipCache(context, state.zipUri)
                                 mdZipViewState = null
@@ -5623,7 +5624,7 @@ private fun FileBrowserAppScreen(
             BackHandler {
                 if (state.isEncrypted) {
                     encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = "退出加密压缩 HTML",
+                        title = context.getString(R.string.browser_exit_encrypted_html),
                         onDelete = {
                             cleanHtmlZipCache(context, state.zipUri)
                             htmlZipViewState = null
@@ -5645,7 +5646,7 @@ private fun FileBrowserAppScreen(
                 onBack = {
                     if (state.isEncrypted) {
                         encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = "退出加密压缩 HTML",
+                            title = context.getString(R.string.browser_exit_encrypted_html),
                             onDelete = {
                                 cleanHtmlZipCache(context, state.zipUri)
                                 htmlZipViewState = null
@@ -5676,7 +5677,7 @@ private fun FileBrowserAppScreen(
             BackHandler {
                 if (state.isEncrypted) {
                     encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = "退出加密书籍",
+                        title = context.getString(R.string.browser_exit_encrypted_book),
                         onDelete = {
                             cleanEpubCache(context, state.epubUri)
                             epubViewState = null
@@ -5703,7 +5704,7 @@ private fun FileBrowserAppScreen(
                 onBack = {
                     if (state.isEncrypted) {
                         encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = "退出加密书籍",
+                            title = context.getString(R.string.browser_exit_encrypted_book),
                             onDelete = {
                                 cleanEpubCache(context, state.epubUri)
                                 epubViewState = null
@@ -5809,7 +5810,7 @@ private fun FileBrowserAppScreen(
                         }
                         passEditState = null
                         refreshTrigger++
-                        Toast.makeText(ctx, if (ok) "已保存并重新加密" else "保存失败", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(ctx, if (ok) ctx.getString(R.string.browser_saved_and_reencrypted) else ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
                     }
                 },
                 onBack = { passEditState = null }
@@ -5838,8 +5839,8 @@ private fun FileBrowserAppScreen(
                 pendingSaveFileUri = null
                 initialDirUri = targetRoot
             },
-            title = { Text("文件已存在") },
-            text = { Text("$fileName 已存在于当前目录，是否覆盖？") },
+            title = { Text(stringResource(R.string.browser_file_exists_title)) },
+            text = { Text(stringResource(R.string.browser_file_exists_overwrite, fileName)) },
             confirmButton = {
                 Button(onClick = {
                     val ctx = context
@@ -5859,19 +5860,19 @@ private fun FileBrowserAppScreen(
                             initialDirUri = dir
                             currentUri = dir
                             saveCompletedToken++
-                            Toast.makeText(ctx, "已覆盖保存", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.browser_overwrite_save), Toast.LENGTH_SHORT).show()
                         } else {
-                            Toast.makeText(ctx, "保存失败", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
                         }
                     }
-                }) { Text("覆盖") }
+                }) { Text(stringResource(R.string.file_share_overwrite_action)) }
             },
                 dismissButton = {
                     TextButton(onClick = {
                         showOverwriteConfirm = null
                         pendingSaveFileUri = null
                         initialDirUri = normalizeContentUriString(targetRoot)
-                    }) { Text("不覆盖") }
+                    }) { Text(stringResource(R.string.browser_do_not_overwrite)) }
             }
         )
     }
@@ -5886,16 +5887,16 @@ private fun OperationProgressDialog(progress: OperationProgress) {
     Dialog(onDismissRequest = { }) {
         Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
             Column(Modifier.padding(24.dp)) {
-                Text("${progress.label} 中…", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.browser_progress_in_progress, progress.label), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
                 if (progress.total != null && progress.total > 0) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), progress = { progress.current.toFloat() / progress.total })
                     Spacer(Modifier.height(8.dp))
-                    Text("${progress.current} / ${progress.total} 项", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_progress_items, progress.current, progress.total ?: 0), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(8.dp))
-                    Text("处理中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_processing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -6035,11 +6036,11 @@ private sealed class GpgOpState {
     }
     data class BatchDecrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
         override val isDecrypt = true
-        override val displayName get() = "共 ${list.size} 个文件"
+        override val displayName get() = list.size.toString()
     }
     data class BatchEncrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
         override val isDecrypt = false
-        override val displayName get() = "共 ${list.size} 个文件"
+        override val displayName get() = list.size.toString()
     }
 }
 
@@ -6057,10 +6058,10 @@ private sealed class GpgMethod {
 
 internal data class CachedDir(val items: List<DocumentFileModel>)
 
-private enum class FileSortOrder(val label: String) {
-    NAME("名称"),
-    TIME("更新时间"),
-    SIZE("大小")
+private enum class FileSortOrder(@androidx.annotation.StringRes val labelRes: Int) {
+    NAME(R.string.browser_name_field),
+    TIME(R.string.browser_modified_field),
+    SIZE(R.string.browser_size_field)
 }
 
 private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Comparator<DocumentFileModel> {
@@ -6077,13 +6078,13 @@ private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Co
     }
 }
 
-private fun parseFileSearchSize(raw: String): Long? {
+private fun parseFileSearchSize(context: Context, raw: String): Long? {
     val normalized = raw.trim()
     if (normalized.isEmpty()) return null
     val match = Regex("""^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?b?)?$""", RegexOption.IGNORE_CASE).matchEntire(normalized)
-        ?: throw IllegalArgumentException("大小格式无效：$raw。支持 1024、10KB、1.5MB、2GB")
+        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_format_invalid, raw))
     val value = match.groupValues[1].toDoubleOrNull()
-        ?: throw IllegalArgumentException("大小数值无效：$raw")
+        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_invalid, raw))
     val unit = match.groupValues[2].lowercase(Locale.getDefault())
     val multiplier = when (unit) {
         "", "b" -> 1.0
@@ -6091,21 +6092,21 @@ private fun parseFileSearchSize(raw: String): Long? {
         "m", "mb" -> 1024.0 * 1024
         "g", "gb" -> 1024.0 * 1024 * 1024
         "t", "tb" -> 1024.0 * 1024 * 1024 * 1024
-        else -> throw IllegalArgumentException("不支持的大小单位：$unit")
+        else -> throw IllegalArgumentException(context.getString(R.string.browser_size_unit_unsupported, unit))
     }
     val bytes = value * multiplier
     if (!bytes.isFinite() || bytes < 0.0) {
-        throw IllegalArgumentException("大小必须为非负数：$raw")
+        throw IllegalArgumentException(context.getString(R.string.browser_size_must_non_negative, raw))
     }
     return bytes.toLong()
 }
 
-private fun parseFileSearchDate(raw: String, endOfDay: Boolean): Long? {
+private fun parseFileSearchDate(context: Context, raw: String, endOfDay: Boolean): Long? {
     val normalized = raw.trim()
     if (normalized.isEmpty()) return null
     val parser = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
     val parsed = parser.parse(normalized)
-        ?: throw IllegalArgumentException("日期格式无效：$raw，应为 yyyy-MM-dd")
+        ?: throw IllegalArgumentException(context.getString(R.string.browser_date_format_invalid, raw))
     if (!endOfDay) return parsed.time
     return Calendar.getInstance().apply {
         time = parsed
@@ -6146,14 +6147,14 @@ private fun FileSearchDialog(
                     .padding(20.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text("文件查找", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.browser_file_search_title), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = namePattern,
                     onValueChange = onNamePatternChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("文件名正则") },
-                    placeholder = { Text("例如 .*\\.pdf$ 或 ^IMG_") },
+                    label = { Text(stringResource(R.string.browser_filename_regex_label)) },
+                    placeholder = { Text(stringResource(R.string.browser_regex_example)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
@@ -6161,8 +6162,8 @@ private fun FileSearchDialog(
                     value = minSize,
                     onValueChange = onMinSizeChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("最小大小") },
-                    placeholder = { Text("例如 10MB 或 1024") },
+                    label = { Text(stringResource(R.string.browser_min_size_label)) },
+                    placeholder = { Text(stringResource(R.string.browser_size_example_mb)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
@@ -6170,8 +6171,8 @@ private fun FileSearchDialog(
                     value = maxSize,
                     onValueChange = onMaxSizeChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("最大大小") },
-                    placeholder = { Text("例如 500MB") },
+                    label = { Text(stringResource(R.string.browser_max_size_label)) },
+                    placeholder = { Text(stringResource(R.string.browser_size_example_large)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
@@ -6179,7 +6180,7 @@ private fun FileSearchDialog(
                     value = modifiedAfter,
                     onValueChange = onModifiedAfterChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("修改时间下限") },
+                    label = { Text(stringResource(R.string.browser_min_mtime_label)) },
                     placeholder = { Text("yyyy-MM-dd") },
                     singleLine = true
                 )
@@ -6188,13 +6189,13 @@ private fun FileSearchDialog(
                     value = modifiedBefore,
                     onValueChange = onModifiedBeforeChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text("修改时间上限") },
+                    label = { Text(stringResource(R.string.browser_max_mtime_label)) },
                     placeholder = { Text("yyyy-MM-dd") },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "将从当前目录递归搜索全部子目录；留空表示不限制。",
+                    stringResource(R.string.browser_recursive_search_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -6209,10 +6210,10 @@ private fun FileSearchDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onClear, enabled = !searching) { Text("清空") }
-                    TextButton(onClick = onDismiss, enabled = !searching) { Text("关闭") }
+                    TextButton(onClick = onClear, enabled = !searching) { Text(stringResource(R.string.browser_clear_filter)) }
+                    TextButton(onClick = onDismiss, enabled = !searching) { Text(stringResource(R.string.common_close)) }
                     TextButton(onClick = onSearch, enabled = !searching) {
-                        Text(if (searching) "搜索中..." else "开始查找")
+                        Text(if (searching) stringResource(R.string.browser_search_in_progress) else stringResource(R.string.browser_start_search))
                     }
                 }
             }
@@ -6241,20 +6242,20 @@ private fun FileSearchResultsDialog(
                     .padding(20.dp)
                     .heightIn(max = 640.dp)
             ) {
-                Text("查找结果 (${results.size})", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(R.string.browser_search_results, results.size), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
                     TextButton(onClick = onAddAll, enabled = results.any { it.model.uri.toString() !in pendingUris }) {
-                        Text("全部加入待处理")
+                        Text(stringResource(R.string.browser_add_all_to_pending))
                     }
-                    TextButton(onClick = onDismiss) { Text("关闭") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
                 }
                 Spacer(Modifier.height(8.dp))
                 if (results.isEmpty()) {
-                    Text("没有符合条件的文件。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_no_matching_files_dot), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 } else {
                     LazyColumn(modifier = Modifier.fillMaxWidth()) {
                         items(results, key = { it.model.uri.toString() }) { item ->
@@ -6285,7 +6286,7 @@ private fun FileSearchResultsDialog(
                                             onClick = { onAddOne(item.model) },
                                             enabled = item.model.uri.toString() !in pendingUris
                                         ) {
-                                            Text(if (item.model.uri.toString() in pendingUris) "已在待处理" else "加入待处理")
+                                            Text(if (item.model.uri.toString() in pendingUris) stringResource(R.string.browser_already_in_pending) else stringResource(R.string.browser_add_to_pending))
                                         }
                                     }
                                 }
@@ -6399,7 +6400,7 @@ internal fun FileBrowserScreen(
     fun showExternalOpenDialog(target: DocumentFileModel) {
         val options = queryExternalOpenTargets(context, target.uri.toString())
         if (options.isEmpty()) {
-            Toast.makeText(context, "没有可打开的应用", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
             return
         }
         externalOpenTarget = target
@@ -6435,46 +6436,46 @@ internal fun FileBrowserScreen(
         val existingUris = pendingList.map { it.uri.toString() }.toHashSet()
         val toAdd = targets.filter { existingUris.add(it.uri.toString()) }
         toAdd.forEach(onAddToPendingList)
-        Toast.makeText(context, if (toAdd.isEmpty()) "没有新的文件可加入待处理列表" else "已加入 ${toAdd.size} 项到待处理列表", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, if (toAdd.isEmpty()) context.getString(R.string.browser_no_new_pending_items) else context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
     }
 
     fun runFileSearch() {
         val nameRegex = try {
             fileSearchNamePattern.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
         } catch (error: Exception) {
-            fileSearchError = "文件名正则无效：${error.message ?: error.javaClass.simpleName}"
+            fileSearchError = context.getString(R.string.browser_filename_regex_invalid, error.message ?: error.javaClass.simpleName)
             return
         }
         val minSizeBytes = try {
-            parseFileSearchSize(fileSearchMinSize)
+            parseFileSearchSize(context, fileSearchMinSize)
         } catch (error: Exception) {
-            fileSearchError = error.message ?: "最小大小无效"
+            fileSearchError = error.message ?: context.getString(R.string.browser_min_size_invalid)
             return
         }
         val maxSizeBytes = try {
-            parseFileSearchSize(fileSearchMaxSize)
+            parseFileSearchSize(context, fileSearchMaxSize)
         } catch (error: Exception) {
-            fileSearchError = error.message ?: "最大大小无效"
+            fileSearchError = error.message ?: context.getString(R.string.browser_max_size_invalid)
             return
         }
         val modifiedAfterMillis = try {
-            parseFileSearchDate(fileSearchModifiedAfter, endOfDay = false)
+            parseFileSearchDate(context, fileSearchModifiedAfter, endOfDay = false)
         } catch (error: Exception) {
-            fileSearchError = error.message ?: "修改时间下限无效"
+            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_min_invalid)
             return
         }
         val modifiedBeforeMillis = try {
-            parseFileSearchDate(fileSearchModifiedBefore, endOfDay = true)
+            parseFileSearchDate(context, fileSearchModifiedBefore, endOfDay = true)
         } catch (error: Exception) {
-            fileSearchError = error.message ?: "修改时间上限无效"
+            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_max_invalid)
             return
         }
         if (minSizeBytes != null && maxSizeBytes != null && minSizeBytes > maxSizeBytes) {
-            fileSearchError = "大小范围无效：最小大小不能大于最大大小"
+            fileSearchError = context.getString(R.string.browser_size_range_invalid)
             return
         }
         if (modifiedAfterMillis != null && modifiedBeforeMillis != null && modifiedAfterMillis > modifiedBeforeMillis) {
-            fileSearchError = "时间范围无效：开始日期不能晚于结束日期"
+            fileSearchError = context.getString(R.string.browser_mtime_range_invalid)
             return
         }
         scope.launch {
@@ -6495,10 +6496,10 @@ internal fun FileBrowserScreen(
                 showFileSearchDialog = false
                 showFileSearchResultsDialog = true
                 if (results.isEmpty()) {
-                    Toast.makeText(context, "没有符合条件的文件", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.browser_no_matching_files), Toast.LENGTH_SHORT).show()
                 }
             } catch (error: Exception) {
-                fileSearchError = "文件查找失败：${error.message ?: error.javaClass.simpleName}"
+                fileSearchError = context.getString(R.string.browser_search_failed, error.message ?: error.javaClass.simpleName)
             } finally {
                 fileSearchRunning = false
             }
@@ -6520,7 +6521,7 @@ internal fun FileBrowserScreen(
                     items = result
                     onCacheDir(normalizedUri, result)
                 } catch (e: Exception) {
-                    error = e.message ?: "加载失败"
+                    error = e.message ?: context.getString(R.string.browser_loading_failed)
                     items = emptyList()
                 }
             }
@@ -6535,7 +6536,7 @@ internal fun FileBrowserScreen(
             items = result
             onCacheDir(normalizedUri, result)
         } catch (e: Exception) {
-            error = e.message ?: "加载失败"
+            error = e.message ?: context.getString(R.string.browser_loading_failed)
             items = emptyList()
         }
         loading = false
@@ -6594,7 +6595,7 @@ internal fun FileBrowserScreen(
                         }
                         Box {
                             IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "排序")
+                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = stringResource(R.string.browser_sort_desc))
                             }
                             DropdownMenu(
                                 expanded = showSortMenu,
@@ -6604,7 +6605,7 @@ internal fun FileBrowserScreen(
                                     val isCurrent = sortOrder == order
                                     val direction = if (isCurrent) (if (sortAscending) " ↑" else " ↓") else ""
                                     DropdownMenuItem(
-                                        text = { Text(order.label + direction) },
+                                        text = { Text(stringResource(order.labelRes) + direction) },
                                         onClick = {
                                             if (isCurrent) {
                                                 sortAscending = !sortAscending
@@ -6643,7 +6644,7 @@ internal fun FileBrowserScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("生成当前目录音乐列表") },
+                                text = { Text(stringResource(R.string.browser_generate_dir_playlist)) },
                                 leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
@@ -6651,7 +6652,7 @@ internal fun FileBrowserScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("文件查找") },
+                                text = { Text(stringResource(R.string.browser_file_search_title)) },
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
@@ -7113,7 +7114,7 @@ internal fun FileBrowserScreen(
                                 onCreateMusicPlaylist(menuTarget.uri.toString(), menuTarget.name)
                                 contextMenuTarget = null
                             }
-                        ) { Text("生成音乐列表", color = MaterialTheme.colorScheme.onSurface) }
+                        ) { Text(context.getString(R.string.browser_generate_music_playlist), color = MaterialTheme.colorScheme.onSurface) }
                     }
                     if (isViewingTrash && onRestoreFromTrash != null) {
                         TextButton(
@@ -7205,9 +7206,9 @@ internal fun FileBrowserScreen(
                             contextMenuTarget = null
                             showDeleteConfirm = menuTarget
                         }
-                    ) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                    ) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
                     TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
-                        Text("取消", color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.common_cancel), color = MaterialTheme.colorScheme.onSurface)
                     }
                 }
             }
@@ -7409,10 +7410,10 @@ internal fun FileBrowserScreen(
         val hasRoot = rootUri != null
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = null },
-            title = { Text("确认删除") },
+            title = { Text(stringResource(R.string.browser_confirm_delete_title)) },
             text = {
                 Column {
-                    Text("确定删除「${target.name}」吗？", color = MaterialTheme.colorScheme.onSurface)
+                    Text(stringResource(R.string.browser_delete_confirm_single, target.name), color = MaterialTheme.colorScheme.onSurface)
                     if (hasRoot) {
                         Spacer(Modifier.height(12.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -7421,7 +7422,7 @@ internal fun FileBrowserScreen(
                                 onClick = { deletePermanently = false }
                             )
                             Spacer(Modifier.size(8.dp))
-                            Text("移到回收站（可恢复）", style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.browser_move_to_trash_recoverable), style = MaterialTheme.typography.bodyMedium)
                         }
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             androidx.compose.material3.RadioButton(
@@ -7429,11 +7430,11 @@ internal fun FileBrowserScreen(
                                 onClick = { deletePermanently = true }
                             )
                             Spacer(Modifier.size(8.dp))
-                            Text("完全删除（不可恢复）", style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.browser_delete_permanently), style = MaterialTheme.typography.bodyMedium)
                         }
                     } else {
                         Spacer(Modifier.height(8.dp))
-                        Text("此目录无回收站，将完全删除。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.browser_no_trash_permanent_delete), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             },
@@ -7443,10 +7444,10 @@ internal fun FileBrowserScreen(
                         showDeleteConfirm = null
                         onConfirmDelete?.invoke(target, deletePermanently)
                     }
-                ) { Text(if (hasRoot && !deletePermanently) "移到回收站" else "删除", color = MaterialTheme.colorScheme.error) }
+                ) { Text(if (hasRoot && !deletePermanently) stringResource(R.string.browser_moved_to_trash) else stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = null }) { Text("取消") }
+                TextButton(onClick = { showDeleteConfirm = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -7465,15 +7466,15 @@ internal fun FileBrowserScreen(
                 showRenameDialog = false
                 actionTarget = null
             },
-            title = { Text("操作: ${target.name}") },
+            title = { Text(stringResource(R.string.browser_archive_operation, target.name)) },
             text = {
                 Column {
-                    Text("重命名为:", style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.browser_rename_to), style = MaterialTheme.typography.bodyMedium)
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = renameValue,
                         onValueChange = { renameValue = it },
-                        label = { Text("新名称") },
+                        label = { Text(stringResource(R.string.browser_new_name_label)) },
                         singleLine = true,
                         modifier = Modifier
                             .fillMaxWidth()
@@ -7495,14 +7496,14 @@ internal fun FileBrowserScreen(
                                     if (it.uri == target.uri) it.copy(name = newName, uri = renamedUri) else it
                                 }
                             } else {
-                                Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                             }
                         } catch (_: Exception) {}
                     }
-                ) { Text("重命名") }
+                ) { Text(stringResource(R.string.browser_rename_title)) }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false; actionTarget = null }) { Text("取消") }
+                TextButton(onClick = { showRenameDialog = false; actionTarget = null }) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -7591,25 +7592,25 @@ internal fun FileBrowserScreen(
                         .padding(24.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
-                    Text("详细信息", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(stringResource(R.string.context_details), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(16.dp))
 
-                    Text("完整路径", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_full_path), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SelectionContainer(modifier = Modifier.weight(1f)) {
                             Text(fullPath, style = MaterialTheme.typography.bodyMedium)
                         }
                         IconButton(onClick = {
-                            clipboardManager?.setPrimaryClip(ClipData.newPlainText("路径", fullPath))
-                            Toast.makeText(context, "已复制路径", Toast.LENGTH_SHORT).show()
+                            clipboardManager?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.browser_full_path), fullPath))
+                            Toast.makeText(context, context.getString(R.string.browser_path_copied), Toast.LENGTH_SHORT).show()
                         }) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = "复制路径", Modifier.size(20.dp))
+                            Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.browser_copy_path), Modifier.size(20.dp))
                         }
                     }
 
                     Spacer(Modifier.height(12.dp))
-                    Text("重命名", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_rename_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
@@ -7633,21 +7634,21 @@ internal fun FileBrowserScreen(
                                                 if (it.uri == detailTarget.uri) it.copy(name = newName, uri = renamedUri) else it
                                             }
                                             showFileDetail = showFileDetail?.copy(name = newName, uri = renamedUri)
-                                            Toast.makeText(context, "已重命名", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_renamed), Toast.LENGTH_SHORT).show()
                                         } else {
-                                            Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
+                                            Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                                         }
                                     } catch (_: Exception) {
-                                        Toast.makeText(context, "重命名失败", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                                     }
                                 }
                             },
                             enabled = detailRenameValue.trim().let { it.isNotEmpty() && it != detailTarget.name }
-                        ) { Text("确定") }
+                        ) { Text(stringResource(R.string.common_ok)) }
                     }
 
                     Spacer(Modifier.height(16.dp))
-                    Text("文件属性", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_file_properties_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
 
                     @Composable
@@ -7662,18 +7663,18 @@ internal fun FileBrowserScreen(
                         }
                     }
 
-                    MetaRow("类型", if (detailTarget.isDirectory) "文件夹" else mimeType.ifEmpty { "文件" })
-                    if (!detailTarget.isDirectory) MetaRow("大小", sizeStr)
-                    MetaRow("修改时间", displayModified)
+                    MetaRow(context.getString(R.string.browser_type_field), if (detailTarget.isDirectory) context.getString(R.string.browser_folder_type) else mimeType.ifEmpty { context.getString(R.string.browser_file_type) })
+                    if (!detailTarget.isDirectory) MetaRow(context.getString(R.string.browser_size_field), sizeStr)
+                    MetaRow(context.getString(R.string.browser_modified_field), displayModified)
 
                     if (isArchiveFile) {
                         Spacer(Modifier.height(16.dp))
-                        Text("压缩包内容（第一层）", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.browser_archive_contents), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(8.dp))
                         when (val r = zipDetailResult) {
                             is ZipFirstLevelResult.Ok -> {
                                 if (r.entries.isEmpty()) {
-                                    Text("（空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(stringResource(R.string.browser_empty_placeholder), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 } else {
                                     Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
                                         r.entries.forEach { entry ->
@@ -7686,7 +7687,7 @@ internal fun FileBrowserScreen(
                                 Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
                                     Text("${r.rootDirName}/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                                     if (r.children.isEmpty()) {
-                                        Text("  （空）", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Text(stringResource(R.string.browser_empty_placeholder_indent), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     } else {
                                         r.children.forEach { child ->
                                             Text("  $child", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
@@ -7697,19 +7698,19 @@ internal fun FileBrowserScreen(
                             ZipFirstLevelResult.Encrypted -> {
                                 if (!zipDetailShowPasswordInput) {
                                     OutlinedButton(onClick = { zipDetailShowPasswordInput = true }) {
-                                        Text("输入密码查看内容")
+                                        Text(stringResource(R.string.browser_enter_password_view))
                                     }
                                 } else {
                                     Column(Modifier.fillMaxWidth()) {
                                         ReliablePasswordInputField(
                                             value = zipDetailPassword,
                                             onValueChange = { zipDetailPassword = it },
-                                            label = { Text("密码") },
+                                            label = { Text(stringResource(R.string.browser_enter_password)) },
                                             modifier = Modifier.fillMaxWidth()
                                         )
                                         Spacer(Modifier.height(8.dp))
                                         Row(horizontalArrangement = Arrangement.End) {
-                                            TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text("取消") }
+                                            TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text(stringResource(R.string.common_cancel)) }
                                             Spacer(Modifier.width(8.dp))
                                             Button(
                                                 onClick = {
@@ -7719,18 +7720,18 @@ internal fun FileBrowserScreen(
                                                         }
                                                         zipDetailResult = res
                                                         if (res is ZipFirstLevelResult.Error) {
-                                                            Toast.makeText(context, "密码错误或无法读取", Toast.LENGTH_SHORT).show()
+                                                            Toast.makeText(context, context.getString(R.string.browser_password_wrong_or_unreadable), Toast.LENGTH_SHORT).show()
                                                         }
                                                     }
                                                 },
                                                 enabled = zipDetailPassword.isNotEmpty()
-                                            ) { Text("确定") }
+                                            ) { Text(stringResource(R.string.common_ok)) }
                                         }
                                     }
                                 }
                             }
                             ZipFirstLevelResult.Error -> {
-                                Text("无法读取压缩包内容", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.browser_cannot_read_archive), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                             }
                             null -> {
                                 CircularProgressIndicator(Modifier.size(24.dp))
@@ -7740,7 +7741,7 @@ internal fun FileBrowserScreen(
 
                     Spacer(Modifier.height(16.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { showFileDetail = null }) { Text("关闭") }
+                        TextButton(onClick = { showFileDetail = null }) { Text(stringResource(R.string.common_close)) }
                     }
                 }
             }
@@ -7749,8 +7750,8 @@ internal fun FileBrowserScreen(
 
     if (showQuickCopyConfirm || showQuickMoveConfirm) {
         val isCopy = showQuickCopyConfirm
-        val title = if (isCopy) "确认拷贝到当前目录" else "确认移动到当前目录"
-        val actionLabel = if (isCopy) "拷贝" else "移动"
+        val title = if (isCopy) context.getString(R.string.browser_confirm_copy_title) else context.getString(R.string.browser_confirm_move_title)
+        val actionLabel = if (isCopy) context.getString(R.string.pending_list_action_copy) else context.getString(R.string.pending_list_action_move)
         AlertDialog(
             onDismissRequest = {
                 showQuickCopyConfirm = false
@@ -7760,7 +7761,7 @@ internal fun FileBrowserScreen(
             text = {
                 Column {
                     Text(
-                        "将处理 ${pendingList.size} 项。为避免误操作，请确认以下待处理列表：",
+                        context.getString(R.string.browser_pending_compress_confirm, pendingList.size),
                         style = MaterialTheme.typography.bodyMedium
                     )
                     Spacer(Modifier.height(8.dp))
@@ -7781,7 +7782,7 @@ internal fun FileBrowserScreen(
                         }
                         if (pendingList.size > preview.size) {
                             Text(
-                                "... 另有 ${pendingList.size - preview.size} 项",
+                                context.getString(R.string.browser_pending_more_items, pendingList.size - preview.size),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -7804,7 +7805,7 @@ internal fun FileBrowserScreen(
                         showQuickCopyConfirm = false
                         showQuickMoveConfirm = false
                     }
-                ) { Text("取消") }
+                ) { Text(stringResource(R.string.common_cancel)) }
             }
         )
     }
@@ -7911,7 +7912,7 @@ fun FileItem(
                 Spacer(Modifier.size(8.dp))
                 Icon(
                     Icons.AutoMirrored.Filled.PlaylistAdd,
-                    contentDescription = "已在待处理列表",
+                    contentDescription = stringResource(R.string.browser_already_in_pending_list),
                     Modifier.size(20.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
@@ -7955,7 +7956,7 @@ fun PendingListScreen(
     val screenTitle = title ?: if (isPickMode) {
         context.getString(R.string.directory_pick_list_title, pendingList.size)
     } else {
-        "待处理列表 (${pendingList.size})"
+        stringResource(R.string.browser_pending_list_title, pendingList.size)
     }
     Scaffold(
         topBar = {
@@ -7963,7 +7964,7 @@ fun PendingListScreen(
                 title = { Text(screenTitle) },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -7981,13 +7982,13 @@ fun PendingListScreen(
                     .padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                Text("列表为空", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(R.string.browser_list_empty), style = MaterialTheme.typography.bodyLarge)
             }
         } else {
             Column(Modifier.fillMaxSize().padding(padding)) {
                 if (!isPickMode) {
                 Text(
-                    "当前目录：$currentDirPath",
+                    stringResource(R.string.browser_current_dir, currentDirPath),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 4,
@@ -8006,12 +8007,12 @@ fun PendingListScreen(
                         onValueChange = { filterText = it },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("正则过滤文件名，留空显示全部") },
+                        placeholder = { Text(stringResource(R.string.browser_filename_regex_hint)) },
                         label = null
                     )
                     if (filterText.isNotEmpty()) {
                         IconButton(onClick = { filterText = "" }) {
-                            Icon(Icons.Default.RemoveCircle, contentDescription = "清除过滤", Modifier.size(20.dp))
+                            Icon(Icons.Default.RemoveCircle, contentDescription = stringResource(R.string.pending_list_action_clear_filter), Modifier.size(20.dp))
                         }
                     }
                 }
@@ -8026,7 +8027,7 @@ fun PendingListScreen(
                     },
                     context.getString(R.string.pending_list_action_playback) to {
                         if (audioFromFiltered.isEmpty()) {
-                            Toast.makeText(context, "当前列表没有可播放的音频文件", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.browser_no_audio_in_list), Toast.LENGTH_SHORT).show()
                         } else {
                             onAddToPlayback(audioFromFiltered)
                         }
@@ -8115,7 +8116,7 @@ fun PendingListScreen(
                         IconButton(onClick = { onRemove(item) }) {
                             Icon(
                                 Icons.Default.RemoveCircle,
-                                contentDescription = "从列表移除",
+                                contentDescription = stringResource(R.string.browser_remove_from_list),
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
@@ -8284,7 +8285,7 @@ fun PlaybackScreen(
         selectedPlaylistId = playlist.id
         showCreatePlaylistDialog = false
         newPlaylistName = ""
-        Toast.makeText(context, "已创建空播放列表", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, context.getString(R.string.browser_empty_playlist_created), Toast.LENGTH_SHORT).show()
     }
 
     suspend fun removeTrackEntryAfterMove(source: Playlist, trackIndex: Int) {
@@ -8301,7 +8302,7 @@ fun PlaybackScreen(
 
     suspend fun transferTrackToPlaylist(transfer: PlaylistTrackTransfer, target: Playlist) {
         if (target.isDirectorySource) {
-            Toast.makeText(context, "目录列表不能作为移入目标", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_playlist_dir_no_move_target), Toast.LENGTH_SHORT).show()
             return
         }
         if (target.id == transfer.source.id) return
@@ -8309,16 +8310,16 @@ fun PlaybackScreen(
         val trackName = transfer.source.names.getOrElse(transfer.trackIndex) { trackUri.substringAfterLast('/') }
         val result = prefs.appendTracksToPlaylist(target.id, listOf(trackUri), listOf(trackName))
         if (!result.found) {
-            Toast.makeText(context, "目标播放列表已不存在", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.browser_playlist_target_missing), Toast.LENGTH_SHORT).show()
             return
         }
         if (transfer.move) {
             removeTrackEntryAfterMove(transfer.source, transfer.trackIndex)
         }
         pendingTrackTransfer = null
-        val action = if (transfer.move) "移动" else "复制"
-        val duplicateHint = if (result.skippedCount > 0) "，目标列表已存在同一首" else ""
-        Toast.makeText(context, "已${action}到「${target.name}」$duplicateHint", Toast.LENGTH_SHORT).show()
+        val action = if (transfer.move) context.getString(R.string.pending_list_action_move) else context.getString(R.string.pending_list_action_copy)
+        val duplicateHint = if (result.skippedCount > 0) context.getString(R.string.browser_playlist_duplicate_hint) else ""
+        Toast.makeText(context, context.getString(R.string.browser_playlist_action_result, action, target.name, duplicateHint), Toast.LENGTH_SHORT).show()
     }
 
     fun promptSaveCurrentBookmark() {
@@ -8338,27 +8339,27 @@ fun PlaybackScreen(
 
     if (showPlayerAudioSettingsDialog) {
         val engines = listOf(
-            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER to "系统 MediaPlayer",
+            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER to context.getString(R.string.browser_system_media_player),
             PLAYER_AUDIO_ENGINE_EXO_PLAYER to "Media3 ExoPlayer"
         )
         val presets = listOf(
-            PLAYER_AUDIO_PRESET_FLAT to "原始",
-            PLAYER_AUDIO_PRESET_VOCAL to "人声清晰",
-            PLAYER_AUDIO_PRESET_BASS to "低频增强",
-            PLAYER_AUDIO_PRESET_CAR to "车载",
-            PLAYER_AUDIO_PRESET_HEADPHONE to "耳机"
+            PLAYER_AUDIO_PRESET_FLAT to context.getString(R.string.browser_flat_preset),
+            PLAYER_AUDIO_PRESET_VOCAL to context.getString(R.string.browser_vocal_preset),
+            PLAYER_AUDIO_PRESET_BASS to context.getString(R.string.browser_bass_preset),
+            PLAYER_AUDIO_PRESET_CAR to context.getString(R.string.browser_car_preset),
+            PLAYER_AUDIO_PRESET_HEADPHONE to context.getString(R.string.browser_headphone_preset)
         )
         fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
             scope.launch { prefs.updatePlayerAudioSettings(transform) }
         }
         AlertDialog(
             onDismissRequest = { showPlayerAudioSettingsDialog = false },
-            title = { Text("播放器配置") },
+            title = { Text(stringResource(R.string.browser_player_config_title)) },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text("这些配置只保存在本机，用来对比不同手机上的播放效果。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_player_settings_local_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(12.dp))
-                    Text("播放内核", style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.browser_player_engine), style = MaterialTheme.typography.titleSmall)
                     engines.forEach { (value, label) ->
                         Row(
                             Modifier
@@ -8374,12 +8375,12 @@ fun PlaybackScreen(
                             Text(label, style = MaterialTheme.typography.bodyMedium)
                         }
                     }
-                    Text("切换内核后从下一首或重新开始播放时生效。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_engine_switch_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("稳定播放保持唤醒", style = MaterialTheme.typography.bodyLarge)
-                            Text("播放时请求 PARTIAL_WAKE_LOCK，减少息屏后卡顿或中断。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_wake_lock), style = MaterialTheme.typography.bodyLarge)
+                            Text(stringResource(R.string.browser_wake_lock_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = playerAudioSettings.keepAwake,
@@ -8389,8 +8390,8 @@ fun PlaybackScreen(
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("本 App 音效", style = MaterialTheme.typography.bodyLarge)
-                            Text("使用 Android Equalizer/BassBoost/LoudnessEnhancer，只影响当前播放器。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_audio_effects), style = MaterialTheme.typography.bodyLarge)
+                            Text(stringResource(R.string.browser_audio_effects_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = playerAudioSettings.audioEffectsEnabled,
@@ -8398,7 +8399,7 @@ fun PlaybackScreen(
                         )
                     }
                     Spacer(Modifier.height(8.dp))
-                    Text("音效预设", style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.browser_audio_preset), style = MaterialTheme.typography.titleSmall)
                     presets.forEach { (value, label) ->
                         Row(
                             Modifier
@@ -8417,8 +8418,8 @@ fun PlaybackScreen(
                     Spacer(Modifier.height(12.dp))
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text("高品质输出偏好", style = MaterialTheme.typography.bodyLarge)
-                            Text("ExoPlayer 下启用音频 offload 偏好和更大的缓冲；是否真正无损直出取决于手机系统。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.browser_high_quality_output), style = MaterialTheme.typography.bodyLarge)
+                            Text(stringResource(R.string.browser_high_quality_output_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Switch(
                             checked = playerAudioSettings.highQualityOutput,
@@ -8428,7 +8429,7 @@ fun PlaybackScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPlayerAudioSettingsDialog = false }) { Text("关闭") }
+                TextButton(onClick = { showPlayerAudioSettingsDialog = false }) { Text(stringResource(R.string.common_close)) }
             }
         )
     }
@@ -8452,7 +8453,7 @@ fun PlaybackScreen(
                         Text(context.getString(R.string.player_bookmarks_action))
                     }
                     IconButton(onClick = { showPlayerAudioSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "播放器配置")
+                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.browser_player_config_title))
                     }
                 },
                 navigationIcon = if (showBackButton) {
@@ -8498,7 +8499,7 @@ fun PlaybackScreen(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        val metadataText = formatTrackMetadata(state.metadata)
+                        val metadataText = formatTrackMetadata(context, state.metadata)
                         if (metadataText.isNotEmpty()) {
                             Text(
                                 metadataText,
@@ -8545,25 +8546,25 @@ fun PlaybackScreen(
                         Spacer(Modifier.height(8.dp))
                         val diagnostics = state.diagnostics
                         TextButton(onClick = { showPlaybackDiagnostics = !showPlaybackDiagnostics }) {
-                            Text(if (showPlaybackDiagnostics) "隐藏诊断" else "播放诊断")
+                            Text(if (showPlaybackDiagnostics) stringResource(R.string.browser_hide_diagnostics) else stringResource(R.string.browser_playback_diagnostics))
                         }
                         if (showPlaybackDiagnostics) {
                             val diagLines = listOfNotNull(
-                                "内核：${diagnostics.engine.ifBlank { "未知" }}",
-                                "来源：${if (diagnostics.playbackSource == "direct") "直接播放" else diagnostics.playbackSource}",
-                                "输出：${diagnostics.outputDevice.ifBlank { "未知" }}",
-                                diagnostics.outputDeviceSource.takeIf { it.isNotBlank() }?.let { "输出依据：$it" },
+                                context.getString(R.string.browser_engine_value, diagnostics.engine.ifBlank { context.getString(R.string.common_unknown_error) }),
+                                context.getString(R.string.browser_source_value, if (diagnostics.playbackSource == "direct") context.getString(R.string.browser_source_direct) else diagnostics.playbackSource),
+                                context.getString(R.string.browser_output_value, diagnostics.outputDevice.ifBlank { context.getString(R.string.common_unknown_error) }),
+                                diagnostics.outputDeviceSource.takeIf { it.isNotBlank() }?.let { context.getString(R.string.browser_output_based_on, it) },
                                 "Offload：${if (diagnostics.exoOffloadActive) "已进入" else "未进入/不适用"}",
-                                "高品质输出偏好：${diagnostics.highQualityOutput.ifBlank { "未知" }}",
-                                "音效：${diagnostics.audioEffects.ifBlank { "未知" }}",
-                                "加载切换：${diagnostics.bufferEvents}",
-                                "错误次数：${diagnostics.playerErrors}",
-                                diagnostics.lastError?.let { "最后错误：$it" },
-                                diagnostics.mimeType?.let { "类型：$it" },
-                                diagnostics.sourceQuality?.let { "音源性质：$it" },
-                                diagnostics.bitrate?.let { "码率：$it bps" },
-                                diagnostics.sampleRate?.let { "采样率：$it Hz" },
-                                diagnostics.bitsPerSample?.let { "位深：$it bit" }
+                                context.getString(R.string.browser_hq_output_value, diagnostics.highQualityOutput.ifBlank { context.getString(R.string.common_unknown_error) }),
+                                context.getString(R.string.browser_effects_value, diagnostics.audioEffects.ifBlank { context.getString(R.string.common_unknown_error) }),
+                                context.getString(R.string.browser_buffer_events, diagnostics.bufferEvents),
+                                context.getString(R.string.browser_error_count, diagnostics.playerErrors),
+                                diagnostics.lastError?.let { context.getString(R.string.browser_last_error, it) },
+                                diagnostics.mimeType?.let { context.getString(R.string.browser_type_value, it) },
+                                diagnostics.sourceQuality?.let { context.getString(R.string.browser_source_nature, it) },
+                                diagnostics.bitrate?.let { context.getString(R.string.browser_bitrate, it) },
+                                diagnostics.sampleRate?.let { context.getString(R.string.browser_sample_rate, it) },
+                                diagnostics.bitsPerSample?.let { context.getString(R.string.browser_bit_depth, it) }
                             )
                             Text(
                                 diagLines.joinToString("\n"),
@@ -8638,7 +8639,7 @@ fun PlaybackScreen(
                         if (pl.isDirectorySource) {
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "目录列表 · 重新排序时从源目录刷新 · 删除曲目会同步删除源文件",
+                                context.getString(R.string.browser_playlist_dir_list_refresh_hint),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onErrorContainer
                             )
@@ -8760,7 +8761,7 @@ fun PlaybackScreen(
                                             }
                                         )
                                         DropdownMenuItem(
-                                            text = { Text("复制到列表") },
+                                            text = { Text(stringResource(R.string.browser_copy_to_list)) },
                                             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                                             onClick = {
                                                 pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = false)
@@ -8768,7 +8769,7 @@ fun PlaybackScreen(
                                             }
                                         )
                                         DropdownMenuItem(
-                                            text = { Text("移动到列表") },
+                                            text = { Text(stringResource(R.string.browser_move_to_list)) },
                                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
                                             onClick = {
                                                 pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = true)
@@ -8868,7 +8869,7 @@ fun PlaybackScreen(
                                     )
                                     val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
                                     Text(
-                                        "${pl.trackCount} 首 · 书签 $bookmarkCount",
+                                        context.getString(R.string.browser_playlist_track_bookmark, pl.trackCount, bookmarkCount),
                                         style = MaterialTheme.typography.labelSmall,
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
@@ -8876,7 +8877,7 @@ fun PlaybackScreen(
                                     )
                                     if (isDangerousPlaylist) {
                                         Text(
-                                            "目录列表 · 删除曲目会同步删除源文件",
+                                            context.getString(R.string.browser_playlist_dir_list_hint),
                                             style = MaterialTheme.typography.labelSmall,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis,
@@ -8999,12 +9000,12 @@ fun PlaybackScreen(
                     showCreatePlaylistDialog = false
                     newPlaylistName = ""
                 },
-                title = { Text("新建空播放列表") },
+                title = { Text(stringResource(R.string.browser_new_empty_playlist)) },
                 text = {
                     OutlinedTextField(
                         value = newPlaylistName,
                         onValueChange = { newPlaylistName = it },
-                        label = { Text("列表名称") },
+                        label = { Text(stringResource(R.string.browser_playlist_name_label)) },
                         singleLine = true
                     )
                 },
@@ -9025,7 +9026,7 @@ fun PlaybackScreen(
             val targetPlaylists = playlists.filter { it.id != transfer.source.id && !it.isDirectorySource }
             AlertDialog(
                 onDismissRequest = { pendingTrackTransfer = null },
-                title = { Text(if (transfer.move) "移动到播放列表" else "复制到播放列表") },
+                title = { Text(if (transfer.move) stringResource(R.string.browser_move_to_playlist) else stringResource(R.string.browser_copy_to_playlist)) },
                 text = {
                     Column(
                         Modifier
@@ -9034,7 +9035,7 @@ fun PlaybackScreen(
                     ) {
                         if (targetPlaylists.isEmpty()) {
                             Text(
-                                "没有可移入的普通播放列表。目录列表不能作为目标，请先新建普通播放列表。",
+                                context.getString(R.string.browser_playlist_no_normal_move_target),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
@@ -9459,6 +9460,8 @@ fun QuickObfuscatePasswordDialog(
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val passwordLabelText = stringResource(R.string.browser_enter_password)
     val passwordConfirmed = !isObfuscate || isRequiredPasswordConfirmed(password, confirmPassword)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
@@ -9468,7 +9471,7 @@ fun QuickObfuscatePasswordDialog(
         ) {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    if (isObfuscate) "快速混淆" else "快速去混淆",
+                    if (isObfuscate) context.getString(R.string.context_quick_obfuscate) else context.getString(R.string.context_quick_deobfuscate),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -9481,8 +9484,8 @@ fun QuickObfuscatePasswordDialog(
                         confirmPassword = confirmPassword,
                         onPasswordChange = onPasswordChange,
                         onConfirmPasswordChange = onConfirmPasswordChange,
-                        passwordLabel = "密码",
-                        confirmLabel = "再次输入密码",
+                        passwordLabel = passwordLabelText,
+                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
                         enabled = !inProgress,
                         allowBlank = false
                     )
@@ -9490,7 +9493,7 @@ fun QuickObfuscatePasswordDialog(
                     ReliablePasswordInputField(
                         value = password,
                         onValueChange = onPasswordChange,
-                        label = { Text("密码") },
+                        label = { Text(stringResource(R.string.browser_enter_password)) },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !inProgress
                     )
@@ -9499,12 +9502,12 @@ fun QuickObfuscatePasswordDialog(
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
-                    Text(if (isObfuscate) "混淆中…" else "去混淆中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (isObfuscate) stringResource(R.string.browser_obfuscating) else stringResource(R.string.browser_deobfuscating), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
-                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed && (!isObfuscate || password.isNotBlank())) { Text("确定") }
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
+                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed && (!isObfuscate || password.isNotBlank())) { Text(stringResource(R.string.common_ok)) }
                 }
             }
         }
@@ -9849,12 +9852,14 @@ fun GpgPasswordDialog(
     isDecrypt: Boolean,
     fileName: String,
     password: String,
-    passwordLabel: String = "密码",
+    passwordLabel: String? = null,
     inProgress: Boolean = false,
     onPasswordChange: (String) -> Unit,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val resolvedPasswordLabel = passwordLabel ?: stringResource(R.string.browser_enter_password)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -9863,7 +9868,7 @@ fun GpgPasswordDialog(
         ) {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    if (isDecrypt) "GnuPG 解密" else "GnuPG 加密",
+                    if (isDecrypt) stringResource(R.string.context_gpg_decrypt) else stringResource(R.string.context_gpg_encrypt),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -9872,7 +9877,7 @@ fun GpgPasswordDialog(
                 ReliablePasswordInputField(
                     value = password,
                     onValueChange = onPasswordChange,
-                    label = { Text(passwordLabel) },
+                    label = { Text(resolvedPasswordLabel) },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = !inProgress
                 )
@@ -9884,18 +9889,18 @@ fun GpgPasswordDialog(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        if (isDecrypt) "解密中…" else "加密中…",
+                        if (isDecrypt) stringResource(R.string.browser_decrypting) else stringResource(R.string.browser_encrypting),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
                     Button(
                         onClick = { onConfirm(password) },
                         enabled = !inProgress
-                    ) { Text("确定") }
+                    ) { Text(stringResource(R.string.common_ok)) }
                 }
             }
         }
@@ -9917,6 +9922,8 @@ fun GpgEncryptDialog(
     onConfirm: (String, Long?) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val passwordLabelText = stringResource(R.string.browser_enter_password)
     val useSymmetric = selectedKeyId == null
     val symmetricPasswordReady = isRequiredPasswordConfirmed(password, confirmPassword)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
@@ -9927,7 +9934,7 @@ fun GpgEncryptDialog(
         ) {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    "GnuPG 加密",
+                    context.getString(R.string.context_gpg_encrypt),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -9943,7 +9950,7 @@ fun GpgEncryptDialog(
                         selected = selectedKeyId == null,
                         onClick = if (inProgress) null else onSelectPassword
                     )
-                    Text("使用密码对称加密", style = MaterialTheme.typography.bodyMedium)
+                    Text(stringResource(R.string.browser_gpg_use_symmetric_encrypt), style = MaterialTheme.typography.bodyMedium)
                 }
                 if (useSymmetric) {
                     Spacer(Modifier.height(12.dp))
@@ -9952,8 +9959,8 @@ fun GpgEncryptDialog(
                         confirmPassword = confirmPassword,
                         onPasswordChange = onPasswordChange,
                         onConfirmPasswordChange = onConfirmPasswordChange,
-                        passwordLabel = "密码",
-                        confirmLabel = "再次输入密码",
+                        passwordLabel = passwordLabelText,
+                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
                         enabled = !inProgress,
                         allowBlank = false
                     )
@@ -9961,14 +9968,14 @@ fun GpgEncryptDialog(
                     ReliablePasswordInputField(
                         value = password,
                         onValueChange = onPasswordChange,
-                        label = { Text("密码") },
+                        label = { Text(stringResource(R.string.browser_enter_password)) },
                         modifier = Modifier.fillMaxWidth(),
                         enabled = !inProgress
                     )
                 }
                 if (keys.isNotEmpty()) {
                     Spacer(Modifier.height(16.dp))
-                    Text("或选择一个公钥进行非对称加密", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(stringResource(R.string.browser_gpg_or_select_public_key), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                     Spacer(Modifier.height(8.dp))
                     keys.forEach { (keyId, desc) ->
                         Row(
@@ -9989,15 +9996,15 @@ fun GpgEncryptDialog(
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
-                    Text("加密中…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_encrypting), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text("取消") }
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
                     Button(
                         onClick = { onConfirm(password, selectedKeyId) },
                         enabled = !inProgress && (selectedKeyId != null || symmetricPasswordReady)
-                    ) { Text("确定") }
+                    ) { Text(stringResource(R.string.common_ok)) }
                 }
             }
         }
@@ -10027,7 +10034,7 @@ fun PassEditScreen(
                 title = { Text(fileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                 navigationIcon = {
                     IconButton(onClick = { if (!saveInProgress) onBack() }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
                 },
                 actions = {
@@ -10047,7 +10054,7 @@ fun PassEditScreen(
                             }
                         },
                         enabled = !saveInProgress
-                    ) { Text("保存") }
+                    ) { Text(stringResource(R.string.common_save)) }
                 }
             )
         }
@@ -10076,6 +10083,7 @@ fun GpgMethodDialog(
     onSecretKey: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -10084,27 +10092,27 @@ fun GpgMethodDialog(
         ) {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    if (isDecrypt) "GnuPG 解密" else "GnuPG 加密",
+                    if (isDecrypt) context.getString(R.string.context_gpg_decrypt) else context.getString(R.string.context_gpg_encrypt),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
                 if (isDecrypt) {
-                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text("密码解密（对称）") }
+                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_password_decrypt)) }
                     if (hasSecretKeys) {
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = onSecretKey, modifier = Modifier.fillMaxWidth()) { Text("私钥解密") }
+                        Button(onClick = onSecretKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_secret_key_decrypt)) }
                     }
                 } else {
-                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text("对称加密（密码）") }
+                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_symmetric_encrypt)) }
                     if (hasPublicKeys) {
                         Spacer(Modifier.height(8.dp))
-                        Button(onClick = onPublicKey, modifier = Modifier.fillMaxWidth()) { Text("公钥加密") }
+                        Button(onClick = onPublicKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_op_public_key_encrypt)) }
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
             }
         }
     }
@@ -10125,7 +10133,7 @@ fun GpgPublicKeyPickerDialog(
             tonalElevation = 6.dp
         ) {
             Column(Modifier.padding(24.dp)) {
-                Text("公钥加密", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.browser_op_public_key_encrypt), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
                 keys.forEach { (keyId, desc) ->
@@ -10144,12 +10152,12 @@ fun GpgPublicKeyPickerDialog(
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("取消") }
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
                     Button(onClick = {
                         val kid = selectedKeyId
                         val desc = keys.find { it.first == kid }?.second ?: ""
                         if (kid != null) onConfirm(kid, desc)
-                    }) { Text("加密") }
+                    }) { Text(stringResource(R.string.quick_crypto_action_encrypt_short)) }
                 }
             }
         }
@@ -10204,7 +10212,7 @@ fun AboutDialog(onDismiss: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Text(tip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
             }
         }
     }
@@ -10293,7 +10301,7 @@ fun CacheManagementDialog(
                     ) { Text("清理全部") }
                     Spacer(Modifier.height(8.dp))
                 }
-                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
             }
         }
     }
@@ -10468,7 +10476,7 @@ fun KeyManagementDialog(
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                TextButton(onClick = onDismiss) { Text("关闭") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
             }
         }
     }
@@ -10520,7 +10528,7 @@ fun KeyManagementDialog(
                     enabled = deleteConfirmInput.trim().lowercase() == "yes"
                 ) { Text("确认删除") }
             },
-            dismissButton = { TextButton(onClick = { pendingDelete = null; deleteConfirmInput = "" }) { Text("取消") } }
+            dismissButton = { TextButton(onClick = { pendingDelete = null; deleteConfirmInput = "" }) { Text(stringResource(R.string.common_cancel)) } }
         )
     }
     if (showGenerateKeyDialog) {
@@ -10604,7 +10612,7 @@ fun GenerateKeyDialog(
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !generatingInProgress) { Text("取消") }
+                    TextButton(onClick = onDismiss, enabled = !generatingInProgress) { Text(stringResource(R.string.common_cancel)) }
                     Button(
                         onClick = {
                             if (identity.isNotBlank() && !generatingInProgress) {
