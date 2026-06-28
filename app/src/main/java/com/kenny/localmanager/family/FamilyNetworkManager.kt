@@ -7,6 +7,7 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.util.Log
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.R
 import com.kenny.localmanager.util.getLocalIpAddress
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -117,7 +118,7 @@ class FamilyNetworkManager(context: Context) {
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val tlsManager = FamilyTlsManager(appContext)
     private val boardStore = BulletinBoardStore(appContext)
-    private val boardHttpHandler = BulletinBoardHttpHandler(boardStore)
+    private val boardHttpHandler = BulletinBoardHttpHandler(appContext, boardStore)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val logBuffer = CopyOnWriteArrayList<String>()
     private val _state = MutableStateFlow(FamilyNetworkState())
@@ -288,10 +289,10 @@ class FamilyNetworkManager(context: Context) {
     fun start() {
         if (started) return
         started = true
-        appendLog("启动家庭网络客户端。")
+        appendLog(appContext.getString(R.string.family_msg_68492))
         val manager = nsdManager
         if (manager == null) {
-            val message = "系统未提供 NsdManager，无法进行 mDNS 注册和发现。"
+            val message = appContext.getString(R.string.family_msg_58365)
             appendError(message)
             started = false
             return
@@ -300,7 +301,7 @@ class FamilyNetworkManager(context: Context) {
         val localIp = try {
             getLocalIpAddress()
         } catch (e: Throwable) {
-            appendLog("获取本机 IP 失败：${e.message ?: e.javaClass.simpleName}")
+            appendLog(appContext.getString(R.string.family_msg_55245, e.message ?: e.javaClass.simpleName))
             null
         }
         _state.update {
@@ -315,11 +316,11 @@ class FamilyNetworkManager(context: Context) {
             if (localServiceEnabled) {
                 startLocalServerStack(localIp)
             } else {
-                appendLog("本机留言板服务已关闭，仅发现局域网内其他设备。")
+                appendLog(appContext.getString(R.string.family_msg_40781))
             }
             startDiscovery(clearDiscovered = false)
         } catch (e: Throwable) {
-            appendError("启动家庭网络失败：${e.message ?: e.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_93246, e.message ?: e.javaClass.simpleName))
             Log.e(TAG, "start failed", e)
             stop()
         }
@@ -329,6 +330,7 @@ class FamilyNetworkManager(context: Context) {
         if (!localServiceEnabled || httpsServer != null) return
         val localIdentity = tlsManager.localIdentity()
         val server = EmbeddedHttpServer(
+            context = appContext,
             preferredPort = FAMILY_PREFERRED_PORT,
             sslContext = localIdentity.sslContext,
             log = { appendLog(it) },
@@ -339,7 +341,7 @@ class FamilyNetworkManager(context: Context) {
         server.start()
         httpsServer = server
         serverJob = scope.launch(Dispatchers.IO) { server.acceptLoop() }
-        appendLog("本地 HTTPS 留言板已监听端口 ${server.port}，证书指纹=${localIdentity.fingerprintSha256}。")
+        appendLog(appContext.getString(R.string.family_msg_55407, server.port, localIdentity.fingerprintSha256))
         val instanceId = loadOrCreateInstanceId()
         currentInstanceId = instanceId
         val displayHostName = resolveLocalDisplayHostName(instanceId)
@@ -381,16 +383,16 @@ class FamilyNetworkManager(context: Context) {
         if (_state.value.openBoardSession?.service?.isSelf == true) {
             closeBulletinBoard()
         }
-        appendLog("本机留言板 HTTPS 服务已停止。")
+        appendLog(appContext.getString(R.string.family_msg_39692))
     }
 
     fun refresh() {
         if (!started) {
-            appendLog("家庭网络尚未启动，先执行启动。")
+            appendLog(appContext.getString(R.string.family_msg_00574))
             start()
             return
         }
-        appendLog("手工刷新服务发现。")
+        appendLog(appContext.getString(R.string.family_msg_84496))
         _state.update { current ->
             current.copy(discoveredServices = current.discoveredServices.filter { it.isSelf }.take(1))
         }
@@ -404,7 +406,7 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ) {
         if (service.isSelf && !localServiceEnabled) {
-            appendError("本机留言板服务已在配置中关闭，无法进入本机留言板。")
+            appendError(appContext.getString(R.string.family_msg_83716))
             return
         }
         val isHost = service.isSelf
@@ -430,14 +432,14 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<Unit> {
         if (service.isSelf && !localServiceEnabled) {
-            return Result.failure(IllegalStateException("本机留言板服务已关闭"))
+            return Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_18983)))
         }
         if (service.isSelf) {
             return withContext(Dispatchers.IO) {
                 if (boardStore.snapshot(boardId) != null) {
                     Result.success(Unit)
                 } else {
-                    Result.failure(IllegalStateException("留言板不存在：$boardId"))
+                    Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_71757)))
                 }
             }
         }
@@ -470,7 +472,7 @@ class FamilyNetworkManager(context: Context) {
             ).mapCatching { text ->
                 val json = JSONObject(text)
                 if (!json.optBoolean("ok", false)) {
-                    throw IllegalStateException(json.optString("message", "读取留言板列表失败"))
+                    throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
                 }
                 val boards = buildList {
                     val arr = json.optJSONArray("boards") ?: JSONArray()
@@ -505,14 +507,14 @@ class FamilyNetworkManager(context: Context) {
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
         if (!canManage) {
-            appendError("只有宿主可以创建留言板。")
-            onComplete(Result.failure(IllegalStateException("只有宿主可以创建留言板")))
+            appendError(appContext.getString(R.string.family_msg_64323))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_24175))))
             return
         }
         val trimmed = name.trim()
         if (trimmed.isEmpty()) {
-            appendError("创建留言板失败：名称不能为空。")
-            onComplete(Result.failure(IllegalStateException("名称不能为空")))
+            appendError(appContext.getString(R.string.family_msg_99038))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_57102))))
             return
         }
         scope.launch {
@@ -520,10 +522,10 @@ class FamilyNetworkManager(context: Context) {
                 if (service.isSelf) {
                     runCatching {
                         if (boardStore.isBoardNameTaken(trimmed)) {
-                            throw IllegalStateException("留言板名称已存在：$trimmed")
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357))
                         }
                         boardStore.createBoard(trimmed)
-                            ?: throw IllegalStateException("创建留言板失败")
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_64304))
                     }
                 } else {
                     boardApiRequest(
@@ -535,16 +537,16 @@ class FamilyNetworkManager(context: Context) {
                     ).mapCatching { text ->
                         val json = JSONObject(text)
                         if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", "创建留言板失败"))
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_64304)))
                         }
                         BulletinBoardInfo.fromJson(json.getJSONObject("board"))
                     }
                 }
             }
             result.onSuccess { board ->
-                appendLog("留言板已创建：${board.name}")
+                appendLog(appContext.getString(R.string.family_msg_41249, board.name))
             }.onFailure { error ->
-                appendError("创建留言板失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_36032, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -559,14 +561,14 @@ class FamilyNetworkManager(context: Context) {
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
         if (!canManage) {
-            appendError("只有宿主可以重命名留言板。")
-            onComplete(Result.failure(IllegalStateException("只有宿主可以重命名留言板")))
+            appendError(appContext.getString(R.string.family_msg_34578))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_02158))))
             return
         }
         val trimmed = newName.trim()
         if (trimmed.isEmpty()) {
-            appendError("重命名失败：名称不能为空。")
-            onComplete(Result.failure(IllegalStateException("名称不能为空")))
+            appendError(appContext.getString(R.string.family_msg_90252))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_57102))))
             return
         }
         scope.launch {
@@ -574,10 +576,10 @@ class FamilyNetworkManager(context: Context) {
                 if (service.isSelf) {
                     runCatching {
                         if (boardStore.isBoardNameTaken(trimmed, excludeBoardId = boardId)) {
-                            throw IllegalStateException("留言板名称已存在：$trimmed")
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357))
                         }
                         boardStore.renameBoard(boardId, trimmed)
-                            ?: throw IllegalStateException("重命名失败：留言板不存在")
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_90260))
                     }
                 } else {
                     boardApiRequest(
@@ -589,14 +591,14 @@ class FamilyNetworkManager(context: Context) {
                     ).mapCatching { text ->
                         val json = JSONObject(text)
                         if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", "重命名留言板失败"))
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
                         }
                         BulletinBoardInfo.fromJson(json.getJSONObject("board"))
                     }
                 }
             }
             result.onSuccess { board ->
-                appendLog("留言板已重命名为：${board.name}")
+                appendLog(appContext.getString(R.string.family_msg_15134, board.name))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
                     _state.update { current ->
@@ -606,7 +608,7 @@ class FamilyNetworkManager(context: Context) {
                     }
                 }
             }.onFailure { error ->
-                appendError("重命名留言板失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -620,8 +622,8 @@ class FamilyNetworkManager(context: Context) {
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         if (!canManage) {
-            appendError("只有宿主可以删除留言板。")
-            onComplete(Result.failure(IllegalStateException("只有宿主可以删除留言板")))
+            appendError(appContext.getString(R.string.family_msg_63710))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_22771))))
             return
         }
         scope.launch {
@@ -629,7 +631,7 @@ class FamilyNetworkManager(context: Context) {
                 if (service.isSelf) {
                     runCatching {
                         if (!boardStore.deleteBoard(boardId)) {
-                            throw IllegalStateException("删除失败：留言板不存在，或这是最后一个留言板")
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_96259))
                         }
                     }
                 } else {
@@ -641,19 +643,19 @@ class FamilyNetworkManager(context: Context) {
                     ).mapCatching { text ->
                         val json = JSONObject(text)
                         if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", "删除留言板失败"))
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_86488)))
                         }
                     }
                 }
             }
             result.onSuccess {
-                appendLog("留言板已删除：$boardId")
+                appendLog(appContext.getString(R.string.family_msg_83171))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
                     closeBulletinBoard()
                 }
             }.onFailure { error ->
-                appendError("删除留言板失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_13838, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -665,8 +667,8 @@ class FamilyNetworkManager(context: Context) {
     ) {
         val session = _state.value.openBoardSession ?: return
         if (rootUri.isNullOrBlank()) {
-            val error = IllegalStateException("未设置根目录")
-            appendError("导出失败：${error.message}")
+            val error = IllegalStateException(appContext.getString(R.string.family_msg_74491))
+            appendError(appContext.getString(R.string.family_msg_88483, error.message))
             onComplete?.invoke(Result.failure(error))
             return
         }
@@ -675,8 +677,8 @@ class FamilyNetworkManager(context: Context) {
                 runCatching {
                     val content = if (session.isHost) {
                         val snapshot = boardStore.snapshot(session.boardId)
-                            ?: throw IllegalStateException("留言板不存在：${session.boardId}")
-                        BulletinBoardExporter.snapshotToMarkdown(snapshot)
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_17263, session.boardId))
+                        BulletinBoardExporter.snapshotToMarkdown(appContext, snapshot)
                     } else {
                         boardApiTextRequest(
                             service = session.service,
@@ -694,9 +696,9 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess { savedPath ->
-                appendLog("已导出到 $savedPath")
+                appendLog(appContext.getString(R.string.family_msg_17812))
             }.onFailure { error ->
-                appendError("导出失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_12658, error.message ?: error.javaClass.simpleName))
             }
             onComplete?.invoke(result)
         }
@@ -713,7 +715,7 @@ class FamilyNetworkManager(context: Context) {
                 runCatching {
                     if (service.isSelf) {
                         boardStore.exportBoardpack(board.id)
-                            ?: throw IllegalStateException("留言板不存在：${board.id}")
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_65793, board.id))
                     } else {
                         boardApiBytesRequest(
                             service = service,
@@ -724,7 +726,7 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onFailure { error ->
-                appendError("导出 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_60609, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -740,9 +742,9 @@ class FamilyNetworkManager(context: Context) {
                 BulletinBoardPack.writeToUri(appContext, uri, data)
             }
             result.onSuccess {
-                appendLog("boardpack 已保存。")
+                appendLog(appContext.getString(R.string.family_msg_42003))
             }.onFailure { error ->
-                appendError("保存 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_11426, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -764,9 +766,9 @@ class FamilyNetworkManager(context: Context) {
                 )
             }
             result.onSuccess { path ->
-                appendLog("boardpack 已导出到 $path")
+                appendLog(appContext.getString(R.string.family_msg_60034))
             }.onFailure { error ->
-                appendError("导出 boardpack 失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_60609, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -798,9 +800,9 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess { board ->
-                appendLog("已从归档包导入留言板：${board.name}")
+                appendLog(appContext.getString(R.string.family_msg_56747, board.name))
             }.onFailure { error ->
-                appendError("导入归档包失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_99856, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -863,7 +865,7 @@ class FamilyNetworkManager(context: Context) {
                         openBoardSession = open.copy(loading = false, lastError = detail)
                     )
                 }
-                appendError("同步留言板失败：$detail")
+                appendError(appContext.getString(R.string.family_msg_19687))
             }
         }
     }
@@ -872,7 +874,7 @@ class FamilyNetworkManager(context: Context) {
         val session = _state.value.openBoardSession ?: return
         val trimmed = content.trim()
         if (trimmed.isEmpty() && attachments.isEmpty()) {
-            appendError("发送消息失败：消息内容与附件不能同时为空。")
+            appendError(appContext.getString(R.string.family_msg_78865))
             return
         }
         scope.launch {
@@ -891,11 +893,11 @@ class FamilyNetworkManager(context: Context) {
         onComplete: (Result<Unit>) -> Unit = {}
     ) {
         if (items.isEmpty()) {
-            onComplete(Result.failure(IllegalStateException("未选择任何文件或目录")))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_98275))))
             return
         }
         if (target.service.isSelf && !localServiceEnabled) {
-            onComplete(Result.failure(IllegalStateException("本机留言板服务已关闭，无法转发到本机")))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_78904))))
             return
         }
         attachmentUploadJob?.cancel()
@@ -903,7 +905,7 @@ class FamilyNetworkManager(context: Context) {
             var pendingAttachmentId: String? = null
             val attachmentName = when (items.size) {
                 1 -> items.first().name
-                else -> "${items.size} 项"
+                else -> appContext.getString(R.string.family_msg_33626, items.size)
             }
             val totalBytes = items.sumOf { estimateUploadBytes(appContext, it) }.coerceAtLeast(1L)
             try {
@@ -916,7 +918,7 @@ class FamilyNetworkManager(context: Context) {
                         )
                     )
                 }
-                appendLog("开始转发 ${items.size} 项到 ${target.service.displayHostName}/${target.boardName}…")
+                appendLog(appContext.getString(R.string.family_msg_15756, items.size, target.service.displayHostName, target.boardName))
                 val (_, device) = buildAuthorIdentity()
                 val transport = buildAttachmentTransport(target)
                 val uploadResult = withContext(Dispatchers.IO) {
@@ -956,18 +958,18 @@ class FamilyNetworkManager(context: Context) {
                     onFailure = { Result.failure(it) }
                 )
                 postResult.onSuccess {
-                    appendLog("已转发到 ${target.service.displayHostName}/${target.boardName}")
+                    appendLog(appContext.getString(R.string.family_msg_26185, target.service.displayHostName, target.boardName))
                 }.onFailure { error ->
-                    appendError("转发失败：${error.message ?: error.javaClass.simpleName}")
+                    appendError(appContext.getString(R.string.family_msg_37653, error.message ?: error.javaClass.simpleName))
                 }
                 onComplete(postResult)
             } catch (e: CancellationException) {
                 pendingAttachmentId?.let { abortIncompleteUploadForTarget(target, it) }
-                appendLog("转发已取消")
+                appendLog(appContext.getString(R.string.family_msg_69636))
                 onComplete(Result.failure(e))
             } catch (e: Throwable) {
                 pendingAttachmentId?.let { abortIncompleteUploadForTarget(target, it) }
-                appendError("转发失败：${e.message ?: e.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_64576, e.message ?: e.javaClass.simpleName))
                 onComplete(Result.failure(e))
             } finally {
                 _state.update { it.copy(attachmentUpload = null) }
@@ -986,11 +988,11 @@ class FamilyNetworkManager(context: Context) {
         onComplete: (Result<Int>) -> Unit = {}
     ) {
         if (messages.isEmpty()) {
-            onComplete(Result.failure(IllegalStateException("未选择任何消息")))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_76264))))
             return
         }
         if (target.service.isSelf && !localServiceEnabled) {
-            onComplete(Result.failure(IllegalStateException("本机留言板服务已关闭，无法转发到本机")))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_78904))))
             return
         }
         scope.launch {
@@ -1002,7 +1004,8 @@ class FamilyNetworkManager(context: Context) {
                     val sourceDownload = buildDownloadTransport(sourceSession)
                     for (message in messages) {
                         if (!message.isConversationMessage) continue
-                        val attachmentRefs = BulletinMessageForwarder.relayAttachments(
+                        val attachmentRefs =                         BulletinMessageForwarder.relayAttachments(
+                            context = appContext,
                             sourceSession = sourceSession,
                             sourceDownload = sourceDownload,
                             target = target,
@@ -1011,10 +1014,10 @@ class FamilyNetworkManager(context: Context) {
                             uploaderDevice = device,
                             boardStore = boardStore
                         ).getOrThrow()
-                        val prefix = "[转发自 ${sourceSession.boardName}] "
+                        val prefix = appContext.getString(R.string.family_msg_22277, sourceSession.boardName)
                         val content = if (message.content.isBlank()) {
                             if (attachmentRefs.isEmpty()) continue
-                            "[${attachmentRefs.size} 个附件]"
+                            appContext.getString(R.string.family_msg_21188, attachmentRefs.size)
                         } else {
                             prefix + message.content
                         }
@@ -1022,20 +1025,20 @@ class FamilyNetworkManager(context: Context) {
                         sent++
                     }
                     if (sent == 0) {
-                        throw IllegalStateException("没有可转发的消息")
+                        throw IllegalStateException(appContext.getString(R.string.family_msg_57135))
                     }
                     sent
                 }
             }
             result.onSuccess { count ->
-                appendLog("已转发 $count 条消息到 ${target.service.displayHostName}/${target.boardName}")
+                appendLog(appContext.getString(R.string.family_msg_97773, target.service.displayHostName, target.boardName))
                 if (_state.value.openBoardSession?.service?.deviceKey == target.service.deviceKey &&
                     _state.value.openBoardSession?.boardId == target.boardId
                 ) {
                     refreshOpenBoard()
                 }
             }.onFailure { error ->
-                appendError("转发消息失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_80952, error.message ?: error.javaClass.simpleName))
             }
             onComplete(result)
         }
@@ -1059,7 +1062,7 @@ class FamilyNetworkManager(context: Context) {
     ) {
         val session = _state.value.openBoardSession ?: return
         if (rootUri.isBlank()) {
-            appendError("下载失败：未设置根目录。")
+            appendError(appContext.getString(R.string.family_msg_90274))
             return
         }
         attachmentDownloadJob?.cancel()
@@ -1103,13 +1106,13 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 result.onSuccess { saved ->
-                    appendLog("已保存到 ${saved.savedPath}")
+                    appendLog(appContext.getString(R.string.family_msg_69047, saved.savedPath))
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
-                    appendError("下载附件失败：${error.message ?: error.javaClass.simpleName}")
+                    appendError(appContext.getString(R.string.family_msg_62914, error.message ?: error.javaClass.simpleName))
                 }
             } catch (_: CancellationException) {
-                appendLog("附件下载已取消")
+                appendLog(appContext.getString(R.string.family_msg_02521))
             } finally {
                 _state.update { it.copy(attachmentDownload = null) }
                 attachmentDownloadJob = null
@@ -1134,7 +1137,7 @@ class FamilyNetworkManager(context: Context) {
                     ).mapCatching { text ->
                         val json = JSONObject(text)
                         if (!json.has("id")) {
-                            throw IllegalStateException(json.optString("message", "读取附件元数据失败"))
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_02317)))
                         }
                         json
                     }
@@ -1167,13 +1170,13 @@ class FamilyNetworkManager(context: Context) {
     ) {
         val session = _state.value.openBoardSession ?: return
         if (items.isEmpty()) {
-            appendError("上传失败：未选择任何文件或目录。")
+            appendError(appContext.getString(R.string.family_msg_74313))
             return
         }
         attachmentUploadJob?.cancel()
         attachmentUploadJob = scope.launch {
             var pendingAttachmentId: String? = null
-            val primaryName = if (items.size == 1) items.first().name else "${items.size} 项附件"
+            val primaryName = if (items.size == 1) items.first().name else appContext.getString(R.string.family_msg_14178, items.size)
             val totalBytes = items.sumOf { estimateUploadBytes(appContext, it) }
             try {
                 _state.update {
@@ -1185,12 +1188,13 @@ class FamilyNetworkManager(context: Context) {
                         )
                     )
                 }
-                appendLog("开始上传附件到 ${session.service.displayHostName}…")
+                appendLog(appContext.getString(R.string.family_msg_48713, session.service.displayHostName))
                 val (_, device) = buildAuthorIdentity()
                 val transport: BulletinAttachmentTransport = if (session.isHost) {
                     LocalBulletinAttachmentTransport(boardStore)
                 } else {
                     RemoteBulletinAttachmentTransport(
+                        context = appContext,
                         service = session.service,
                         accessPassword = session.accessPassword,
                         requestJson = { method, path, body ->
@@ -1230,17 +1234,17 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 uploadResult.onSuccess { refs ->
-                    val body = textContent.trim().ifBlank { "[${refs.size} 个附件]" }
+                    val body = textContent.trim().ifBlank { appContext.getString(R.string.family_msg_30844, refs.size) }
                     postBoardMessageInternal(session, body, refs)
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
-                    appendError("上传附件失败：${error.message ?: error.javaClass.simpleName}")
+                    appendError(appContext.getString(R.string.family_msg_05106, error.message ?: error.javaClass.simpleName))
                 }
             } catch (_: CancellationException) {
                 pendingAttachmentId?.let { attachmentId ->
                     abortIncompleteUpload(session, attachmentId)
                 }
-                appendLog("附件上传已取消")
+                appendLog(appContext.getString(R.string.family_msg_16695))
             } finally {
                 _state.update { it.copy(attachmentUpload = null) }
                 attachmentUploadJob = null
@@ -1262,7 +1266,7 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
             }.onFailure { error ->
-                appendLog("清理未完成附件失败：${error.message ?: error.javaClass.simpleName}")
+                appendLog(appContext.getString(R.string.family_msg_20236, error.message ?: error.javaClass.simpleName))
             }
         }
     }
@@ -1281,7 +1285,7 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
             }.onFailure { error ->
-                appendLog("清理未完成附件失败：${error.message ?: error.javaClass.simpleName}")
+                appendLog(appContext.getString(R.string.family_msg_20236, error.message ?: error.javaClass.simpleName))
             }
         }
     }
@@ -1291,6 +1295,7 @@ class FamilyNetworkManager(context: Context) {
             LocalBulletinAttachmentTransport(boardStore)
         } else {
             RemoteBulletinAttachmentTransport(
+                context = appContext,
                 service = target.service,
                 accessPassword = target.accessPassword,
                 requestJson = { method, path, body ->
@@ -1319,7 +1324,7 @@ class FamilyNetworkManager(context: Context) {
                         authorDevice,
                         attachments
                     ) ?: throw IllegalStateException(
-                        if (attachments.isNotEmpty()) "消息无效或附件未就绪" else "消息内容不能为空或留言板不存在"
+                        if (attachments.isNotEmpty()) appContext.getString(R.string.family_msg_55517) else appContext.getString(R.string.family_msg_84872)
                     )
                 }.map { }
             } else {
@@ -1368,7 +1373,7 @@ class FamilyNetworkManager(context: Context) {
                         authorDevice,
                         attachments
                     ) ?: throw IllegalStateException(
-                        if (attachments.isNotEmpty()) "消息无效或附件未就绪" else "消息内容不能为空或留言板不存在"
+                        if (attachments.isNotEmpty()) appContext.getString(R.string.family_msg_55517) else appContext.getString(R.string.family_msg_84872)
                     )
                 }.map { }
             } else {
@@ -1389,22 +1394,22 @@ class FamilyNetworkManager(context: Context) {
             }
         }
         result.onSuccess {
-            appendLog("留言已发布到 ${session.service.displayHostName}/${session.boardId}")
+            appendLog(appContext.getString(R.string.family_msg_66183, session.service.displayHostName, session.boardId))
             refreshOpenBoard()
         }.onFailure { error ->
-            appendError("发布留言失败：${error.message ?: error.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_34685, error.message ?: error.javaClass.simpleName))
         }
     }
 
     fun updateBoardMessage(messageId: String, content: String) {
         val session = _state.value.openBoardSession ?: return
         if (!session.canManageBoard) {
-            appendError("只有宿主可以修改留言。")
+            appendError(appContext.getString(R.string.family_msg_68617))
             return
         }
         val trimmed = content.trim()
         if (trimmed.isEmpty()) {
-            appendError("修改留言失败：内容不能为空。")
+            appendError(appContext.getString(R.string.family_msg_41301))
             return
         }
         scope.launch {
@@ -1412,7 +1417,7 @@ class FamilyNetworkManager(context: Context) {
                 if (session.isHost) {
                     runCatching {
                         boardStore.updateMessage(session.boardId, messageId, trimmed)
-                            ?: throw IllegalStateException("留言不存在或内容为空")
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_44812))
                     }.map { }
                 } else {
                     boardApiRequest(
@@ -1425,10 +1430,10 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess {
-                appendLog("留言已更新：$messageId")
+                appendLog(appContext.getString(R.string.family_msg_02548))
                 refreshOpenBoard()
             }.onFailure { error ->
-                appendError("修改留言失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_20886, error.message ?: error.javaClass.simpleName))
             }
         }
     }
@@ -1436,7 +1441,7 @@ class FamilyNetworkManager(context: Context) {
     fun deleteBoardMessage(messageId: String) {
         val session = _state.value.openBoardSession ?: return
         if (!session.canManageBoard) {
-            appendError("只有宿主可以删除留言。")
+            appendError(appContext.getString(R.string.family_msg_05464))
             return
         }
         scope.launch {
@@ -1444,7 +1449,7 @@ class FamilyNetworkManager(context: Context) {
                 if (session.isHost) {
                     runCatching {
                         if (!boardStore.deleteMessage(session.boardId, messageId)) {
-                            throw IllegalStateException("留言不存在")
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_74922))
                         }
                     }.map { }
                 } else {
@@ -1457,10 +1462,10 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess {
-                appendLog("留言已删除：$messageId")
+                appendLog(appContext.getString(R.string.family_msg_72725))
                 refreshOpenBoard()
             }.onFailure { error ->
-                appendError("删除留言失败：${error.message ?: error.javaClass.simpleName}")
+                appendError(appContext.getString(R.string.family_msg_10024, error.message ?: error.javaClass.simpleName))
             }
         }
     }
@@ -1468,7 +1473,7 @@ class FamilyNetworkManager(context: Context) {
     fun stop() {
         stopIfIdleJob?.cancel()
         if (!started && httpsServer == null && registrationListener == null && discoveryListener == null) return
-        appendLog("停止家庭网络服务。")
+        appendLog(appContext.getString(R.string.family_msg_95798))
         stopDiscoveryInternal()
         unregisterServiceInternal()
         serverJob?.cancel()
@@ -1522,7 +1527,7 @@ class FamilyNetworkManager(context: Context) {
         }
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) {
-                appendLog("mDNS 服务已注册：${info.serviceName} ${info.serviceType} 端口 ${info.port}")
+                appendLog(appContext.getString(R.string.family_msg_38541, info.serviceName, info.serviceType, info.port))
                 _state.update {
                     it.copy(
                         isRegistered = true,
@@ -1542,17 +1547,17 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                appendError("mDNS 服务注册失败，错误码=$errorCode，service=${serviceInfo.serviceName}")
+                appendError(appContext.getString(R.string.family_msg_61384, serviceInfo.serviceName))
                 _state.update { it.copy(isRegistered = false) }
             }
 
             override fun onServiceUnregistered(info: NsdServiceInfo) {
-                appendLog("mDNS 服务已注销：${info.serviceName}")
+                appendLog(appContext.getString(R.string.family_msg_41707, info.serviceName))
                 _state.update { it.copy(isRegistered = false) }
             }
 
             override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                appendError("mDNS 服务注销失败，错误码=$errorCode，service=${serviceInfo.serviceName}")
+                appendError(appContext.getString(R.string.family_msg_11672, serviceInfo.serviceName))
             }
         }
         registrationListener = listener
@@ -1562,7 +1567,7 @@ class FamilyNetworkManager(context: Context) {
     private fun startDiscovery(clearDiscovered: Boolean) {
         val manager = nsdManager
         if (manager == null) {
-            appendError("系统未提供 NsdManager，无法开始服务发现。")
+            appendError(appContext.getString(R.string.family_msg_25347))
             return
         }
         stopDiscoveryInternal()
@@ -1572,7 +1577,7 @@ class FamilyNetworkManager(context: Context) {
         val listener = object : NsdManager.DiscoveryListener {
             override fun onStartDiscoveryFailed(serviceType: String, errorCode: Int) {
                 if (errorCode == NsdManager.FAILURE_ALREADY_ACTIVE) {
-                    appendLog("服务发现尚未完全停止，稍后自动重试…")
+                    appendLog(appContext.getString(R.string.family_msg_20665))
                     scope.launch {
                         delay(500)
                         if (started && (familyTabActive || ephemeralSessionCount > 0)) {
@@ -1581,7 +1586,7 @@ class FamilyNetworkManager(context: Context) {
                     }
                     return
                 }
-                appendError("启动服务发现失败，类型=$serviceType，错误码=$errorCode")
+                appendError(appContext.getString(R.string.family_msg_41010))
                 _state.update { it.copy(isDiscovering = false) }
                 try {
                     manager.stopServiceDiscovery(this)
@@ -1590,7 +1595,7 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                appendError("停止服务发现失败，类型=$serviceType，错误码=$errorCode")
+                appendError(appContext.getString(R.string.family_msg_28896))
                 _state.update { it.copy(isDiscovering = false) }
                 try {
                     manager.stopServiceDiscovery(this)
@@ -1599,12 +1604,12 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onDiscoveryStarted(serviceType: String) {
-                appendLog("开始发现服务：$serviceType")
+                appendLog(appContext.getString(R.string.family_msg_94230))
                 _state.update { it.copy(isDiscovering = true, lastError = null) }
             }
 
             override fun onDiscoveryStopped(serviceType: String) {
-                appendLog("已停止发现服务：$serviceType")
+                appendLog(appContext.getString(R.string.family_msg_01436))
                 _state.update { it.copy(isDiscovering = false) }
             }
 
@@ -1612,12 +1617,12 @@ class FamilyNetworkManager(context: Context) {
                 if (!serviceTypeMatches(serviceInfo.serviceType)) return
                 val candidateName = serviceInfo.serviceName?.trim().orEmpty()
                 if (candidateName.isEmpty()) return
-                appendLog("发现候选服务：$candidateName")
+                appendLog(appContext.getString(R.string.family_msg_81223))
                 enqueueResolve(serviceInfo)
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-                appendLog("服务离线通知：${serviceInfo.serviceName}。为避免 Android NSD 误报，这里暂时保留上次成功解析的入口。")
+                appendLog(appContext.getString(R.string.family_msg_24100, serviceInfo.serviceName))
             }
         }
         discoveryListener = listener
@@ -1659,7 +1664,7 @@ class FamilyNetworkManager(context: Context) {
                         pendingResolveQueue.addFirst(serviceInfo)
                     }
                 }
-                appendError("解析服务失败，name=${serviceInfo.serviceName}，错误码=$errorCode")
+                appendError(appContext.getString(R.string.family_msg_57086, serviceInfo.serviceName))
                 drainResolveQueue()
             }
 
@@ -1680,7 +1685,10 @@ class FamilyNetworkManager(context: Context) {
                     attributes = attributes,
                     isSelf = instanceId != null && attributes["instance_id"] == instanceId
                 )
-                appendLog("解析到服务：${entry.displayHostName} -> ${entry.host}:${entry.port}${if (entry.isSelf) "（本机）" else ""}")
+                appendLog(
+                    appContext.getString(R.string.family_msg_83175, entry.displayHostName, entry.host, entry.port) +
+                        if (entry.isSelf) appContext.getString(R.string.family_self_suffix) else ""
+                )
                 upsertDiscoveredService(entry)
                 drainResolveQueue()
             }
@@ -1763,7 +1771,7 @@ class FamilyNetworkManager(context: Context) {
                 isSelf = true
             )
         )
-        appendLog("本机留言板服务已加入发现列表：$displayHostName（$resolvedHost:$port）")
+        appendLog(appContext.getString(R.string.family_msg_74498))
     }
 
     private fun reregisterMdnsService() {
@@ -1789,7 +1797,7 @@ class FamilyNetworkManager(context: Context) {
             instanceId = instanceId,
             tlsFingerprint = tlsFingerprint
         )
-        appendLog("主机名已更新，重新广播 mDNS：$displayHostName")
+        appendLog(appContext.getString(R.string.family_msg_17804))
     }
 
     private fun resolveLocalDisplayHostName(instanceId: String): String =
@@ -1812,7 +1820,7 @@ class FamilyNetworkManager(context: Context) {
                     JSONObject().apply {
                         put("ok", false)
                         put("error", "unauthorized")
-                        put("message", "需要正确的网络服务密码")
+                        put("message", appContext.getString(R.string.family_msg_06885))
                     }.toString()
                 )
             return boardHttpHandler.handle(method, path, bodyBytes, authLevel, headers)
@@ -1862,7 +1870,7 @@ class FamilyNetworkManager(context: Context) {
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {
         return runCatching {
             val snapshot = boardStore.snapshot(boardId)
-                ?: throw IllegalStateException("留言板不存在：$boardId")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_71757))
             snapshot.copy(
                 canManage = true,
                 agents = emptyList(),
@@ -1886,7 +1894,7 @@ class FamilyNetworkManager(context: Context) {
         ).mapCatching { text ->
             val json = JSONObject(text)
             if (!json.optBoolean("ok", false)) {
-                throw IllegalStateException(json.optString("message", "读取留言板失败"))
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_50818)))
             }
             val messages = buildList {
                 val arr = json.optJSONArray("messages") ?: JSONArray()
@@ -1921,12 +1929,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = method
@@ -1963,12 +1971,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = method
@@ -1997,12 +2005,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = "GET"
@@ -2046,12 +2054,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = "GET"
@@ -2102,7 +2110,7 @@ class FamilyNetworkManager(context: Context) {
             ).getOrThrow()
             val json = JSONObject(response)
             if (!json.optBoolean("ok", false)) {
-                throw IllegalStateException(json.optString("message", "导入留言板失败"))
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_35200)))
             }
             BulletinBoardInfo.fromJson(json.getJSONObject("board"))
         }
@@ -2117,12 +2125,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = "POST"
@@ -2153,12 +2161,12 @@ class FamilyNetworkManager(context: Context) {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException("对端 ${service.serviceName} 未声明 HTTPS。")
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
             }
             val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException("对端 ${service.serviceName} 缺少 TLS 指纹。")
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val endpoint = URL("https://${service.host}:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = method
@@ -2200,9 +2208,9 @@ class FamilyNetworkManager(context: Context) {
         try {
             manager.stopServiceDiscovery(listener)
         } catch (e: IllegalArgumentException) {
-            appendLog("停止发现时监听器不存在：${e.message ?: e.javaClass.simpleName}")
+            appendLog(appContext.getString(R.string.family_msg_46190, e.message ?: e.javaClass.simpleName))
         } catch (e: Throwable) {
-            appendError("停止服务发现失败：${e.message ?: e.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_42441, e.message ?: e.javaClass.simpleName))
         } finally {
             discoveryListener = null
             _state.update { it.copy(isDiscovering = false) }
@@ -2215,9 +2223,9 @@ class FamilyNetworkManager(context: Context) {
         try {
             manager.unregisterService(listener)
         } catch (e: IllegalArgumentException) {
-            appendLog("注销服务时监听器不存在：${e.message ?: e.javaClass.simpleName}")
+            appendLog(appContext.getString(R.string.family_msg_70371, e.message ?: e.javaClass.simpleName))
         } catch (e: Throwable) {
-            appendError("注销 mDNS 服务失败：${e.message ?: e.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_37052, e.message ?: e.javaClass.simpleName))
         } finally {
             registrationListener = null
             _state.update { it.copy(isRegistered = false) }
@@ -2227,7 +2235,7 @@ class FamilyNetworkManager(context: Context) {
     private fun acquireMulticastLock() {
         if (multicastLock?.isHeld == true) return
         val manager = wifiManager ?: run {
-            appendLog("未获取到 WifiManager，跳过 MulticastLock。")
+            appendLog(appContext.getString(R.string.family_msg_64542))
             return
         }
         try {
@@ -2235,9 +2243,9 @@ class FamilyNetworkManager(context: Context) {
                 setReferenceCounted(false)
                 acquire()
             }
-            appendLog("已申请 Wi-Fi MulticastLock。")
+            appendLog(appContext.getString(R.string.family_msg_29648))
         } catch (e: Throwable) {
-            appendError("申请 Wi-Fi MulticastLock 失败：${e.message ?: e.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_60264, e.message ?: e.javaClass.simpleName))
         }
     }
 
@@ -2246,10 +2254,10 @@ class FamilyNetworkManager(context: Context) {
         try {
             if (lock.isHeld) {
                 lock.release()
-                appendLog("已释放 Wi-Fi MulticastLock。")
+                appendLog(appContext.getString(R.string.family_msg_17052))
             }
         } catch (e: Throwable) {
-            appendError("释放 Wi-Fi MulticastLock 失败：${e.message ?: e.javaClass.simpleName}")
+            appendError(appContext.getString(R.string.family_msg_21921, e.message ?: e.javaClass.simpleName))
         } finally {
             multicastLock = null
         }
@@ -2317,6 +2325,7 @@ class FamilyNetworkManager(context: Context) {
 }
 
 private class EmbeddedHttpServer(
+    private val context: Context,
     preferredPort: Int,
     sslContext: SSLContext,
     private val log: (String) -> Unit,
@@ -2328,7 +2337,7 @@ private class EmbeddedHttpServer(
         try {
             bind(InetSocketAddress(preferredPort))
         } catch (firstError: Throwable) {
-            log("端口 $preferredPort 监听失败：${firstError.message ?: firstError.javaClass.simpleName}；改用系统分配端口。")
+            log(context.getString(R.string.family_msg_66267, preferredPort, firstError.message ?: firstError.javaClass.simpleName))
             bind(InetSocketAddress(0))
         }
         soTimeout = 2000
@@ -2349,7 +2358,7 @@ private class EmbeddedHttpServer(
             } catch (_: java.net.SocketTimeoutException) {
             } catch (e: Throwable) {
                 if (running.get()) {
-                    log("HTTPS 服务 accept 失败：${e.message ?: e.javaClass.simpleName}")
+                    log(context.getString(R.string.family_msg_08788, e.message ?: e.javaClass.simpleName))
                 }
             }
         }
@@ -2444,7 +2453,7 @@ private class EmbeddedHttpServer(
                 else -> 0
             }
             if (headerBuffer.size() > 64 * 1024) {
-                throw IllegalStateException("HTTP 请求头过大，超过 64 KiB")
+                throw IllegalStateException(context.getString(R.string.family_msg_52047))
             }
         }
         return headerBuffer.toByteArray()

@@ -1,6 +1,7 @@
 package com.kenny.localmanager.family
 
 import android.content.Context
+import com.kenny.localmanager.R
 import java.net.URL
 import java.security.KeyFactory
 import java.security.KeyStore
@@ -40,10 +41,10 @@ class FamilyTlsManager(private val context: Context) {
 
     fun openHttpsConnection(url: URL, expectedFingerprintSha256: String): HttpsURLConnection {
         val connection = url.openConnection() as? HttpsURLConnection
-            ?: throw IllegalStateException("目标 URL 不是 HTTPS：$url")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_07788))
         val normalizedFingerprint = normalizeFingerprint(expectedFingerprintSha256)
         if (normalizedFingerprint.isBlank()) {
-            throw IllegalStateException("目标服务缺少 TLS 指纹，无法安全建立 HTTPS 连接。")
+            throw IllegalStateException(context.getString(R.string.family_msg_22248))
         }
         connection.sslSocketFactory = clientSslContext.socketFactory
         connection.hostnameVerifier = fingerprintHostnameVerifier(normalizedFingerprint)
@@ -120,7 +121,11 @@ class FamilyTlsManager(private val context: Context) {
             }
         }
         throw IllegalStateException(
-            "无法解析本机 TLS 私钥，已尝试算法 ${algorithms.joinToString()}：${lastError?.message ?: "未知错误"}",
+            context.getString(
+                R.string.family_msg_44400,
+                algorithms.joinToString(),
+                lastError?.message ?: context.getString(R.string.common_unknown_error)
+            ),
             lastError
         )
     }

@@ -3,6 +3,7 @@ package com.kenny.localmanager.family
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.listChildrenFast
 import kotlin.coroutines.coroutineContext
@@ -98,6 +99,7 @@ object BulletinAttachmentUploader {
         ).getOrElse { throw it }
         onAttachmentInit?.invoke(init.attachmentId)
         uploadStreamInChunks(
+            context = context,
             transport = transport,
             boardId = boardId,
             attachmentId = init.attachmentId,
@@ -125,7 +127,7 @@ object BulletinAttachmentUploader {
     ): BulletinAttachmentRef {
         val entries = collectDirectoryEntries(context, item.uri.toString())
         if (entries.isEmpty()) {
-            throw IllegalStateException("目录 ${item.name} 为空，无法上传")
+            throw IllegalStateException(context.getString(R.string.family_msg_57103, item.name))
         }
         val init = transport.initDirectoryUpload(
             boardId = boardId,
@@ -138,9 +140,10 @@ object BulletinAttachmentUploader {
         var uploadedInDirectory = 0L
         init.directoryFiles.forEach { slot ->
             val uri = pathToUri[slot.path]
-                ?: throw IllegalStateException("目录内找不到文件：${slot.path}")
+                ?: throw IllegalStateException(context.getString(R.string.family_msg_79995, slot.path))
             val fileOffset = uploadedInDirectory
             uploadStreamInChunks(
+                context = context,
                 transport = transport,
                 boardId = boardId,
                 attachmentId = init.attachmentId,
@@ -158,6 +161,7 @@ object BulletinAttachmentUploader {
     }
 
     private suspend fun uploadStreamInChunks(
+        context: Context,
         transport: BulletinAttachmentTransport,
         boardId: String,
         attachmentId: String,
@@ -167,7 +171,7 @@ object BulletinAttachmentUploader {
         openStream: () -> InputStream?,
         onProgress: ((uploadedInStream: Long) -> Unit)? = null
     ) {
-        val input = openStream() ?: throw IllegalStateException("无法读取文件流")
+        val input = openStream() ?: throw IllegalStateException(context.getString(R.string.family_msg_22316))
         input.use { stream ->
             val buffer = ByteArray(chunkSize)
             var chunkIndex = 0
@@ -190,7 +194,7 @@ object BulletinAttachmentUploader {
                 onProgress?.invoke(uploaded)
             }
             if (uploaded < totalSize) {
-                throw IllegalStateException("上传未完成：已传 $uploaded / $totalSize 字节")
+                throw IllegalStateException(context.getString(R.string.family_msg_91420, uploaded, totalSize))
             }
         }
     }
@@ -249,11 +253,11 @@ object BulletinAttachmentUploader {
     ): Result<List<BulletinAttachmentRef>> = withContext(Dispatchers.IO) {
         try {
             if (items.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("未选择任何文件或目录"))
+                return@withContext Result.failure(IllegalStateException(context.getString(R.string.family_msg_98275)))
             }
             val entries = collectMultiItemDirectoryEntries(context, items)
             if (entries.isEmpty()) {
-                return@withContext Result.failure(IllegalStateException("所选文件/目录均为空，无法组成目录附件"))
+                return@withContext Result.failure(IllegalStateException(context.getString(R.string.family_msg_84938)))
             }
             val pathToUri = mapMultiItemEntryUris(context, items, entries)
             val aggregateTotal = entries.sumOf { it.size }.coerceAtLeast(1L)
@@ -267,9 +271,10 @@ object BulletinAttachmentUploader {
             var uploadedInDirectory = 0L
             init.directoryFiles.forEach { slot ->
                 val uri = pathToUri[slot.path]
-                    ?: throw IllegalStateException("目录内找不到文件：${slot.path}")
+                    ?: throw IllegalStateException(context.getString(R.string.family_msg_79995, slot.path))
                 val fileOffset = uploadedInDirectory
                 uploadStreamInChunks(
+                    context = context,
                     transport = transport,
                     boardId = boardId,
                     attachmentId = init.attachmentId,
@@ -389,7 +394,7 @@ class LocalBulletinAttachmentTransport(
         uploaderDevice: String?
     ): Result<InitUploadSession> = runCatching {
         val result = store.attachments.initFileUpload(boardId, name, size, mime = mime, uploaderDevice = uploaderDevice)
-            ?: throw IllegalStateException("初始化单文件附件失败")
+            ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_73188))
         InitUploadSession(result.attachmentId, result.chunkSize)
     }
 
@@ -400,7 +405,7 @@ class LocalBulletinAttachmentTransport(
         uploaderDevice: String?
     ): Result<InitUploadSession> = runCatching {
         val result = store.attachments.initDirectoryUpload(boardId, name, entries, uploaderDevice)
-            ?: throw IllegalStateException("初始化目录附件失败")
+            ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_56604))
         InitUploadSession(result.attachmentId, result.chunkSize, result.directoryFiles)
     }
 
@@ -411,7 +416,7 @@ class LocalBulletinAttachmentTransport(
         data: ByteArray
     ): Result<Unit> = runCatching {
         store.attachments.writeFileChunk(boardId, attachmentId, chunkIndex, data)
-            ?: throw IllegalStateException("写入附件分块失败：index=$chunkIndex")
+            ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_45381, chunkIndex))
     }
 
     override fun uploadDirectoryFileChunk(
@@ -422,17 +427,18 @@ class LocalBulletinAttachmentTransport(
         data: ByteArray
     ): Result<Unit> = runCatching {
         store.attachments.writeDirectoryFileChunk(boardId, attachmentId, fileId, chunkIndex, data)
-            ?: throw IllegalStateException("写入目录附件分块失败：$fileId#$chunkIndex")
+            ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_50876, fileId, chunkIndex))
     }
 
     override fun completeUpload(boardId: String, attachmentId: String): Result<BulletinAttachmentRef> =
         runCatching {
             store.attachments.completeUpload(boardId, attachmentId)
-                ?: throw IllegalStateException("完成附件上传失败：$attachmentId")
+                ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_03789, attachmentId))
         }
 }
 
 class RemoteBulletinAttachmentTransport(
+    private val context: Context,
     private val service: FamilyDiscoveredService,
     private val accessPassword: String?,
     private val requestJson: (method: String, path: String, body: String?) -> Result<String>,
@@ -514,7 +520,7 @@ class RemoteBulletinAttachmentTransport(
             ).getOrElse { throw it }
             val json = JSONObject(text)
             if (!json.optBoolean("ok", false)) {
-                throw IllegalStateException(json.optString("message", "完成附件上传失败"))
+                throw IllegalStateException(json.optString("message", context.getString(R.string.family_msg_73920)))
             }
             val metaText = requestJson(
                 "GET",
@@ -528,7 +534,7 @@ class RemoteBulletinAttachmentTransport(
     private fun parseInitResponse(text: String): InitUploadSession {
         val json = JSONObject(text)
         if (!json.optBoolean("ok", false)) {
-            throw IllegalStateException(json.optString("message", "初始化附件上传失败"))
+            throw IllegalStateException(json.optString("message", context.getString(R.string.family_msg_56857)))
         }
         val files = buildList {
             val arr = json.optJSONArray("files") ?: JSONArray()

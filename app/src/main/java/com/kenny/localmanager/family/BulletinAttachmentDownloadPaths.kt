@@ -3,6 +3,7 @@ package com.kenny.localmanager.family
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 
 enum class BulletinAttachmentDownloadConflict {
     OVERWRITE,
@@ -10,15 +11,18 @@ enum class BulletinAttachmentDownloadConflict {
 }
 
 object BulletinAttachmentDownloadPaths {
-    const val ROOT_DIR_NAME = "留言板附件"
+    private val legacyRootDirNames = listOf("留言板附件", "Bulletin attachments")
 
-    fun sanitizeSegment(name: String): String =
-        name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "unknown" }
+    fun rootDirName(context: Context): String =
+        context.getString(R.string.family_attachment_folder_name)
 
     fun downloadRoot(context: Context, rootUri: String): DocumentFile? {
         val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(rootUri)) ?: return null
-        return rootDoc.findFile(ROOT_DIR_NAME)?.takeIf { it.isDirectory }
-            ?: rootDoc.createDirectory(ROOT_DIR_NAME)
+        val localized = rootDirName(context)
+        (listOf(localized) + legacyRootDirNames).distinct().forEach { name ->
+            rootDoc.findFile(name)?.takeIf { it.isDirectory }?.let { return it }
+        }
+        return rootDoc.createDirectory(localized)
     }
 
     fun targetExists(context: Context, rootUri: String, ref: BulletinAttachmentRef): Boolean {
@@ -28,6 +32,7 @@ object BulletinAttachmentDownloadPaths {
     }
 
     fun resolveTargetName(
+        context: Context,
         downloadDir: DocumentFile,
         ref: BulletinAttachmentRef,
         conflict: BulletinAttachmentDownloadConflict
@@ -36,10 +41,18 @@ object BulletinAttachmentDownloadPaths {
         if (conflict == BulletinAttachmentDownloadConflict.OVERWRITE) {
             return baseName
         }
-        return uniqueNameIn(downloadDir, baseName, ref.kind == BulletinAttachmentKind.DIRECTORY)
+        return uniqueNameIn(context, downloadDir, baseName, ref.kind == BulletinAttachmentKind.DIRECTORY)
     }
 
-    private fun uniqueNameIn(dir: DocumentFile, baseName: String, isDirectory: Boolean): String {
+    fun sanitizeSegment(name: String): String =
+        name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "unknown" }
+
+    private fun uniqueNameIn(
+        context: Context,
+        dir: DocumentFile,
+        baseName: String,
+        isDirectory: Boolean
+    ): String {
         if (dir.findFile(baseName) == null) return baseName
         var index = 1
         while (index < 10_000) {
@@ -56,7 +69,7 @@ object BulletinAttachmentDownloadPaths {
             if (dir.findFile(candidate) == null) return candidate
             index++
         }
-        throw IllegalStateException("无法生成不冲突的文件名：$baseName")
+        throw IllegalStateException(context.getString(R.string.family_msg_81577, baseName))
     }
 }
 

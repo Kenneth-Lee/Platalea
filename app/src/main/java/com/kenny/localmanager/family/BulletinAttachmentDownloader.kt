@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinAttachmentDefaults.CHUNK_SIZE
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
@@ -49,8 +50,8 @@ object BulletinAttachmentDownloader {
     ): Result<BulletinAttachmentDownloadResult> = withContext(Dispatchers.IO) {
         try {
             val downloadDir = BulletinAttachmentDownloadPaths.downloadRoot(context, rootUri)
-                ?: return@withContext Result.failure(IllegalStateException("无法访问下载目录"))
-            val targetName = BulletinAttachmentDownloadPaths.resolveTargetName(downloadDir, ref, conflict)
+                ?: return@withContext Result.failure(IllegalStateException(context.getString(R.string.family_msg_95592)))
+            val targetName = BulletinAttachmentDownloadPaths.resolveTargetName(context, downloadDir, ref, conflict)
             if (conflict == BulletinAttachmentDownloadConflict.OVERWRITE) {
                 downloadDir.findFile(targetName)?.let { existing ->
                     deleteSafEntry(context, existing)
@@ -70,9 +71,9 @@ object BulletinAttachmentDownloader {
                 BulletinAttachmentKind.DIRECTORY -> downloadDirectory(
                     context, transport, boardId, ref, downloadDir, targetName, totalBytes, onProgress
                 )
-            } ?: return@withContext Result.failure(IllegalStateException("附件下载失败"))
+            } ?: return@withContext Result.failure(IllegalStateException(context.getString(R.string.family_msg_31754)))
 
-            val savedPath = "${BulletinAttachmentDownloadPaths.ROOT_DIR_NAME}/$targetName"
+            val savedPath = "${BulletinAttachmentDownloadPaths.rootDirName(context)}/$targetName"
             Result.success(BulletinAttachmentDownloadResult(resultUri, savedPath))
         } catch (e: CancellationException) {
             throw e
@@ -93,6 +94,7 @@ object BulletinAttachmentDownloader {
     ): Uri? {
         val cacheFile = cachePartFile(context, ref.id, null)
         downloadToCacheFile(
+            context = context,
             transport = transport,
             boardId = boardId,
             attachmentId = ref.id,
@@ -116,9 +118,9 @@ object BulletinAttachmentDownloader {
     ): Uri? {
         val meta = transport.getAttachmentMeta(boardId, ref.id).getOrElse { throw it }
         val files = meta.optJSONArray("files")
-            ?: throw IllegalStateException("目录附件缺少 files 列表")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_03372))
         val attachmentDir = downloadDir.createDirectory(targetName)
-            ?: throw IllegalStateException("无法创建目录：$targetName")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_18940))
 
         var aggregateDownloaded = 0L
         for (i in 0 until files.length()) {
@@ -130,6 +132,7 @@ object BulletinAttachmentDownloader {
             val cacheFile = cachePartFile(context, ref.id, fileId)
             val before = aggregateDownloaded
             downloadToCacheFile(
+                context = context,
                 transport = transport,
                 boardId = boardId,
                 attachmentId = ref.id,
@@ -147,6 +150,7 @@ object BulletinAttachmentDownloader {
     }
 
     private suspend fun downloadToCacheFile(
+        context: Context,
         transport: BulletinAttachmentDownloadTransport,
         boardId: String,
         attachmentId: String,
@@ -165,7 +169,7 @@ object BulletinAttachmentDownloader {
                 val chunk = transport.downloadBlob(boardId, attachmentId, fileId, offset, end)
                     .getOrElse { throw it }
                 if (chunk.bytes.isEmpty()) {
-                    throw IllegalStateException("下载附件分块为空：offset=$offset")
+                    throw IllegalStateException(context.getString(R.string.family_msg_00942, offset))
                 }
                 raf.seek(offset)
                 raf.write(chunk.bytes)
@@ -174,7 +178,7 @@ object BulletinAttachmentDownloader {
             }
         }
         if (offset < totalSize) {
-            throw IllegalStateException("下载未完成：$offset / $totalSize 字节")
+            throw IllegalStateException(context.getString(R.string.family_msg_14374, offset, totalSize))
         }
     }
 
@@ -198,14 +202,14 @@ object BulletinAttachmentDownloader {
         relativePath: String
     ) {
         val parts = relativePath.split('/').filter { it.isNotEmpty() }
-        if (parts.isEmpty()) throw IllegalStateException("目录附件路径为空")
+        if (parts.isEmpty()) throw IllegalStateException(context.getString(R.string.family_msg_37067))
         val fileName = BulletinAttachmentDownloadPaths.sanitizeSegment(parts.last())
         var parent = attachmentDir
         for (segment in parts.dropLast(1)) {
             val safe = BulletinAttachmentDownloadPaths.sanitizeSegment(segment)
             parent = parent.findFile(safe)?.takeIf { it.isDirectory }
                 ?: parent.createDirectory(safe)
-                ?: throw IllegalStateException("无法创建子目录：$safe")
+                ?: throw IllegalStateException(context.getString(R.string.family_msg_05412))
         }
         parent.findFile(fileName)?.let { existing ->
             if (!existing.isDirectory) {
@@ -214,7 +218,7 @@ object BulletinAttachmentDownloader {
         }
         val mime = guessMimeType(fileName)
         val created = parent.createFile(mime, fileName)
-            ?: throw IllegalStateException("无法创建文件：$fileName")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
         copyFileToUri(context, cacheFile, created.uri)
     }
 
@@ -226,7 +230,7 @@ object BulletinAttachmentDownloader {
         source.inputStream().use { input ->
             context.contentResolver.openOutputStream(destUri)?.use { output ->
                 input.copyTo(output)
-            } ?: throw IllegalStateException("无法写入 SAF 文件")
+            } ?: throw IllegalStateException(context.getString(R.string.family_msg_80037))
         }
     }
 
@@ -248,7 +252,7 @@ class LocalBulletinAttachmentDownloadTransport(
     override fun getAttachmentMeta(boardId: String, attachmentId: String): Result<JSONObject> =
         runCatching {
             store.attachments.getAttachmentMeta(boardId, attachmentId)
-                ?: throw IllegalStateException("附件不存在：$attachmentId")
+                ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_34495, attachmentId))
         }
 
     override fun downloadBlob(
@@ -263,7 +267,7 @@ class LocalBulletinAttachmentDownloadTransport(
             store.attachments.readDirectoryFileBlob(boardId, attachmentId, fileId, rangeHeader)
         } else {
             store.attachments.readFileBlob(boardId, attachmentId, rangeHeader)
-        } ?: throw IllegalStateException("读取附件分块失败")
+        } ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_96683))
         BlobDownloadResult(result.statusCode, result.bytes, result.totalSize, result.contentRange)
     }
 }

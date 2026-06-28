@@ -863,7 +863,7 @@ private fun BoardPickerDialog(
         val result = withContext(Dispatchers.IO) {
             runCatching {
                 val bytes = BulletinBoardPack.readFromDocumentFile(context, file).getOrThrow()
-                BulletinBoardPack.peekBoardName(bytes)
+                BulletinBoardPack.peekBoardName(context, bytes)
             }
         }
         importPackNameLoading = false
@@ -871,7 +871,7 @@ private fun BoardPickerDialog(
             importPackSourceName = packName
             importNameConflict = packName in existingBoardNames
             pendingImportName = if (importNameConflict) {
-                BulletinBoardPack.suggestUniqueBoardName(packName, existingBoardNames)
+                BulletinBoardPack.suggestUniqueBoardName(context, packName, existingBoardNames)
             } else {
                 packName
             }

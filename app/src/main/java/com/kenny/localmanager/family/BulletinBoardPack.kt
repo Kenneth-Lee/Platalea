@@ -2,6 +2,7 @@ package com.kenny.localmanager.family
 
 import android.content.Context
 import android.net.Uri
+import com.kenny.localmanager.R
 import androidx.documentfile.provider.DocumentFile
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,7 +27,7 @@ object BulletinBoardPack {
 
     class PackException(val code: String, override val message: String) : Exception(message)
 
-    fun peekBoardName(data: ByteArray): String {
+    fun peekBoardName(context: Context, data: ByteArray): String {
         var name: String? = null
         ZipInputStream(ByteArrayInputStream(data)).use { zip ->
             var entry = zip.nextEntry
@@ -34,7 +35,7 @@ object BulletinBoardPack {
                 if (!entry.isDirectory && entry.name == "${BOARD_PREFIX}meta.json") {
                     val meta = runCatching { JSONObject(String(zip.readBytes(), Charsets.UTF_8)) }
                         .getOrElse {
-                            throw PackException("invalid_board", "board/meta.json 不是合法 JSON")
+                            throw PackException("invalid_board", context.getString(R.string.family_msg_04549))
                         }
                     name = meta.optString("name").trim()
                     break
@@ -44,13 +45,13 @@ object BulletinBoardPack {
             }
         }
         return name?.takeIf { it.isNotEmpty() }
-            ?: throw PackException("invalid_boardpack", "包内缺少 board/meta.json 或名称无效")
+            ?: throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09744))
     }
 
-    fun suggestUniqueBoardName(baseName: String, existingNames: Set<String>): String {
+    fun suggestUniqueBoardName(context: Context, baseName: String, existingNames: Set<String>): String {
         val trimmed = baseName.trim().ifBlank { "board" }
         if (trimmed !in existingNames) return trimmed
-        val imported = "$trimmed (导入)"
+        val imported = context.getString(R.string.family_msg_47294, trimmed)
         if (imported !in existingNames) return imported
         var index = 2
         while (true) {
@@ -60,13 +61,13 @@ object BulletinBoardPack {
         }
     }
 
-    fun exportBoardDir(boardDir: File, sourceDevice: String = "android"): ByteArray {
+    fun exportBoardDir(context: Context, boardDir: File, sourceDevice: String = "android"): ByteArray {
         val metaFile = File(boardDir, "meta.json")
         if (!metaFile.exists()) {
-            throw PackException("board_not_found", "留言板目录无效：${boardDir.name}")
+            throw PackException("board_not_found", context.getString(R.string.family_msg_02583, boardDir.name))
         }
         val meta = runCatching { JSONObject(metaFile.readText()) }
-            .getOrElse { throw PackException("invalid_board", "meta.json 不是合法 JSON") }
+            .getOrElse { throw PackException("invalid_board", context.getString(R.string.family_msg_93179)) }
         val boardId = meta.optString("id", boardDir.name)
         val boardName = meta.optString("name", boardId)
         val stats = collectStats(boardDir)
@@ -103,6 +104,7 @@ object BulletinBoardPack {
     }
 
     fun importIntoRoot(
+        context: Context,
         rootDir: File,
         data: ByteArray,
         name: String? = null,
@@ -119,7 +121,7 @@ object BulletinBoardPack {
                     if (entry.name == MANIFEST_NAME) {
                         manifest = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
                             .getOrElse {
-                                throw PackException("invalid_boardpack", "manifest.json 无效")
+                                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_35962))
                             }
                     }
                     extracted[entry.name] = bytes
@@ -127,10 +129,10 @@ object BulletinBoardPack {
                 zip.closeEntry()
                 entry = zip.nextEntry
             }
-            validateManifest(manifest)
+            validateManifest(context, manifest)
         }
         if (!extracted.containsKey("${BOARD_PREFIX}meta.json")) {
-            throw PackException("invalid_boardpack", "包内缺少 board/meta.json")
+            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_34360))
         }
 
         val newBoardId = UUID.randomUUID().toString()
@@ -140,7 +142,7 @@ object BulletinBoardPack {
             if (!entryName.startsWith(BOARD_PREFIX) || entryName.endsWith("/")) return@forEach
             val relative = entryName.removePrefix(BOARD_PREFIX)
             if (relative.isBlank() || relative.contains("..")) {
-                throw PackException("invalid_boardpack", "包内路径非法：$entryName")
+                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entryName))
             }
             val target = File(boardDir, relative)
             target.parentFile?.mkdirs()
@@ -151,21 +153,21 @@ object BulletinBoardPack {
         val meta = runCatching { JSONObject(metaFile.readText()) }
             .getOrElse {
                 boardDir.deleteRecursively()
-                throw PackException("invalid_board", "board/meta.json 不是合法 JSON")
+                throw PackException("invalid_board", context.getString(R.string.family_msg_04549))
             }
         val trimmedName = name?.trim().orEmpty()
         if (name != null && trimmedName.isEmpty()) {
             boardDir.deleteRecursively()
-            throw PackException("invalid_board", "覆盖名称不能为空")
+            throw PackException("invalid_board", context.getString(R.string.family_msg_15321))
         }
         val finalName = trimmedName.ifEmpty { meta.optString("name", newBoardId).trim() }
         if (finalName.isEmpty()) {
             boardDir.deleteRecursively()
-            throw PackException("invalid_board", "留言板名称不能为空")
+            throw PackException("invalid_board", context.getString(R.string.family_msg_82976))
         }
         if (isBoardNameTaken(rootDir, finalName)) {
             boardDir.deleteRecursively()
-            throw PackException("board_name_duplicate", "留言板名称已存在：$finalName")
+            throw PackException("board_name_duplicate", context.getString(R.string.family_msg_43889, finalName))
         }
         meta.put("name", finalName)
         if (roleIds != null) {
@@ -203,24 +205,23 @@ object BulletinBoardPack {
         data: ByteArray
     ): Result<String> = runCatching {
         val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(rootUri))
-            ?: throw IllegalStateException("无法访问根目录")
-        val exportDir = rootDoc.findFile(BulletinBoardExporter.EXPORT_DIR_NAME)?.takeIf { it.isDirectory }
-            ?: rootDoc.createDirectory(BulletinBoardExporter.EXPORT_DIR_NAME)
-            ?: throw IllegalStateException("无法创建导出目录")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54649))
+        val exportDir = BulletinBoardExporter.findOrCreateExportDir(context, rootDoc)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54837))
         val safeName = sanitizePackFileName(fileName)
         exportDir.findFile(safeName)?.takeIf { !it.isDirectory }?.delete()
         val created = exportDir.createFile("application/octet-stream", safeName)
-            ?: throw IllegalStateException("无法创建 boardpack 文件")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_78543))
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
             output.write(data)
-        } ?: throw IllegalStateException("无法写入 boardpack 文件")
-        "${BulletinBoardExporter.EXPORT_DIR_NAME}/$safeName"
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
+        "${BulletinBoardExporter.exportDirName(context)}/$safeName"
     }
 
     fun writeToUri(context: Context, uri: Uri, data: ByteArray): Result<Unit> = runCatching {
         context.contentResolver.openOutputStream(uri)?.use { output ->
             output.write(data)
-        } ?: throw IllegalStateException("无法写入文件")
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_11874))
     }
 
     fun readFromDocumentFile(context: Context, file: com.kenny.localmanager.file.DocumentFileModel): Result<ByteArray> =
@@ -228,7 +229,7 @@ object BulletinBoardPack {
 
     fun readFromUri(context: Context, uri: Uri): Result<ByteArray> = runCatching {
         context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-            ?: throw IllegalStateException("无法读取文件")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_94078))
     }
 
     fun defaultPackFileName(boardName: String): String {
@@ -248,17 +249,20 @@ object BulletinBoardPack {
         } == true
     }
 
-    private fun validateManifest(manifest: JSONObject?) {
+    private fun validateManifest(context: Context, manifest: JSONObject?) {
         if (manifest == null) {
-            throw PackException("invalid_boardpack", "包内缺少 manifest.json")
+            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_40120))
         }
         if (manifest.optString("format") != FORMAT) {
-            throw PackException("unsupported_boardpack", "不支持的包格式：${manifest.optString("format")}")
+            throw PackException(
+                "unsupported_boardpack",
+                context.getString(R.string.family_msg_24247, manifest.optString("format"))
+            )
         }
         if (manifest.optInt("version") != VERSION) {
             throw PackException(
                 "unsupported_boardpack",
-                "不支持的包版本：${manifest.optInt("version")}，当前仅支持 v$VERSION"
+                context.getString(R.string.family_msg_86457, manifest.optInt("version"), VERSION)
             )
         }
     }

@@ -1,9 +1,13 @@
 package com.kenny.localmanager.family
 
+import android.content.Context
+import com.kenny.localmanager.R
+
 import org.json.JSONArray
 import org.json.JSONObject
 
 class BulletinBoardHttpHandler(
+    private val context: Context,
     private val store: BulletinBoardStore
 ) {
     fun handle(
@@ -15,7 +19,7 @@ class BulletinBoardHttpHandler(
     ): FamilyHttpResponse {
         val normalizedPath = path.substringBefore('?').trimEnd('/').ifEmpty { "/" }
         if (requiresHostAuth(method, normalizedPath)) {
-            return forbidden("远程不可修改或删除，请在本机应用中操作")
+            return forbidden(context.getString(R.string.family_http_remote_modify_forbidden))
         }
         return when {
             method == "GET" && normalizedPath == "/boards" -> listBoards()
@@ -112,9 +116,9 @@ class BulletinBoardHttpHandler(
                 boardId,
                 attachmentId,
                 fileId,
-                chunkIndex.toIntOrNull() ?: return badRequest("invalid_attachment", "分块索引无效"),
+                chunkIndex.toIntOrNull() ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_84534)),
                 bodyBytes
-            ) ?: return badRequest("invalid_attachment", "目录附件分块写入失败")
+            ) ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_53911))
             return FamilyHttpResponse(
                 200,
                 JSONObject().apply {
@@ -130,9 +134,9 @@ class BulletinBoardHttpHandler(
         val result = store.attachments.writeFileChunk(
             boardId,
             attachmentId,
-            chunkIndex.toIntOrNull() ?: return badRequest("invalid_attachment", "分块索引无效"),
+            chunkIndex.toIntOrNull() ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_84534)),
             bodyBytes
-        ) ?: return badRequest("invalid_attachment", "附件分块写入失败")
+        ) ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_61610))
         return FamilyHttpResponse(
             200,
             JSONObject().apply {
@@ -148,14 +152,14 @@ class BulletinBoardHttpHandler(
         if (dirBlob != null) {
             val (boardId, attachmentId, fileId) = dirBlob.destructured
             val result = store.attachments.readDirectoryFileBlob(boardId, attachmentId, fileId, rangeHeader)
-                ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", "附件不存在或未就绪"))
+                ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
             return blobResponse(result)
         }
         val fileBlob = Regex("""/boards/([^/]+)/attachments/([^/]+)/blob""").find(path)
             ?: return notFound()
         val (boardId, attachmentId) = fileBlob.destructured
         val result = store.attachments.readFileBlob(boardId, attachmentId, rangeHeader)
-            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", "附件不存在或未就绪"))
+            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
         return blobResponse(result)
     }
 
@@ -174,16 +178,16 @@ class BulletinBoardHttpHandler(
     }
 
     private fun initAttachment(boardId: String, bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val kind = BulletinAttachmentKind.fromWire(payload.optString("kind", "file"))
-            ?: return badRequest("invalid_attachment", "kind 无效")
+            ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_91834))
         val uploaderDevice = payload.optString("uploader_device").takeIf { it.isNotBlank() }
         val result = when (kind) {
             BulletinAttachmentKind.FILE -> {
                 val name = payload.optString("name")
                 val size = payload.optLong("size", -1)
                 if (name.isBlank() || size < 0) {
-                    return badRequest("invalid_attachment", "单文件附件需要 name 与 size")
+                    return badRequest("invalid_attachment", context.getString(R.string.family_msg_88641))
                 }
                 store.attachments.initFileUpload(
                     boardId = boardId,
@@ -210,11 +214,11 @@ class BulletinBoardHttpHandler(
                     }
                 }.filter { it.path.isNotBlank() && it.size >= 0 }
                 if (name.isBlank() || entries.isEmpty()) {
-                    return badRequest("invalid_attachment", "目录附件需要 name 与 entries")
+                    return badRequest("invalid_attachment", context.getString(R.string.family_msg_89635))
                 }
                 store.attachments.initDirectoryUpload(boardId, name, entries, uploaderDevice)
             }
-        } ?: return badRequest("invalid_attachment", "初始化附件失败")
+        } ?: return badRequest("invalid_attachment", context.getString(R.string.family_msg_97057))
         val body = JSONObject().apply {
             put("ok", true)
             put("attachment_id", result.attachmentId)
@@ -242,7 +246,7 @@ class BulletinBoardHttpHandler(
 
     private fun completeAttachment(boardId: String, attachmentId: String): FamilyHttpResponse {
         val ref = store.attachments.completeUpload(boardId, attachmentId)
-            ?: return badRequest("incomplete_upload", "附件未完成上传或校验失败")
+            ?: return badRequest("incomplete_upload", context.getString(R.string.family_msg_71159))
         return FamilyHttpResponse(
             200,
             JSONObject().apply {
@@ -255,13 +259,13 @@ class BulletinBoardHttpHandler(
 
     private fun getAttachmentMeta(boardId: String, attachmentId: String): FamilyHttpResponse {
         val meta = store.attachments.getAttachmentMeta(boardId, attachmentId)
-            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", "附件不存在：$attachmentId"))
+            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_34495)))
         return FamilyHttpResponse(200, meta.toString())
     }
 
     private fun deleteAttachment(boardId: String, attachmentId: String): FamilyHttpResponse {
         if (!store.attachments.deleteAttachment(boardId, attachmentId)) {
-            return FamilyHttpResponse(404, jsonError("attachment_not_found", "附件不存在"))
+            return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_55026)))
         }
         return FamilyHttpResponse(200, JSONObject().apply { put("ok", true) }.toString())
     }
@@ -287,14 +291,14 @@ class BulletinBoardHttpHandler(
     }
 
     private fun createBoard(bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val name = payload.optString("name").trim()
-        if (name.isEmpty()) return badRequest("invalid_board", "留言板名称不能为空")
+        if (name.isEmpty()) return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
         if (store.isBoardNameTaken(name)) {
-            return badRequest("board_name_duplicate", "留言板名称已存在：$name")
+            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
         }
         val board = store.createBoard(name)
-            ?: return badRequest("invalid_board", "创建留言板失败")
+            ?: return badRequest("invalid_board", context.getString(R.string.family_msg_64304))
         return FamilyHttpResponse(
             200,
             JSONObject().apply {
@@ -310,14 +314,14 @@ class BulletinBoardHttpHandler(
     }
 
     private fun renameBoard(boardId: String, bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val name = payload.optString("name").trim()
-        if (name.isEmpty()) return badRequest("invalid_board", "留言板名称不能为空")
+        if (name.isEmpty()) return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
         if (store.isBoardNameTaken(name, excludeBoardId = boardId)) {
-            return badRequest("board_name_duplicate", "留言板名称已存在：$name")
+            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
         }
         val board = store.renameBoard(boardId, name)
-            ?: return badRequest("board_rename_failed", "重命名失败：留言板不存在")
+            ?: return badRequest("board_rename_failed", context.getString(R.string.family_msg_90260))
         return FamilyHttpResponse(
             200,
             JSONObject().apply {
@@ -336,7 +340,7 @@ class BulletinBoardHttpHandler(
         if (!store.deleteBoard(boardId)) {
             return badRequest(
                 "board_delete_failed",
-                "删除失败：留言板不存在，或这是最后一个留言板"
+                context.getString(R.string.family_msg_96259)
             )
         }
         return FamilyHttpResponse(200, JSONObject().apply { put("ok", true) }.toString())
@@ -344,8 +348,8 @@ class BulletinBoardHttpHandler(
 
     private fun exportBoard(boardId: String): FamilyHttpResponse {
         val snapshot = store.snapshot(boardId)
-            ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
-        val markdown = BulletinBoardExporter.snapshotToMarkdown(snapshot)
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+        val markdown = BulletinBoardExporter.snapshotToMarkdown(context, snapshot)
         return FamilyHttpResponse(
             200,
             markdown,
@@ -355,7 +359,7 @@ class BulletinBoardHttpHandler(
 
     private fun getMessages(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
         val snapshot = store.snapshot(boardId)
-            ?: return FamilyHttpResponse(404, jsonError("board_not_found", "留言板不存在：$boardId"))
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
         val participants = BulletinBoardMention.collectParticipants(snapshot.messages)
         val body = snapshot.copy(
             canManage = false,
@@ -367,15 +371,15 @@ class BulletinBoardHttpHandler(
     }
 
     private fun createMessage(boardId: String, bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val content = payload.optString("content")
-        val authorLabel = payload.optString("author_label", "访客")
+        val authorLabel = payload.optString("author_label", context.getString(R.string.family_board_guest_label))
         val authorDevice = payload.optString("author_device").takeIf { it.isNotBlank() }
         val attachmentRefs = parseAttachmentRefs(payload.optJSONArray("attachments"))
         val message = store.appendMessage(boardId, authorLabel, content, authorDevice, attachmentRefs)
             ?: return badRequest(
                 "invalid_message",
-                if (attachmentRefs.isNotEmpty()) "消息无效或附件未就绪" else "消息内容不能为空或留言板不存在"
+                if (attachmentRefs.isNotEmpty()) context.getString(R.string.family_msg_55517) else context.getString(R.string.family_msg_84872)
             )
         val snapshot = store.snapshot(boardId)
         return FamilyHttpResponse(
@@ -398,10 +402,10 @@ class BulletinBoardHttpHandler(
     }
 
     private fun updateMessage(boardId: String, messageId: String, bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", "请求体不是合法 JSON")
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val content = payload.optString("content")
         val message = store.updateMessage(boardId, messageId, content)
-            ?: return FamilyHttpResponse(404, jsonError("message_not_found", "消息不存在或内容为空"))
+            ?: return FamilyHttpResponse(404, jsonError("message_not_found", context.getString(R.string.family_msg_72023)))
         val snapshot = store.snapshot(boardId)
         return FamilyHttpResponse(
             200,
@@ -416,7 +420,7 @@ class BulletinBoardHttpHandler(
     private fun deleteMessage(boardId: String, messageId: String): FamilyHttpResponse {
         val deleted = store.deleteMessage(boardId, messageId)
         if (!deleted) {
-            return FamilyHttpResponse(404, jsonError("message_not_found", "消息不存在"))
+            return FamilyHttpResponse(404, jsonError("message_not_found", context.getString(R.string.family_msg_33886)))
         }
         val snapshot = store.snapshot(boardId)
         return FamilyHttpResponse(
@@ -449,7 +453,7 @@ class BulletinBoardHttpHandler(
         FamilyHttpResponse(403, jsonError("forbidden", message))
 
     private fun notFound(): FamilyHttpResponse =
-        FamilyHttpResponse(404, jsonError("not_found", "接口不存在"))
+        FamilyHttpResponse(404, jsonError("not_found", context.getString(R.string.family_msg_00813)))
 
     private fun jsonError(code: String, message: String): String =
         JSONObject().apply {

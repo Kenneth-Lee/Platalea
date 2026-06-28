@@ -1,9 +1,13 @@
 package com.kenny.localmanager.family
 
+import android.content.Context
+import com.kenny.localmanager.R
+
 import java.io.ByteArrayInputStream
 
 object BulletinMessageForwarder {
     fun relayAttachments(
+        context: Context,
         sourceSession: BulletinBoardOpenSession,
         sourceDownload: BulletinAttachmentDownloadTransport,
         target: BulletinForwardTarget,
@@ -20,9 +24,10 @@ object BulletinMessageForwarder {
                         sourceBoardId = sourceSession.boardId,
                         attachmentId = attachment.id,
                         targetBoardId = target.boardId
-                    ) ?: throw IllegalStateException("复制附件失败：${attachment.name}")
+                    ) ?: throw IllegalStateException(context.getString(R.string.family_msg_36550, attachment.name))
                 } else {
                     reuploadAttachment(
+                        context = context,
                         sourceSession = sourceSession,
                         sourceDownload = sourceDownload,
                         targetTransport = targetTransport,
@@ -36,6 +41,7 @@ object BulletinMessageForwarder {
     }
 
     private fun reuploadAttachment(
+        context: Context,
         sourceSession: BulletinBoardOpenSession,
         sourceDownload: BulletinAttachmentDownloadTransport,
         targetTransport: BulletinAttachmentTransport,
@@ -45,6 +51,7 @@ object BulletinMessageForwarder {
     ): BulletinAttachmentRef {
         return when (attachment.kind) {
             BulletinAttachmentKind.FILE -> reuploadFileAttachment(
+                context = context,
                 sourceDownload = sourceDownload,
                 targetTransport = targetTransport,
                 sourceSession = sourceSession,
@@ -53,6 +60,7 @@ object BulletinMessageForwarder {
                 uploaderDevice = uploaderDevice
             )
             BulletinAttachmentKind.DIRECTORY -> reuploadDirectoryAttachment(
+                context = context,
                 sourceDownload = sourceDownload,
                 targetTransport = targetTransport,
                 sourceSession = sourceSession,
@@ -64,6 +72,7 @@ object BulletinMessageForwarder {
     }
 
     private fun reuploadFileAttachment(
+        context: Context,
         sourceDownload: BulletinAttachmentDownloadTransport,
         targetTransport: BulletinAttachmentTransport,
         sourceSession: BulletinBoardOpenSession,
@@ -100,6 +109,7 @@ object BulletinMessageForwarder {
     }
 
     private fun reuploadDirectoryAttachment(
+        context: Context,
         sourceDownload: BulletinAttachmentDownloadTransport,
         targetTransport: BulletinAttachmentTransport,
         sourceSession: BulletinBoardOpenSession,
@@ -110,7 +120,7 @@ object BulletinMessageForwarder {
         val meta = sourceDownload.getAttachmentMeta(sourceSession.boardId, attachment.id)
             .getOrElse { throw it }
         val files = meta.optJSONArray("files")
-            ?: throw IllegalStateException("目录附件缺少 files 列表")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_03372))
         val sourceFileIdByPath = buildMap {
             for (i in 0 until files.length()) {
                 val file = files.getJSONObject(i)
@@ -129,7 +139,7 @@ object BulletinMessageForwarder {
             }
         }
         if (entries.isEmpty()) {
-            throw IllegalStateException("目录附件 ${attachment.name} 为空")
+            throw IllegalStateException(context.getString(R.string.family_msg_84204, attachment.name))
         }
         val init = targetTransport.initDirectoryUpload(
             boardId = targetBoardId,
@@ -139,7 +149,7 @@ object BulletinMessageForwarder {
         ).getOrElse { throw it }
         init.directoryFiles.forEach { slot ->
             val sourceFileId = sourceFileIdByPath[slot.path]
-                ?: throw IllegalStateException("源目录附件缺少文件：${slot.path}")
+                ?: throw IllegalStateException(context.getString(R.string.family_msg_19397, slot.path))
             val bytes = readAllBytes(slot.size.coerceAtLeast(1L)) { start, end ->
                 sourceDownload.downloadBlob(
                     boardId = sourceSession.boardId,

@@ -18,7 +18,7 @@ enum class FamilyNetworkAuthLevel {
 
 object BulletinBoardDefaults {
     const val DEFAULT_BOARD_ID = "default"
-    const val DEFAULT_BOARD_NAME = "默认留言板"
+    const val DEFAULT_BOARD_NAME = "default" // localized via family_board_default_name
 }
 
 object BulletinMessageKind {

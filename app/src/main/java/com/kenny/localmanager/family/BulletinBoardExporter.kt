@@ -3,6 +3,7 @@ package com.kenny.localmanager.family
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.R
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -10,18 +11,30 @@ import java.util.Locale
 object BulletinBoardExporter {
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault())
     private val fileTimeFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+    private val legacyExportDirNames = listOf("留言板导出", "Bulletin exports")
 
-    fun snapshotToMarkdown(snapshot: BulletinBoardSnapshot): String {
+    fun exportDirName(context: Context): String =
+        context.getString(R.string.family_board_export_folder_name)
+
+    fun findOrCreateExportDir(context: Context, rootDoc: DocumentFile): DocumentFile? {
+        val localized = exportDirName(context)
+        (listOf(localized) + legacyExportDirNames).distinct().forEach { name ->
+            rootDoc.findFile(name)?.takeIf { it.isDirectory }?.let { return it }
+        }
+        return rootDoc.createDirectory(localized)
+    }
+
+    fun snapshotToMarkdown(context: Context, snapshot: BulletinBoardSnapshot): String {
         val exportedAt = timeFormat.format(Date())
         val sb = StringBuilder()
         sb.appendLine("# ${snapshot.boardName}")
         sb.appendLine()
-        sb.appendLine("> 留言板 ID：`${snapshot.boardId}`")
-        sb.appendLine("> 导出时间：$exportedAt")
-        sb.appendLine("> 消息数：${snapshot.messages.size}")
+        sb.appendLine(context.getString(R.string.family_msg_58092, snapshot.boardId))
+        sb.appendLine(context.getString(R.string.family_msg_48632, exportedAt))
+        sb.appendLine(context.getString(R.string.family_msg_97534, snapshot.messages.size))
         sb.appendLine()
         if (snapshot.messages.isEmpty()) {
-            sb.appendLine("（暂无留言）")
+            sb.appendLine(context.getString(R.string.family_msg_06816))
             return sb.toString()
         }
         snapshot.messages.forEach { message ->
@@ -31,7 +44,7 @@ object BulletinBoardExporter {
             sb.appendLine("**${message.authorLabel}** · $timeLabel")
             message.authorDevice?.takeIf { it.isNotBlank() }?.let { device ->
                 sb.appendLine()
-                sb.appendLine("> 设备：$device")
+                sb.appendLine(context.getString(R.string.family_msg_33585, device))
             }
             sb.appendLine()
             if (message.content.isNotBlank()) {
@@ -39,9 +52,9 @@ object BulletinBoardExporter {
                 sb.appendLine()
             }
             if (message.attachments.isNotEmpty()) {
-                sb.appendLine("附件：")
+                sb.appendLine(context.getString(R.string.family_msg_90847))
                 message.attachments.forEach { attachment ->
-                    sb.appendLine("- ${formatAttachmentLine(attachment)}")
+                    sb.appendLine("- ${formatAttachmentLine(context, attachment)}")
                 }
                 sb.appendLine()
             }
@@ -56,10 +69,9 @@ object BulletinBoardExporter {
         markdown: String
     ): Result<String> = runCatching {
         val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(rootUri))
-            ?: throw IllegalStateException("无法访问根目录")
-        val exportDir = rootDoc.findFile(EXPORT_DIR_NAME)?.takeIf { it.isDirectory }
-            ?: rootDoc.createDirectory(EXPORT_DIR_NAME)
-            ?: throw IllegalStateException("无法创建导出目录")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54649))
+        val exportDir = findOrCreateExportDir(context, rootDoc)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54837))
         val safeName = sanitizeFileName(fileName)
         exportDir.findFile(safeName)?.let { existing ->
             if (!existing.isDirectory) {
@@ -67,11 +79,11 @@ object BulletinBoardExporter {
             }
         }
         val created = exportDir.createFile("text/markdown", safeName)
-            ?: throw IllegalStateException("无法创建 Markdown 文件")
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_02480))
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
             output.write(markdown.toByteArray(Charsets.UTF_8))
-        } ?: throw IllegalStateException("无法写入 Markdown 文件")
-        "$EXPORT_DIR_NAME/$safeName"
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_40893))
+        "${exportDirName(context)}/$safeName"
     }
 
     fun defaultExportFileName(boardName: String): String {
@@ -80,13 +92,17 @@ object BulletinBoardExporter {
         return "${safeBoard}_$ts.md"
     }
 
-    private fun formatAttachmentLine(attachment: BulletinAttachmentRef): String {
+    private fun formatAttachmentLine(context: Context, attachment: BulletinAttachmentRef): String {
         val size = when (attachment.kind) {
             BulletinAttachmentKind.FILE -> attachment.size
             BulletinAttachmentKind.DIRECTORY -> attachment.totalSize.coerceAtLeast(attachment.size)
         }
         val sizeLabel = formatByteCount(size)
-        val kindLabel = if (attachment.kind == BulletinAttachmentKind.DIRECTORY) "目录" else "文件"
+        val kindLabel = if (attachment.kind == BulletinAttachmentKind.DIRECTORY) {
+            context.getString(R.string.family_msg_11649)
+        } else {
+            context.getString(R.string.family_msg_33306)
+        }
         return "${attachment.name}（$kindLabel，$sizeLabel）"
     }
 
@@ -104,6 +120,4 @@ object BulletinBoardExporter {
         val base = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "board" }
         return if (base.endsWith(".md", ignoreCase = true)) base else "$base.md"
     }
-
-    const val EXPORT_DIR_NAME = "留言板导出"
 }

@@ -95,7 +95,7 @@ fun DirectoryPickDialog(
                 listChildrenFast(context, currentUri)
             }
         } catch (e: Exception) {
-            error = e.message ?: "加载失败"
+            error = e.message ?: context.getString(R.string.common_load_failed)
             items = emptyList()
         }
         loading = false

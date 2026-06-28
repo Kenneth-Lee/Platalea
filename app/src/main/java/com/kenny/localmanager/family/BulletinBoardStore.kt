@@ -1,6 +1,7 @@
 package com.kenny.localmanager.family
 
 import android.content.Context
+import com.kenny.localmanager.R
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -10,7 +11,8 @@ import kotlin.concurrent.read
 import kotlin.concurrent.write
 
 class BulletinBoardStore(context: Context) {
-    private val rootDir = File(context.filesDir, "family_boards")
+    val appContext = context.applicationContext
+    private val rootDir = File(appContext.filesDir, "family_boards")
     private val lock = ReentrantReadWriteLock()
     val attachments = BulletinAttachmentStore(rootDir)
 
@@ -26,7 +28,7 @@ class BulletinBoardStore(context: Context) {
                 metaFile.writeText(
                     JSONObject().apply {
                         put("id", BulletinBoardDefaults.DEFAULT_BOARD_ID)
-                        put("name", BulletinBoardDefaults.DEFAULT_BOARD_NAME)
+                        put("name", appContext.getString(R.string.family_board_default_name))
                         put("revision", 0L)
                     }.toString()
                 )
@@ -105,8 +107,8 @@ class BulletinBoardStore(context: Context) {
     fun exportBoardpack(boardId: String): ByteArray? = lock.read {
         if (readMeta(boardId) == null) return@read null
         runCatching {
-            BulletinBoardPack.exportBoardDir(boardDir(boardId))
-        }.getOrElse { throw IllegalStateException(it.message ?: "导出 boardpack 失败") }
+            BulletinBoardPack.exportBoardDir(appContext, boardDir(boardId))
+        }.getOrElse { throw IllegalStateException(it.message ?: appContext.getString(R.string.family_msg_74262)) }
     }
 
     fun importBoardpack(
@@ -115,10 +117,10 @@ class BulletinBoardStore(context: Context) {
         roleIds: List<String>? = null
     ): BulletinBoardInfo = lock.write {
         runCatching {
-            BulletinBoardPack.importIntoRoot(rootDir, data, name, roleIds)
+            BulletinBoardPack.importIntoRoot(appContext, rootDir, data, name, roleIds)
         }.getOrElse { error ->
             val packError = error as? BulletinBoardPack.PackException
-            throw IllegalStateException(packError?.message ?: error.message ?: "导入 boardpack 失败")
+            throw IllegalStateException(packError?.message ?: error.message ?: appContext.getString(R.string.family_msg_68600))
         }
     }
 
@@ -150,7 +152,7 @@ class BulletinBoardStore(context: Context) {
         val message = BulletinMessage(
             id = UUID.randomUUID().toString(),
             seq = nextSeq,
-            authorLabel = authorLabel.trim().ifEmpty { "访客" },
+            authorLabel = authorLabel.trim().ifEmpty { appContext.getString(R.string.family_board_guest_label) },
             content = trimmed,
             createdAt = now,
             updatedAt = now,
