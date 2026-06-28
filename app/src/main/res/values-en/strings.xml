@@ -234,7 +234,7 @@
     <string name="family_network_discovery_active">Discovery: listening for LAN services</string>
     <string name="family_network_discovery_idle">Discovery: idle</string>
     <string name="family_network_last_error">Last error: %1$s</string>
-    <string name="family_network_empty_hint">No bulletin board service has been discovered yet. After the local service starts, you should see a Self entry in the list.</string>
+    <string name="family_network_empty_hint">No bulletin board service has been discovered yet. After the local service starts, you should see a Self entry in the list; you can also tap Refresh in the top bar.</string>
     <string name="family_network_self_badge">Self</string>
     <string name="family_network_service_host_port">%1$s:%2$d</string>
     <string name="family_network_service_type_line">Type: %1$s</string>
@@ -1753,7 +1753,7 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="family_msg_83175">Resolved service: %1$s -&gt; %2$s:%3$d</string>
     <string name="family_msg_83716">Local bulletin board service is disabled in settings; cannot open local board.</string>
     <string name="family_msg_84204">Directory attachment %1$s is empty</string>
-    <string name="family_msg_84496">Manually refreshing service discovery.</string>
+    <string name="family_msg_84496">Refreshing service discovery.</string>
     <string name="family_msg_84534">Invalid chunk index</string>
     <string name="family_msg_84872">Message content cannot be empty or bulletin board does not exist</string>
     <string name="family_msg_84938">All selected files/directories are empty; cannot build directory attachment</string>

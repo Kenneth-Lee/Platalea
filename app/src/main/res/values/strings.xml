@@ -271,7 +271,7 @@
     <string name="config_quick_note_shortcut_requested">已请求创建速记快捷方式</string>
     <string name="config_quick_note_shortcut_failed">速记快捷方式创建失败：%1$s</string>
     <string name="family_network_title">家庭网络</string>
-    <string name="family_network_refresh">手工刷新</string>
+    <string name="family_network_refresh">刷新</string>
     <string name="family_network_local_service">本机服务</string>
     <string name="family_network_discovered_services">已发现服务</string>
     <string name="family_network_discovered_services_count">已发现服务（%1$d）</string>
@@ -290,7 +290,7 @@
     <string name="family_network_discovery_active">发现状态：正在监听局域网服务</string>
     <string name="family_network_discovery_idle">发现状态：未监听</string>
     <string name="family_network_last_error">最近错误：%1$s</string>
-    <string name="family_network_empty_hint">当前还没有发现留言板服务。启动本机服务后，应能在列表中看到「本机」条目；也可点击「手工刷新」。</string>
+    <string name="family_network_empty_hint">当前还没有发现留言板服务。启动本机服务后，应能在列表中看到「本机」条目；也可点击顶栏刷新。</string>
     <string name="family_network_self_badge">本机</string>
     <string name="family_network_service_host_port">%1$s:%2$d</string>
     <string name="family_network_service_type_line">类型：%1$s</string>
@@ -1754,7 +1754,7 @@ OPF目录文件: %2$s</string>
     <string name="family_msg_83175">解析到服务：%1$s -> %2$s:%3$d</string>
     <string name="family_msg_83716">本机留言板服务已在配置中关闭，无法进入本机留言板。</string>
     <string name="family_msg_84204">目录附件 %1$s 为空</string>
-    <string name="family_msg_84496">手工刷新服务发现。</string>
+    <string name="family_msg_84496">刷新服务发现。</string>
     <string name="family_msg_84534">分块索引无效</string>
     <string name="family_msg_84872">消息内容不能为空或留言板不存在</string>
     <string name="family_msg_84938">所选文件/目录均为空，无法组成目录附件</string>

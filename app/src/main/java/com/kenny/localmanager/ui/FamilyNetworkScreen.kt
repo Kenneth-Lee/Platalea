@@ -743,7 +743,6 @@ fun FamilyNetworkScreen(
                 state = state,
                 remainingMinutes = remainingMinutes,
                 localServicePasswordSet = !networkPassword.isNullOrBlank(),
-                onRefresh = { manager.refresh() },
                 onOpenBoard = { service -> requestOpenBoard(service) }
             )
         } else {
@@ -1185,7 +1184,6 @@ private fun FamilyPeerListPane(
     state: FamilyNetworkState,
     remainingMinutes: Int?,
     localServicePasswordSet: Boolean,
-    onRefresh: () -> Unit,
     onOpenBoard: (FamilyDiscoveredService) -> Unit
 ) {
     LazyColumn(
@@ -1196,8 +1194,7 @@ private fun FamilyPeerListPane(
             CollapsibleLocalServiceCard(
                 state = state,
                 remainingMinutes = remainingMinutes,
-                localServicePasswordSet = localServicePasswordSet,
-                onRefresh = onRefresh
+                localServicePasswordSet = localServicePasswordSet
             )
         }
 
@@ -1242,8 +1239,7 @@ private fun FamilyPeerListPane(
 private fun CollapsibleLocalServiceCard(
     state: FamilyNetworkState,
     remainingMinutes: Int?,
-    localServicePasswordSet: Boolean,
-    onRefresh: () -> Unit
+    localServicePasswordSet: Boolean
 ) {
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
@@ -1360,11 +1356,6 @@ private fun CollapsibleLocalServiceCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                }
-                TextButton(onClick = onRefresh) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.family_network_refresh))
                 }
             }
         }
