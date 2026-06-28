@@ -33,12 +33,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.deleteLocalGitCache
 import com.kenny.localmanager.git.deleteSysgitFromTree
-import com.kenny.localmanager.git.hasLocalGitCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -59,6 +60,10 @@ fun GitConfigDialog(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val syncSuccessDefault = stringResource(R.string.git_sync_success_default)
+    val syncFailedDefault = stringResource(R.string.git_sync_failed_default)
+    val logErrorPrefix = remember { context.getString(R.string.git_log_error, "").trimEnd() }
+    val logDebugPrefix = stringResource(R.string.git_log_debug_prefix)
 
     var repoUrl by remember { mutableStateOf("") }
     var userName by remember { mutableStateOf("") }
@@ -70,7 +75,6 @@ fun GitConfigDialog(
     val syncLogs = remember { mutableStateListOf<String>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    // 加载保存的配置
     LaunchedEffect(prefs) {
         repoUrl = prefs.gitRepoUrl.first() ?: ""
         userName = prefs.gitUserName.first() ?: ""
@@ -104,17 +108,17 @@ fun GitConfigDialog(
 
     fun applyConfig() {
         if (rootUri.isNullOrBlank()) {
-            Toast.makeText(context, "请先选择根目录", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return
         }
         if (repoUrl.isBlank()) {
-            Toast.makeText(context, "请填写仓库地址", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.git_config_repo_url_required), Toast.LENGTH_SHORT).show()
             return
         }
         persistConfig()
         syncStatus = SyncStatus.Syncing
         syncLogs.clear()
-        syncLogs.add("正在连接...")
+        syncLogs.add(context.getString(R.string.git_config_connecting))
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 cloneToTree(
@@ -128,12 +132,12 @@ fun GitConfigDialog(
                 )
             }
             if (result.isSuccess) {
-                syncStatus = SyncStatus.Success(result.getOrNull() ?: "同步成功")
+                syncStatus = SyncStatus.Success(result.getOrNull() ?: syncSuccessDefault)
                 configApplied = true
                 configDirty = false
                 prefs.setGitConfigApplied(true)
             } else {
-                val errMsg = result.exceptionOrNull()?.message ?: "同步失败"
+                val errMsg = result.exceptionOrNull()?.message ?: syncFailedDefault
                 syncStatus = SyncStatus.Error(errMsg)
             }
         }
@@ -153,7 +157,7 @@ fun GitConfigDialog(
             syncStatus = SyncStatus.Idle
             syncLogs.clear()
             prefs.setGitConfigApplied(false)
-            Toast.makeText(context, "已删除本地仓库", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.git_config_local_deleted), Toast.LENGTH_SHORT).show()
         }
         showDeleteConfirm = false
     }
@@ -169,13 +173,12 @@ fun GitConfigDialog(
                     .padding(24.dp)
                     .verticalScroll(rememberScrollState())
             ) {
-                Text("Git 配置", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text("克隆/同步到根目录 .sysgit，仅支持 HTTPS。", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(stringResource(R.string.git_config_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(R.string.git_config_subtitle), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
 
-                // 仓库地址
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("仓库地址", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
+                    Text(stringResource(R.string.git_config_repo_url_label), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = repoUrl,
                         onValueChange = {
@@ -185,14 +188,13 @@ fun GitConfigDialog(
                         },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("https://gitcode.com/用户/仓库.git", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        placeholder = { Text(stringResource(R.string.git_config_repo_url_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // HTTPS 密码
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("HTTPS 密码", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
+                    Text(stringResource(R.string.git_config_https_password_label), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = httpsPassword,
                         onValueChange = {
@@ -202,14 +204,13 @@ fun GitConfigDialog(
                         },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("私有库需填令牌/密码", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        placeholder = { Text(stringResource(R.string.git_config_https_password_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Git 用户名
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Git 用户名", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
+                    Text(stringResource(R.string.git_config_user_name_label), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = userName,
                         onValueChange = {
@@ -219,14 +220,13 @@ fun GitConfigDialog(
                         },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("本地 commit 显示名", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        placeholder = { Text(stringResource(R.string.git_config_user_name_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
 
-                // Git 邮箱
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Git 邮箱", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
+                    Text(stringResource(R.string.git_config_user_email_label), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.width(100.dp))
                     OutlinedTextField(
                         value = userEmail,
                         onValueChange = {
@@ -236,43 +236,41 @@ fun GitConfigDialog(
                         },
                         modifier = Modifier.weight(1f),
                         singleLine = true,
-                        placeholder = { Text("本地 commit 邮箱", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        placeholder = { Text(stringResource(R.string.git_config_user_email_placeholder), color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     )
                 }
 
                 Spacer(Modifier.height(16.dp))
 
-                // 状态显示
                 Row(
                     Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("状态: ", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Text(stringResource(R.string.git_config_status_label), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
                     when (syncStatus) {
                         is SyncStatus.Idle -> {
                             if (repoUrl.isBlank()) {
-                                Text("未配置", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(stringResource(R.string.git_config_status_not_configured), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             } else if (configApplied && !configDirty) {
-                                Text("已同步", color = MaterialTheme.colorScheme.primary)
+                                Text(stringResource(R.string.git_config_status_synced), color = MaterialTheme.colorScheme.primary)
                             } else {
-                                Text("已保存或待保存，尚未应用", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.git_config_status_dirty), color = MaterialTheme.colorScheme.error)
                             }
                         }
                         is SyncStatus.Syncing -> {
                             CircularProgressIndicator(Modifier.height(16.dp).width(16.dp), strokeWidth = 2.dp)
                             Spacer(Modifier.width(8.dp))
-                            Text("同步中...", color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.git_config_status_syncing), color = MaterialTheme.colorScheme.primary)
                         }
                         is SyncStatus.Success -> {
-                            Text("已同步", color = MaterialTheme.colorScheme.primary)
+                            Text(stringResource(R.string.git_config_status_synced), color = MaterialTheme.colorScheme.primary)
                         }
                         is SyncStatus.Error -> {
-                            Text("同步失败", color = MaterialTheme.colorScheme.error)
+                            Text(stringResource(R.string.git_config_status_sync_failed), color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
 
-                // 进度/错误信息（log 窗口）
                 if (syncLogs.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     val logScrollState = rememberScrollState()
@@ -289,7 +287,7 @@ fun GitConfigDialog(
                             Text(
                                 line,
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (line.startsWith("错误") || line.startsWith("[调试]"))
+                                color = if (line.startsWith(logErrorPrefix) || line.startsWith(logDebugPrefix))
                                     MaterialTheme.colorScheme.error
                                 else
                                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -300,7 +298,6 @@ fun GitConfigDialog(
 
                 Spacer(Modifier.height(24.dp))
 
-                // 操作按钮
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(
                         Modifier.fillMaxWidth(),
@@ -311,7 +308,7 @@ fun GitConfigDialog(
                             enabled = syncStatus !is SyncStatus.Syncing && repoUrl.isNotBlank(),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("应用配置")
+                            Text(stringResource(R.string.git_config_apply))
                         }
                         Spacer(Modifier.weight(1f))
                     }
@@ -325,13 +322,13 @@ fun GitConfigDialog(
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("删除本地仓库")
+                            Text(stringResource(R.string.git_config_delete_local))
                         }
                         TextButton(
                             onClick = onDismiss,
                             modifier = Modifier.weight(1f)
                         ) {
-                            Text("关闭")
+                            Text(stringResource(R.string.common_close))
                         }
                     }
                 }
@@ -339,20 +336,21 @@ fun GitConfigDialog(
         }
     }
 
-    // 删除确认对话框
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("确认删除") },
-            text = { Text("确定要删除本地 .sysgit 目录和缓存吗？\n这可以解决本地冲突问题，但需要重新同步。") },
+            title = { Text(stringResource(R.string.git_config_delete_confirm_title)) },
+            text = { Text(stringResource(R.string.git_config_delete_confirm_message)) },
             confirmButton = {
                 TextButton(
                     onClick = { deleteLocalRepo() },
                     colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
-                ) { Text("删除") }
+                ) { Text(stringResource(R.string.common_delete)) }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             }
         )
     }
