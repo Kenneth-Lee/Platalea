@@ -118,6 +118,7 @@ class FamilyNetworkManager(context: Context) {
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val tlsManager = FamilyTlsManager(appContext)
     private val boardStore = BulletinBoardStore(appContext)
+    private val userRolesStore = FamilyUserRolesStore(appContext)
     private val boardHttpHandler = BulletinBoardHttpHandler(appContext, boardStore)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val logBuffer = CopyOnWriteArrayList<String>()
@@ -143,7 +144,7 @@ class FamilyNetworkManager(context: Context) {
     /** 转发等临时操作持有会话（如文件浏览器转发留言板）。 */
     private var ephemeralSessionCount = 0
     private var networkPassword: String? = null
-    private var networkHostPassword: String? = null
+    private var userRoles: List<FamilyUserRole> = emptyList()
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
     private var familyNetworkHostName: String? = null
@@ -177,15 +178,39 @@ class FamilyNetworkManager(context: Context) {
         _state.update { it.copy(rememberedBoardAccessCount = boardAccessPasswordCache.size) }
     }
 
+    init {
+        reloadUserRoles()
+    }
+
+    fun listUserRoles(): List<FamilyUserRole> = userRolesStore.listRoles()
+
+    fun saveUserRoles(roles: List<FamilyUserRole>): Result<Unit> {
+        val validated = FamilyNetworkRoles.validateUserRolesAgainstAdmin(networkPassword, roles)
+        if (validated.isFailure) {
+            return Result.failure(validated.exceptionOrNull() ?: IllegalStateException("invalid roles"))
+        }
+        return userRolesStore.replaceRoles(roles).also { result ->
+            if (result.isSuccess) reloadUserRoles()
+        }
+    }
+
+    fun migrateUserRolesFromLegacyConfig(legacyExtraRolesText: String?) {
+        if (userRolesStore.migrateFromLegacyExtraRolesText(legacyExtraRolesText)) {
+            reloadUserRoles()
+        }
+    }
+
+    private fun reloadUserRoles() {
+        userRoles = userRolesStore.listRoles()
+    }
+
     fun configure(
         networkPassword: String?,
         localServiceEnabled: Boolean,
         familyNetworkUserName: String? = null,
-        familyNetworkHostName: String? = null,
-        networkHostPassword: String? = null
+        familyNetworkHostName: String? = null
     ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
-        this.networkHostPassword = networkHostPassword?.trim()?.ifEmpty { null }
         val newHostName = familyNetworkHostName?.trim()?.ifEmpty { null }
         val hostNameChanged = this.familyNetworkHostName != newHostName
         this.familyNetworkHostName = newHostName
@@ -406,6 +431,8 @@ class FamilyNetworkManager(context: Context) {
     fun openBulletinBoard(
         service: FamilyDiscoveredService,
         boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID,
+        boardName: String = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
+        boardRoleIds: List<String>? = null,
         accessPassword: String? = null
     ) {
         if (service.isSelf && !localServiceEnabled) {
@@ -418,7 +445,8 @@ class FamilyNetworkManager(context: Context) {
                 openBoardSession = BulletinBoardOpenSession(
                     service = service,
                     boardId = boardId,
-                    boardName = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
+                    boardName = boardName,
+                    boardRoleIds = boardRoleIds,
                     isHost = isHost,
                     canManageBoard = isHost,
                     accessPassword = accessPassword?.trim()?.ifEmpty { null },
@@ -510,6 +538,7 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String?,
         canManage: Boolean,
         name: String,
+        roleIds: List<String> = emptyList(),
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
         if (!canManage) {
@@ -530,7 +559,7 @@ class FamilyNetworkManager(context: Context) {
                         if (boardStore.isBoardNameTaken(trimmed)) {
                             throw IllegalStateException(appContext.getString(R.string.family_msg_21357))
                         }
-                        boardStore.createBoard(trimmed)
+                        boardStore.createBoard(trimmed, roleIds)
                             ?: throw IllegalStateException(appContext.getString(R.string.family_msg_64304))
                     }
                 } else {
@@ -538,7 +567,10 @@ class FamilyNetworkManager(context: Context) {
                         service = service,
                         method = "POST",
                         path = "/boards",
-                        body = JSONObject().put("name", trimmed).toString(),
+                        body = JSONObject().apply {
+                            put("name", trimmed)
+                            put("role_ids", JSONArray(roleIds))
+                        }.toString(),
                         accessPassword = accessPassword?.trim()?.ifEmpty { null }
                     ).mapCatching { text ->
                         val json = JSONObject(text)
@@ -610,6 +642,61 @@ class FamilyNetworkManager(context: Context) {
                     _state.update { current ->
                         current.copy(
                             openBoardSession = open.copy(boardName = board.name)
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
+            }
+            onComplete(result)
+        }
+    }
+
+    fun updateBoardAccessEntry(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        canManage: Boolean,
+        boardId: String,
+        roleIds: List<String>,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        if (!canManage) {
+            appendError(appContext.getString(R.string.family_msg_34578))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_02158))))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching {
+                        boardStore.updateBoard(boardId, roleIds = roleIds)
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+                    }
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "PATCH",
+                        path = "/boards/$boardId",
+                        body = JSONObject().apply {
+                            put("role_ids", JSONArray(roleIds))
+                        }.toString(),
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
+                        }
+                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                    }
+                }
+            }
+            result.onSuccess { board ->
+                appendLog(appContext.getString(R.string.family_msg_15134, board.name))
+                val open = _state.value.openBoardSession
+                if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
+                    _state.update { current ->
+                        current.copy(
+                            openBoardSession = open.copy(boardRoleIds = board.roleIds)
                         )
                     }
                 }
@@ -1820,7 +1907,7 @@ class FamilyNetworkManager(context: Context) {
         headers: Map<String, String>
     ): FamilyHttpResponse {
         if (path.startsWith("/boards")) {
-            val authLevel = resolveAuthLevel(headers)
+            val auth = resolveSessionAuth(headers)
                 ?: return FamilyHttpResponse(
                     401,
                     JSONObject().apply {
@@ -1829,7 +1916,7 @@ class FamilyNetworkManager(context: Context) {
                         put("message", appContext.getString(R.string.family_msg_06885))
                     }.toString()
                 )
-            return boardHttpHandler.handle(method, path, bodyBytes, authLevel, headers)
+            return boardHttpHandler.handle(method, path, bodyBytes, auth, headers)
         }
         if (method == "GET" && (path == "/" || path.isEmpty())) {
             val boards = boardStore.listBoards()
@@ -1860,21 +1947,18 @@ class FamilyNetworkManager(context: Context) {
         }.toString())
     }
 
-    private fun resolveAuthLevel(headers: Map<String, String>): FamilyNetworkAuthLevel? {
-        val guest = networkPassword
-        val host = networkHostPassword
-        if (guest.isNullOrBlank() && host.isNullOrBlank()) {
-            return FamilyNetworkAuthLevel.OPEN
+    private fun resolveSessionAuth(headers: Map<String, String>): FamilyNetworkSessionAuth? {
+        if (!FamilyNetworkRoles.hasAnyPassword(networkPassword, userRoles)) {
+            return FamilyNetworkSessionAuth.OPEN
         }
         val provided = headers[FamilyNetworkAuth.PASSWORD_HEADER.lowercase(Locale.ROOT)]?.trim().orEmpty()
         if (provided.isEmpty()) return null
-        if (!host.isNullOrBlank() && provided == host) {
-            return FamilyNetworkAuthLevel.HOST
-        }
-        if (!guest.isNullOrBlank() && provided == guest) {
-            return FamilyNetworkAuthLevel.GUEST
-        }
-        return null
+        return FamilyNetworkRoles.resolveAuth(
+            providedPassword = provided,
+            adminPassword = networkPassword,
+            userRoles = userRoles,
+            adminLabel = appContext.getString(R.string.family_role_admin),
+        )
     }
 
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {

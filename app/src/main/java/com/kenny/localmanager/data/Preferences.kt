@@ -24,6 +24,7 @@ private val LOCAL_NETWORK_SERVICE_ENABLED = booleanPreferencesKey("local_network
 private val FAMILY_NETWORK_USER_NAME = stringPreferencesKey("family_network_user_name")
 private val FAMILY_NETWORK_HOST_NAME = stringPreferencesKey("family_network_host_name")
 private val FAMILY_NETWORK_HOST_PASSWORD = stringPreferencesKey("family_network_host_password")
+private val FAMILY_NETWORK_EXTRA_ROLES = stringPreferencesKey("family_network_extra_roles")
 private val FTP_TIMEOUT_MINUTES = intPreferencesKey("ftp_timeout_minutes")
 private val FILTER_VISIBLE = booleanPreferencesKey("filter_visible")
 private val GIT_REPO_URL = stringPreferencesKey("git_repo_url")
@@ -211,6 +212,10 @@ class Preferences(private val context: Context) {
 
     val familyNetworkHostPassword: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[FAMILY_NETWORK_HOST_PASSWORD]
+    }
+
+    val familyNetworkExtraRoles: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[FAMILY_NETWORK_EXTRA_ROLES]
     }
 
     val filterVisible: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -621,6 +626,17 @@ class Preferences(private val context: Context) {
                 prefs.remove(FAMILY_NETWORK_HOST_PASSWORD)
             } else {
                 prefs[FAMILY_NETWORK_HOST_PASSWORD] = trimmed
+            }
+        }
+    }
+
+    suspend fun setFamilyNetworkExtraRoles(config: String?) {
+        context.dataStore.edit { prefs ->
+            val trimmed = config?.trim().orEmpty()
+            if (trimmed.isEmpty()) {
+                prefs.remove(FAMILY_NETWORK_EXTRA_ROLES)
+            } else {
+                prefs[FAMILY_NETWORK_EXTRA_ROLES] = trimmed
             }
         }
     }

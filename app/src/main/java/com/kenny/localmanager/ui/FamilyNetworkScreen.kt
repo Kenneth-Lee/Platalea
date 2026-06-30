@@ -176,6 +176,12 @@ fun FamilyNetworkScreen(
             }
     }
 
+    var showUserRolesDialog by remember { mutableStateOf(false) }
+    var showBoardAccessDialog by remember { mutableStateOf(false) }
+    var boardAccessRoleIds by remember { mutableStateOf(setOf<String>()) }
+    var boardAccessInProgress by remember { mutableStateOf(false) }
+    var boardAccessError by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
         manager.configure(
             networkPassword,
@@ -415,6 +421,8 @@ fun FamilyNetworkScreen(
                 manager.openBulletinBoard(
                     service = access.service,
                     boardId = board.id,
+                    boardName = board.name,
+                    boardRoleIds = board.roleIds,
                     accessPassword = access.accessPassword
                 )
             }
@@ -680,6 +688,15 @@ fun FamilyNetworkScreen(
                                     }
                                     if (canManageBoard) {
                                         DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_access_edit)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                boardAccessRoleIds = session.boardRoleIds?.toSet().orEmpty()
+                                                boardAccessError = null
+                                                showBoardAccessDialog = true
+                                            }
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text(stringResource(R.string.family_board_rename)) },
                                             onClick = {
                                                 showBoardMenu = false
@@ -743,7 +760,8 @@ fun FamilyNetworkScreen(
                 state = state,
                 remainingMinutes = remainingMinutes,
                 localServicePasswordSet = !networkPassword.isNullOrBlank(),
-                onOpenBoard = { service -> requestOpenBoard(service) }
+                onOpenBoard = { service -> requestOpenBoard(service) },
+                onManageUserRoles = { showUserRolesDialog = true }
             )
         } else {
             BulletinBoardPage(
@@ -772,6 +790,76 @@ fun FamilyNetworkScreen(
                 onSelectedMessageIdsChange = { selectedForwardMessageIds = it }
             )
         }
+    }
+
+    if (showUserRolesDialog) {
+        FamilyUserRolesDialog(manager = manager, onDismiss = { showUserRolesDialog = false })
+    }
+
+    if (showBoardAccessDialog && boardSession != null) {
+        val session = boardSession
+        var accessAvailableRoles by remember(session.service.deviceKey) {
+            mutableStateOf(collectKnownRoleOptions(manager, session.service.isSelf, emptyList()))
+        }
+        LaunchedEffect(showBoardAccessDialog, session.boardId) {
+            if (!showBoardAccessDialog) return@LaunchedEffect
+            boardAccessRoleIds = session.boardRoleIds?.toSet().orEmpty()
+            if (session.service.isSelf) {
+                accessAvailableRoles = manager.listUserRoles()
+            } else {
+                manager.fetchBoardList(session.service, session.accessPassword)
+                    .onSuccess { result ->
+                        accessAvailableRoles = collectKnownRoleOptions(manager, false, result.boards)
+                    }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = {
+                if (!boardAccessInProgress) showBoardAccessDialog = false
+            },
+            title = { Text(stringResource(R.string.family_board_access_edit_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BoardRoleAccessSelector(
+                        availableRoles = accessAvailableRoles,
+                        selectedRoleIds = boardAccessRoleIds,
+                        onSelectionChange = { boardAccessRoleIds = it }
+                    )
+                    boardAccessError?.let {
+                        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !boardAccessInProgress,
+                    onClick = {
+                        boardAccessInProgress = true
+                        boardAccessError = null
+                        manager.updateBoardAccessEntry(
+                            service = session.service,
+                            accessPassword = session.accessPassword,
+                            canManage = session.canManageBoard,
+                            boardId = session.boardId,
+                            roleIds = boardAccessRoleIds.toList()
+                        ) { result ->
+                            boardAccessInProgress = false
+                            result.onSuccess {
+                                showBoardAccessDialog = false
+                            }.onFailure { error ->
+                                boardAccessError = error.message ?: error.javaClass.simpleName
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !boardAccessInProgress,
+                    onClick = { showBoardAccessDialog = false }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
     }
 
     bulletinForwardPayload?.let { payload ->
@@ -813,9 +901,13 @@ private fun BoardPickerDialog(
     var importPackNameError by remember { mutableStateOf<String?>(null) }
     var importPackSourceName by remember { mutableStateOf("") }
     var createNameError by remember { mutableStateOf<String?>(null) }
+    var createSelectedRoleIds by remember { mutableStateOf(setOf<String>()) }
 
     val targetDeviceLabel = service.displayHostName.ifBlank { service.serviceName }
     val existingBoardNames = remember(boards) { boards.map { it.name.trim() }.toSet() }
+    val availableRoles = remember(boards, service.isSelf) {
+        collectKnownRoleOptions(manager, service.isSelf, boards)
+    }
 
     val reloadBoards: () -> Unit = {
         scope.launch {
@@ -1033,6 +1125,13 @@ private fun BoardPickerDialog(
                             style = MaterialTheme.typography.bodySmall
                         )
                     }
+                    if (canManageBoards) {
+                        BoardRoleAccessSelector(
+                            availableRoles = availableRoles,
+                            selectedRoleIds = createSelectedRoleIds,
+                            onSelectionChange = { createSelectedRoleIds = it }
+                        )
+                    }
                 }
             },
             confirmButton = {
@@ -1044,12 +1143,14 @@ private fun BoardPickerDialog(
                             service = service,
                             accessPassword = accessPassword,
                             canManage = canManageBoards,
-                            name = newBoardName
+                            name = newBoardName,
+                            roleIds = createSelectedRoleIds.toList()
                         ) { result ->
                             actionInProgress = false
                             result.onSuccess {
                                 showCreateDialog = false
                                 newBoardName = ""
+                                createSelectedRoleIds = emptySet()
                                 createNameError = null
                                 reloadBoards()
                             }.onFailure { error ->
@@ -1164,6 +1265,7 @@ private fun BoardPickerDialog(
                         onClick = {
                             showCreateDialog = true
                             newBoardName = ""
+                            createSelectedRoleIds = emptySet()
                         }
                     ) { Text(stringResource(R.string.family_board_create)) }
                 }
@@ -1184,7 +1286,8 @@ private fun FamilyPeerListPane(
     state: FamilyNetworkState,
     remainingMinutes: Int?,
     localServicePasswordSet: Boolean,
-    onOpenBoard: (FamilyDiscoveredService) -> Unit
+    onOpenBoard: (FamilyDiscoveredService) -> Unit,
+    onManageUserRoles: () -> Unit
 ) {
     LazyColumn(
         modifier = modifier,
@@ -1194,7 +1297,8 @@ private fun FamilyPeerListPane(
             CollapsibleLocalServiceCard(
                 state = state,
                 remainingMinutes = remainingMinutes,
-                localServicePasswordSet = localServicePasswordSet
+                localServicePasswordSet = localServicePasswordSet,
+                onManageUserRoles = onManageUserRoles
             )
         }
 
@@ -1239,7 +1343,8 @@ private fun FamilyPeerListPane(
 private fun CollapsibleLocalServiceCard(
     state: FamilyNetworkState,
     remainingMinutes: Int?,
-    localServicePasswordSet: Boolean
+    localServicePasswordSet: Boolean,
+    onManageUserRoles: () -> Unit
 ) {
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
@@ -1331,6 +1436,9 @@ private fun CollapsibleLocalServiceCard(
                         },
                         style = MaterialTheme.typography.bodySmall
                     )
+                    TextButton(onClick = onManageUserRoles) {
+                        Text(stringResource(R.string.family_user_roles_manage))
+                    }
                 }
                 state.lastError?.takeIf { it.isNotBlank() }?.let { error ->
                     Text(

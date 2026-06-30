@@ -120,7 +120,7 @@ cp server/config.example.json server/config.json
 | `port` | HTTPS 监听端口，默认 8765 |
 | `board_root` | 留言板数据目录（相对配置文件路径） |
 | `guest_password` | **兼容项**：未配置 `roles` 时映射为 `guest` 角色密码 |
-| `host_password` | **兼容项**：未配置 `roles` 时映射为 `admin` 角色密码 |
+| `host_password` | **兼容项**：未配置 `roles` 时映射为 `admin` 角色密码（管理员） |
 | `roles` | 多角色配置（须含 `admin`）；见 [角色与权限文档](../docs/家庭网络留言板角色与权限.md) |
 | `service_name` | mDNS 实例名，留空则用 `LocalManager-<主机名>` |
 | `hostname` | mDNS 主机名，留空则用系统主机名 |
@@ -228,7 +228,7 @@ python3 server/bulletin_server.py --config server/config.json
 3. 点击进入，输入 **`guest_password`**（不是手机全局配置里的本机密码）
 4. 进入默认留言板，可查看与发送消息
 
-> 手机端使用 **guest_password** 可读写留言；使用 **host_password** 连入后界面显示「远程宿主」，可修改/删除 PC 留言板上的消息。
+> 手机端使用 **guest_password**（user）可读写授权留言板；使用 **host_password**（admin）连入后界面显示「远程管理员」，可管理 PC 留言板。
 
 ## PC 命令行调试（board_client.py）
 

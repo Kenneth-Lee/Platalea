@@ -14,21 +14,21 @@ class BulletinBoardHttpHandler(
         method: String,
         path: String,
         bodyBytes: ByteArray,
-        authLevel: FamilyNetworkAuthLevel,
+        auth: FamilyNetworkSessionAuth,
         headers: Map<String, String> = emptyMap()
     ): FamilyHttpResponse {
         val normalizedPath = path.substringBefore('?').trimEnd('/').ifEmpty { "/" }
-        if (requiresHostAuth(method, normalizedPath) && !authLevel.canManageBoard) {
+        if (requiresHostAuth(method, normalizedPath) && !auth.canManageBoard) {
             return forbidden(context.getString(R.string.family_http_remote_modify_forbidden))
         }
         return when {
-            method == "GET" && normalizedPath == "/boards" -> listBoards(authLevel)
+            method == "GET" && normalizedPath == "/boards" -> listBoards(auth)
             method == "POST" && normalizedPath == "/boards" -> createBoard(bodyBytes.decodeToString())
             method == "PATCH" && normalizedPath.startsWith("/boards/") &&
                 !normalizedPath.contains("/messages") && !normalizedPath.contains("/attachments") -> {
                 val boardId = normalizedPath.removePrefix("/boards/")
                 if (boardId.isBlank() || boardId.contains('/')) return notFound()
-                renameBoard(boardId, bodyBytes.decodeToString())
+                patchBoard(boardId, bodyBytes.decodeToString())
             }
             method == "DELETE" && normalizedPath.startsWith("/boards/") &&
                 !normalizedPath.contains("/messages") && !normalizedPath.contains("/attachments") -> {
@@ -39,15 +39,15 @@ class BulletinBoardHttpHandler(
             method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/export.md") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/export.md")
                 if (boardId.isBlank() || boardId.contains('/')) return notFound()
-                exportBoard(boardId, authLevel)
+                exportBoard(boardId, auth)
             }
             method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
-                getMessages(boardId, authLevel)
+                getMessages(boardId, auth)
             }
             method == "POST" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
-                createMessage(boardId, bodyBytes.decodeToString(), authLevel)
+                createMessage(boardId, bodyBytes.decodeToString(), auth)
             }
             method == "PUT" && normalizedPath.startsWith("/boards/") && normalizedPath.contains("/messages/") -> {
                 val parts = normalizedPath.removePrefix("/boards/").split("/messages/")
@@ -270,13 +270,14 @@ class BulletinBoardHttpHandler(
         return FamilyHttpResponse(200, JSONObject().apply { put("ok", true) }.toString())
     }
 
-    private fun listBoards(authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
-        val boards = store.listBoards().filter { canAccessBoard(authLevel, it.roleIds) }
+    private fun listBoards(auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
+        val boards = store.listBoards().filter { canAccessBoard(auth, it.roleIds) }
         val body = JSONObject().apply {
             put("ok", true)
-            put("role_id", authLevel.sessionRoleId)
-            put("role_class", authLevel.sessionRoleClass)
-            put("can_manage", authLevel.canManageBoard)
+            put("role_id", auth.sessionRoleId)
+            put("role_class", auth.sessionRoleClass)
+            put("can_manage", auth.canManageBoard)
+            auth.roleLabel?.let { put("role_label", it) }
             put("boards", JSONArray().apply {
                 boards.forEach { board ->
                     put(
@@ -285,7 +286,7 @@ class BulletinBoardHttpHandler(
                             put("name", board.name)
                             put("revision", board.revision)
                             put("message_count", board.messageCount)
-                            if (authLevel.canManageBoard) {
+                            if (auth.canManageBoard) {
                                 put("role_ids", board.roleIds?.let { JSONArray(it) } ?: JSONObject.NULL)
                             }
                         }
@@ -303,43 +304,53 @@ class BulletinBoardHttpHandler(
         if (store.isBoardNameTaken(name)) {
             return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
         }
-        val board = store.createBoard(name)
+        val roleIds = parseRoleIdsFromPayload(payload) ?: emptyList()
+        val board = store.createBoard(name, roleIds)
             ?: return badRequest("invalid_board", context.getString(R.string.family_msg_64304))
-        return FamilyHttpResponse(
-            200,
-            JSONObject().apply {
-                put("ok", true)
-                put("board", JSONObject().apply {
-                    put("id", board.id)
-                    put("name", board.name)
-                    put("revision", board.revision)
-                    put("message_count", board.messageCount)
-                })
-            }.toString()
-        )
+        return FamilyHttpResponse(200, boardResponseJson(board, includeRoleIds = true))
+    }
+
+    private fun patchBoard(boardId: String, bodyText: String): FamilyHttpResponse {
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
+        val name = payload.optString("name").trim().ifEmpty { null }
+        val roleIds = if (payload.has("role_ids")) parseRoleIdsFromPayload(payload) else null
+        if (name == null && roleIds == null) {
+            return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
+        }
+        if (name != null && store.isBoardNameTaken(name, excludeBoardId = boardId)) {
+            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
+        }
+        val board = store.updateBoard(boardId, name = name, roleIds = roleIds)
+            ?: return badRequest("board_rename_failed", context.getString(R.string.family_msg_90260))
+        return FamilyHttpResponse(200, boardResponseJson(board, includeRoleIds = true))
+    }
+
+    private fun boardResponseJson(board: BulletinBoardInfo, includeRoleIds: Boolean): String =
+        JSONObject().apply {
+            put("ok", true)
+            put("board", JSONObject().apply {
+                put("id", board.id)
+                put("name", board.name)
+                put("revision", board.revision)
+                put("message_count", board.messageCount)
+                if (includeRoleIds) {
+                    put("role_ids", board.roleIds?.let { JSONArray(it) } ?: JSONObject.NULL)
+                }
+            })
+        }.toString()
+
+    private fun parseRoleIdsFromPayload(payload: JSONObject): List<String>? {
+        if (!payload.has("role_ids") || payload.isNull("role_ids")) return emptyList()
+        val arr = payload.optJSONArray("role_ids") ?: return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                add(arr.optString(i).trim())
+            }
+        }.filter { it.isNotEmpty() && it != FamilyNetworkRoles.ADMIN_ROLE_ID }.distinct()
     }
 
     private fun renameBoard(boardId: String, bodyText: String): FamilyHttpResponse {
-        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
-        val name = payload.optString("name").trim()
-        if (name.isEmpty()) return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
-        if (store.isBoardNameTaken(name, excludeBoardId = boardId)) {
-            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
-        }
-        val board = store.renameBoard(boardId, name)
-            ?: return badRequest("board_rename_failed", context.getString(R.string.family_msg_90260))
-        return FamilyHttpResponse(
-            200,
-            JSONObject().apply {
-                put("ok", true)
-                put("board", JSONObject().apply {
-                    put("id", board.id)
-                    put("name", board.name)
-                    put("revision", board.revision)
-                    put("message_count", board.messageCount)
-                })
-            }.toString()
-        )
+        return patchBoard(boardId, bodyText)
     }
 
     private fun deleteBoard(boardId: String): FamilyHttpResponse {
@@ -352,8 +363,8 @@ class BulletinBoardHttpHandler(
         return FamilyHttpResponse(200, JSONObject().apply { put("ok", true) }.toString())
     }
 
-    private fun exportBoard(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
-        if (!canAccessBoardForId(boardId, authLevel)) {
+    private fun exportBoard(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
+        if (!canAccessBoardForId(boardId, auth)) {
             return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
         }
         val snapshot = store.snapshot(boardId)
@@ -366,27 +377,28 @@ class BulletinBoardHttpHandler(
         )
     }
 
-    private fun getMessages(boardId: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
-        if (!canAccessBoardForId(boardId, authLevel)) {
+    private fun getMessages(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
+        if (!canAccessBoardForId(boardId, auth)) {
             return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
         }
         val snapshot = store.snapshot(boardId)
             ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
         val participants = BulletinBoardMention.collectParticipants(snapshot.messages)
         val body = snapshot.copy(
-            canManage = authLevel.canManageBoard,
-            roleId = authLevel.sessionRoleId,
+            canManage = auth.canManageBoard,
+            roleId = auth.sessionRoleId,
+            roleLabel = auth.roleLabel,
             agents = emptyList(),
             participants = participants,
             commands = emptyList()
         ).toJson().apply {
-            put("role_class", authLevel.sessionRoleClass)
+            put("role_class", auth.sessionRoleClass)
         }.toString()
         return FamilyHttpResponse(200, body)
     }
 
-    private fun createMessage(boardId: String, bodyText: String, authLevel: FamilyNetworkAuthLevel): FamilyHttpResponse {
-        if (!canAccessBoardForId(boardId, authLevel)) {
+    private fun createMessage(boardId: String, bodyText: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
+        if (!canAccessBoardForId(boardId, auth)) {
             return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
         }
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
@@ -464,9 +476,9 @@ class BulletinBoardHttpHandler(
     private fun parseJson(bodyText: String): JSONObject? =
         runCatching { JSONObject(bodyText) }.getOrNull()
 
-    private fun canAccessBoardForId(boardId: String, authLevel: FamilyNetworkAuthLevel): Boolean {
+    private fun canAccessBoardForId(boardId: String, auth: FamilyNetworkSessionAuth): Boolean {
         val info = store.getBoardInfo(boardId) ?: return false
-        return canAccessBoard(authLevel, info.roleIds)
+        return canAccessBoard(auth, info.roleIds)
     }
 
     private fun badRequest(code: String, message: String): FamilyHttpResponse =

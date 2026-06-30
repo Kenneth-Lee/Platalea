@@ -7,19 +7,27 @@ object FamilyNetworkAuth {
     const val PASSWORD_HEADER = "X-Network-Service-Password"
 }
 
-enum class FamilyNetworkAuthLevel {
-    OPEN,
-    GUEST,
-    HOST;
-
+data class FamilyNetworkSessionAuth(
+    val roleId: String,
+    val roleLabel: String?,
+    val isAdmin: Boolean,
+) {
     val canManageBoard: Boolean
-        get() = this == OPEN || this == HOST
+        get() = isAdmin
 
     val sessionRoleClass: String
-        get() = if (this == GUEST) "user" else "admin"
+        get() = if (isAdmin) "admin" else "user"
 
     val sessionRoleId: String
-        get() = if (this == GUEST) "guest" else "admin"
+        get() = roleId
+
+    companion object {
+        val OPEN = FamilyNetworkSessionAuth(
+            roleId = FamilyNetworkRoles.ADMIN_ROLE_ID,
+            roleLabel = null,
+            isAdmin = true
+        )
+    }
 }
 
 object BulletinBoardDefaults {
@@ -81,10 +89,10 @@ data class BulletinBoardListResult(
     val canManage: Boolean = false
 )
 
-fun canAccessBoard(authLevel: FamilyNetworkAuthLevel, roleIds: List<String>?): Boolean {
-    if (authLevel.canManageBoard) return true
+fun canAccessBoard(auth: FamilyNetworkSessionAuth, roleIds: List<String>?): Boolean {
+    if (auth.canManageBoard) return true
     if (roleIds == null) return true
-    return authLevel.sessionRoleId in roleIds
+    return auth.sessionRoleId in roleIds
 }
 
 data class BulletinMessage(
@@ -211,6 +219,7 @@ data class BulletinBoardOpenSession(
     val service: FamilyDiscoveredService,
     val boardId: String,
     val boardName: String,
+    val boardRoleIds: List<String>? = null,
     val isHost: Boolean,
     val canManageBoard: Boolean = isHost,
     val remoteRoleId: String? = null,

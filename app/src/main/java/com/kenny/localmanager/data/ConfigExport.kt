@@ -22,6 +22,7 @@ private const val KEY_LOCAL_NETWORK_SERVICE_ENABLED = "local_network_service_ena
 private const val KEY_FAMILY_NETWORK_USER_NAME = "family_network_user_name"
 private const val KEY_FAMILY_NETWORK_HOST_NAME = "family_network_host_name"
 private const val KEY_FAMILY_NETWORK_HOST_PASSWORD = "family_network_host_password"
+private const val KEY_FAMILY_NETWORK_EXTRA_ROLES = "family_network_extra_roles"
 private const val KEY_GIT_REPO_URL = "git_repo_url"
 private const val KEY_GIT_USER_NAME = "git_user_name"
 private const val KEY_GIT_USER_EMAIL = "git_user_email"
@@ -230,7 +231,6 @@ suspend fun importConfig(
         if (obj.has(KEY_FAMILY_NETWORK_HOST_NAME)) {
             prefs.setFamilyNetworkHostName(obj.optString(KEY_FAMILY_NETWORK_HOST_NAME).ifBlank { null })
         }
-        prefs.setFamilyNetworkHostPassword(null)
     }
     if (ConfigExportCategory.GIT in categories) {
         if (obj.has(KEY_GIT_REPO_URL)) prefs.setGitRepoUrl(obj.optString(KEY_GIT_REPO_URL).ifBlank { null })

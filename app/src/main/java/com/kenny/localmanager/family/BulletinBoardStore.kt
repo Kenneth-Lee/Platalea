@@ -90,11 +90,34 @@ class BulletinBoardStore(context: Context) {
             id = meta.getString("id"),
             name = trimmed,
             revision = meta.optLong("revision"),
-            messageCount = activeCount
+            messageCount = activeCount,
+            roleIds = BulletinBoardInfo.roleIdsFromMeta(meta)
         )
     }
 
-    fun createBoard(name: String): BulletinBoardInfo? = lock.write {
+    fun updateBoard(
+        boardId: String,
+        name: String? = null,
+        roleIds: List<String>? = null
+    ): BulletinBoardInfo? = lock.write {
+        val meta = readMeta(boardId) ?: return@write null
+        if (name != null) {
+            val trimmed = name.trim()
+            if (trimmed.isEmpty()) return@write null
+            if (isBoardNameTakenLocked(trimmed, boardId)) return@write null
+            meta.put("name", trimmed)
+        }
+        if (roleIds != null) {
+            meta.put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
+        }
+        writeMeta(boardId, meta)
+        boardInfoFromMeta(boardId)
+    }
+
+    private fun normalizeRoleIds(roleIds: List<String>): List<String> =
+        roleIds.map { it.trim() }.filter { it.isNotEmpty() && it != FamilyNetworkRoles.ADMIN_ROLE_ID }.distinct()
+
+    fun createBoard(name: String, roleIds: List<String> = emptyList()): BulletinBoardInfo? = lock.write {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return@write null
         if (isBoardNameTakenLocked(trimmed, excludeBoardId = null)) return@write null
@@ -107,10 +130,17 @@ class BulletinBoardStore(context: Context) {
                 put("name", trimmed)
                 put("revision", 0L)
                 put("created_at", System.currentTimeMillis())
+                put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
             }
         )
         writeMessages(boardId, emptyList())
-        BulletinBoardInfo(id = boardId, name = trimmed, revision = 0L, messageCount = 0)
+        BulletinBoardInfo(
+            id = boardId,
+            name = trimmed,
+            revision = 0L,
+            messageCount = 0,
+            roleIds = normalizeRoleIds(roleIds)
+        )
     }
 
     fun exportBoardpack(boardId: String): ByteArray? = lock.read {
