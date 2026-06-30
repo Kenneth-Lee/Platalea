@@ -15,7 +15,12 @@ data class Playlist(
     val uris: List<String>,
     val names: List<String>,
     val sourceType: String = SOURCE_TYPE_MANUAL,
-    val sourceUri: String? = null
+    val sourceUri: String? = null,
+    val previewEnabled: Boolean = false,
+    /** 每首曲目从该位置（毫秒）开始播放。 */
+    val previewStartMs: Long = 0L,
+    /** 从起始位置起最多播放时长（毫秒）；0 表示播到曲目结束。 */
+    val previewMaxDurationMs: Long = 0L,
 ) {
     val trackCount: Int get() = uris.size
     val isDirectorySource: Boolean get() = sourceType == SOURCE_TYPE_DIRECTORY && !sourceUri.isNullOrBlank()
@@ -32,6 +37,9 @@ data class Playlist(
         put("names", JSONArray(names))
         put("sourceType", sourceType)
         put("sourceUri", sourceUri ?: "")
+        put("previewEnabled", previewEnabled)
+        put("previewStartMs", previewStartMs.coerceAtLeast(0L))
+        put("previewMaxDurationMs", previewMaxDurationMs.coerceAtLeast(0L))
     }
 
     companion object {
@@ -45,7 +53,10 @@ data class Playlist(
             uris = jsonArrayToList(obj.optJSONArray("uris")),
             names = jsonArrayToList(obj.optJSONArray("names")),
             sourceType = obj.optString("sourceType", SOURCE_TYPE_MANUAL).ifBlank { SOURCE_TYPE_MANUAL },
-            sourceUri = obj.optString("sourceUri").trim().ifBlank { null }
+            sourceUri = obj.optString("sourceUri").trim().ifBlank { null },
+            previewEnabled = obj.optBoolean("previewEnabled", false),
+            previewStartMs = obj.optLong("previewStartMs", 0L).coerceAtLeast(0L),
+            previewMaxDurationMs = obj.optLong("previewMaxDurationMs", 0L).coerceAtLeast(0L),
         )
 
         private fun jsonArrayToList(arr: JSONArray?): List<String> {

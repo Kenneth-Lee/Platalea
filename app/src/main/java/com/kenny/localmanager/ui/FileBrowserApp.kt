@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -255,6 +256,7 @@ import com.kenny.localmanager.player.PlaylistTrackSortField
 import com.kenny.localmanager.player.PlaylistTrackSorter
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
+import com.kenny.localmanager.player.PlaybackTimeFormat
 import com.kenny.localmanager.player.TrackMetadata
 import com.kenny.localmanager.player.ACTION_NEXT
 import com.kenny.localmanager.player.ACTION_PAUSE
@@ -8203,6 +8205,12 @@ fun PlaybackScreen(
     var playerAudioSettings by remember { mutableStateOf(PlayerAudioSettings()) }
     var showPlayerAudioSettingsDialog by remember { mutableStateOf(false) }
     var showPlaybackDiagnostics by remember { mutableStateOf(false) }
+    var showPreviewSettingsDialog by remember { mutableStateOf(false) }
+    var previewSettingsTarget by remember { mutableStateOf<Playlist?>(null) }
+    var previewEnabledInput by remember { mutableStateOf(false) }
+    var previewStartInput by remember { mutableStateOf("") }
+    var previewMaxDurationInput by remember { mutableStateOf("") }
+    var previewTimeError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -8234,6 +8242,28 @@ fun PlaybackScreen(
         playlistSortField = PlaylistTrackSortField.ARTIST
         playlistSortOrder = PlaylistSortOrder.ASCENDING
         showSortPlaylistDialog = true
+    }
+
+    fun openPreviewSettingsDialog(pl: Playlist) {
+        previewSettingsTarget = pl
+        previewEnabledInput = pl.previewEnabled
+        previewStartInput = if (pl.previewStartMs > 0L) PlaybackTimeFormat.formatMs(pl.previewStartMs) else ""
+        previewMaxDurationInput = if (pl.previewMaxDurationMs > 0L) PlaybackTimeFormat.formatMs(pl.previewMaxDurationMs) else ""
+        previewTimeError = null
+        showPreviewSettingsDialog = true
+    }
+
+    fun previewListHint(pl: Playlist): String {
+        val start = PlaybackTimeFormat.formatMs(pl.previewStartMs)
+        return if (pl.previewMaxDurationMs > 0L) {
+            context.getString(
+                R.string.player_preview_list_hint,
+                start,
+                PlaybackTimeFormat.formatMs(pl.previewMaxDurationMs)
+            )
+        } else {
+            context.getString(R.string.player_preview_list_hint_no_limit, start)
+        }
     }
 
     fun recordPlayedPlaylist(pl: Playlist) {
@@ -8515,6 +8545,21 @@ fun PlaybackScreen(
                                 color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (state.previewActive) {
+                            val previewPl = state.playlistId?.let { id -> playlistById[id] }
+                            val previewStartText = formatPlaybackTime((previewPl?.previewStartMs ?: 0L).toInt())
+                            val previewEndText = state.previewWindowEndMs?.let { formatPlaybackTime(it) }
+                            Text(
+                                if (previewEndText != null) {
+                                    context.getString(R.string.player_preview_playing_hint, previewStartText, previewEndText)
+                                } else {
+                                    context.getString(R.string.player_preview_playing_hint_no_end, previewStartText)
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
+                                maxLines = 2
                             )
                         }
                         if (state.durationMs > 0) {
@@ -8883,6 +8928,15 @@ fun PlaybackScreen(
                                         overflow = TextOverflow.Ellipsis,
                                         color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                    if (pl.previewEnabled) {
+                                        Text(
+                                            previewListHint(pl),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            maxLines = 2,
+                                            overflow = TextOverflow.Ellipsis,
+                                            color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                     if (isDangerousPlaylist) {
                                         Text(
                                             context.getString(R.string.browser_playlist_dir_list_hint),
@@ -8959,6 +9013,14 @@ fun PlaybackScreen(
                                             onClick = {
                                                 playlistActionMenuIndex = null
                                                 openSortPlaylistDialog(pl)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_preview_settings)) },
+                                            leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null) },
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                openPreviewSettingsDialog(pl)
                                             }
                                         )
                                         DropdownMenuItem(
@@ -9070,6 +9132,117 @@ fun PlaybackScreen(
                     TextButton(onClick = { pendingTrackTransfer = null }) {
                         Text(context.getString(R.string.common_cancel))
                     }
+                }
+            )
+        }
+        if (showPreviewSettingsDialog) {
+            val target = previewSettingsTarget
+            AlertDialog(
+                onDismissRequest = {
+                    showPreviewSettingsDialog = false
+                    previewSettingsTarget = null
+                    previewTimeError = null
+                },
+                title = { Text(context.getString(R.string.player_preview_settings_title)) },
+                text = {
+                    Column(Modifier.verticalScroll(rememberScrollState())) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(context.getString(R.string.player_preview_enabled), style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    context.getString(R.string.player_preview_enabled_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Switch(
+                                checked = previewEnabledInput,
+                                onCheckedChange = { previewEnabledInput = it }
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedTextField(
+                            value = previewStartInput,
+                            onValueChange = {
+                                previewStartInput = it
+                                previewTimeError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(context.getString(R.string.player_preview_start_label)) },
+                            supportingText = { Text(context.getString(R.string.player_preview_start_hint)) },
+                            singleLine = true,
+                            enabled = previewEnabledInput
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = previewMaxDurationInput,
+                            onValueChange = {
+                                previewMaxDurationInput = it
+                                previewTimeError = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(context.getString(R.string.player_preview_max_duration_label)) },
+                            supportingText = { Text(context.getString(R.string.player_preview_max_duration_hint)) },
+                            singleLine = true,
+                            enabled = previewEnabledInput
+                        )
+                        previewTimeError?.let { err ->
+                            Spacer(Modifier.height(8.dp))
+                            Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        val settingsTarget = target ?: return@Button
+                        val startMs = if (previewEnabledInput) {
+                            PlaybackTimeFormat.parseToMs(previewStartInput) ?: run {
+                                previewTimeError = context.getString(R.string.player_preview_time_invalid)
+                                return@Button
+                            }
+                        } else {
+                            0L
+                        }
+                        val maxMs = if (previewEnabledInput && previewMaxDurationInput.isNotBlank()) {
+                            PlaybackTimeFormat.parseToMs(previewMaxDurationInput) ?: run {
+                                previewTimeError = context.getString(R.string.player_preview_time_invalid)
+                                return@Button
+                            }
+                        } else {
+                            0L
+                        }
+                        scope.launch {
+                            prefs.updatePlaylist(
+                                settingsTarget.copy(
+                                    previewEnabled = previewEnabledInput,
+                                    previewStartMs = startMs.coerceAtLeast(0L),
+                                    previewMaxDurationMs = maxMs.coerceAtLeast(0L)
+                                )
+                            )
+                            if (playbackState?.playlistId == settingsTarget.id) {
+                                val reloadIntent = Intent(context, PlaybackService::class.java).apply {
+                                    action = ACTION_RELOAD_PLAYLIST
+                                    putExtra(EXTRA_PLAYLIST_ID, settingsTarget.id)
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                                    context.startForegroundService(reloadIntent)
+                                } else {
+                                    context.startService(reloadIntent)
+                                }
+                            }
+                            showPreviewSettingsDialog = false
+                            previewSettingsTarget = null
+                            previewTimeError = null
+                            Toast.makeText(context, context.getString(R.string.player_preview_saved), Toast.LENGTH_SHORT).show()
+                        }
+                    }) { Text(context.getString(R.string.common_save)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showPreviewSettingsDialog = false
+                        previewSettingsTarget = null
+                        previewTimeError = null
+                    }) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
         }

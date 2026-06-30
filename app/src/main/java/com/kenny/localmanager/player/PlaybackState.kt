@@ -14,6 +14,8 @@ data class PlaybackState(
     val isPlaying: Boolean,
     val playlistId: String? = null,
     val playlistName: String? = null,
+    val previewActive: Boolean = false,
+    val previewWindowEndMs: Int? = null,
     val metadata: TrackMetadata = TrackMetadata(),
     val diagnostics: PlaybackDiagnostics = PlaybackDiagnostics()
 )

@@ -104,6 +104,10 @@ class PlaybackService : Service() {
     private var dirUri: String = ""
     private var playlistId: String? = null
     private var playlistName: String? = null
+    private var previewEnabled: Boolean = false
+    private var previewStartMs: Long = 0L
+    private var previewMaxDurationMs: Long = 0L
+    private var previewTrackAnchorMs: Long = 0L
     private var currentIndex = AtomicInteger(0)
     private var progressUpdateRunnable: Runnable? = null
     private val handler = android.os.Handler(android.os.Looper.getMainLooper())
@@ -336,6 +340,7 @@ class PlaybackService : Service() {
                 val durationMs = currentPlayerDurationMs()
                 val target = if (durationMs > 0) posMs.coerceIn(0, durationMs) else posMs.coerceAtLeast(0)
                 seekCurrentPlayerTo(target)
+                previewTrackAnchorMs = target.toLong()
                 updateState(positionMs = target)
             }
             ACTION_REMOVE_PLAYLIST_TRACK -> {
@@ -440,6 +445,7 @@ class PlaybackService : Service() {
     }
 
     private fun persistPlaybackState(positionMsOverride: Long? = null) {
+        if (previewEnabled) return
         val currentPlaylistId = playlistId
         val currentDirUri = dirUri
         val idx = currentIndex.get()
@@ -470,7 +476,7 @@ class PlaybackService : Service() {
         lastPauseOrigin = PauseOrigin.OTHER
         // 切换列表前先保存当前列表进度，否则再切回来时无法恢复
         val oldPlaylistId = this.playlistId
-        if (oldPlaylistId != null && playlistUris.isNotEmpty()) {
+        if (!previewEnabled && oldPlaylistId != null && playlistUris.isNotEmpty()) {
             val idx = currentIndex.get()
             if (idx in playlistUris.indices) {
                 val pos = currentPlaybackPositionMsSafe().toLong()
@@ -491,20 +497,34 @@ class PlaybackService : Service() {
             startForeground(NOTIFICATION_ID, buildNotification())
         }
         scope.launch {
+            val playlist = playlistId?.let { id ->
+                withContext(Dispatchers.IO) { prefs.getPlaylistById(id) }
+            }
+            previewEnabled = playlist?.previewEnabled == true
+            previewStartMs = playlist?.previewStartMs?.coerceAtLeast(0L) ?: 0L
+            previewMaxDurationMs = playlist?.previewMaxDurationMs?.coerceAtLeast(0L) ?: 0L
+
             var startIndex = 0
-            var startPositionMs = 0
+            var startSeekMs: Int? = null
             if (playlistId != null) {
                 if (startIndexHint in uris.indices) {
                     startIndex = startIndexHint
-                    startPositionMs = startPositionHintMs.coerceAtLeast(0)
+                    startSeekMs = if (startPositionHintMs >= 0) {
+                        startPositionHintMs.coerceAtLeast(0)
+                    } else {
+                        null
+                    }
+                } else if (previewEnabled) {
+                    startIndex = 0
+                    startSeekMs = null
                 } else {
                     val resume = withContext(Dispatchers.IO) { prefs.getPlayerResumeStateForPlaylist(playlistId) }
                     if (resume != null && resume.first in uris.indices) {
                         startIndex = resume.first
-                        startPositionMs = resume.second.toInt().coerceAtLeast(0)
+                        startSeekMs = resume.second.toInt().coerceAtLeast(0)
                     } else {
                         startIndex = 0
-                        startPositionMs = 0
+                        startSeekMs = 0
                         Log.i(
                             TAG,
                             "No valid resume state for playlist=$playlistId, fallback to track 0 from beginning"
@@ -520,15 +540,40 @@ class PlaybackService : Service() {
                 val lastPos = withContext(Dispatchers.IO) { prefs.playerLastPositionMs.first() }
                 if (lastDir == dir && lastIndex in uris.indices) {
                     startIndex = lastIndex
-                    startPositionMs = lastPos.toInt().coerceAtLeast(0)
+                    startSeekMs = lastPos.toInt().coerceAtLeast(0)
                 }
             }
             currentIndex.set(startIndex)
-            playTrackAtIndex(startIndex, startPositionMs)
+            playTrackAtIndex(startIndex, startSeekMs)
         }
     }
 
-    private fun playTrackAtIndex(index: Int, seekToMs: Int = 0) {
+    private fun resolvePreviewSeekMs(seekToMs: Int?): Int = when {
+        seekToMs != null -> seekToMs.coerceAtLeast(0)
+        previewEnabled -> previewStartMs.toInt().coerceAtLeast(0)
+        else -> 0
+    }
+
+    private fun previewWindowEndMs(): Int? {
+        if (!previewEnabled || previewMaxDurationMs <= 0L) return null
+        val end = previewTrackAnchorMs + previewMaxDurationMs
+        return end.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    }
+
+    private fun checkPreviewLimit() {
+        if (!previewEnabled || previewMaxDurationMs <= 0L) return
+        val pos = currentPlayerPositionMs().toLong()
+        if (pos - previewTrackAnchorMs < previewMaxDurationMs) return
+        progressUpdateRunnable?.let(handler::removeCallbacks)
+        val idx = currentIndex.get()
+        if (idx >= playlistUris.lastIndex) {
+            stopPlayback()
+        } else {
+            playNext(skipSave = true)
+        }
+    }
+
+    private fun playTrackAtIndex(index: Int, seekToMs: Int? = null) {
         if (index !in playlistUris.indices) {
             if (playlistUris.isNotEmpty()) updateState(isPlaying = false)
             return
@@ -543,20 +588,23 @@ class PlaybackService : Service() {
         currentTrackMetadata = readTrackMetadata(uri)
         resetPlaybackDiagnostics(uri)
 
+        val effectiveSeekMs = resolvePreviewSeekMs(seekToMs)
+        previewTrackAnchorMs = effectiveSeekMs.toLong()
+
         currentIndex.set(index)
         updateState(
             trackIndex = index,
             trackName = name,
-            positionMs = seekToMs,
+            positionMs = effectiveSeekMs,
             durationMs = 0,
             isPlaying = false
         )
         updateNotification()
 
         if (playerAudioSettings.engine == PLAYER_AUDIO_ENGINE_EXO_PLAYER) {
-            startExoPlayerTrack(index, uri, uri, name, seekToMs)
+            startExoPlayerTrack(index, uri, uri, name, effectiveSeekMs)
         } else {
-            startMediaPlayerTrack(index, uri, uri, name, seekToMs)
+            startMediaPlayerTrack(index, uri, uri, name, effectiveSeekMs)
         }
     }
 
@@ -761,6 +809,9 @@ class PlaybackService : Service() {
     ) {
         val pl = withContext(Dispatchers.IO) { prefs.getPlaylistById(plId) } ?: return
         if (plId != playlistId) return
+        previewEnabled = pl.previewEnabled
+        previewStartMs = pl.previewStartMs.coerceAtLeast(0L)
+        previewMaxDurationMs = pl.previewMaxDurationMs.coerceAtLeast(0L)
         playlistUris = pl.uris
         playlistNames = pl.names
         if (pl.uris.isEmpty()) {
@@ -774,7 +825,7 @@ class PlaybackService : Service() {
         val positionMs = if (startIndexHint in pl.uris.indices) {
             startPositionHintMs.coerceAtLeast(0)
         } else {
-            0
+            null
         }
         playTrackAtIndex(index, positionMs)
     }
@@ -811,7 +862,7 @@ class PlaybackService : Service() {
             playlistUris = newUris
             playlistNames = newNames
             val newIndex = idx.coerceAtMost(newUris.lastIndex)
-            playTrackAtIndex(newIndex, 0)
+            playTrackAtIndex(newIndex, null)
         }
     }
 
@@ -820,6 +871,7 @@ class PlaybackService : Service() {
         progressUpdateRunnable = object : Runnable {
             override fun run() {
                 if (isCurrentPlayerPlaying()) {
+                    checkPreviewLimit()
                     updateState(
                         positionMs = currentPlayerPositionMs(),
                         durationMs = currentPlayerDurationMs(),
@@ -850,6 +902,8 @@ class PlaybackService : Service() {
             isPlaying = isPlaying,
             playlistId = playlistId,
             playlistName = playlistName,
+            previewActive = previewEnabled,
+            previewWindowEndMs = previewWindowEndMs(),
             metadata = currentTrackMetadata,
             diagnostics = buildPlaybackDiagnostics()
         )
@@ -1108,9 +1162,9 @@ class PlaybackService : Service() {
         loudnessEnhancer = null
     }
 
-    private fun playNext() {
+    private fun playNext(skipSave: Boolean = false) {
         progressUpdateRunnable?.let(handler::removeCallbacks)
-        savePosition()
+        if (!skipSave) savePosition()
         val next = currentIndex.get() + 1
         if (next >= playlistUris.size) {
             stopPlayback()
@@ -1122,15 +1176,18 @@ class PlaybackService : Service() {
     private fun playPrev() {
         progressUpdateRunnable?.let(handler::removeCallbacks)
         savePosition()
-        if (hasActivePlayer() && currentPlayerPositionMs() > 3000) {
-            seekCurrentPlayerTo(0)
-            updateState(positionMs = 0, isPlaying = isCurrentPlayerPlaying())
+        val restartMs = if (previewEnabled) previewStartMs.toInt().coerceAtLeast(0) else 0
+        if (hasActivePlayer() && currentPlayerPositionMs() - restartMs > 3000) {
+            seekCurrentPlayerTo(restartMs)
+            previewTrackAnchorMs = restartMs.toLong()
+            updateState(positionMs = restartMs, isPlaying = isCurrentPlayerPlaying())
             return
         }
         val prev = currentIndex.get() - 1
         if (prev < 0) {
-            seekCurrentPlayerTo(0)
-            updateState(positionMs = 0)
+            seekCurrentPlayerTo(restartMs)
+            previewTrackAnchorMs = restartMs.toLong()
+            updateState(positionMs = restartMs)
             return
         }
         playTrackAtIndex(prev)
