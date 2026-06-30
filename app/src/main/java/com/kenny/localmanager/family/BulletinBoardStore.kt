@@ -43,15 +43,24 @@ class BulletinBoardStore(context: Context) {
     fun listBoards(): List<BulletinBoardInfo> = lock.read {
         rootDir.listFiles()?.mapNotNull { dir ->
             if (!dir.isDirectory) return@mapNotNull null
-            val meta = readMeta(dir.name) ?: return@mapNotNull null
-            val activeCount = readMessages(dir.name).count { it.isConversationMessage }
-            BulletinBoardInfo(
-                id = meta.getString("id"),
-                name = meta.optString("name", dir.name),
-                revision = meta.optLong("revision"),
-                messageCount = activeCount
-            )
+            boardInfoFromMeta(dir.name) ?: return@mapNotNull null
         }.orEmpty().sortedBy { it.id }
+    }
+
+    fun getBoardInfo(boardId: String): BulletinBoardInfo? = lock.read {
+        boardInfoFromMeta(boardId)
+    }
+
+    private fun boardInfoFromMeta(boardId: String): BulletinBoardInfo? {
+        val meta = readMeta(boardId) ?: return null
+        val activeCount = readMessages(boardId).count { it.isConversationMessage }
+        return BulletinBoardInfo(
+            id = meta.getString("id"),
+            name = meta.optString("name", boardId),
+            revision = meta.optLong("revision"),
+            messageCount = activeCount,
+            roleIds = BulletinBoardInfo.roleIdsFromMeta(meta)
+        )
     }
 
     fun snapshot(boardId: String): BulletinBoardSnapshot? = lock.read {

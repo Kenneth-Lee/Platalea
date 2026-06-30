@@ -1759,6 +1759,7 @@ private fun FileBrowserAppScreen(
         var localNetworkServiceEnabled by remember { mutableStateOf(true) }
         var familyNetworkUserName by remember { mutableStateOf("") }
         var familyNetworkHostName by remember { mutableStateOf("") }
+        var familyNetworkHostPassword by remember { mutableStateOf("") }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
         var showExportConfigDialog by remember { mutableStateOf(false) }
@@ -2272,6 +2273,9 @@ private fun FileBrowserAppScreen(
             prefs.familyNetworkHostName.collect { familyNetworkHostName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
+            prefs.familyNetworkHostPassword.collect { familyNetworkHostPassword = it.orEmpty() }
+        }
+        LaunchedEffect(prefs) {
             prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
@@ -2279,12 +2283,13 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostName, familyNetworkHostPassword) {
             familyNetworkManager.configure(
                 ftpPassword,
                 localNetworkServiceEnabled,
                 familyNetworkUserName.ifBlank { null },
-                familyNetworkHostName.ifBlank { null }
+                familyNetworkHostName.ifBlank { null },
+                familyNetworkHostPassword.ifBlank { null }
             )
         }
         LaunchedEffect(activeMainTab) {
@@ -2954,7 +2959,8 @@ private fun FileBrowserAppScreen(
                                         s.ifBlank { null },
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
@@ -2967,7 +2973,8 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         enabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 familyNetworkUserName = familyNetworkUserName,
@@ -2978,7 +2985,8 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         name.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
+                                        familyNetworkHostName.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 familyNetworkHostName = familyNetworkHostName,
@@ -2989,7 +2997,8 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
-                                        name.ifBlank { null }
+                                        name.ifBlank { null },
+                                        familyNetworkHostPassword.ifBlank { null }
                                     )
                                 },
                                 onOpenGitConfig = { showGitConfigDialog = true },

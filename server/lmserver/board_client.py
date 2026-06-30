@@ -101,6 +101,11 @@ def build_parser(*, prog: str = "lmserver") -> argparse.ArgumentParser:
 
     create = sub.add_parser("create-board", help="创建留言板（需 host 密码）")
     create.add_argument("name", help="留言板名称")
+    create.add_argument(
+        "--role-ids",
+        default="guest",
+        help="授权可见的非 admin 角色，逗号分隔（默认 guest；传空串表示仅 admin 可见）",
+    )
 
     delete_board = sub.add_parser("delete-board", help="删除留言板（需 host 密码）")
     delete_board.add_argument("board_id", help="留言板 ID")
@@ -264,7 +269,13 @@ def format_timestamp(ms: int) -> str:
 
 def print_human(command: str, status: int, body: dict[str, Any], board_id: str) -> None:
     if status >= 400 or not body.get("ok", True):
-        message = body.get("message") or body.get("error") or "请求失败"
+        error = body.get("error")
+        message = body.get("message") or error or "请求失败"
+        if error == "board_name_duplicate":
+            print(f"错误 ({status}): 留言板名称已存在", file=sys.stderr)
+            if message and message != error:
+                print(f"  {message}", file=sys.stderr)
+            return
         print(f"错误 ({status}): {message}", file=sys.stderr)
         return
 
@@ -272,10 +283,13 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
         boards = body.get("boards") or []
         role_id = body.get("role_id")
         role_label = body.get("role_label")
-        if role_id or role_label:
-            label = role_label or role_id
+        role_class = body.get("role_class")
+        if role_id or role_label or role_class:
+            label = role_label or role_id or "?"
+            kind = "管理员" if role_class == "admin" else ("用户" if role_class == "user" else role_class or "")
             manage = "可管理" if body.get("can_manage") else "只读"
-            print(f"当前角色: {label}（{manage}）")
+            suffix = f" [{kind}]" if kind else ""
+            print(f"当前角色: {label}{suffix}（{manage}）")
         if not boards:
             print("（暂无留言板）")
             return
@@ -339,7 +353,17 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
 
     if command == "create-board":
         board = body.get("board") or {}
-        print(f"已创建留言板: {board.get('id')} 「{board.get('name')}」")
+        board_id = board.get("id", "?")
+        board_name = board.get("name", "")
+        role_ids = board.get("role_ids")
+        print(f"已创建留言板: {board_id} 「{board_name}」")
+        if role_ids is None:
+            print("  可见角色: (legacy，所有非 admin 角色可见)")
+        elif not role_ids:
+            print("  可见角色: (无，仅 host/admin 可见)")
+            print("  提示: guest 执行 list-boards 看不到此板；可用 --role-ids guest 创建，或以 host 密码 list-boards")
+        else:
+            print(f"  可见角色: {', '.join(role_ids)}")
         return
 
     if command == "import-boardpack":
@@ -476,7 +500,13 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
     elif args.command == "get-agent":
         path, method, body, password = "/agent", "GET", None, guest_password
     elif args.command == "create-board":
-        path, method, body, password = "/boards", "POST", {"name": args.name}, host_password
+        body: dict[str, Any] = {"name": args.name}
+        role_ids_raw = args.role_ids.strip()
+        if role_ids_raw:
+            body["role_ids"] = [item.strip() for item in role_ids_raw.split(",") if item.strip()]
+        else:
+            body["role_ids"] = []
+        path, method, body, password = "/boards", "POST", body, host_password
     elif args.command == "delete-board":
         path, method, body, password = f"/boards/{board_id}", "DELETE", None, host_password
     elif args.command == "post":

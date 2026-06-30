@@ -35,6 +35,11 @@ class AuthContext:
         return self.is_admin or self.can_manage_boards
 
 
+    @property
+    def role_class(self) -> str:
+        return "admin" if self.is_admin else "user"
+
+
 @dataclass(frozen=True)
 class RolesConfig:
     roles: dict[str, RoleDefinition]
@@ -59,7 +64,12 @@ class RolesConfig:
         provided = headers.get(PASSWORD_HEADER, "").strip()
         if not provided:
             return None
-        for role in self.roles.values():
+        admin_role = self.roles.get(ADMIN_ROLE_ID)
+        if admin_role is not None and admin_role.password and provided == admin_role.password:
+            return _auth_from_role(admin_role)
+        for role_id, role in self.roles.items():
+            if role_id == ADMIN_ROLE_ID:
+                continue
             if role.password and provided == role.password:
                 return _auth_from_role(role)
         return None
@@ -189,6 +199,7 @@ def can_access_board(auth: AuthContext, board_role_ids: tuple[str, ...] | None) 
 def auth_session_fields(auth: AuthContext) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "role_id": auth.role_id,
+        "role_class": auth.role_class,
         "can_manage": auth.can_manage,
     }
     if auth.role_label:

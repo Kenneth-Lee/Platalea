@@ -8,9 +8,8 @@
 cd server
 pip install .          # 或 pip install -e . 开发模式
 lmserver init-config   # 写入 ~/.localmanager/config.json
-lmserver start         # 首次启动会自动安装 TLS 到 ~/.localmanager/tls/
-# 或
-lmserver start -b      # 后台启动
+lmserver start         # 后台守护进程，日志 ~/.localmanager/server.log
+lmserver stop          # 停止服务
 ```
 
 安装后统一使用 **`lmserver`** 命令。配置与数据目录（Mac / Linux / Windows 相同）：
@@ -40,6 +39,29 @@ lmserver --host 192.168.1.10 list-boards
 版本号来自仓库根目录的 **`VERSION`** 文件（Android 与 `lmserver` 各自在构建/打包时读取，互不读对方源码）。
 
 其它管理命令：`lmserver stop`、`lmserver status`、`lmserver --help`。
+
+### Shell 自动补全（bash / zsh）
+
+安装后执行一次（或写入 `~/.bashrc` / `~/.zshrc`）：
+
+```bash
+# 开发目录（pip install -e .）
+source /path/to/local_manager/server/lmserver-completion.sh
+
+# pip 安装到虚拟环境时
+source "$(dirname "$(dirname "$(command -v lmserver)")")/share/lmserver/lmserver-completion.sh"
+```
+
+可选：指定非默认数据目录
+
+```bash
+export LMSERVER_HOME=/path/to/.localmanager
+source .../lmserver-completion.sh
+```
+
+补全内容：子命令、服务/API 选项、本地留言板 ID（来自 `boards/`）、`put`/`delete` 的消息 ID、附件/配置文件路径。
+
+脚本会在 source 时检测 shell 类型：bash 用 `complete`，zsh 用原生 `compdef`（不再依赖 `mapfile` / `bashcompinit`）。非交互式 shell 会跳过并提示写入 rc 文件。
 
 ---
 

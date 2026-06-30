@@ -1,5 +1,6 @@
 README.md
 VERSION
+lmserver-completion.sh
 pyproject.toml
 lmserver/__init__.py
 lmserver/__main__.py

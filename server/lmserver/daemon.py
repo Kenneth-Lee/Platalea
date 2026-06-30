@@ -48,6 +48,77 @@ def already_running_message(config_path: Path, *, guest_password: str = "") -> s
     return None
 
 
+def write_server_pid() -> None:
+    """Register the running server process (call from daemon after bind)."""
+    _write_pid(os.getpid())
+
+
+def clear_server_pid() -> None:
+    _clear_pid()
+
+
+def _terminate_pid(pid: int, timeout: float = 6.0) -> bool:
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return False
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not is_process_alive(pid):
+            return True
+        time.sleep(0.2)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    time.sleep(0.1)
+    return not is_process_alive(pid)
+
+
+def _find_listener_pids(port: int) -> list[int]:
+    """Find process IDs listening on TCP port (Linux ss / lsof fallback)."""
+    import re
+    import subprocess
+
+    pids: list[int] = []
+    try:
+        proc = subprocess.run(
+            ["ss", "-tlnp", f"sport = :{port}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode == 0:
+            for match in re.finditer(r"pid=(\d+)", proc.stdout):
+                pids.append(int(match.group(1)))
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    if not pids:
+        try:
+            proc = subprocess.run(
+                ["lsof", "-ti", f":{port}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if proc.returncode == 0:
+                for line in proc.stdout.splitlines():
+                    line = line.strip()
+                    if line.isdigit():
+                        pids.append(int(line))
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            pass
+    seen: set[int] = set()
+    unique: list[int] = []
+    for pid in pids:
+        if pid not in seen and pid != os.getpid():
+            seen.add(pid)
+            unique.append(pid)
+    return unique
+
+
 def _read_pid() -> int | None:
     path = pid_file()
     if not path.exists():
@@ -132,29 +203,53 @@ def server_status(host: str, port: int, *, ca_cert: Path, password: str = "") ->
     return "stopped"
 
 
-def stop_server() -> int:
-    pid = _read_pid()
-    if pid is None:
-        print("Server is not running (no pid file).")
-        return 0
-    if not is_process_alive(pid):
+def stop_server(config_path: Path | None = None) -> int:
+    from .paths import ensure_config
+
+    cfg = Path(config_path).expanduser().resolve() if config_path else ensure_config(None)
+    probe_host, port, ca_cert, password = load_server_probe(cfg)
+
+    targets: list[int] = []
+    pid_from_file = _read_pid()
+    if pid_from_file is not None and is_process_alive(pid_from_file):
+        targets.append(pid_from_file)
+
+    if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
+        for listener_pid in _find_listener_pids(port):
+            if listener_pid not in targets:
+                targets.append(listener_pid)
+
+    if not targets:
         _clear_pid()
-        print("Server is not running (stale pid file removed).")
+        if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
+            print(
+                f"Port {port} is in use but listener PID could not be determined. "
+                f"Try: fuser -k {port}/tcp",
+                file=sys.stderr,
+            )
+            return 1
+        print("Server is not running.")
         return 0
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        _clear_pid()
-        print("Server is not running (stale pid file removed).")
-        return 0
-    for _ in range(30):
-        if not is_process_alive(pid):
-            _clear_pid()
-            print(f"Server stopped (pid {pid}).")
-            return 0
-        time.sleep(0.2)
-    print(f"Server did not stop within timeout (pid {pid}).", file=sys.stderr)
-    return 1
+
+    stopped: list[int] = []
+    for pid in targets:
+        if _terminate_pid(pid):
+            stopped.append(pid)
+
+    _clear_pid()
+
+    if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
+        print(f"Server did not stop (port {port} still in use).", file=sys.stderr)
+        return 1
+
+    if stopped:
+        if len(stopped) == 1:
+            print(f"Server stopped (pid {stopped[0]}).")
+        else:
+            print(f"Server stopped (pids {', '.join(str(p) for p in stopped)}).")
+    else:
+        print("Server is not running.")
+    return 0
 
 
 def start_background(config_path: Path) -> int:

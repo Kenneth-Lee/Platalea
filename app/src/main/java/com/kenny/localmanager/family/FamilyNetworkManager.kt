@@ -143,6 +143,7 @@ class FamilyNetworkManager(context: Context) {
     /** 转发等临时操作持有会话（如文件浏览器转发留言板）。 */
     private var ephemeralSessionCount = 0
     private var networkPassword: String? = null
+    private var networkHostPassword: String? = null
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
     private var familyNetworkHostName: String? = null
@@ -180,9 +181,11 @@ class FamilyNetworkManager(context: Context) {
         networkPassword: String?,
         localServiceEnabled: Boolean,
         familyNetworkUserName: String? = null,
-        familyNetworkHostName: String? = null
+        familyNetworkHostName: String? = null,
+        networkHostPassword: String? = null
     ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
+        this.networkHostPassword = networkHostPassword?.trim()?.ifEmpty { null }
         val newHostName = familyNetworkHostName?.trim()?.ifEmpty { null }
         val hostNameChanged = this.familyNetworkHostName != newHostName
         this.familyNetworkHostName = newHostName
@@ -460,7 +463,9 @@ class FamilyNetworkManager(context: Context) {
             runCatching {
                 BulletinBoardListResult(
                     boards = boardStore.listBoards(),
-                    canManage = true
+                    canManage = true,
+                    roleId = "admin",
+                    roleClass = "admin"
                 )
             }
         } else {
@@ -484,6 +489,7 @@ class FamilyNetworkManager(context: Context) {
                     boards = boards,
                     roleId = json.optString("role_id").takeIf { it.isNotBlank() },
                     roleLabel = json.optString("role_label").takeIf { it.isNotBlank() },
+                    roleClass = json.optString("role_class").takeIf { it.isNotBlank() },
                     canManage = json.optBoolean("can_manage", false)
                 )
             }
@@ -1856,12 +1862,16 @@ class FamilyNetworkManager(context: Context) {
 
     private fun resolveAuthLevel(headers: Map<String, String>): FamilyNetworkAuthLevel? {
         val guest = networkPassword
-        if (guest.isNullOrBlank()) {
+        val host = networkHostPassword
+        if (guest.isNullOrBlank() && host.isNullOrBlank()) {
             return FamilyNetworkAuthLevel.OPEN
         }
         val provided = headers[FamilyNetworkAuth.PASSWORD_HEADER.lowercase(Locale.ROOT)]?.trim().orEmpty()
         if (provided.isEmpty()) return null
-        if (provided == guest) {
+        if (!host.isNullOrBlank() && provided == host) {
+            return FamilyNetworkAuthLevel.HOST
+        }
+        if (!guest.isNullOrBlank() && provided == guest) {
             return FamilyNetworkAuthLevel.GUEST
         }
         return null
@@ -1873,6 +1883,8 @@ class FamilyNetworkManager(context: Context) {
                 ?: throw IllegalStateException(appContext.getString(R.string.family_msg_71757))
             snapshot.copy(
                 canManage = true,
+                roleId = "admin",
+                roleClass = "admin",
                 agents = emptyList(),
                 participants = BulletinBoardMention.collectParticipants(snapshot.messages),
                 commands = emptyList()
@@ -1910,6 +1922,7 @@ class FamilyNetworkManager(context: Context) {
                 canManage = json.optBoolean("can_manage", false),
                 roleId = json.optString("role_id").takeIf { it.isNotBlank() },
                 roleLabel = json.optString("role_label").takeIf { it.isNotBlank() },
+                roleClass = json.optString("role_class").takeIf { it.isNotBlank() },
                 agents = BulletinBoardSnapshot.parseAgents(json),
                 participants = BulletinBoardSnapshot.parseParticipants(json).ifEmpty {
                     BulletinBoardMention.collectParticipants(messages)

@@ -85,6 +85,36 @@ class BulletinRolesTests(unittest.TestCase):
                 host_password=None,
             )
 
+    def test_resolve_prefers_admin_password(self) -> None:
+        roles = load_roles_config(
+            {
+                "roles": {
+                    "admin": {"password": "secret", "label": "管理员"},
+                    "guest": {"password": "guest", "label": "访客"},
+                }
+            },
+            guest_password=None,
+            host_password=None,
+        )
+        auth = roles.resolve({"X-Network-Service-Password": "secret"})
+        assert auth is not None
+        self.assertTrue(auth.is_admin)
+        self.assertEqual(auth.role_class, "admin")
+
+    def test_auth_session_fields_include_role_class(self) -> None:
+        guest = AuthContext(
+            role_id="guest",
+            role_label="访客",
+            is_admin=False,
+            can_create_boards=False,
+            can_manage_boards=False,
+        )
+        from lmserver.bulletin_roles import auth_session_fields
+
+        fields = auth_session_fields(guest)
+        self.assertEqual(fields["role_class"], "user")
+        self.assertEqual(fields["role_id"], "guest")
+
 
 if __name__ == "__main__":
     unittest.main()

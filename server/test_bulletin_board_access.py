@@ -76,6 +76,39 @@ class BulletinBoardAccessTests(unittest.TestCase):
         )
         self.assertEqual(response["body"]["error"], "board_not_found")
 
+    def test_create_board_rejects_duplicate_name(self) -> None:
+        first = self.store.create_board("徐州行")
+        second = self.store.create_board("徐州行")
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)
+        self.assertTrue(self.store.is_board_name_taken("徐州行"))
+
+    def test_rename_board_rejects_duplicate_name(self) -> None:
+        first = self.store.create_board("A板")
+        second = self.store.create_board("B板")
+        assert first is not None and second is not None
+        updated = self.store.update_board(second.id, name="A板")
+        self.assertIsNone(updated)
+
+    def test_create_board_http_duplicate_name(self) -> None:
+        self.store.create_board("徐州行")
+        response = handle_board_request(
+            self.store,
+            "POST",
+            "/boards",
+            json.dumps({"name": "徐州行"}).encode("utf-8"),
+            self.admin,
+            {},
+        )
+        self.assertEqual(response["status"].value, 400)
+        self.assertEqual(response["body"]["error"], "board_name_duplicate")
+
+    def test_list_boards_includes_role_class(self) -> None:
+        response = handle_board_request(self.store, "GET", "/boards", b"", self.guest, {})
+        self.assertEqual(response["body"]["role_class"], "user")
+        admin_response = handle_board_request(self.store, "GET", "/boards", b"", self.admin, {})
+        self.assertEqual(admin_response["body"]["role_class"], "admin")
+
     def test_create_board_strips_admin_from_role_ids(self) -> None:
         response = handle_board_request(
             self.store,

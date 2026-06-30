@@ -362,6 +362,8 @@ def handle_board_request(
             return _bad_request("invalid_board", str(exc))
         if role_ids is None:
             role_ids = ()
+        if store.is_board_name_taken(name):
+            return _bad_request("board_name_duplicate", f"留言板名称已存在: {name}")
         board = store.create_board(name, role_ids=role_ids)
         if board is None:
             return _bad_request("invalid_board", "创建留言板失败")
@@ -416,6 +418,12 @@ def handle_board_request(
             role_ids = _parse_role_ids_payload(payload)
         except ValueError as exc:
             return _bad_request("invalid_board", str(exc))
+        if name is not None:
+            trimmed_name = str(name).strip()
+            if not trimmed_name:
+                return _bad_request("invalid_board", "留言板名称不能为空")
+            if store.is_board_name_taken(trimmed_name, exclude_board_id=board_id):
+                return _bad_request("board_name_duplicate", f"留言板名称已存在: {trimmed_name}")
         updated = store.update_board(
             board_id,
             name=str(name).strip() if name is not None else None,
@@ -907,6 +915,7 @@ def _get_attachment_blob(
     }
 
 
+from .daemon import clear_server_pid, write_server_pid
 from .paths import config_path as default_config_path
 
 
@@ -947,6 +956,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         config.key_file,
         BulletinBoardHttpHandler,
     )
+    write_server_pid()
     https_server.store = store  # type: ignore[attr-defined]
     https_server.auth_service = auth_service  # type: ignore[attr-defined]
     https_server.max_import_bytes = config.max_import_bytes  # type: ignore[attr-defined]
@@ -1012,6 +1022,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
             zeroconf_client.close()
         https_server.shutdown()
         https_server.server_close()
+        clear_server_pid()
         LOGGER.info("HTTPS 服务已关闭。")
 
 

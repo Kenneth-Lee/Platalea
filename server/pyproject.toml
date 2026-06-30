@@ -29,3 +29,6 @@ include = ["lmserver*"]
 
 [tool.setuptools.package-data]
 lmserver = ["py.typed", "bundled_tls/*.pem"]
+
+[tool.setuptools.data-files]
+"share/lmserver" = ["lmserver-completion.sh"]

@@ -17,12 +17,14 @@ from .daemon import (
     server_status,
     start_background,
     stop_server,
+    wait_until_ready,
 )
 from .paths import (
     app_dir,
     config_path,
     ensure_app_layout,
     ensure_config,
+    log_file,
 )
 from .tls_setup import ensure_tls_materials
 
@@ -58,24 +60,23 @@ def _cmd_start(args: argparse.Namespace) -> int:
     if message:
         print(message)
         return 0
-    if args.background:
-        return start_background(cfg_path)
-    try:
-        config, agent_config = load_config(cfg_path)
-    except Exception as exc:
-        print(f"加载配置失败: {exc}", file=sys.stderr)
+    if start_background(cfg_path) != 0:
         return 1
-    logging.basicConfig(
-        level=getattr(logging, config.log_level, logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    try:
-        return run_server(config, agent_config)
-    except KeyboardInterrupt:
+    probe_host, port, ca, password = load_server_probe(cfg_path)
+    if wait_until_ready(probe_host, port, ca_cert=ca, password=password):
+        print(f"Server ready on port {port}. Log: {log_file()}")
         return 0
-    except Exception as exc:
-        logging.getLogger("local_manager.bulletin_server").exception("留言板服务启动失败: %s", exc)
-        return 1
+    print(
+        f"Server started but not ready within 30s on {probe_host}:{port}. "
+        f"Check {log_file()} for details.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def _cmd_stop(args: argparse.Namespace) -> int:
+    cfg_path = _resolved_config(args.config) if getattr(args, "config", "") else ensure_config(None)
+    return stop_server(cfg_path)
 
 
 def _cmd_serve_daemon(args: argparse.Namespace) -> int:
@@ -99,10 +100,6 @@ def _cmd_serve_daemon(args: argparse.Namespace) -> int:
     except Exception as exc:
         logging.getLogger("local_manager.bulletin_server").exception("留言板服务异常退出: %s", exc)
         return 1
-
-
-def _cmd_stop(_args: argparse.Namespace) -> int:
-    return stop_server()
 
 
 def _cmd_status(args: argparse.Namespace) -> int:
@@ -175,9 +172,10 @@ LocalManager PC 端留言板 HTTPS 服务与 API 命令行工具。
                         创建默认配置文件
   init-tls [--force] [--config PATH]
                         手动安装/覆盖 TLS 证书（通常不必单独运行）
-  start [-b] [--config PATH]
-                        启动 HTTPS + mDNS 服务（-b 后台，默认前台 Ctrl+C 停止）
-  stop                  停止后台服务
+  start [--config PATH]
+                        启动 HTTPS + mDNS 守护进程（日志写入 server.log）
+  stop [--config PATH]
+                        停止本机服务（按 pid 文件或监听端口）
   status [--config PATH]
                         查看运行状态
 
@@ -215,7 +213,7 @@ API 全局选项（写在子命令之前）:
 示例:
   lmserver init-config
   lmserver start
-  lmserver start -b
+  lmserver stop
   lmserver status
   lmserver list-boards
   lmserver get-messages default
@@ -241,18 +239,13 @@ def build_top_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"lmserver {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    start = sub.add_parser("start", help="启动 HTTPS + mDNS 留言板服务", add_help=False)
+    start = sub.add_parser("start", help="启动 HTTPS + mDNS 守护进程", add_help=False)
     start.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
     _config_flag(start)
-    start.add_argument(
-        "-b",
-        "--background",
-        action="store_true",
-        help="后台运行（默认前台，Ctrl+C 停止）",
-    )
 
-    stop = sub.add_parser("stop", help="停止后台服务", add_help=False)
+    stop = sub.add_parser("stop", help="停止本机服务", add_help=False)
     stop.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
+    _config_flag(stop)
     stop.set_defaults(_handler=_cmd_stop)
 
     status = sub.add_parser("status", help="查看服务运行状态", add_help=False)

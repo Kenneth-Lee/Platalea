@@ -169,6 +169,30 @@ class BulletinBoardStore:
                 )
             return sorted(boards, key=lambda item: item.id)
 
+    def is_board_name_taken(self, name: str, *, exclude_board_id: str | None = None) -> bool:
+        with self._lock:
+            return self._is_board_name_taken_locked(name, exclude_board_id=exclude_board_id)
+
+    def _is_board_name_taken_locked(
+        self, name: str, *, exclude_board_id: str | None = None
+    ) -> bool:
+        trimmed = name.strip()
+        if not trimmed:
+            return False
+        if not self._root_dir.exists():
+            return False
+        for board_dir in self._root_dir.iterdir():
+            if not board_dir.is_dir():
+                continue
+            if exclude_board_id and board_dir.name == exclude_board_id:
+                continue
+            meta = self._read_meta(board_dir.name)
+            if meta is None:
+                continue
+            if str(meta.get("name", board_dir.name)).strip() == trimmed:
+                return True
+        return False
+
     def create_board(
         self,
         name: str,
@@ -178,6 +202,8 @@ class BulletinBoardStore:
         if not trimmed:
             return None
         with self._lock:
+            if self._is_board_name_taken_locked(trimmed):
+                return None
             board_id = str(uuid.uuid4())
             board_dir = self._board_dir(board_id)
             board_dir.mkdir(parents=True, exist_ok=True)
@@ -213,6 +239,10 @@ class BulletinBoardStore:
                 return None
             trimmed_name = name.strip() if name is not None else None
             if trimmed_name is not None and not trimmed_name:
+                return None
+            if trimmed_name is not None and self._is_board_name_taken_locked(
+                trimmed_name, exclude_board_id=board_id
+            ):
                 return None
             if trimmed_name is not None:
                 meta["name"] = trimmed_name

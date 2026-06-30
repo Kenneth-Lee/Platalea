@@ -14,6 +14,12 @@ enum class FamilyNetworkAuthLevel {
 
     val canManageBoard: Boolean
         get() = this == OPEN || this == HOST
+
+    val sessionRoleClass: String
+        get() = if (this == GUEST) "user" else "admin"
+
+    val sessionRoleId: String
+        get() = if (this == GUEST) "guest" else "admin"
 }
 
 object BulletinBoardDefaults {
@@ -34,6 +40,17 @@ data class BulletinBoardInfo(
     val roleIds: List<String>? = null
 ) {
     companion object {
+        fun roleIdsFromMeta(meta: JSONObject): List<String>? = when {
+            !meta.has("role_ids") -> null
+            meta.isNull("role_ids") -> emptyList()
+            else -> buildList {
+                val arr = meta.optJSONArray("role_ids") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    add(arr.optString(i).trim())
+                }
+            }.filter { it.isNotEmpty() && it != "admin" }
+        }
+
         fun fromJson(obj: JSONObject): BulletinBoardInfo {
             val roleIds = when {
                 !obj.has("role_ids") -> null
@@ -60,8 +77,15 @@ data class BulletinBoardListResult(
     val boards: List<BulletinBoardInfo>,
     val roleId: String? = null,
     val roleLabel: String? = null,
+    val roleClass: String? = null,
     val canManage: Boolean = false
 )
+
+fun canAccessBoard(authLevel: FamilyNetworkAuthLevel, roleIds: List<String>?): Boolean {
+    if (authLevel.canManageBoard) return true
+    if (roleIds == null) return true
+    return authLevel.sessionRoleId in roleIds
+}
 
 data class BulletinMessage(
     val id: String,
@@ -149,6 +173,7 @@ data class BulletinBoardSnapshot(
     val canManage: Boolean = false,
     val roleId: String? = null,
     val roleLabel: String? = null,
+    val roleClass: String? = null,
     val agents: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
     val commands: List<String> = emptyList()
