@@ -89,12 +89,12 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cert-file",
         default=str(DEFAULT_TLS_SERVER_CERT),
-        help="HTTPS 服务端证书文件，默认 server/tls/pc_server_cert.pem",
+        help="HTTPS 服务端证书文件，默认 pc_tools/tls/pc_server_cert.pem",
     )
     parser.add_argument(
         "--key-file",
         default=str(DEFAULT_TLS_SERVER_KEY),
-        help="HTTPS 服务端私钥文件，默认 server/tls/pc_server_key.pem",
+        help="HTTPS 服务端私钥文件，默认 pc_tools/tls/pc_server_key.pem",
     )
     return parser
 

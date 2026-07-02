@@ -63,7 +63,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--ca-cert",
         default=str(DEFAULT_TLS_CA_CERT),
-        help="私有 CA 根证书路径，默认 server/tls/ca_cert.pem",
+        help="私有 CA 根证书路径，默认 pc_tools/tls/ca_cert.pem",
     )
     parser.add_argument(
         "--tls-fingerprint",

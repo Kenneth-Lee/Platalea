@@ -1,4 +1,4 @@
-"""Unified lmserver CLI: server lifecycle + board API commands."""
+"""Unified platalea CLI: PC local services, board API, and file utilities."""
 from __future__ import annotations
 
 import argparse
@@ -19,6 +19,7 @@ from .daemon import (
     stop_server,
     wait_until_ready,
 )
+from .obfuscate import run_deobfuscate, run_obfuscate
 from .paths import (
     app_dir,
     config_path,
@@ -28,12 +29,19 @@ from .paths import (
 )
 from .tls_setup import ensure_tls_materials
 
-SERVER_COMMANDS = frozenset({
+CLI_NAME = "platalea"
+
+SERVE_COMMANDS = frozenset({
     "start",
     "stop",
     "status",
     "init-config",
     "init-tls",
+})
+
+OBFUSCATE_COMMANDS = frozenset({
+    "obfuscate",
+    "deobfuscate",
 })
 
 
@@ -136,7 +144,7 @@ def _cmd_init_tls(args: argparse.Namespace) -> int:
 
 
 def _run_board_with_auto_start(argv: list[str]) -> int:
-    board_parser = build_board_parser()
+    board_parser = build_board_parser(prog=CLI_NAME)
     args, _unknown = board_parser.parse_known_args(argv)
     host = (args.host or "127.0.0.1").strip().lower()
     local_hosts = {"127.0.0.1", "localhost", "::1"}
@@ -149,7 +157,7 @@ def _run_board_with_auto_start(argv: list[str]) -> int:
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1
-    return run_board_client(argv)
+    return run_board_client(argv, prog=CLI_NAME)
 
 
 def _print_unified_help() -> None:
@@ -157,17 +165,17 @@ def _print_unified_help() -> None:
     cfg = config_path()
     ca = home / "tls" / "ca_cert.pem"
     print(
-        f"""usage: lmserver [--version] <command> ...
+        f"""usage: {CLI_NAME} [--version] <command> ...
 
-LocalManager PC 端留言板 HTTPS 服务与 API 命令行工具。
+LocalManager PC 端本地工具：家庭留言板 HTTPS 服务、API 与文件工具。
 
 配置与数据目录: {home}
   config.json    服务配置（默认 {cfg}）
   boards/        留言板数据
-  tls/           TLS 证书（首次 lmserver start 时自动安装）
+  tls/           TLS 证书（首次 {CLI_NAME} start 时自动安装）
   server.log     后台模式日志
 
-服务管理命令:
+服务管理:
   init-config [--force] [--config PATH]
                         创建默认配置文件
   init-tls [--force] [--config PATH]
@@ -179,7 +187,7 @@ LocalManager PC 端留言板 HTTPS 服务与 API 命令行工具。
   status [--config PATH]
                         查看运行状态
 
-留言板 API 命令（连接本机 127.0.0.1 时，若服务未运行会自动后台启动）:
+留言板 API（连接本机 127.0.0.1 时，若服务未运行会自动后台启动）:
   list-boards           列出所有留言板
   get-agent             查看 AI Agent 配置
   get-messages BOARD    读取指定留言板消息
@@ -199,6 +207,12 @@ LocalManager PC 端留言板 HTTPS 服务与 API 命令行工具。
   import-boardpack INPUT.boardpack [--name NAME] [--role-ids IDS]
                         导入留言板（需 host 密码）
 
+文件工具（与 Android 快速混淆 .qx 格式兼容）:
+  obfuscate INPUT -p PASSWORD [-o OUTPUT] [--in-place] [-q]
+                        混淆文件或目录（输出 .qx）
+  deobfuscate INPUT -p PASSWORD [-o OUTPUT] [--in-place] [-q]
+                        反混淆 .qx 文件或目录
+
 API 全局选项（写在子命令之前）:
   --host HOST           目标主机，默认 127.0.0.1
   --port PORT           HTTPS 端口，未指定时从 --config 读取
@@ -211,32 +225,32 @@ API 全局选项（写在子命令之前）:
   --json                输出原始 JSON
 
 示例:
-  lmserver init-config
-  lmserver start
-  lmserver stop
-  lmserver status
-  lmserver list-boards
-  lmserver get-messages default
-  lmserver post default "Hello from PC"
-  lmserver post default "说明" --attach ./report.pdf
-  lmserver upload-attachment default ./photo.jpg
-  lmserver post-attachment default ./data.zip --content "资料"
-  lmserver create-board "厨房留言"
-  lmserver --host 192.168.1.10 --password guest list-boards
+  {CLI_NAME} init-config
+  {CLI_NAME} start
+  {CLI_NAME} stop
+  {CLI_NAME} status
+  {CLI_NAME} list-boards
+  {CLI_NAME} get-messages default
+  {CLI_NAME} post default "Hello from PC"
+  {CLI_NAME} obfuscate secret.txt -p mypass
+  {CLI_NAME} deobfuscate secret.txt.qx -p mypass
+  {CLI_NAME} --host 192.168.1.10 --password guest list-boards
 
-子命令详细说明: lmserver <command> -h
+子命令详细说明: {CLI_NAME} <command> -h
+
+兼容: 旧命令 lmserver 仍可用（已弃用）。
 """
     )
 
 
 def build_top_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="lmserver",
-        description="LocalManager PC 端留言板 HTTPS 服务。",
+        prog=CLI_NAME,
+        description="LocalManager PC 端本地工具。",
         add_help=False,
     )
     parser.add_argument("-h", "--help", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--version", action="version", version=f"lmserver {__version__}")
+    parser.add_argument("--version", action="version", version=f"{CLI_NAME} {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     start = sub.add_parser("start", help="启动 HTTPS + mDNS 守护进程", add_help=False)
@@ -273,7 +287,7 @@ def build_top_parser() -> argparse.ArgumentParser:
 
 
 def _parse_serve_daemon_argv(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="lmserver _serve-daemon")
+    parser = argparse.ArgumentParser(prog=f"{CLI_NAME} _serve-daemon")
     _config_flag(parser)
     return parser.parse_args(argv)
 
@@ -285,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if argv[0] in {"--version", "-V"}:
-        print(f"lmserver {__version__}")
+        print(f"{CLI_NAME} {__version__}")
         return 0
 
     if argv[0] in {"-h", "--help"} and len(argv) == 1:
@@ -296,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
     if head == "_serve-daemon":
         return _cmd_serve_daemon(_parse_serve_daemon_argv(argv[1:]))
 
-    if head in SERVER_COMMANDS:
+    if head in SERVE_COMMANDS:
         parser = build_top_parser()
         args = parser.parse_args(argv)
         if head == "start":
@@ -306,21 +320,34 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"Missing handler for command: {head}")
         return handler(args)
 
+    if head in OBFUSCATE_COMMANDS:
+        if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
+            if head == "obfuscate":
+                run_obfuscate(["--help"])
+            else:
+                run_deobfuscate(["--help"])
+            return 0
+        if head == "obfuscate":
+            return run_obfuscate(argv[1:])
+        return run_deobfuscate(argv[1:])
+
     if head in BOARD_COMMANDS:
         if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
-            build_board_parser().print_help()
+            build_board_parser(prog=CLI_NAME).print_help()
             return 0
         return _run_board_with_auto_start(argv)
 
-    # Board client global options before subcommand, e.g. lmserver --config ... list-boards
     if head.startswith("-"):
         if "-h" in argv or "--help" in argv:
-            build_board_parser().print_help()
+            build_board_parser(prog=CLI_NAME).print_help()
             return 0
         return _run_board_with_auto_start(argv)
 
     print(f"未知命令: {head}", file=sys.stderr)
-    print("运行 lmserver -h 查看全部命令，或 lmserver <command> -h 查看单项说明。", file=sys.stderr)
+    print(
+        f"运行 {CLI_NAME} -h 查看全部命令，或 {CLI_NAME} <command> -h 查看单项说明。",
+        file=sys.stderr,
+    )
     return 2
 
 

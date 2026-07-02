@@ -3,8 +3,8 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "lmserver"
-description = "LocalManager PC bulletin board server and CLI"
+name = "platalea"
+description = "LocalManager PC tools: family bulletin board service, CLI, and file utilities"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Proprietary" }
@@ -15,7 +15,8 @@ dependencies = [
 ]
 
 [project.scripts]
-lmserver = "lmserver.cli:main"
+platalea = "platalea.cli:main"
+lmserver = "platalea.compat:main_lmserver"
 
 [project.urls]
 Homepage = "https://github.com/Kenneth-Lee-2025/local_manager"
@@ -25,10 +26,10 @@ version = { file = "VERSION" }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["lmserver*"]
+include = ["platalea*"]
 
 [tool.setuptools.package-data]
-lmserver = ["py.typed", "bundled_tls/*.pem"]
+platalea = ["py.typed", "bundled_tls/*.pem"]
 
 [tool.setuptools.data-files]
-"share/lmserver" = ["lmserver-completion.sh"]
+"share/platalea" = ["platalea-completion.sh"]

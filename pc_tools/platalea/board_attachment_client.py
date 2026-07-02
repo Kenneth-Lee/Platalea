@@ -1,4 +1,4 @@
-"""Bulletin board attachment upload helpers for lmserver CLI."""
+"""Bulletin board attachment upload helpers for platalea CLI."""
 from __future__ import annotations
 
 import mimetypes

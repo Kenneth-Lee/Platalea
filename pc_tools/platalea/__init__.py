@@ -1,4 +1,4 @@
-"""LocalManager PC bulletin board server and CLI."""
+"""LocalManager PC tools: family bulletin board service, CLI, and file utilities."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -26,9 +26,14 @@ def _read_version() -> str:
     try:
         from importlib.metadata import PackageNotFoundError, version
 
-        return version("lmserver")
+        return version("platalea")
     except PackageNotFoundError:
-        pass
+        try:
+            from importlib.metadata import version as pkg_version
+
+            return pkg_version("lmserver")
+        except PackageNotFoundError:
+            pass
     except Exception:
         pass
     return "0.0.0"

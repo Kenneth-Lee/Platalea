@@ -266,7 +266,7 @@ def start_background(config_path: Path) -> int:
     cmd = [
         sys.executable,
         "-m",
-        "lmserver",
+        "platalea",
         "_serve-daemon",
         "--config",
         str(config_path),

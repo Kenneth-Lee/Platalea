@@ -88,7 +88,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     if not config_path.exists():
         raise FileNotFoundError(
             f"配置文件不存在: {config_path}\n"
-            f"请复制配置示例到 {config_path.name} 后修改，或运行: lmserver init-config"
+            f"请复制配置示例到 {config_path.name} 后修改，或运行: platalea init-config"
         )
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -938,7 +938,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     if not config.cert_file.exists():
         raise FileNotFoundError(
             f"TLS 证书不存在: {config.cert_file}\n"
-            "请先运行 lmserver start（会自动安装 TLS），或 lmserver init-tls。"
+            "请先运行 platalea start（会自动安装 TLS），或 platalea init-tls。"
         )
     if not config.key_file.exists():
         raise FileNotFoundError(f"TLS 私钥不存在: {config.key_file}")

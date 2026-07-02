@@ -40,7 +40,7 @@ def _openssl_available() -> bool:
 def _generate_tls_with_openssl(tls_home: Path, *, days: int = DEFAULT_VALID_DAYS) -> None:
     if not _openssl_available():
         raise RuntimeError(
-            "OpenSSL is not available. Install OpenSSL or run lmserver init-tls from a machine "
+            "OpenSSL is not available. Install OpenSSL or run platalea init-tls from a machine "
             "that has the bundled development certificates."
         )
 
@@ -52,7 +52,7 @@ def _generate_tls_with_openssl(tls_home: Path, *, days: int = DEFAULT_VALID_DAYS
     pc_csr = tls_home / "pc_server.csr"
     pc_cert = tls_home / "pc_server_cert.pem"
 
-    with tempfile.TemporaryDirectory(prefix="lmserver-tls-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="platalea-tls-") as tmp:
         leaf_ext = Path(tmp) / "leaf_ext.cnf"
         leaf_ext.write_text(
             "\n".join(
@@ -174,7 +174,7 @@ def ensure_tls_materials(config_path: Path, *, force: bool = False) -> Path:
     print(
         f"Generated TLS materials in {tls_home}. "
         "If Android clients cannot connect, regenerate matching CA assets with "
-        "server/generate_tls_materials.sh and rebuild the app.",
+        "pc_tools/generate_tls_materials.sh and rebuild the app.",
         file=sys.stderr,
     )
     return tls_home

@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lmserver.bulletin_roles import ADMIN_ROLE_ID, AuthContext, can_access_board
-from lmserver.bulletin_server import handle_board_request
-from lmserver.bulletin_store import BulletinBoardStore
+from platalea.bulletin_roles import ADMIN_ROLE_ID, AuthContext, can_access_board
+from platalea.bulletin_server import handle_board_request
+from platalea.bulletin_store import BulletinBoardStore
 
 
 class BulletinBoardAccessTests(unittest.TestCase):

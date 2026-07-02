@@ -14,9 +14,9 @@ BOARDS_DIR_NAME = "boards"
 TLS_DIR_NAME = "tls"
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-SERVER_DIR = PACKAGE_DIR.parent
-REPO_ROOT = SERVER_DIR.parent
-EXAMPLE_CONFIG = SERVER_DIR / "config.example.json"
+PC_TOOLS_DIR = PACKAGE_DIR.parent
+REPO_ROOT = PC_TOOLS_DIR.parent
+EXAMPLE_CONFIG = PC_TOOLS_DIR / "config.example.json"
 
 
 def app_dir() -> Path:
@@ -138,4 +138,4 @@ def ensure_config(explicit: str | Path | None = None) -> Path:
 
 
 def dev_repo_tls_dir() -> Path:
-    return SERVER_DIR / "tls"
+    return PC_TOOLS_DIR / "tls"

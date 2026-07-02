@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from lmserver.board_attachment_client import (
+from platalea.board_attachment_client import (
     collect_directory_entries,
     meta_to_attachment_ref,
 )

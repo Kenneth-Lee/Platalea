@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import unittest
 
-from lmserver.bulletin_roles import (
+from platalea.bulletin_roles import (
     ADMIN_ROLE_ID,
     AuthContext,
     can_access_board,
@@ -109,7 +109,7 @@ class BulletinRolesTests(unittest.TestCase):
             can_create_boards=False,
             can_manage_boards=False,
         )
-        from lmserver.bulletin_roles import auth_session_fields
+        from platalea.bulletin_roles import auth_session_fields
 
         fields = auth_session_fields(guest)
         self.assertEqual(fields["role_class"], "user")

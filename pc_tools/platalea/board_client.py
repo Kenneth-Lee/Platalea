@@ -34,28 +34,28 @@ BOARD_COMMANDS = frozenset({
 })
 
 
-def build_parser(*, prog: str = "lmserver") -> argparse.ArgumentParser:
+def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
     home = app_dir()
     parser = argparse.ArgumentParser(
         prog=prog,
         description="LocalManager 留言板 HTTPS API 客户端。",
         epilog=(
-            "示例（本机，默认读取 ~/.localmanager/config.json）：\n"
-            "  lmserver list-boards\n"
-            "  lmserver get-messages default\n"
-            "  lmserver post default \"@qwen2.5 你好\"\n"
-            "  lmserver post default \"说明\" --attach ./report.pdf\n"
-            "  lmserver upload-attachment default ./photo.jpg\n"
-            "  lmserver post-attachment default ./notes.md ./data.zip --content \"资料\"\n"
-            "  lmserver create-board \"厨房留言\"\n"
-            "  lmserver delete-board kitchen\n"
-            "  lmserver get-agent\n"
+            f"示例（本机，默认读取 ~/.localmanager/config.json）：\n"
+            f"  {prog} list-boards\n"
+            f"  {prog} get-messages default\n"
+            f"  {prog} post default \"@qwen2.5 你好\"\n"
+            f"  {prog} post default \"说明\" --attach ./report.pdf\n"
+            f"  {prog} upload-attachment default ./photo.jpg\n"
+            f"  {prog} post-attachment default ./notes.md ./data.zip --content \"资料\"\n"
+            f"  {prog} create-board \"厨房留言\"\n"
+            f"  {prog} delete-board kitchen\n"
+            f"  {prog} get-agent\n"
             "\n"
             "连接局域网内其它设备（不会自动启动本机服务）：\n"
-            "  lmserver --host 192.168.1.10 --password guest list-boards\n"
+            f"  {prog} --host 192.168.1.10 --password guest list-boards\n"
             "\n"
             f"配置与 TLS 默认目录: {home}\n"
-            "连接 127.0.0.1 时若服务未运行，lmserver 会自动后台启动本机服务。"
+            f"连接 127.0.0.1 时若服务未运行，{prog} 会自动后台启动本机服务。"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -639,9 +639,9 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
     return 0 if status < 400 else 1
 
 
-def run_board_client(argv: list[str] | None = None) -> int:
+def run_board_client(argv: list[str] | None = None, *, prog: str = "platalea") -> int:
     """Run board_client with the given argv (defaults to sys.argv[1:])."""
-    parser = build_parser()
+    parser = build_parser(prog=prog)
     args = parser.parse_args(argv)
     return _dispatch_board_client(args, parser)
 
