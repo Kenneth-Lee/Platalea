@@ -100,7 +100,7 @@ _platalea_api_flags() {
 
 _platalea_flag_expects_value() {
     case "$1" in
-        --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p|-o|--output)
+        --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p)
             return 0
             ;;
     esac
@@ -129,7 +129,7 @@ _platalea_split_argv() {
     _PLATALEA_POS=()
     while (( $# > 0 )); do
         case "$1" in
-            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p|-o|--output)
+            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p)
                 shift
                 (( $# > 0 )) && shift
                 ;;
