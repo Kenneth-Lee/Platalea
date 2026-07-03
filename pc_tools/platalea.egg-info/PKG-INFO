@@ -41,7 +41,7 @@ platalea post default "Hello"
 platalea create-board "厨房留言"    # 需 host 密码
 ```
 
-**文件工具**（与 Android「快速混淆」`.qx` 格式兼容）：
+**文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件）：
 
 ```bash
 platalea obfuscate secret.txt -p mypass

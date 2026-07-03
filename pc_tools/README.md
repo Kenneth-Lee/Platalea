@@ -30,11 +30,20 @@ platalea post default "Hello"
 platalea create-board "厨房留言"    # 需 host 密码
 ```
 
-**文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件）：
+**文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件头）：
 
 ```bash
 platalea obfuscate secret.txt -p mypass
 platalea deobfuscate secret.txt.qx -p mypass
+```
+
+**GPG**（需本机安装 `gpg`；密钥默认放在 `~/.localmanager/gnupg/pubring.gpg` 与 `secring.gpg`，可从手机导出）：
+
+```bash
+platalea pass-encrypt notes.md -r RECIPIENT
+platalea pass-decrypt notes.md.pass -p KEYPASS
+platalea quick-encrypt "hello" -r RECIPIENT
+platalea quick-decrypt "$BASE64" -p KEYPASS
 ```
 
 连接远程设备时指定 `--host`，不会自动启动本机服务：

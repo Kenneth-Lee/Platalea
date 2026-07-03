@@ -20,6 +20,7 @@ platalea/cli.py
 platalea/compat.py
 platalea/daemon.py
 platalea/family_common.py
+platalea/gpg_cmd.py
 platalea/obfuscate.py
 platalea/paths.py
 platalea/tls_setup.py

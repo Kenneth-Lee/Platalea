@@ -83,6 +83,7 @@ _platalea_commands() {
     printf '%s\n' \
         start stop status init-config init-tls \
         obfuscate deobfuscate \
+        pass-encrypt pass-decrypt quick-encrypt quick-decrypt \
         list-boards get-agent get-messages \
         post post-attachment upload-attachment \
         create-board delete-board put delete \
