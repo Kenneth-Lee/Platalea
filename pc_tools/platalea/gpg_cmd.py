@@ -12,7 +12,7 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-from .paths import app_dir
+from .paths import gnupg_dir
 
 PASS_EXTENSION = ".pass"
 PGP_ARMOR_BEGIN = "-----BEGIN PGP MESSAGE-----"
@@ -30,11 +30,11 @@ def find_gpg() -> str:
 
 
 def default_pubring_path() -> Path:
-    return app_dir() / "gnupg" / "pubring.gpg"
+    return gnupg_dir() / "pubring.gpg"
 
 
 def default_secring_path() -> Path:
-    return app_dir() / "gnupg" / "secring.gpg"
+    return gnupg_dir() / "secring.gpg"
 
 
 def resolve_keyring(explicit: str | None, default: Path) -> Path:

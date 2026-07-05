@@ -20,6 +20,7 @@ from .daemon import (
     wait_until_ready,
 )
 from .obfuscate import run_deobfuscate, run_obfuscate
+from .config_import import run_import_config
 from .gpg_cmd import (
     run_pass_decrypt,
     run_pass_encrypt,
@@ -63,6 +64,10 @@ GPG_HANDLERS = {
     "quick-encrypt": run_quick_encrypt,
     "quick-decrypt": run_quick_decrypt,
 }
+
+CONFIG_COMMANDS = frozenset({
+    "import-config",
+})
 
 
 def _config_flag(parser: argparse.ArgumentParser) -> None:
@@ -243,6 +248,10 @@ GPG（需本机安装 gpg，密钥默认 ~/.localmanager/gnupg/）:
   quick-decrypt TEXT -p KEYPASS [--secret-keyring PATH]
                         快密解密（Base64 或 armor 密文 → stdout）
 
+配置导入（Android 导出 JSON → ~/.localmanager/）:
+  import-config FILE [--list] [--categories gpg,git,...] [--skip-keys]
+                        导入公钥/私钥等到 PC 配置目录
+
 API 全局选项（写在子命令之前）:
   --host HOST           目标主机，默认 127.0.0.1
   --port PORT           HTTPS 端口，未指定时从 --config 读取
@@ -268,6 +277,7 @@ API 全局选项（写在子命令之前）:
   {CLI_NAME} pass-decrypt notes.md.pass -p keypass
   {CLI_NAME} quick-encrypt "hello" -r me@example.com
   {CLI_NAME} quick-decrypt "$CIPHER" -p keypass
+  {CLI_NAME} import-config ~/Downloads/local_manager_config.json
   {CLI_NAME} --host 192.168.1.10 --password guest list-boards
 
 子命令详细说明: {CLI_NAME} <command> -h
@@ -370,6 +380,14 @@ def main(argv: list[str] | None = None) -> int:
             GPG_HANDLERS[head](["--help"])
             return 0
         return GPG_HANDLERS[head](argv[1:])
+
+    if head in CONFIG_COMMANDS:
+        if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
+            if head == "import-config":
+                run_import_config(["--help"])
+            return 0
+        if head == "import-config":
+            return run_import_config(argv[1:])
 
     if head in BOARD_COMMANDS:
         if len(argv) >= 2 and argv[1] in {"-h", "--help"}:

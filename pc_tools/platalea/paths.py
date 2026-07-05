@@ -12,6 +12,8 @@ LOG_NAME = "server.log"
 INSTANCE_ID_NAME = "instance_id"
 BOARDS_DIR_NAME = "boards"
 TLS_DIR_NAME = "tls"
+GNUPG_DIR_NAME = "gnupg"
+IMPORTED_DIR_NAME = "imported"
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PC_TOOLS_DIR = PACKAGE_DIR.parent
@@ -71,11 +73,21 @@ def log_file() -> Path:
     return app_dir() / LOG_NAME
 
 
+def gnupg_dir() -> Path:
+    return app_dir() / GNUPG_DIR_NAME
+
+
+def imported_dir() -> Path:
+    return app_dir() / IMPORTED_DIR_NAME
+
+
 def ensure_app_layout() -> Path:
     root = app_dir()
     root.mkdir(parents=True, exist_ok=True)
     (root / BOARDS_DIR_NAME).mkdir(parents=True, exist_ok=True)
     (root / TLS_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (root / GNUPG_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (root / IMPORTED_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return root
 
 

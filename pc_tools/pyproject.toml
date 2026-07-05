@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "platalea"
 description = "LocalManager PC tools: family bulletin board service, CLI, and file utilities"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = { text = "Proprietary" }
 authors = [{ name = "Kenny" }]
 dynamic = ["version"]

@@ -84,6 +84,7 @@ _platalea_commands() {
         start stop status init-config init-tls \
         obfuscate deobfuscate \
         pass-encrypt pass-decrypt quick-encrypt quick-decrypt \
+        import-config \
         list-boards get-agent get-messages \
         post post-attachment upload-attachment \
         create-board delete-board put delete \

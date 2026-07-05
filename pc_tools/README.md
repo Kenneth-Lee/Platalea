@@ -46,6 +46,16 @@ platalea quick-encrypt "hello" -r RECIPIENT
 platalea quick-decrypt "$BASE64" -p KEYPASS
 ```
 
+**配置导入**（Android 设置 → 导出配置，或根目录 `local_manager_config.json`）：
+
+```bash
+platalea import-config ~/Downloads/local_manager_config.json --list
+platalea import-config ~/Downloads/local_manager_config.json
+platalea import-config mobile.json --categories gpg,git --skip-keys
+```
+
+写入 `~/.localmanager/gnupg/`（密钥）、`~/.localmanager/imported/`（Git/播放列表等存档）、`config.json` 的 `imported_from_mobile`（家庭网络显示名等）。
+
 连接远程设备时指定 `--host`，不会自动启动本机服务：
 
 ```bash
@@ -105,6 +115,8 @@ source .../platalea-completion.sh
 ## 快速开始（双机测试）
 
 ### 1. 依赖
+
+需要 **Python 3.9+**（考虑现在macOS 自带的版本是 3.9.6 ，以这个版本为基准起点）
 
 ```bash
 python3 -m venv pc_tools/.venv
