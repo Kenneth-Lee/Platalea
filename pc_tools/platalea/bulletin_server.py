@@ -160,7 +160,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
         query_string = self.path.split("?", 1)[1] if "?" in self.path else ""
         if normalized_path.startswith("/boards"):
             auth = self.auth_service.resolve(self._header_map())
-            if auth is None:
+            if auth is None and self.auth_service._roles.auth_required:
                 json_response(
                     self,
                     HTTPStatus.UNAUTHORIZED,

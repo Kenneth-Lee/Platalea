@@ -1,3 +1,17 @@
 config.json
 boards/
 instance_id
+
+# Python egg-info
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+.venv/
+venv/
+ENV/
+env/

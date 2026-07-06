@@ -1,3 +1,0 @@
-[console_scripts]
-lmserver = platalea.compat:main_lmserver
-platalea = platalea.cli:main
