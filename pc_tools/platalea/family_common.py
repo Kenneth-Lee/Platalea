@@ -54,43 +54,30 @@ def normalize_hostname(hostname: str) -> str:
 
 def is_usable_ip(address_text: str) -> bool:
     ip_value = ipaddress.ip_address(address_text)
-    return not (
-        ip_value.is_loopback
-        or ip_value.is_unspecified
-        or ip_value.is_multicast
-    )
+    # 排除回环、未指定、组播和公网地址
+    # 只保留私有地址（RFC 1918）和链路本地地址
+    if ip_value.is_loopback or ip_value.is_unspecified or ip_value.is_multicast:
+        return False
+    # 对于 IPv4，只保留私有地址范围
+    if ip_value.version == 4:
+        # RFC 1918 私有地址范围: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+        # 以及链路本地: 169.254.0.0/16
+        return (
+            ip_value.is_private
+            or ip_value.is_link_local
+            or str(ip_value).startswith("100.")  # CGNAT
+        )
+    # 对于 IPv6，保留唯一本地地址和链路本地地址
+    return ip_value.is_private or ip_value.is_link_local
 
 
 def collect_local_addresses() -> list[ipaddress._BaseAddress]:
     candidates: dict[str, ipaddress._BaseAddress] = {}
-    hostnames = {socket.gethostname(), socket.getfqdn()}
 
-    for hostname in hostnames:
-        if not hostname:
-            continue
-        try:
-            infos = socket.getaddrinfo(
-                hostname,
-                None,
-                family=socket.AF_UNSPEC,
-                type=socket.SOCK_STREAM,
-            )
-        except OSError as exc:
-            LOGGER.debug("解析本机地址失败 hostname=%s exc=%s", hostname, exc)
-            continue
-
-        for info in infos:
-            sockaddr = info[4]
-            address_text = sockaddr[0]
-            try:
-                if is_usable_ip(address_text):
-                    candidates[address_text] = ipaddress.ip_address(address_text)
-            except ValueError:
-                LOGGER.debug("忽略无法识别的地址 %s", address_text)
-
+    # 方法1: 通过 UDP 探测获取本地出口地址（不依赖 DNS）
     probe_targets: list[tuple[int, str]] = [
-        (socket.AF_INET, "192.0.2.1"),
-        (socket.AF_INET6, "2001:db8::1"),
+        (socket.AF_INET, "192.0.2.1"),     # RFC 5737 测试地址
+        (socket.AF_INET6, "2001:db8::1"),   # RFC 3849 文档地址
     ]
     for family, target in probe_targets:
         try:
@@ -101,6 +88,58 @@ def collect_local_addresses() -> list[ipaddress._BaseAddress]:
                     candidates[address_text] = ipaddress.ip_address(address_text)
         except OSError as exc:
             LOGGER.debug("UDP 探测本地出口地址失败 family=%s target=%s exc=%s", family, target, exc)
+
+    # 方法2: 通过网络接口获取地址（如果方法1失败）
+    if not candidates:
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["ifconfig"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if result.returncode == 0:
+                import re
+                # 匹配 inet 地址（IPv4）
+                for match in re.finditer(r"inet\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", result.stdout):
+                    addr = match.group(1)
+                    if is_usable_ip(addr):
+                        candidates[addr] = ipaddress.ip_address(addr)
+                # 匹配 inet6 地址（IPv6）
+                for match in re.finditer(r"inet6\s+([0-9a-fA-F:]+)", result.stdout):
+                    addr = match.group(1)
+                    if is_usable_ip(addr):
+                        candidates[addr] = ipaddress.ip_address(addr)
+        except Exception as exc:
+            LOGGER.debug("ifconfig 获取地址失败: %s", exc)
+
+    # 方法3: 尝试解析主机名（但过滤掉公网地址）
+    if not candidates:
+        hostnames = {socket.gethostname(), socket.getfqdn()}
+        for hostname in hostnames:
+            if not hostname:
+                continue
+            try:
+                infos = socket.getaddrinfo(
+                    hostname,
+                    None,
+                    family=socket.AF_UNSPEC,
+                    type=socket.SOCK_STREAM,
+                )
+            except OSError as exc:
+                LOGGER.debug("解析本机地址失败 hostname=%s exc=%s", hostname, exc)
+                continue
+
+            for info in infos:
+                sockaddr = info[4]
+                address_text = sockaddr[0]
+                try:
+                    if is_usable_ip(address_text):
+                        candidates[address_text] = ipaddress.ip_address(address_text)
+                except ValueError:
+                    LOGGER.debug("忽略无法识别的地址 %s", address_text)
 
     addresses = sorted(
         candidates.values(),

@@ -246,7 +246,9 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
         )
 
     def _header_map(self) -> dict[str, str]:
-        return {key: value for key, value in self.headers.items()}
+        # 返回原始 headers 对象以支持大小写不敏感的头部查找
+        # HTTPMessage 的 get() 方法是大小写不敏感的，而普通 dict 不是
+        return self.headers
 
     def log_message(self, fmt: str, *args: Any) -> None:
         LOGGER.debug("HTTP %s - %s", self.address_string(), fmt % args)
