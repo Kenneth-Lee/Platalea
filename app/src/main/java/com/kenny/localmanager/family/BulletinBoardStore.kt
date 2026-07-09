@@ -22,8 +22,16 @@ class BulletinBoardStore(context: Context) {
 
     fun ensureDefaultBoard() {
         lock.write {
-            boardDir(BulletinBoardDefaults.DEFAULT_BOARD_ID).mkdirs()
             val metaFile = metaFile(BulletinBoardDefaults.DEFAULT_BOARD_ID)
+            val hasAnyBoard = rootDir.listFiles()?.any { dir ->
+                dir.isDirectory && readMeta(dir.name) != null
+            } == true
+            if (!metaFile.exists() && hasAnyBoard) {
+                // Keep existing boards stable: do not force-create an empty "default" board
+                // when the store already has valid boards.
+                return@write
+            }
+            boardDir(BulletinBoardDefaults.DEFAULT_BOARD_ID).mkdirs()
             if (!metaFile.exists()) {
                 metaFile.writeText(
                     JSONObject().apply {

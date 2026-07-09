@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -200,9 +201,11 @@ fun FamilyNetworkScreen(
         if (timeoutMinutes <= 0 || onDismiss == null) {
             return@LaunchedEffect
         }
-        while (remainingMinutes != null && remainingMinutes!! > 0) {
+        while (true) {
+            val left = remainingMinutes ?: break
+            if (left <= 0) break
             delay(60_000)
-            remainingMinutes = remainingMinutes?.minus(1)
+            remainingMinutes = left - 1
         }
         if (remainingMinutes == 0) {
             onDismiss()
@@ -1210,7 +1213,10 @@ private fun BoardPickerDialog(
                                 .height(240.dp),
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
-                            items(boards, key = { it.id }) { board ->
+                            itemsIndexed(
+                                items = boards,
+                                key = { index, board -> "${board.id}#$index" }
+                            ) { _index, board ->
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -1325,7 +1331,10 @@ private fun FamilyPeerListPane(
                 }
             }
         } else {
-            items(state.discoveredServices, key = { it.deviceKey }) { service ->
+            itemsIndexed(
+                items = state.discoveredServices,
+                key = { index, service -> "${service.deviceKey}#$index" }
+            ) { _index, service ->
                 FamilyNetworkServiceCard(
                     service = service,
                     onClick = { onOpenBoard(service) }
@@ -1773,11 +1782,11 @@ private fun BulletinBoardPage(
                 modifier = Modifier.weight(1f),
                 state = listState
             ) {
-                items(
+                itemsIndexed(
                     items = session.messages,
-                    key = { it.id },
-                    contentType = { "bulletin_message" }
-                ) { message ->
+                    key = { index, message -> "${message.id}#${message.seq}#$index" },
+                    contentType = { _index, _message -> "bulletin_message" }
+                ) { _index, message ->
                     if (message.isAiStatus) {
                         BulletinAiStatusRow(message = message)
                     } else if (message.isConversationMessage) {

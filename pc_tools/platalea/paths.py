@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import os
+import platform
 import shutil
 from pathlib import Path
+
+from dataclasses import dataclass
 
 APP_DIR_NAME = ".localmanager"
 CONFIG_NAME = "config.json"
@@ -14,6 +18,7 @@ BOARDS_DIR_NAME = "boards"
 TLS_DIR_NAME = "tls"
 GNUPG_DIR_NAME = "gnupg"
 IMPORTED_DIR_NAME = "imported"
+SERVICE_CONTROL_DIR_NAME = "service_control"
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 PC_TOOLS_DIR = PACKAGE_DIR.parent
@@ -81,6 +86,32 @@ def imported_dir() -> Path:
     return app_dir() / IMPORTED_DIR_NAME
 
 
+@dataclass(frozen=True)
+class ServiceControlPaths:
+    state_root: Path
+    system_units_dir: Path
+    state_file: Path
+    logs_dir: Path
+
+
+def service_control_paths() -> ServiceControlPaths:
+    override = os.environ.get("PLATALEA_SERVICE_CONTROL_ROOT", "").strip()
+    if override:
+        root = Path(override).expanduser().resolve()
+    else:
+        current = platform.system().lower()
+        if current == "darwin":
+            root = Path("/Library/LocalManager") / SERVICE_CONTROL_DIR_NAME
+        else:
+            root = app_dir() / SERVICE_CONTROL_DIR_NAME
+    return ServiceControlPaths(
+        state_root=root,
+        system_units_dir=root / "system_units",
+        state_file=root / "state.json",
+        logs_dir=root / "logs",
+    )
+
+
 def ensure_app_layout() -> Path:
     root = app_dir()
     root.mkdir(parents=True, exist_ok=True)
@@ -88,6 +119,7 @@ def ensure_app_layout() -> Path:
     (root / TLS_DIR_NAME).mkdir(parents=True, exist_ok=True)
     (root / GNUPG_DIR_NAME).mkdir(parents=True, exist_ok=True)
     (root / IMPORTED_DIR_NAME).mkdir(parents=True, exist_ok=True)
+    (root / SERVICE_CONTROL_DIR_NAME).mkdir(parents=True, exist_ok=True)
     return root
 
 

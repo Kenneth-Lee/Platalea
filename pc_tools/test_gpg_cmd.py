@@ -11,6 +11,7 @@ from pathlib import Path
 from platalea.gpg_cmd import (
     GpgError,
     decode_quick_ciphertext,
+    run_list_keys,
     run_pass_decrypt,
     run_pass_encrypt,
     run_quick_decrypt,
@@ -137,6 +138,37 @@ class GpgIntegrationTest(unittest.TestCase):
             capture_output=True,
         )
         self.assertEqual(proc2.stdout.decode("utf-8"), "hello 快密")
+
+    def test_list_keys(self) -> None:
+        proc = subprocess.run(
+            [
+                "platalea",
+                "gpg",
+                "list-keys",
+                "--homedir",
+                str(self.home),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("公钥:", proc.stdout)
+        self.assertIn("私钥:", proc.stdout)
+        self.assertIn("Platalea Test", proc.stdout)
+
+
+class GpgListKeysUnitTest(unittest.TestCase):
+    def test_list_keys_requires_keyring_or_homedir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            import platalea.gpg_cmd as gc
+
+            old_gnupg = gc.gnupg_dir
+            try:
+                gc.gnupg_dir = lambda: Path(tmp)
+                rc = run_list_keys([])
+                self.assertEqual(rc, 1)
+            finally:
+                gc.gnupg_dir = old_gnupg
 
 
 if __name__ == "__main__":

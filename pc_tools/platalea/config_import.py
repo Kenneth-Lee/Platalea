@@ -37,6 +37,8 @@ CATEGORY_RECENT = "recent"
 CATEGORY_EPUB = "epub"
 CATEGORY_OTHER = "other"
 
+DEFAULT_PC_IMPORT_CATEGORIES = frozenset({CATEGORY_GPG, CATEGORY_GIT})
+
 ALL_CATEGORIES = frozenset({
     CATEGORY_GPG,
     CATEGORY_GIT,
@@ -222,7 +224,10 @@ def import_mobile_config(
 ) -> ImportReport:
     obj = load_mobile_config(input_path)
     detected = detect_categories(obj)
-    selected = detected if categories is None else (categories & detected)
+    if categories is None:
+        selected = detected & DEFAULT_PC_IMPORT_CATEGORIES
+    else:
+        selected = categories & detected
     report = ImportReport(categories=selected)
     if categories is not None:
         unknown = categories - ALL_CATEGORIES
@@ -316,7 +321,10 @@ def run_import_config(argv: list[str] | None = None) -> int:
     ap.add_argument("input", type=Path, help="手机导出的 .json 配置文件")
     ap.add_argument(
         "--categories",
-        help=f"导入分类，逗号分隔：{','.join(sorted(ALL_CATEGORIES))}；默认导入文件中检测到的全部分类",
+        help=(
+            f"导入分类，逗号分隔：{','.join(sorted(ALL_CATEGORIES))}；"
+            f"默认仅导入 PC 常用分类：{','.join(sorted(DEFAULT_PC_IMPORT_CATEGORIES))}"
+        ),
     )
     ap.add_argument(
         "--skip-keys",
@@ -347,6 +355,7 @@ def run_import_config(argv: list[str] | None = None) -> int:
             print(f"配置文件: {input_path}")
             print(f"config_version: {obj.get(KEY_CONFIG_VERSION, '?')}")
             print(f"检测到的分类: {', '.join(sorted(detected)) or '(无)'}")
+            print(f"默认将导入: {', '.join(sorted(detected & DEFAULT_PC_IMPORT_CATEGORIES)) or '(无)'}")
             if contains_gpg_keys(obj):
                 print("包含 GPG 密钥: 是")
             else:

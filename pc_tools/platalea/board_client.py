@@ -280,6 +280,90 @@ def resolve_board_id(args: argparse.Namespace) -> str:
     return default
 
 
+def resolve_board_id_for_request(
+    args: argparse.Namespace,
+    *,
+    host: str,
+    port: int,
+    guest_password: str,
+) -> str:
+    """Resolve --board to an actual board ID.
+
+    Accepts exact board ID and board name. For the common legacy case where user passes
+    --board default but multiple boards exist, prefer the board whose *name* is "default"
+    (case-insensitive), then fallback to ID match.
+    """
+    requested = resolve_board_id(args)
+    if not requested:
+        return requested
+
+    # Local host with no explicit --board keeps lightweight behavior.
+    if not str(getattr(args, "board", "") or "").strip():
+        return requested
+
+    try:
+        status, payload = request_api(
+            host,
+            port,
+            "GET",
+            "/boards",
+            password=guest_password,
+            body=None,
+            ca_cert=args.ca_cert,
+            tls_fingerprint=args.tls_fingerprint,
+        )
+    except Exception:
+        return requested
+
+    if status >= 400 or not isinstance(payload, dict) or not payload.get("ok", False):
+        return requested
+
+    boards = payload.get("boards") or []
+    if not isinstance(boards, list) or not boards:
+        return requested
+
+    requested_lower = requested.lower()
+
+    if requested_lower == DEFAULT_BOARD_FALLBACK:
+        by_name_default = [
+            b for b in boards
+            if str(b.get("name", "")).strip().lower() == DEFAULT_BOARD_FALLBACK
+        ]
+        if len(by_name_default) == 1:
+            board_id = str(by_name_default[0].get("id", "")).strip()
+            if board_id:
+                return board_id
+        if len(by_name_default) > 1:
+            with_messages = [
+                b for b in by_name_default if int(b.get("message_count", 0) or 0) > 0
+            ]
+            candidate = with_messages[0] if with_messages else by_name_default[0]
+            board_id = str(candidate.get("id", "")).strip()
+            if board_id:
+                return board_id
+
+    by_id = [b for b in boards if str(b.get("id", "")).strip() == requested]
+    if len(by_id) == 1:
+        return requested
+
+    by_name = [
+        b for b in boards
+        if str(b.get("name", "")).strip().lower() == requested_lower
+    ]
+    if len(by_name) == 1:
+        board_id = str(by_name[0].get("id", "")).strip()
+        if board_id:
+            return board_id
+    if len(by_name) > 1:
+        with_messages = [b for b in by_name if int(b.get("message_count", 0) or 0) > 0]
+        candidate = with_messages[0] if with_messages else by_name[0]
+        board_id = str(candidate.get("id", "")).strip()
+        if board_id:
+            return board_id
+
+    return requested
+
+
 def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str, str]:
     config = load_config_defaults(args.config)
     host = args.host or "127.0.0.1"
@@ -436,6 +520,16 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
         participants = body.get("participants") or []
         commands = body.get("commands") or []
         print(f"留言板: {board_id} 「{name}」  共 {len(messages)} 条")
+        if not messages:
+            diag = body.get("_diag_visible_boards") or []
+            if diag:
+                print("提示: 当前板为空。你当前密码可见的留言板消息数:")
+                for item in diag:
+                    board_name = item.get("name", "")
+                    board_count = item.get("message_count", 0)
+                    board_id_item = item.get("id", "?")
+                    print(f"  - {board_id_item} 「{board_name}」: {board_count} 条")
+                print("可用 --board <id> 指定目标板。")
         if agents:
             print(f"可 @ 模型: {', '.join(agents)}")
         if commands:
@@ -575,7 +669,12 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
     }
     if args.command in board_scoped:
         try:
-            board_id = resolve_board_id(args)
+            board_id = resolve_board_id_for_request(
+                args,
+                host=host,
+                port=port,
+                guest_password=guest_password,
+            )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
@@ -748,6 +847,31 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
     except Exception as exc:
         print(f"请求失败 ({host}:{port}): {exc}", file=sys.stderr)
         return 1
+
+    # Diagnose the common "board looks empty" confusion by showing all visible boards.
+    if (
+        args.command == "get-messages"
+        and status < 400
+        and isinstance(payload, dict)
+        and payload.get("ok", True)
+        and not (payload.get("messages") or [])
+    ):
+        try:
+            list_status, list_payload = request_api(
+                host,
+                port,
+                "GET",
+                "/boards",
+                password=guest_password,
+                body=None,
+                ca_cert=args.ca_cert,
+                tls_fingerprint=args.tls_fingerprint,
+            )
+            if list_status < 400 and isinstance(list_payload, dict) and list_payload.get("ok", False):
+                payload["_diag_visible_boards"] = list_payload.get("boards") or []
+        except Exception:
+            # Best-effort diagnostics only; keep original output path.
+            pass
 
     if args.json:
         print(json.dumps({"status": status, "body": payload}, ensure_ascii=False, indent=2))

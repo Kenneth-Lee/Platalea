@@ -49,6 +49,7 @@ platalea file deobfuscate secret.txt.qx -p mypass
 **GPG**（需本机安装 `gpg`；密钥默认放在 `~/.localmanager/gnupg/pubring.gpg` 与 `secring.gpg`，可从手机导出）：
 
 ```bash
+platalea gpg list-keys
 platalea gpg pass-encrypt notes.md -r RECIPIENT
 platalea gpg pass-decrypt notes.md.pass -p KEYPASS
 platalea gpg quick-encrypt "hello" -r RECIPIENT
@@ -63,6 +64,18 @@ platalea config import ~/Downloads/local_manager_config.json
 platalea config import mobile.json --categories gpg,git --skip-keys
 ```
 
+默认仅导入 PC 侧有直接用途的分类（`gpg,git`）。如需导入其它分类（如 `music/recent/epub/other`）可显式传 `--categories`。
+
+**系统服务控制**（Phase 1：先落地 macOS `launchd` 骨架；其它平台后续补齐）：
+
+```bash
+platalea service status
+platalea service install
+platalea service uninstall
+```
+
+这组命令的设计目标是为无头主机提供“当前用户 owner + 单机单实例 + 后装覆盖前装 + 可卸载”的系统控制面。当前版本已提供 CLI、状态文件与 macOS `launchctl` 接入（需在 macOS 上以 sudo 执行 install/uninstall）；远程关机的特权 broker 链路后续继续接入。
+
 写入 `~/.localmanager/gnupg/`（密钥）、`~/.localmanager/imported/`（Git/播放列表等存档）、`config.json` 的 `imported_from_mobile`（家庭网络显示名等）。
 
 连接远程设备时指定 `--host`，不会自动启动本机服务：
@@ -73,7 +86,7 @@ platalea --host 192.168.1.10 list-boards
 
 版本号来自仓库根目录的 **`VERSION`** 文件（Android 与 `platalea` 各自在构建/打包时读取，互不读对方源码）。
 
-其它管理命令：`platalea stop`、`platalea status`、`platalea help`（或 `platalea help board|gpg|file` 查看分组说明）。
+其它管理命令：`platalea stop`、`platalea status`、`platalea help`（或 `platalea help board|gpg|file|service|power` 查看分组说明）。
 
 ### Shell 自动补全（bash / zsh）
 

@@ -28,11 +28,14 @@ from .daemon import (
 from .obfuscate import run_deobfuscate, run_obfuscate
 from .config_import import run_import_config
 from .gpg_cmd import (
+    run_list_keys,
     run_pass_decrypt,
     run_pass_encrypt,
     run_quick_decrypt,
     run_quick_encrypt,
 )
+from .power_cmd import run_power_shutdown
+from .service_cmd import run_service_install, run_service_status, run_service_uninstall
 from .paths import (
     app_dir,
     config_path,
@@ -50,9 +53,10 @@ SERVE_COMMANDS = frozenset({
     "status",
 })
 
-GROUP_COMMANDS = frozenset({"gpg", "file", "config", "help"})
+GROUP_COMMANDS = frozenset({"gpg", "file", "config", "service", "power", "help"})
 
 GPG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
+    "list-keys": run_list_keys,
     "pass-encrypt": run_pass_encrypt,
     "pass-decrypt": run_pass_decrypt,
     "quick-encrypt": run_quick_encrypt,
@@ -65,6 +69,16 @@ FILE_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
 }
 
 CONFIG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {}
+
+SERVICE_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
+    "install": run_service_install,
+    "uninstall": run_service_uninstall,
+    "status": run_service_status,
+}
+
+POWER_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
+    "shutdown": run_power_shutdown,
+}
 
 
 def run_config_init(argv: list[str] | None = None) -> int:
@@ -95,7 +109,7 @@ CONFIG_SUBCOMMANDS.update({
     "import": run_import_config,
 })
 
-HELP_TOPICS = frozenset({"serve", "board", "gpg", "file", "config"})
+HELP_TOPICS = frozenset({"serve", "board", "gpg", "file", "config", "service", "power"})
 
 
 def _config_flag(parser: argparse.ArgumentParser) -> None:
@@ -249,6 +263,8 @@ API 全局选项（写在子命令之前）:
 
 def _gpg_help() -> str:
     return f"""GPG（需本机安装 gpg，密钥默认 ~/.localmanager/gnupg/）:
+    gpg list-keys [--public-only|--secret-only] [--json]
+                                                检查当前可用公钥/私钥、指纹和 UID（用于确认 -r 收件人）
   gpg pass-encrypt INPUT -r RECIPIENT [-o OUT.pass] [--pubring PATH]
                         公钥加密为 .pass（ASCII armor，兼容 Android 密码保护）
   gpg pass-decrypt INPUT -p KEYPASS [-o OUT] [--secret-keyring PATH]
@@ -277,10 +293,27 @@ def _config_help() -> str:
                         从 Android 导出 JSON 导入公钥/私钥等到 PC"""
 
 
+def _service_help() -> str:
+        return """系统服务控制（Phase 1 骨架）:
+    service install [--config PATH]
+                                                以当前用户为 owner 安装系统控制面与开机自启
+    service uninstall [--keep-state]
+                                                卸载系统控制面与托管服务
+    service status
+                                                查看控制面安装状态与 owner"""
+
+
+def _power_help() -> str:
+        return """系统电源控制（预留）:
+    power shutdown
+                                                请求系统关机（后续接入特权 broker）"""
+
+
 def _examples_help() -> str:
     return f"""示例:
   {CLI_NAME} config init
   {CLI_NAME} start
+    {CLI_NAME} service status
     {CLI_NAME} list-boards
     {CLI_NAME} get-agent
   {CLI_NAME} get-messages
@@ -298,7 +331,7 @@ def _examples_help() -> str:
   {CLI_NAME} help board
   {CLI_NAME} --host 192.168.1.10 --password guest list-boards
 
-分组帮助: {CLI_NAME} help [serve|board|gpg|file|config]
+分组帮助: {CLI_NAME} help [serve|board|gpg|file|config|service|power]
 子命令详细说明: {CLI_NAME} <command> -h  或  {CLI_NAME} gpg pass-encrypt -h"""
 
 
@@ -322,6 +355,10 @@ LocalManager PC 端本地工具：家庭留言板 HTTPS 服务、API 与本地�
 
 {_config_help()}
 
+{_service_help()}
+
+{_power_help()}
+
 {_examples_help()}
 """
     )
@@ -341,6 +378,8 @@ def _print_topic_help(topic: str | None) -> int:
         "gpg": _gpg_help,
         "file": _file_help,
         "config": _config_help,
+        "service": _service_help,
+        "power": _power_help,
     }
     print(printers[topic]())
     print()
@@ -355,6 +394,10 @@ def _print_group_usage(group: str) -> None:
         print(_file_help())
     elif group == "config":
         print(_config_help())
+    elif group == "service":
+        print(_service_help())
+    elif group == "power":
+        print(_power_help())
     else:
         _print_unified_help()
 
@@ -457,6 +500,12 @@ def main(argv: list[str] | None = None) -> int:
     if head == "config":
         return _run_group_command("config", CONFIG_SUBCOMMANDS, argv[1:])
 
+    if head == "service":
+        return _run_group_command("service", SERVICE_SUBCOMMANDS, argv[1:])
+
+    if head == "power":
+        return _run_group_command("power", POWER_SUBCOMMANDS, argv[1:])
+
     if head in BOARD_COMMANDS:
         if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
             build_board_parser(prog=CLI_NAME).print_help()
@@ -471,7 +520,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"未知命令: {head}", file=sys.stderr)
     print(
-        f"运行 {CLI_NAME} help 查看全部命令，或 {CLI_NAME} help [serve|board|gpg|file|config]。",
+        f"运行 {CLI_NAME} help 查看全部命令，或 {CLI_NAME} help [serve|board|gpg|file|config|service|power]。",
         file=sys.stderr,
     )
     return 2

@@ -22,6 +22,17 @@ class GpgError(RuntimeError):
     pass
 
 
+def _resolve_optional_keyring(explicit: str | None, default: Path) -> Path | None:
+    if explicit:
+        path = Path(explicit).expanduser().resolve()
+        if not path.is_file():
+            raise GpgError(f"密钥环不存在: {path}")
+        return path
+    if default.is_file():
+        return default
+    return None
+
+
 def find_gpg() -> str:
     gpg = shutil.which("gpg")
     if not gpg:
@@ -343,6 +354,138 @@ def run_quick_decrypt(argv: list[str] | None = None) -> int:
             passphrase=args.passphrase,
         )
         sys.stdout.buffer.write(plain)
+        return 0
+    except GpgError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+def _collect_keys(gpg: str, home: Path, *, secret: bool) -> list[dict[str, object]]:
+    cmd = [
+        gpg,
+        "--homedir",
+        str(home),
+        "--batch",
+        "--yes",
+        "--with-colons",
+        "--fingerprint",
+        "--list-secret-keys" if secret else "--list-keys",
+    ]
+    proc = _run_gpg(cmd, what="列出密钥")
+    text = proc.stdout.decode("utf-8", errors="replace")
+    rows = [line for line in text.splitlines() if line]
+
+    keys: list[dict[str, object]] = []
+    current: dict[str, object] | None = None
+    start_tag = "sec" if secret else "pub"
+
+    for row in rows:
+        fields = row.split(":")
+        tag = fields[0]
+        if tag == start_tag:
+            if current is not None:
+                keys.append(current)
+            current = {
+                "type": "secret" if secret else "public",
+                "keyid": fields[4] if len(fields) > 4 else "",
+                "fingerprint": "",
+                "uids": [],
+            }
+            continue
+        if current is None:
+            continue
+        if tag == "fpr" and not current.get("fingerprint"):
+            current["fingerprint"] = fields[9] if len(fields) > 9 else ""
+            continue
+        if tag == "uid":
+            uid = fields[9] if len(fields) > 9 else ""
+            if uid:
+                uids = current.get("uids")
+                if isinstance(uids, list):
+                    uids.append(uid)
+
+    if current is not None:
+        keys.append(current)
+    return keys
+
+
+def _print_key_summary(keys: list[dict[str, object]], *, secret: bool) -> None:
+    title = "私钥" if secret else "公钥"
+    print(f"{title}: {len(keys)}")
+    for idx, item in enumerate(keys, start=1):
+        keyid = str(item.get("keyid", "")).strip() or "(unknown-keyid)"
+        fpr = str(item.get("fingerprint", "")).strip()
+        print(f"  [{idx}] keyid={keyid}")
+        if fpr:
+            print(f"      fpr={fpr}")
+        uids = item.get("uids")
+        if isinstance(uids, list):
+            for uid in uids:
+                print(f"      uid={uid}")
+
+
+def run_list_keys(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="platalea gpg list-keys",
+        description="检查当前可用 GPG 公钥/私钥（用于确认 -r 收件人和解密前环境）",
+    )
+    ap.add_argument("--pubring", help=f"公钥环（默认 {default_pubring_path()}）")
+    ap.add_argument("--secret-keyring", help=f"私钥环（默认 {default_secring_path()}）")
+    ap.add_argument("--homedir", type=Path, help="使用已有 GnuPG 目录")
+    ap.add_argument("--public-only", action="store_true", help="仅列出公钥")
+    ap.add_argument("--secret-only", action="store_true", help="仅列出私钥")
+    ap.add_argument("--json", action="store_true", help="以 JSON 输出")
+    args = ap.parse_args(argv)
+
+    if args.public_only and args.secret_only:
+        ap.error("--public-only 与 --secret-only 不能同时使用")
+
+    include_public = not args.secret_only
+    include_secret = not args.public_only
+
+    try:
+        pubring: Path | None = None
+        secring: Path | None = None
+        if args.homedir is None:
+            if include_public:
+                pubring = _resolve_optional_keyring(args.pubring, default_pubring_path())
+            if include_secret:
+                secring = _resolve_optional_keyring(args.secret_keyring, default_secring_path())
+            if include_public and include_secret and pubring is None and secring is None:
+                raise GpgError(
+                    "未找到可用密钥环：请先通过 `platalea config import ...` 导入密钥，"
+                    "或传入 --homedir"
+                )
+            if include_public and not include_secret and pubring is None:
+                raise GpgError("未找到公钥环，请先导入公钥或传入 --pubring/--homedir")
+            if include_secret and not include_public and secring is None:
+                raise GpgError("未找到私钥环，请先导入私钥或传入 --secret-keyring/--homedir")
+
+        with gpg_homedir(pubring=pubring, secring=secring, homedir=args.homedir) as (gpg, home):
+            public_keys = _collect_keys(gpg, home, secret=False) if include_public else []
+            secret_keys = _collect_keys(gpg, home, secret=True) if include_secret else []
+
+        if args.json:
+            import json
+
+            print(
+                json.dumps(
+                    {
+                        "public": public_keys,
+                        "secret": secret_keys,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                )
+            )
+            return 0
+
+        if include_public:
+            _print_key_summary(public_keys, secret=False)
+        if include_secret:
+            _print_key_summary(secret_keys, secret=True)
+        if (include_public and not public_keys) and (include_secret and not secret_keys):
+            print("未检测到任何可用密钥。")
         return 0
     except GpgError as exc:
         print(str(exc), file=sys.stderr)
