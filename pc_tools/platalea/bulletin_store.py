@@ -449,10 +449,11 @@ class BulletinBoardStore:
         self,
         board_id: str,
         message_id: str,
-        content: str,
+        *,
+        content: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> BulletinMessage | None:
-        trimmed = content.strip()
-        if not trimmed:
+        if content is None and attachments is None:
             return None
         with self._lock:
             meta = self._read_meta(board_id)
@@ -469,18 +470,39 @@ class BulletinBoardStore:
             )
             if index < 0:
                 return None
+            current = messages[index]
+            new_content = current.content
+            if content is not None:
+                trimmed = content.strip()
+                if not trimmed:
+                    return None
+                new_content = trimmed
+            new_attachments = current.attachments
+            if attachments is not None:
+                for attachment in current.attachments or []:
+                    attachment_id = str(attachment.get("id", "")).strip()
+                    if attachment_id:
+                        self.attachments.delete_attachment(board_id, attachment_id)
+                attachment_list = attachments
+                for item in attachment_list:
+                    attachment_id = str(item.get("id", ""))
+                    if not attachment_id or not self.attachments.is_attachment_ready(
+                        board_id, attachment_id
+                    ):
+                        return None
+                new_attachments = attachment_list or None
             now = int(time.time() * 1000)
             updated = BulletinMessage(
-                id=messages[index].id,
-                seq=messages[index].seq,
-                author_label=messages[index].author_label,
-                content=trimmed,
-                created_at=messages[index].created_at,
+                id=current.id,
+                seq=current.seq,
+                author_label=current.author_label,
+                content=new_content,
+                created_at=current.created_at,
                 updated_at=now,
                 deleted=False,
-                author_device=messages[index].author_device,
-                attachments=messages[index].attachments,
-                message_kind=messages[index].message_kind,
+                author_device=current.author_device,
+                attachments=new_attachments,
+                message_kind=current.message_kind,
             )
             messages[index] = updated
             self._write_messages(board_id, messages)

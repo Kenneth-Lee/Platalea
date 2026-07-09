@@ -17,21 +17,86 @@ from .paths import config_path as default_config_path, default_ca_cert, app_dir
 
 DEFAULT_CA = str(default_ca_cert())
 DEFAULT_CONFIG = default_config_path()
+DEFAULT_BOARD_FALLBACK = "default"
 
-BOARD_COMMANDS = frozenset({
+BOARD_COMMAND_ORDER = (
     "list-boards",
     "get-agent",
     "get-messages",
     "post",
-    "post-attachment",
-    "upload-attachment",
     "create-board",
     "delete-board",
-    "put",
+    "modify",
     "delete",
+    "download-attachment",
     "export-boardpack",
     "import-boardpack",
-})
+)
+
+BOARD_COMMAND_META: dict[str, dict[str, str]] = {
+    "list-boards": {
+        "usage": "list-boards",
+        "summary": "列出所有留言板",
+    },
+    "get-agent": {
+        "usage": "get-agent",
+        "summary": "查看 AI Agent 配置（可用模型列表）",
+    },
+    "get-messages": {
+        "usage": "get-messages",
+        "summary": "读取留言板消息（--board 指定板，默认同上）",
+    },
+    "post": {
+        "usage": "post [CONTENT] [--attach PATH] [--author NAME]",
+        "summary": "发布消息（正文与 --attach 至少一项；仅附件可省略 CONTENT）",
+    },
+    "create-board": {
+        "usage": "create-board NAME",
+        "summary": "创建留言板（需 host 密码）",
+    },
+    "delete-board": {
+        "usage": "delete-board",
+        "summary": "删除留言板（需 host 密码，--board 指定板）",
+    },
+    "modify": {
+        "usage": "modify MSG_ID [CONTENT] [--attach PATH]",
+        "summary": "修改留言（需 host 密码；无 --attach 仅改正文，有 --attach 则替换附件）",
+    },
+    "delete": {
+        "usage": "delete MSG_ID",
+        "summary": "删除留言（需 host 密码）",
+    },
+    "download-attachment": {
+        "usage": "download-attachment ATTACHMENT_ID [-o PATH] [--file REL]",
+        "summary": "下载留言板附件（目录附件可用 --file 指定内部文件）",
+    },
+    "export-boardpack": {
+        "usage": "export-boardpack OUT",
+        "summary": "导出留言板归档包到文件",
+    },
+    "import-boardpack": {
+        "usage": "import-boardpack FILE",
+        "summary": "从归档包导入留言板（需 host 密码）",
+    },
+}
+
+BOARD_COMMANDS = frozenset(BOARD_COMMAND_ORDER)
+
+
+def render_board_commands_help() -> str:
+    lines = [
+        "留言板 API（--board 指定留言板，默认读 config.json 的 default_board）:",
+    ]
+    for name in BOARD_COMMAND_ORDER:
+        meta = BOARD_COMMAND_META[name]
+        usage = meta["usage"]
+        summary = meta["summary"]
+        if len(usage) <= 28:
+            lines.append(f"  {usage:<30}{summary}")
+        else:
+            lines.append(f"  {usage}")
+            lines.append(f"{'':<24}{summary}")
+    return "\n".join(lines)
 
 
 def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
@@ -42,18 +107,24 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
         epilog=(
             f"示例（本机，默认读取 ~/.localmanager/config.json）：\n"
             f"  {prog} list-boards\n"
-            f"  {prog} get-messages default\n"
-            f"  {prog} post default \"@qwen2.5 你好\"\n"
-            f"  {prog} post default \"说明\" --attach ./report.pdf\n"
-            f"  {prog} upload-attachment default ./photo.jpg\n"
-            f"  {prog} post-attachment default ./notes.md ./data.zip --content \"资料\"\n"
-            f"  {prog} create-board \"厨房留言\"\n"
-            f"  {prog} delete-board kitchen\n"
             f"  {prog} get-agent\n"
+            f"  {prog} get-messages\n"
+            f"  {prog} get-messages --board kitchen\n"
+            f"  {prog} post \"@qwen2.5 你好\"\n"
+            f"  {prog} post \"说明\" --attach ./report.pdf\n"
+            f"  {prog} post --attach ./photo.jpg\n"
+            f"  {prog} modify <message_id> \"更新后的正文\"\n"
+            f"  {prog} delete <message_id>\n"
+            f"  {prog} download-attachment <attachment_id> -o ./downloads/\n"
+            f"  {prog} create-board \"厨房留言\"\n"
+            f"  {prog} delete-board --board kitchen\n"
+            f"  {prog} export-boardpack ./kitchen.boardpack --board kitchen\n"
+            f"  {prog} import-boardpack ./kitchen.boardpack --name \"厨房留言(导入)\"\n"
             "\n"
             "连接局域网内其它设备（不会自动启动本机服务）：\n"
             f"  {prog} --host 192.168.1.10 --password guest list-boards\n"
             "\n"
+            f"默认留言板：config.json 的 default_board（未设置时为 {DEFAULT_BOARD_FALLBACK}）。\n"
             f"配置与 TLS 默认目录: {home}\n"
             f"连接 127.0.0.1 时若服务未运行，{prog} 会自动后台启动本机服务。"
         ),
@@ -76,9 +147,14 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
         help="宿主密码；create/delete 等操作优先使用此密码",
     )
     parser.add_argument(
+        "--board",
+        default="",
+        help=f"留言板 ID（默认读 config.json 的 default_board，否则 {DEFAULT_BOARD_FALLBACK}）",
+    )
+    parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG),
-        help=f"读取配置中的 port 与密码（默认 {DEFAULT_CONFIG}）",
+        help=f"读取配置中的 port、密码与 default_board（默认 {DEFAULT_CONFIG}）",
     )
     parser.add_argument("--ca-cert", default=str(DEFAULT_CA), help="TLS CA 证书路径")
     parser.add_argument(
@@ -93,13 +169,12 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list-boards", help="列出所有留言板")
-    sub.add_parser("get-agent", help="查看 AI Agent 配置（可用模型列表）")
+    sub.add_parser("list-boards", help=BOARD_COMMAND_META["list-boards"]["summary"])
+    sub.add_parser("get-agent", help=BOARD_COMMAND_META["get-agent"]["summary"])
 
-    get_messages = sub.add_parser("get-messages", help="读取指定留言板的消息")
-    get_messages.add_argument("board_id", help="留言板 ID（先用 list-boards 查看）")
+    sub.add_parser("get-messages", help=BOARD_COMMAND_META["get-messages"]["summary"])
 
-    create = sub.add_parser("create-board", help="创建留言板（需 host 密码）")
+    create = sub.add_parser("create-board", help=BOARD_COMMAND_META["create-board"]["summary"])
     create.add_argument("name", help="留言板名称")
     create.add_argument(
         "--role-ids",
@@ -107,12 +182,15 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
         help="授权可见的非 admin 角色，逗号分隔（默认 guest；传空串表示仅 admin 可见）",
     )
 
-    delete_board = sub.add_parser("delete-board", help="删除留言板（需 host 密码）")
-    delete_board.add_argument("board_id", help="留言板 ID")
+    sub.add_parser("delete-board", help=BOARD_COMMAND_META["delete-board"]["summary"])
 
-    post = sub.add_parser("post", help="在指定留言板发布消息")
-    post.add_argument("board_id", help="留言板 ID")
-    post.add_argument("content", help="留言内容")
+    post = sub.add_parser("post", help=BOARD_COMMAND_META["post"]["summary"])
+    post.add_argument(
+        "content",
+        nargs="?",
+        default="",
+        help="留言内容（可省略，仅发附件时用 --attach）",
+    )
     post.add_argument("--author", default="pc-cli", help="显示名称")
     post.add_argument(
         "--attach",
@@ -122,34 +200,47 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
         help="上传附件并随消息发送（可重复指定多个路径）",
     )
 
-    upload_attachment = sub.add_parser("upload-attachment", help="上传附件（不发布消息）")
-    upload_attachment.add_argument("board_id", help="留言板 ID")
-    upload_attachment.add_argument("paths", nargs="+", help="文件或目录路径（可多个）")
-
-    post_attachment = sub.add_parser("post-attachment", help="上传附件并发布消息")
-    post_attachment.add_argument("board_id", help="留言板 ID")
-    post_attachment.add_argument("paths", nargs="+", help="文件或目录路径（可多个）")
-    post_attachment.add_argument(
-        "--content",
-        default="",
-        help="随附件一起发送的文字（省略时自动生成占位说明）",
+    modify = sub.add_parser(
+        "modify",
+        help=BOARD_COMMAND_META["modify"]["summary"],
     )
-    post_attachment.add_argument("--author", default="pc-cli", help="显示名称")
+    modify.add_argument("message_id", help="消息 ID")
+    modify.add_argument(
+        "content",
+        nargs="?",
+        default=None,
+        help="新正文（仅替换附件时可省略）",
+    )
+    modify.add_argument(
+        "--attach",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help="上传新附件并替换消息上的原有附件（可重复）",
+    )
 
-    put = sub.add_parser("put", help="修改留言（需 host 密码）")
-    put.add_argument("board_id", help="留言板 ID")
-    put.add_argument("message_id", help="消息 ID")
-    put.add_argument("content", help="新内容")
-
-    delete = sub.add_parser("delete", help="删除留言（需 host 密码）")
-    delete.add_argument("board_id", help="留言板 ID")
+    delete = sub.add_parser("delete", help=BOARD_COMMAND_META["delete"]["summary"])
     delete.add_argument("message_id", help="消息 ID")
 
-    export_pack = sub.add_parser("export-boardpack", help="导出留言板归档包到文件")
-    export_pack.add_argument("board_id", help="留言板 ID")
+    download_att = sub.add_parser("download-attachment", help=BOARD_COMMAND_META["download-attachment"]["summary"])
+    download_att.add_argument("attachment_id", help="附件 ID（get-messages 输出中可见）")
+    download_att.add_argument(
+        "-o",
+        "--output",
+        default="",
+        help="输出路径（单文件）或目录（目录附件整包解压；默认当前目录下附件名）",
+    )
+    download_att.add_argument(
+        "--file",
+        default="",
+        metavar="REL_PATH",
+        help="目录附件内的相对路径（仅下载其中一个文件）",
+    )
+
+    export_pack = sub.add_parser("export-boardpack", help=BOARD_COMMAND_META["export-boardpack"]["summary"])
     export_pack.add_argument("output", help="输出 .boardpack 路径")
 
-    import_pack = sub.add_parser("import-boardpack", help="从归档包导入留言板（需 host 密码）")
+    import_pack = sub.add_parser("import-boardpack", help=BOARD_COMMAND_META["import-boardpack"]["summary"])
     import_pack.add_argument("input", help="输入 .boardpack 路径")
     import_pack.add_argument("--name", default="", help="覆盖显示名（可选）")
     import_pack.add_argument(
@@ -173,6 +264,20 @@ def load_config_defaults(config_path_arg: str) -> dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
     return raw
+
+
+def resolve_board_id(args: argparse.Namespace) -> str:
+    explicit = str(getattr(args, "board", "") or "").strip()
+    if explicit:
+        return explicit
+    config = load_config_defaults(args.config)
+    default = str(config.get("default_board", DEFAULT_BOARD_FALLBACK)).strip()
+    if not default:
+        raise ValueError(
+            "未指定 --board，且 config.json 中 default_board 为空。"
+            "请 platalea list-boards 查看 ID 后使用 --board，或在 config.json 设置 default_board。"
+        )
+    return default
 
 
 def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str, str]:
@@ -345,18 +450,26 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
             ts = format_timestamp(int(message.get("created_at") or 0))
             content = (message.get("content") or "").replace("\n", " ↵ ")
             msg_id = message.get("id", "")
+            attachments = message.get("attachments") or []
             print(f"[{ts}] {author}")
             print(f"  {content}")
             print(f"  id={msg_id}")
+            if attachments:
+                print("  附件:")
+                for item in attachments:
+                    kind = item.get("kind", "file")
+                    name = item.get("name", "?")
+                    att_id = item.get("id", "?")
+                    print(f"    - {name} ({kind}, attachment_id={att_id})")
             print()
         return
 
     if command == "create-board":
         board = body.get("board") or {}
-        board_id = board.get("id", "?")
+        created_id = board.get("id", "?")
         board_name = board.get("name", "")
         role_ids = board.get("role_ids")
-        print(f"已创建留言板: {board_id} 「{board_name}」")
+        print(f"已创建留言板: {created_id} 「{board_name}」")
         if role_ids is None:
             print("  可见角色: (legacy，所有非 admin 角色可见)")
         elif not role_ids:
@@ -387,25 +500,12 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
                 print(f"    - {name} ({kind}, id={item.get('id', '?')})")
         return
 
-    if command == "upload-attachment":
-        attachments = body.get("attachments") or []
-        print(f"已上传 {len(attachments)} 个附件到 {board_id}:")
-        for item in attachments:
-            kind = item.get("kind", "file")
-            name = item.get("name", "?")
-            print(f"  - {name} ({kind}, id={item.get('id', '?')})")
-        return
-
-    if command == "post-attachment":
-        message = body.get("message") or {}
-        print(f"已发送附件消息到 {board_id}: id={message.get('id')}  author={message.get('author_label')}")
-        attachments = message.get("attachments") or []
-        for item in attachments:
-            print(f"  - {item.get('name', '?')} (id={item.get('id', '?')})")
-        return
-
-    if command in {"put", "delete"}:
+    if command in {"modify", "delete"}:
         print(f"操作成功 (board={board_id})")
+        return
+
+    if command == "download-attachment":
+        print(f"已下载附件到: {body.get('output', '?')}")
         return
 
     print(json.dumps(body, ensure_ascii=False, indent=2))
@@ -429,69 +529,56 @@ def _upload_attachment_refs(args: argparse.Namespace, board_id: str, paths: list
     )
 
 
-def _post_message_with_attachments(
-    args: argparse.Namespace,
-    board_id: str,
-    content: str,
-    attachment_refs: list[dict[str, Any]],
-) -> tuple[int, dict[str, Any]]:
-    host, port, guest_password, _host_password = resolve_connection_args(args)
-    body: dict[str, Any] = {
-        "content": content,
-        "author_label": getattr(args, "author", "pc-cli"),
-    }
-    if attachment_refs:
-        body["attachments"] = attachment_refs
-    return request_api(
-        host,
-        port,
-        "POST",
-        f"/boards/{board_id}/messages",
-        password=guest_password,
-        body=body,
-        ca_cert=args.ca_cert,
-        tls_fingerprint=args.tls_fingerprint,
-    )
-
-
 def _default_attachment_message(count: int) -> str:
     return f"[{count} 个附件]"
+
+
+def _dispatch_modify(args: argparse.Namespace, board_id: str, guest_password: str, host_password: str) -> tuple[str, str, dict[str, Any] | None, str] | int:
+    attach_paths = [item for item in (args.attach or []) if str(item).strip()]
+    content = args.content
+    has_content = content is not None and str(content).strip()
+    if not attach_paths and not has_content:
+        print("错误：未指定 --attach 时必须提供新正文", file=sys.stderr)
+        return 1
+    attachment_refs: list[dict[str, Any]] = []
+    if attach_paths:
+        try:
+            attachment_refs = _upload_attachment_refs(args, board_id, attach_paths)
+        except Exception as exc:
+            print(f"上传附件失败: {exc}", file=sys.stderr)
+            return 1
+    body: dict[str, Any] = {}
+    if has_content:
+        body["content"] = str(content).strip()
+    if attach_paths:
+        body["attachments"] = attachment_refs
+    return (
+        f"/boards/{board_id}/messages/{args.message_id}",
+        "PUT",
+        body,
+        host_password,
+    )
 
 
 def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     host, port, guest_password, host_password = resolve_connection_args(args)
 
-    board_id = getattr(args, "board_id", "")
-
-    if args.command == "upload-attachment":
+    board_id = ""
+    board_scoped = {
+        "get-messages",
+        "post",
+        "modify",
+        "delete",
+        "download-attachment",
+        "export-boardpack",
+        "delete-board",
+    }
+    if args.command in board_scoped:
         try:
-            refs = _upload_attachment_refs(args, board_id, args.paths)
-        except Exception as exc:
-            print(f"上传失败: {exc}", file=sys.stderr)
+            board_id = resolve_board_id(args)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
             return 1
-        if args.json:
-            print(json.dumps({"ok": True, "attachments": refs}, ensure_ascii=False, indent=2))
-        else:
-            print_human("upload-attachment", 200, {"ok": True, "attachments": refs}, board_id)
-        return 0
-
-    if args.command == "post-attachment":
-        try:
-            refs = _upload_attachment_refs(args, board_id, args.paths)
-        except Exception as exc:
-            print(f"上传失败: {exc}", file=sys.stderr)
-            return 1
-        content = args.content.strip() or _default_attachment_message(len(refs))
-        try:
-            status, payload = _post_message_with_attachments(args, board_id, content, refs)
-        except Exception as exc:
-            print(f"发帖失败: {exc}", file=sys.stderr)
-            return 1
-        if args.json:
-            print(json.dumps({"status": status, "body": payload}, ensure_ascii=False, indent=2))
-        else:
-            print_human("post-attachment", status, payload, board_id)
-        return 0 if status < 400 else 1
 
     if args.command == "list-boards":
         path, method, body, password = "/boards", "GET", None, guest_password
@@ -511,6 +598,10 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         path, method, body, password = f"/boards/{board_id}", "DELETE", None, host_password
     elif args.command == "post":
         attach_paths = [item for item in (args.attach or []) if str(item).strip()]
+        content = (args.content or "").strip()
+        if not content and not attach_paths:
+            print("错误：消息正文与 --attach 不能同时为空", file=sys.stderr)
+            return 1
         attachment_refs: list[dict[str, Any]] = []
         if attach_paths:
             try:
@@ -518,7 +609,6 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
             except Exception as exc:
                 print(f"上传附件失败: {exc}", file=sys.stderr)
                 return 1
-        content = args.content.strip()
         if not content and attachment_refs:
             content = _default_attachment_message(len(attachment_refs))
         path = f"/boards/{board_id}/messages"
@@ -527,16 +617,44 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         if attachment_refs:
             body["attachments"] = attachment_refs
         password = guest_password
-    elif args.command == "put":
-        path = f"/boards/{board_id}/messages/{args.message_id}"
-        method = "PUT"
-        body = {"content": args.content}
-        password = host_password
+    elif args.command == "modify":
+        result = _dispatch_modify(args, board_id, guest_password, host_password)
+        if isinstance(result, int):
+            return result
+        path, method, body, password = result
     elif args.command == "delete":
         path = f"/boards/{board_id}/messages/{args.message_id}"
         method = "DELETE"
         body = None
         password = host_password
+    elif args.command == "download-attachment":
+        from .board_attachment_client import download_attachment_to_path
+
+        output_raw = (args.output or "").strip()
+        if output_raw:
+            output = Path(output_raw)
+        else:
+            output = Path.cwd()
+        try:
+            saved = download_attachment_to_path(
+                host,
+                port,
+                board_id=board_id,
+                attachment_id=args.attachment_id,
+                output=output,
+                password=guest_password,
+                ca_cert=args.ca_cert,
+                tls_fingerprint=args.tls_fingerprint,
+                file_path=args.file or "",
+            )
+        except Exception as exc:
+            print(f"下载失败: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"ok": True, "output": str(saved)}, ensure_ascii=False, indent=2))
+        else:
+            print_human("download-attachment", 200, {"ok": True, "output": str(saved)}, board_id)
+        return 0
     elif args.command == "export-boardpack":
         path = f"/boards/{board_id}/export.boardpack"
         method = "GET"
@@ -642,7 +760,7 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
 def run_board_client(argv: list[str] | None = None, *, prog: str = "platalea") -> int:
     """Run board_client with the given argv (defaults to sys.argv[1:])."""
     parser = build_parser(prog=prog)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(list(argv if argv is not None else sys.argv[1:]))
     return _dispatch_board_client(args, parser)
 
 

@@ -310,7 +310,7 @@ def _parse_categories(text: str | None) -> set[str] | None:
 
 def run_import_config(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="platalea import-config",
+        prog="platalea config import",
         description="导入 Android 导出的 local_manager 配置 JSON 到 PC (~/.localmanager/)",
     )
     ap.add_argument("input", type=Path, help="手机导出的 .json 配置文件")

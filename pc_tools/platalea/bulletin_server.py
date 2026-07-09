@@ -88,7 +88,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     if not config_path.exists():
         raise FileNotFoundError(
             f"配置文件不存在: {config_path}\n"
-            f"请复制配置示例到 {config_path.name} 后修改，或运行: platalea init-config"
+            f"请复制配置示例到 {config_path.name} 后修改，或运行: platalea config init"
         )
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
@@ -667,15 +667,31 @@ def handle_board_request(
         payload = _parse_json(body_bytes.decode("utf-8"))
         if payload is None:
             return _bad_request("invalid_json", "请求体不是合法 JSON")
-        content = str(payload.get("content", ""))
-        message = store.update_message(board_id, message_id, content)
+        has_content = "content" in payload
+        has_attachments = "attachments" in payload
+        if not has_content and not has_attachments:
+            return _bad_request(
+                "invalid_message",
+                "修改消息需要 content 和/或 attachments 字段",
+            )
+        content_arg = str(payload.get("content", "")) if has_content else None
+        attachments = payload.get("attachments")
+        attachment_list = attachments if isinstance(attachments, list) else None
+        if has_attachments and attachment_list is None:
+            return _bad_request("invalid_message", "attachments 必须是数组")
+        message = store.update_message(
+            board_id,
+            message_id,
+            content=content_arg,
+            attachments=attachment_list if has_attachments else None,
+        )
         if message is None:
             return {
                 "status": HTTPStatus.NOT_FOUND,
                 "body": {
                     "ok": False,
                     "error": "message_not_found",
-                    "message": "消息不存在或内容为空",
+                    "message": "消息不存在、正文为空或附件无效",
                 },
             }
         snapshot = store.snapshot(board_id)
@@ -940,7 +956,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     if not config.cert_file.exists():
         raise FileNotFoundError(
             f"TLS 证书不存在: {config.cert_file}\n"
-            "请先运行 platalea start（会自动安装 TLS），或 platalea init-tls。"
+            "请先运行 platalea start（会自动安装 TLS），或 platalea config init-tls。"
         )
     if not config.key_file.exists():
         raise FileNotFoundError(f"TLS 私钥不存在: {config.key_file}")

@@ -7,7 +7,7 @@
 ```bash
 cd pc_tools
 pip install .          # 或 pip install -e . 开发模式
-platalea init-config   # 写入 ~/.localmanager/config.json
+platalea config init   # 写入 ~/.localmanager/config.json
 platalea start         # 后台守护进程，日志 ~/.localmanager/server.log
 platalea stop          # 停止服务
 ```
@@ -21,37 +21,46 @@ platalea stop          # 停止服务
 | `~/.localmanager/tls/` | TLS 证书 |
 | `~/.localmanager/server.log` | 后台模式日志 |
 
-**留言板 API 子命令**（与原 `board_client.py` 相同；连接本机时若服务未运行会自动后台启动）：
+**留言板 API 子命令**（`--board` 指定留言板，默认读 config.json 的 `default_board`；连接本机时若服务未运行会自动后台启动）：
 
 ```bash
 platalea list-boards
-platalea get-messages default
-platalea post default "Hello"
+platalea get-agent
+platalea get-messages
+platalea post "Hello"
+platalea post --attach ./report.pdf
+platalea post "说明" --attach ./report.pdf --board kitchen
+platalea modify <message_id> "更新后的正文"
+platalea delete <message_id>
+platalea download-attachment <attachment_id> -o ./downloads/
 platalea create-board "厨房留言"    # 需 host 密码
+platalea delete-board --board kitchen
+platalea export-boardpack ./kitchen.boardpack --board kitchen
+platalea import-boardpack ./kitchen.boardpack --name "厨房留言(导入)"
 ```
 
-**文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件头）：
+**本地文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件头）：
 
 ```bash
-platalea obfuscate secret.txt -p mypass
-platalea deobfuscate secret.txt.qx -p mypass
+platalea file obfuscate secret.txt -p mypass
+platalea file deobfuscate secret.txt.qx -p mypass
 ```
 
 **GPG**（需本机安装 `gpg`；密钥默认放在 `~/.localmanager/gnupg/pubring.gpg` 与 `secring.gpg`，可从手机导出）：
 
 ```bash
-platalea pass-encrypt notes.md -r RECIPIENT
-platalea pass-decrypt notes.md.pass -p KEYPASS
-platalea quick-encrypt "hello" -r RECIPIENT
-platalea quick-decrypt "$BASE64" -p KEYPASS
+platalea gpg pass-encrypt notes.md -r RECIPIENT
+platalea gpg pass-decrypt notes.md.pass -p KEYPASS
+platalea gpg quick-encrypt "hello" -r RECIPIENT
+platalea gpg quick-decrypt "$BASE64" -p KEYPASS
 ```
 
 **配置导入**（Android 设置 → 导出配置，或根目录 `local_manager_config.json`）：
 
 ```bash
-platalea import-config ~/Downloads/local_manager_config.json --list
-platalea import-config ~/Downloads/local_manager_config.json
-platalea import-config mobile.json --categories gpg,git --skip-keys
+platalea config import ~/Downloads/local_manager_config.json --list
+platalea config import ~/Downloads/local_manager_config.json
+platalea config import mobile.json --categories gpg,git --skip-keys
 ```
 
 写入 `~/.localmanager/gnupg/`（密钥）、`~/.localmanager/imported/`（Git/播放列表等存档）、`config.json` 的 `imported_from_mobile`（家庭网络显示名等）。
@@ -64,7 +73,7 @@ platalea --host 192.168.1.10 list-boards
 
 版本号来自仓库根目录的 **`VERSION`** 文件（Android 与 `platalea` 各自在构建/打包时读取，互不读对方源码）。
 
-其它管理命令：`platalea stop`、`platalea status`、`platalea --help`。
+其它管理命令：`platalea stop`、`platalea status`、`platalea help`（或 `platalea help board|gpg|file` 查看分组说明）。
 
 ### Shell 自动补全（bash / zsh）
 
@@ -82,10 +91,11 @@ source "$(dirname "$(dirname "$(command -v platalea)")")/share/platalea/platalea
 
 ```bash
 export PLATALEA_HOME=/path/to/.localmanager
+# 兼容旧变量名：LMSERVER_HOME
 source .../platalea-completion.sh
 ```
 
-补全内容：子命令、服务/API 选项、本地留言板 ID（来自 `boards/`）、`put`/`delete` 的消息 ID、附件/配置文件路径。
+补全内容：子命令（含 `gpg`/`file`/`config` 分组）、服务/API 选项、本地留言板 ID（来自 `boards/`）、`modify`/`delete` 的消息 ID、附件/配置文件路径。
 
 脚本会在 source 时检测 shell 类型：bash 用 `complete`，zsh 用原生 `compdef`（不再依赖 `mapfile` / `bashcompinit`）。非交互式 shell 会跳过并提示写入 rc 文件。
 
@@ -107,7 +117,7 @@ source .../platalea-completion.sh
 | `pyproject.toml` | pip 安装入口（包名 `platalea`，命令 `platalea`） |
 | `bulletin_server.py` | 兼容包装（转发到 `platalea`） |
 | `board_client.py` | 兼容包装（转发到 `platalea`） |
-| `config.example.json` | 配置示例（`init-config` 会基于此生成用户目录配置） |
+| `config.example.json` | 配置示例（`config init` 会基于此生成用户目录配置） |
 | `mdns_server.py` | 早期 mDNS 原型（调试用，可保留） |
 | `send_message.py` | 早期 `/message` 调试脚本（已过时） |
 | `generate_tls_materials.sh` | 生成私有 CA、PC 证书、Android 资产 |
@@ -265,9 +275,9 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 ### 典型流程
 
 1. `list-boards` — 列出所有留言板，记下 **board_id**（如 `default`、`kitchen`）
-2. `get-messages <board_id>` — 查看该板消息（输出含 message id，供改删用）
-3. `post <board_id> "内容"` — 发帖；可 `@模型名` 触发 Agent
-4. 需要管理时：`create-board`、`delete-board`、`put`、`delete`（需 host 密码）
+2. `get-messages` — 查看默认板消息（`--board kitchen` 指定其它板；输出含 message id，供改删用）
+3. `post "内容"` — 发帖；可 `@模型名` 触发 Agent；`--attach` 可重复上传附件
+4. 需要管理时：`create-board`、`delete-board`、`modify`、`delete`（需 host 密码）
 
 ### 全局选项
 
@@ -275,7 +285,8 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 |------|------|
 | `--host` | 目标主机，默认 `127.0.0.1`（本机服务） |
 | `--port` | HTTPS 端口；未指定时从 `--config` 读取，否则 8765 |
-| `--config` | 读取 `config.json` 中的 `port`、`guest_password`、`host_password` |
+| `--board` | 留言板 ID；未指定时读 config.json 的 `default_board`（默认 `default`） |
+| `--config` | 读取 `config.json` 中的 `port`、`guest_password`、`host_password`、`default_board` |
 | `--password` | guest 密码（读板、发帖）；未指定时从 config 读取 |
 | `--host-password` | host 密码（创建/删除板、改删消息）；未指定时从 config 读取 |
 | `--ca-cert` | TLS CA 证书，默认 `pc_tools/tls/ca_cert.pem` |
@@ -288,50 +299,59 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 |------|------|------|----------|
 | `list-boards` | — | guest | `GET /boards` |
 | `get-agent` | — | guest | `GET /agent` |
-| `get-messages` | `<board_id>` | guest | `GET /boards/{id}/messages` |
-| `post` | `<board_id> <content>` | guest | `POST /boards/{id}/messages` |
+| `get-messages` | — | guest | `GET /boards/{id}/messages` |
+| `post` | `[content]` | guest | `POST /boards/{id}/messages` |
 | `create-board` | `<name>` | host | `POST /boards` |
-| `delete-board` | `<board_id>` | host | `DELETE /boards/{id}` |
-| `put` | `<board_id> <message_id> <content>` | host | `PUT /boards/{id}/messages/{msgId}` |
-| `delete` | `<board_id> <message_id>` | host | `DELETE /boards/{id}/messages/{msgId}` |
-| `export-boardpack` | `<board_id> <output.boardpack>` | guest+可见 | `GET /boards/{id}/export.boardpack` |
+| `delete-board` | — | host | `DELETE /boards/{id}` |
+| `modify` | `[content]` | host | `PUT /boards/{id}/messages/{msgId}` |
+| `delete` | `<message_id>` | host | `DELETE /boards/{id}/messages/{msgId}` |
+| `download-attachment` | `<attachment_id>` | guest | `GET /boards/{id}/attachments/{attId}/blob` |
+| `export-boardpack` | `<output.boardpack>` | guest+可见 | `GET /boards/{id}/export.boardpack` |
 | `import-boardpack` | `<input.boardpack>` | host | `POST /boards/import` |
 
-`post` 可选 `--author <名称>` 指定显示名，默认 `pc-cli`。
+`post` 可选 `--author <名称>` 指定显示名，默认 `pc-cli`；`--attach PATH` 可重复（正文与附件至少一项，仅附件时可省略正文）。
 
-**凡操作具体留言板，必须在命令中显式传入 `board_id`**（第一个 positional 参数），不再使用隐藏的默认板。
+`modify` 无 `--attach` 时仅修改正文；带 `--attach` 时上传新附件并**替换**消息上的原有附件（正文可选，可只换附件）。
+
+`download-attachment` 用 `get-messages` 输出中的 `attachment_id`；目录附件可用 `--file REL_PATH` 只取其中一个文件，或 `-o 目录/` 整包解压。
+
+非默认留言板一律用 **`--board`** 指定，不再把 `board_id` 写在 positional 参数里。
 
 ### 示例
 
 ```bash
 # 使用 config.json（推荐本机调试）
-python3 pc_tools/board_client.py --config pc_tools/config.json list-boards
-python3 pc_tools/board_client.py --config pc_tools/config.json get-messages default
-python3 pc_tools/board_client.py --config pc_tools/config.json get-agent
-python3 pc_tools/board_client.py --config pc_tools/config.json post default "@qwen2.5 总结一下"
-python3 pc_tools/board_client.py --config pc_tools/config.json post default "普通留言" --author kenny
-python3 pc_tools/board_client.py --config pc_tools/config.json create-board "厨房留言"
-python3 pc_tools/board_client.py --config pc_tools/config.json delete-board kitchen
+platalea --config pc_tools/config.json list-boards
+platalea --config pc_tools/config.json get-messages
+platalea --config pc_tools/config.json get-agent
+platalea --config pc_tools/config.json post "@qwen2.5 总结一下"
+platalea --config pc_tools/config.json post "普通留言" --author kenny
+platalea --config pc_tools/config.json post --attach ./report.pdf
+platalea --config pc_tools/config.json create-board "厨房留言"
+platalea --config pc_tools/config.json delete-board --board kitchen
 
 # 本机、手动指定密码（不读 config）
-python3 pc_tools/board_client.py list-boards --password guest
-python3 pc_tools/board_client.py get-messages default --password guest
+platalea list-boards --password guest
+platalea get-messages --password guest
 
 # 连接局域网内另一台 PC
-python3 pc_tools/board_client.py --host 192.168.1.100 --password guest list-boards
-python3 pc_tools/board_client.py --host 192.168.1.100 --password guest get-messages default
+platalea --host 192.168.1.100 --password guest list-boards
+platalea --host 192.168.1.100 --password guest get-messages --board default
 
 # 改/删消息（host 密码）
-python3 pc_tools/board_client.py --config pc_tools/config.json \
-  put default <message_id> "新内容"
-python3 pc_tools/board_client.py --config pc_tools/config.json \
-  delete default <message_id>
+platalea --config pc_tools/config.json modify <message_id> "新内容"
+platalea --config pc_tools/config.json modify <message_id> --attach ./new.pdf
+platalea --config pc_tools/config.json delete <message_id>
+
+# 下载附件
+platalea download-attachment <attachment_id> -o ./saved.bin
+platalea download-attachment <attachment_id> -o ./out/ --file docs/readme.md
 
 # 原始 JSON（脚本集成）
-python3 pc_tools/board_client.py list-boards --password guest --json
+platalea list-boards --password guest --json
 ```
 
-`get-messages` 的人可读输出会列出每条消息的 `id=`，复制后用于 `put` / `delete`。
+`get-messages` 的人可读输出会列出每条消息的 `id=` 与 `attachment_id=`，复制后用于 `modify` / `delete` / `download-attachment`。
 
 可选 `--tls-fingerprint <sha256>` 做证书指纹固定（与 mDNS TXT `tls_fp_sha256` 一致）。
 

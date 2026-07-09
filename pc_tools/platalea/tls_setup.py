@@ -40,7 +40,7 @@ def _openssl_available() -> bool:
 def _generate_tls_with_openssl(tls_home: Path, *, days: int = DEFAULT_VALID_DAYS) -> None:
     if not _openssl_available():
         raise RuntimeError(
-            "OpenSSL is not available. Install OpenSSL or run platalea init-tls from a machine "
+            "OpenSSL is not available. Install OpenSSL or run platalea config init-tls from a machine "
             "that has the bundled development certificates."
         )
 

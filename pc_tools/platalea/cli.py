@@ -5,10 +5,16 @@ import argparse
 import json
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from . import __version__
-from .board_client import BOARD_COMMANDS, build_parser as build_board_parser, run_board_client
+from .board_client import (
+    BOARD_COMMANDS,
+    build_parser as build_board_parser,
+    render_board_commands_help,
+    run_board_client,
+)
 from .bulletin_server import load_config, run_server
 from .daemon import (
     already_running_message,
@@ -42,32 +48,54 @@ SERVE_COMMANDS = frozenset({
     "start",
     "stop",
     "status",
-    "init-config",
-    "init-tls",
 })
 
-OBFUSCATE_COMMANDS = frozenset({
-    "obfuscate",
-    "deobfuscate",
-})
+GROUP_COMMANDS = frozenset({"gpg", "file", "config", "help"})
 
-GPG_COMMANDS = frozenset({
-    "pass-encrypt",
-    "pass-decrypt",
-    "quick-encrypt",
-    "quick-decrypt",
-})
-
-GPG_HANDLERS = {
+GPG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
     "pass-encrypt": run_pass_encrypt,
     "pass-decrypt": run_pass_decrypt,
     "quick-encrypt": run_quick_encrypt,
     "quick-decrypt": run_quick_decrypt,
 }
 
-CONFIG_COMMANDS = frozenset({
-    "import-config",
+FILE_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
+    "obfuscate": run_obfuscate,
+    "deobfuscate": run_deobfuscate,
+}
+
+CONFIG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {}
+
+
+def run_config_init(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog=f"{CLI_NAME} config init",
+        description=f"创建默认配置（{app_dir()}）",
+    )
+    parser.add_argument("--config", default="", help="自定义配置文件路径")
+    parser.add_argument("--force", action="store_true", help="覆盖已有配置文件")
+    args = parser.parse_args(argv)
+    return _cmd_init_config(args)
+
+
+def run_config_init_tls(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog=f"{CLI_NAME} config init-tls",
+        description="安装 TLS 证书（通常 start 会自动安装）",
+    )
+    _config_flag(parser)
+    parser.add_argument("--force", action="store_true", help="覆盖已有 TLS 文件")
+    args = parser.parse_args(argv)
+    return _cmd_init_tls(args)
+
+
+CONFIG_SUBCOMMANDS.update({
+    "init": run_config_init,
+    "init-tls": run_config_init_tls,
+    "import": run_import_config,
 })
+
+HELP_TOPICS = frozenset({"serve", "board", "gpg", "file", "config"})
 
 
 def _config_flag(parser: argparse.ArgumentParser) -> None:
@@ -185,106 +213,174 @@ def _run_board_with_auto_start(argv: list[str]) -> int:
     return run_board_client(argv, prog=CLI_NAME)
 
 
-def _print_unified_help() -> None:
-    home = app_dir()
-    cfg = config_path()
-    ca = home / "tls" / "ca_cert.pem"
-    print(
-        f"""usage: {CLI_NAME} [--version] <command> ...
-
-LocalManager PC 端本地工具：家庭留言板 HTTPS 服务、API 与文件工具。
-
-配置与数据目录: {home}
+def _data_dir_blurb(home: Path, cfg: Path) -> str:
+    return f"""配置与数据目录: {home}
   config.json    服务配置（默认 {cfg}）
   boards/        留言板数据
   tls/           TLS 证书（首次 {CLI_NAME} start 时自动安装）
-  server.log     后台模式日志
+  server.log     后台模式日志"""
 
-服务管理:
-  init-config [--force] [--config PATH]
-                        创建默认配置文件
-  init-tls [--force] [--config PATH]
-                        手动安装/覆盖 TLS 证书（通常不必单独运行）
+
+def _serve_help() -> str:
+    return f"""服务管理:
   start [--config PATH]
                         启动 HTTPS + mDNS 守护进程（日志写入 server.log）
   stop [--config PATH]
                         停止本机服务（按 pid 文件或监听端口）
   status [--config PATH]
-                        查看运行状态
+                        查看运行状态"""
 
-留言板 API（连接本机 127.0.0.1 时，若服务未运行会自动后台启动）:
-  list-boards           列出所有留言板
-  get-agent             查看 AI Agent 配置
-  get-messages BOARD    读取指定留言板消息
-  post BOARD CONTENT [--author NAME] [--attach PATH]
-                        发布消息（--attach 可重复，上传附件并随消息发送）
-  upload-attachment BOARD PATH [PATH...]
-                        上传附件（不发布消息）
-  post-attachment BOARD PATH [PATH...] [--content TEXT] [--author NAME]
-                        上传附件并发布消息
-  create-board NAME     创建留言板（需 host 密码）
-  delete-board BOARD    删除留言板（需 host 密码）
-  put BOARD MSG_ID CONTENT
-                        修改留言（需 host 密码）
-  delete BOARD MSG_ID   删除留言（需 host 密码）
-  export-boardpack BOARD OUTPUT.boardpack
-                        导出留言板归档包
-  import-boardpack INPUT.boardpack [--name NAME] [--role-ids IDS]
-                        导入留言板（需 host 密码）
 
-文件工具（与 Android 快速混淆 .qx 格式兼容，原地修改）:
-  obfuscate INPUT -p PASSWORD [-q]
-                        混淆文件或目录（原文件变为 .qx）
-  deobfuscate INPUT -p PASSWORD [-q]
-                        反混淆 .qx 文件或目录（恢复原名）
-
-GPG（需本机安装 gpg，密钥默认 ~/.localmanager/gnupg/）:
-  pass-encrypt INPUT -r RECIPIENT [-o OUT.pass] [--pubring PATH]
-                        公钥加密为 .pass（ASCII armor，兼容 Android 密码保护）
-  pass-decrypt INPUT -p KEYPASS [-o OUT] [--secret-keyring PATH]
-                        解密 .pass 文件
-  quick-encrypt TEXT -r RECIPIENT [--pubring PATH]
-                        快密加密，输出 Base64（兼容 Android 快密 Tab）
-  quick-decrypt TEXT -p KEYPASS [--secret-keyring PATH]
-                        快密解密（Base64 或 armor 密文 → stdout）
-
-配置导入（Android 导出 JSON → ~/.localmanager/）:
-  import-config FILE [--list] [--categories gpg,git,...] [--skip-keys]
-                        导入公钥/私钥等到 PC 配置目录
+def _board_help() -> str:
+        return f"""{render_board_commands_help()}
 
 API 全局选项（写在子命令之前）:
   --host HOST           目标主机，默认 127.0.0.1
   --port PORT           HTTPS 端口，未指定时从 --config 读取
+  --board BOARD         留言板 ID（默认 default_board）
   --password PASSWORD   guest 密码，未指定时从 config 读取
   --host-password PASSWORD
                         host 密码（create/delete 等管理操作）
-  --config PATH         配置文件（默认 {cfg}）
-  --ca-cert PATH        CA 证书（默认 {ca}）
+  --config PATH         配置文件
+  --ca-cert PATH        CA 证书
   --tls-fingerprint HEX 可选，固定服务端 TLS SHA-256 指纹
-  --json                输出原始 JSON
+  --json                输出原始 JSON"""
 
-示例:
-  {CLI_NAME} init-config
+
+def _gpg_help() -> str:
+    return f"""GPG（需本机安装 gpg，密钥默认 ~/.localmanager/gnupg/）:
+  gpg pass-encrypt INPUT -r RECIPIENT [-o OUT.pass] [--pubring PATH]
+                        公钥加密为 .pass（ASCII armor，兼容 Android 密码保护）
+  gpg pass-decrypt INPUT -p KEYPASS [-o OUT] [--secret-keyring PATH]
+                        解密 .pass 文件
+  gpg quick-encrypt TEXT -r RECIPIENT [--pubring PATH]
+                        快密加密，输出 Base64（兼容 Android 快密 Tab）
+  gpg quick-decrypt TEXT -p KEYPASS [--secret-keyring PATH]
+                        快密解密（Base64 或 armor 密文 → stdout）"""
+
+
+def _file_help() -> str:
+    return f"""本地文件工具（与 Android 快速混淆 .qx 格式兼容，原地修改）:
+  file obfuscate INPUT -p PASSWORD [-q]
+                        混淆文件或目录（原文件变为 .qx）
+  file deobfuscate INPUT -p PASSWORD [-q]
+                        反混淆 .qx 文件或目录（恢复原名）"""
+
+
+def _config_help() -> str:
+    return f"""配置（~/.localmanager/）:
+  config init [--force] [--config PATH]
+                        创建默认 config.json
+  config init-tls [--force] [--config PATH]
+                        手动安装/覆盖 TLS 证书（通常 start 会自动安装）
+  config import FILE [--list] [--categories gpg,git,...] [--skip-keys]
+                        从 Android 导出 JSON 导入公钥/私钥等到 PC"""
+
+
+def _examples_help() -> str:
+    return f"""示例:
+  {CLI_NAME} config init
   {CLI_NAME} start
-  {CLI_NAME} stop
-  {CLI_NAME} status
-  {CLI_NAME} list-boards
-  {CLI_NAME} get-messages default
-  {CLI_NAME} post default "Hello from PC"
-  {CLI_NAME} obfuscate secret.txt -p mypass
-  {CLI_NAME} deobfuscate secret.txt.qx -p mypass
-  {CLI_NAME} pass-encrypt notes.md -r 0xABCD1234
-  {CLI_NAME} pass-decrypt notes.md.pass -p keypass
-  {CLI_NAME} quick-encrypt "hello" -r me@example.com
-  {CLI_NAME} quick-decrypt "$CIPHER" -p keypass
-  {CLI_NAME} import-config ~/Downloads/local_manager_config.json
+    {CLI_NAME} list-boards
+    {CLI_NAME} get-agent
+  {CLI_NAME} get-messages
+    {CLI_NAME} post "Hello from PC" --author kenny
+  {CLI_NAME} post --attach ./report.pdf --board kitchen
+    {CLI_NAME} modify <message_id> "更新后的正文"
+    {CLI_NAME} delete <message_id>
+    {CLI_NAME} download-attachment <attachment_id> -o ./downloads/
+    {CLI_NAME} export-boardpack ./kitchen.boardpack --board kitchen
+    {CLI_NAME} import-boardpack ./kitchen.boardpack --name "厨房留言(导入)"
+  {CLI_NAME} file obfuscate secret.txt -p mypass
+  {CLI_NAME} gpg pass-encrypt notes.md -r 0xABCD1234
+  {CLI_NAME} gpg quick-decrypt "$CIPHER" -p keypass
+  {CLI_NAME} config import ~/Downloads/local_manager_config.json
+  {CLI_NAME} help board
   {CLI_NAME} --host 192.168.1.10 --password guest list-boards
 
-子命令详细说明: {CLI_NAME} <command> -h
+分组帮助: {CLI_NAME} help [serve|board|gpg|file|config]
+子命令详细说明: {CLI_NAME} <command> -h  或  {CLI_NAME} gpg pass-encrypt -h"""
 
-兼容: 旧命令 lmserver 仍可用（已弃用）。
+
+def _print_unified_help() -> None:
+    home = app_dir()
+    cfg = config_path()
+    print(
+        f"""usage: {CLI_NAME} [--version] <command> ...
+
+LocalManager PC 端本地工具：家庭留言板 HTTPS 服务、API 与本地文件工具。
+
+{_data_dir_blurb(home, cfg)}
+
+{_serve_help()}
+
+{_board_help()}
+
+{_file_help()}
+
+{_gpg_help()}
+
+{_config_help()}
+
+{_examples_help()}
 """
     )
+
+
+def _print_topic_help(topic: str | None) -> int:
+    if topic is None or topic in {"-h", "--help", "all"}:
+        _print_unified_help()
+        return 0
+    if topic not in HELP_TOPICS:
+        print(f"未知帮助主题: {topic}", file=sys.stderr)
+        print(f"可用主题: {', '.join(sorted(HELP_TOPICS))}", file=sys.stderr)
+        return 2
+    printers = {
+        "serve": _serve_help,
+        "board": _board_help,
+        "gpg": _gpg_help,
+        "file": _file_help,
+        "config": _config_help,
+    }
+    print(printers[topic]())
+    print()
+    print(f"完整帮助: {CLI_NAME} help")
+    return 0
+
+
+def _print_group_usage(group: str) -> None:
+    if group == "gpg":
+        print(_gpg_help())
+    elif group == "file":
+        print(_file_help())
+    elif group == "config":
+        print(_config_help())
+    else:
+        _print_unified_help()
+
+
+def _run_group_command(
+    group: str,
+    subcommands: dict[str, Callable[[list[str] | None], int]],
+    argv: list[str],
+) -> int:
+    if not argv or argv[0] in {"-h", "--help"}:
+        _print_group_usage(group)
+        return 0
+    sub = argv[0]
+    if sub in {"-h", "--help"} and len(argv) >= 2 and argv[1] in subcommands:
+        subcommands[argv[1]](["--help"])
+        return 0
+    if sub not in subcommands:
+        names = ", ".join(sorted(subcommands))
+        print(f"未知 {group} 子命令: {sub}", file=sys.stderr)
+        print(f"可用: {names}", file=sys.stderr)
+        print(f"运行 {CLI_NAME} help {group} 查看说明。", file=sys.stderr)
+        return 2
+    if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
+        subcommands[sub](["--help"])
+        return 0
+    return subcommands[sub](argv[1:])
 
 
 def build_top_parser() -> argparse.ArgumentParser:
@@ -310,22 +406,6 @@ def build_top_parser() -> argparse.ArgumentParser:
     status.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
     _config_flag(status)
     status.set_defaults(_handler=_cmd_status)
-
-    init_cfg = sub.add_parser(
-        "init-config",
-        help=f"创建默认配置（{app_dir()}）",
-        add_help=False,
-    )
-    init_cfg.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
-    init_cfg.add_argument("--config", default="", help="自定义配置文件路径")
-    init_cfg.add_argument("--force", action="store_true", help="覆盖已有配置文件")
-    init_cfg.set_defaults(_handler=_cmd_init_config)
-
-    init_tls = sub.add_parser("init-tls", help="安装 TLS 证书（通常 start 会自动安装）", add_help=False)
-    init_tls.add_argument("-h", "--help", action="help", help=argparse.SUPPRESS)
-    _config_flag(init_tls)
-    init_tls.add_argument("--force", action="store_true", help="覆盖已有 TLS 文件")
-    init_tls.set_defaults(_handler=_cmd_init_tls)
 
     return parser
 
@@ -354,6 +434,10 @@ def main(argv: list[str] | None = None) -> int:
     if head == "_serve-daemon":
         return _cmd_serve_daemon(_parse_serve_daemon_argv(argv[1:]))
 
+    if head == "help":
+        topic = argv[1] if len(argv) > 1 else None
+        return _print_topic_help(topic)
+
     if head in SERVE_COMMANDS:
         parser = build_top_parser()
         args = parser.parse_args(argv)
@@ -364,30 +448,14 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"Missing handler for command: {head}")
         return handler(args)
 
-    if head in OBFUSCATE_COMMANDS:
-        if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
-            if head == "obfuscate":
-                run_obfuscate(["--help"])
-            else:
-                run_deobfuscate(["--help"])
-            return 0
-        if head == "obfuscate":
-            return run_obfuscate(argv[1:])
-        return run_deobfuscate(argv[1:])
+    if head == "gpg":
+        return _run_group_command("gpg", GPG_SUBCOMMANDS, argv[1:])
 
-    if head in GPG_COMMANDS:
-        if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
-            GPG_HANDLERS[head](["--help"])
-            return 0
-        return GPG_HANDLERS[head](argv[1:])
+    if head == "file":
+        return _run_group_command("file", FILE_SUBCOMMANDS, argv[1:])
 
-    if head in CONFIG_COMMANDS:
-        if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
-            if head == "import-config":
-                run_import_config(["--help"])
-            return 0
-        if head == "import-config":
-            return run_import_config(argv[1:])
+    if head == "config":
+        return _run_group_command("config", CONFIG_SUBCOMMANDS, argv[1:])
 
     if head in BOARD_COMMANDS:
         if len(argv) >= 2 and argv[1] in {"-h", "--help"}:
@@ -403,7 +471,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"未知命令: {head}", file=sys.stderr)
     print(
-        f"运行 {CLI_NAME} -h 查看全部命令，或 {CLI_NAME} <command> -h 查看单项说明。",
+        f"运行 {CLI_NAME} help 查看全部命令，或 {CLI_NAME} help [serve|board|gpg|file|config]。",
         file=sys.stderr,
     )
     return 2

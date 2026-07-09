@@ -207,7 +207,7 @@ def _default_pass_decrypt_output(input_path: Path) -> Path:
 
 def run_pass_encrypt(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="platalea pass-encrypt",
+        prog="platalea gpg pass-encrypt",
         description="公钥加密为 .pass 文件（OpenPGP ASCII armor，与 Android 密码保护兼容）",
     )
     ap.add_argument("input", nargs="?", type=Path, help="明文文件；省略则从 stdin 读取")
@@ -251,7 +251,7 @@ def run_pass_encrypt(argv: list[str] | None = None) -> int:
 
 def run_pass_decrypt(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="platalea pass-decrypt",
+        prog="platalea gpg pass-decrypt",
         description="解密 .pass 文件（公钥加密，需本地私钥）",
     )
     ap.add_argument("input", nargs="?", type=Path, help=".pass 文件；省略则从 stdin 读取")
@@ -288,7 +288,7 @@ def run_pass_decrypt(argv: list[str] | None = None) -> int:
 
 def run_quick_encrypt(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="platalea quick-encrypt",
+        prog="platalea gpg quick-encrypt",
         description="快密加密：公钥加密后输出 Base64（与 Android 快密 Tab 兼容）",
     )
     ap.add_argument("text", nargs="?", help="明文；省略则从 stdin 读取")
@@ -323,7 +323,7 @@ def run_quick_encrypt(argv: list[str] | None = None) -> int:
 
 def run_quick_decrypt(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
-        prog="platalea quick-decrypt",
+        prog="platalea gpg quick-decrypt",
         description="快密解密：Base64 或 ASCII armor 密文 → 明文 stdout",
     )
     ap.add_argument("text", nargs="?", help="密文；省略则从 stdin 读取")

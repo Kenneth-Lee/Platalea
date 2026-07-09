@@ -109,6 +109,7 @@ class GpgIntegrationTest(unittest.TestCase):
         proc = subprocess.run(
             [
                 "platalea",
+                "gpg",
                 "quick-encrypt",
                 "hello 快密",
                 "-r",
@@ -124,6 +125,7 @@ class GpgIntegrationTest(unittest.TestCase):
         proc2 = subprocess.run(
             [
                 "platalea",
+                "gpg",
                 "quick-decrypt",
                 cipher_b64,
                 "-p",

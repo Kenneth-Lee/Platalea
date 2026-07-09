@@ -4,6 +4,8 @@
 #   source /path/to/platalea-completion.sh
 #
 # Optional:
+#   export PLATALEA_HOME=/path/to/.localmanager
+#   # backward compatible:
 #   export LMSERVER_HOME=/path/to/.localmanager
 
 _platalea_completion_loaded=0
@@ -13,7 +15,9 @@ _platalea_warn() {
 }
 
 _platalea_app_dir() {
-    if [[ -n "${LMSERVER_HOME:-}" ]]; then
+    if [[ -n "${PLATALEA_HOME:-}" ]]; then
+        printf '%s' "$PLATALEA_HOME"
+    elif [[ -n "${LMSERVER_HOME:-}" ]]; then
         printf '%s' "$LMSERVER_HOME"
     else
         printf '%s/.localmanager' "$HOME"
@@ -55,6 +59,31 @@ _platalea_list_board_ids() {
     done
 }
 
+_platalea_default_board() {
+    local app_dir config
+    app_dir="$(_platalea_app_dir)"
+    config="$app_dir/config.json"
+    [[ -f "$config" && -x "$(command -v python3)" ]] || { printf 'default'; return; }
+    python3 - "$config" <<'PY' 2>/dev/null || printf 'default'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    raw = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    print("default")
+else:
+    board = str(raw.get("default_board", "default")).strip()
+    print(board or "default")
+PY
+}
+
+_platalea_effective_board() {
+    if [[ -n "${_PLATALEA_BOARD:-}" ]]; then
+        printf '%s' "$_PLATALEA_BOARD"
+    else
+        _platalea_default_board
+    fi
+}
 _platalea_list_message_ids() {
     local board_id=$1
     local root msg_file
@@ -79,30 +108,89 @@ for item in messages:
 PY
 }
 
+_platalea_list_attachment_ids() {
+    local board_id=$1
+    local root msg_file
+    root="$(_platalea_boards_root)"
+    msg_file="$root/$board_id/messages.json"
+    [[ -f "$msg_file" ]] || return 0
+    python3 - "$msg_file" <<'PY' 2>/dev/null
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+try:
+    messages = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(0)
+if not isinstance(messages, list):
+    raise SystemExit(0)
+seen = set()
+for item in messages:
+    if not isinstance(item, dict) or item.get("deleted"):
+        continue
+    for attachment in item.get("attachments") or []:
+        if not isinstance(attachment, dict):
+            continue
+        att_id = str(attachment.get("id", "")).strip()
+        if att_id and att_id not in seen:
+            seen.add(att_id)
+            print(att_id)
+PY
+}
+
 _platalea_commands() {
     printf '%s\n' \
-        start stop status init-config init-tls \
-        obfuscate deobfuscate \
-        pass-encrypt pass-decrypt quick-encrypt quick-decrypt \
-        import-config \
+        start stop status help \
+        gpg file config \
         list-boards get-agent get-messages \
-        post post-attachment upload-attachment \
-        create-board delete-board put delete \
+        post modify delete download-attachment \
+        create-board delete-board \
         export-boardpack import-boardpack
 }
 
+_platalea_gpg_subcommands() {
+    printf '%s\n' pass-encrypt pass-decrypt quick-encrypt quick-decrypt
+}
+
+_platalea_file_subcommands() {
+    printf '%s\n' obfuscate deobfuscate
+}
+
+_platalea_config_subcommands() {
+    printf '%s\n' init init-tls import
+}
+
+_platalea_help_topics() {
+    printf '%s\n' serve board gpg file config
+}
+
+_platalea_is_group_cmd() {
+    case "$1" in
+        gpg|file|config|help) return 0 ;;
+    esac
+    return 1
+}
+
+_platalea_group_subcommands() {
+    case "$1" in
+        gpg) _platalea_gpg_subcommands ;;
+        file) _platalea_file_subcommands ;;
+        config) _platalea_config_subcommands ;;
+        help) _platalea_help_topics ;;
+    esac
+}
+
 _platalea_global_flags() {
-    printf '%s\n' --help -h --version -V --host --port --password --host-password --config --ca-cert --tls-fingerprint --json
+    printf '%s\n' --help -h --version -V --host --port --board --password --host-password --config --ca-cert --tls-fingerprint --json
 }
 
 _platalea_api_flags() {
     _platalea_global_flags
-    printf '%s\n' --author --attach --content --name --role-ids
+    printf '%s\n' --author --attach --name --role-ids --file -o --output
 }
 
 _platalea_flag_expects_value() {
     case "$1" in
-        --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p)
+        --host|--port|--board|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p)
             return 0
             ;;
     esac
@@ -111,14 +199,14 @@ _platalea_flag_expects_value() {
 
 _platalea_is_server_cmd() {
     case "$1" in
-        start|stop|status|init-config|init-tls) return 0 ;;
+        start|stop|status) return 0 ;;
     esac
     return 1
 }
 
 _platalea_is_board_cmd() {
     case "$1" in
-        list-boards|get-agent|get-messages|post|post-attachment|upload-attachment|create-board|delete-board|put|delete|export-boardpack|import-boardpack)
+        list-boards|get-agent|get-messages|post|modify|delete|download-attachment|create-board|delete-board|export-boardpack|import-boardpack)
             return 0
             ;;
     esac
@@ -128,10 +216,20 @@ _platalea_is_board_cmd() {
 # Words after "platalea" and before the word being completed.
 _platalea_split_argv() {
     _PLATALEA_CMD=""
+    _PLATALEA_SUB=""
     _PLATALEA_POS=()
+    _PLATALEA_BOARD=""
+    local -a positionals=()
     while (( $# > 0 )); do
         case "$1" in
-            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--content|--name|--role-ids|-p)
+            --board)
+                shift
+                if (( $# > 0 )); then
+                    _PLATALEA_BOARD="$1"
+                    shift
+                fi
+                ;;
+            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p)
                 shift
                 (( $# > 0 )) && shift
                 ;;
@@ -139,15 +237,28 @@ _platalea_split_argv() {
                 shift
                 ;;
             *)
-                if [[ -z "$_PLATALEA_CMD" ]]; then
-                    _PLATALEA_CMD="$1"
-                else
-                    _PLATALEA_POS+=("$1")
-                fi
+                positionals+=("$1")
                 shift
                 ;;
         esac
     done
+    if (( ${#positionals[@]} == 0 )); then
+        return 0
+    fi
+    if _platalea_is_group_cmd "${positionals[0]}"; then
+        _PLATALEA_CMD="${positionals[0]}"
+        if (( ${#positionals[@]} > 1 )); then
+            _PLATALEA_SUB="${positionals[1]}"
+            if (( ${#positionals[@]} > 2 )); then
+                _PLATALEA_POS=("${positionals[@]:2}")
+            fi
+        fi
+    else
+        _PLATALEA_CMD="${positionals[0]}"
+        if (( ${#positionals[@]} > 1 )); then
+            _PLATALEA_POS=("${positionals[@]:1}")
+        fi
+    fi
 }
 
 if [[ -n "${BASH_VERSION:-}" ]]; then
@@ -159,7 +270,7 @@ _platalea_completion_bash() {
 
     if _platalea_flag_expects_value "$prev"; then
         case "$prev" in
-            --attach|--config|--ca-cert)
+            --attach|--config|--ca-cert|-o|--output)
                 COMPREPLY=( $(compgen -f -- "$cur") )
                 return 0
                 ;;
@@ -169,6 +280,10 @@ _platalea_completion_bash() {
                 ;;
             --port)
                 COMPREPLY=( $(compgen -W '8765' -- "$cur") )
+                return 0
+                ;;
+            --board)
+                COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") )
                 return 0
                 ;;
         esac
@@ -194,10 +309,34 @@ _platalea_completion_bash() {
     if _platalea_is_server_cmd "$_PLATALEA_CMD"; then
         if [[ "$cur" == -* ]]; then
             case "$_PLATALEA_CMD" in
-                start|status|init-config|init-tls|stop) COMPREPLY=( $(compgen -W '--config --help -h' -- "$cur") ) ;;
+                start|status|stop) COMPREPLY=( $(compgen -W '--config --help -h' -- "$cur") ) ;;
             esac
         elif [[ "$prev" == "--config" ]]; then
             COMPREPLY=( $(compgen -f -- "$cur") )
+        fi
+        return 0
+    fi
+
+    if _platalea_is_group_cmd "$_PLATALEA_CMD"; then
+        if [[ "$cur" == -* ]]; then
+            return 0
+        fi
+        if [[ -z "$_PLATALEA_SUB" ]]; then
+            COMPREPLY=( $(compgen -W "$( _platalea_group_subcommands "$_PLATALEA_CMD" )" -- "$cur") )
+        elif [[ "$_PLATALEA_CMD" == "file" && "$_PLATALEA_SUB" == "obfuscate" || "$_PLATALEA_CMD" == "file" && "$_PLATALEA_SUB" == "deobfuscate" ]]; then
+            if (( ${#_PLATALEA_POS[@]} == 0 )); then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            fi
+        elif [[ "$_PLATALEA_CMD" == "config" && "$_PLATALEA_SUB" == "import" ]]; then
+            if (( ${#_PLATALEA_POS[@]} == 0 )); then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            fi
+        elif [[ "$_PLATALEA_CMD" == "config" && "$_PLATALEA_SUB" == "init" || "$_PLATALEA_CMD" == "config" && "$_PLATALEA_SUB" == "init-tls" ]]; then
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W '--config --force --help -h' -- "$cur") )
+            elif [[ "$prev" == "--config" ]]; then
+                COMPREPLY=( $(compgen -f -- "$cur") )
+            fi
         fi
         return 0
     fi
@@ -208,46 +347,30 @@ _platalea_completion_bash() {
 
     if [[ "$cur" == -* ]]; then
         case "$_PLATALEA_CMD" in
-            post) COMPREPLY=( $(compgen -W "$( _platalea_api_flags )" -- "$cur") ) ;;
-            post-attachment) COMPREPLY=( $(compgen -W "$( _platalea_api_flags )" -- "$cur") ) ;;
-            import-boardpack) COMPREPLY=( $(compgen -W "$( _platalea_api_flags )" -- "$cur") ) ;;
+            post|modify|import-boardpack|download-attachment) COMPREPLY=( $(compgen -W "$( _platalea_api_flags )" -- "$cur") ) ;;
             *) COMPREPLY=( $(compgen -W "$( _platalea_global_flags )" -- "$cur") ) ;;
         esac
         return 0
     fi
 
     local pos_count=${#_PLATALEA_POS[@]}
+    local effective_board
+    effective_board="$(_platalea_effective_board)"
     case "$_PLATALEA_CMD" in
-        get-messages|delete-board|export-boardpack)
+        export-boardpack)
             if (( pos_count == 0 )); then
-                COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") )
-            elif [[ "$_PLATALEA_CMD" == "export-boardpack" ]] && (( pos_count == 1 )); then
                 COMPREPLY=( $(compgen -f -- "$cur") )
             fi
             ;;
-        post)
+        modify|delete)
             if (( pos_count == 0 )); then
-                COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") )
+                COMPREPLY=( $(compgen -W "$( _platalea_list_message_ids "$effective_board" )" -- "$cur") )
             fi
             ;;
-        upload-attachment|post-attachment)
+        download-attachment)
             if (( pos_count == 0 )); then
-                COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") )
-            else
-                COMPREPLY=( $(compgen -f -- "$cur") )
+                COMPREPLY=( $(compgen -W "$( _platalea_list_attachment_ids "$effective_board" )" -- "$cur") )
             fi
-            ;;
-        put)
-            case "$pos_count" in
-                0) COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") ) ;;
-                1) COMPREPLY=( $(compgen -W "$( _platalea_list_message_ids "${_PLATALEA_POS[0]}" )" -- "$cur") ) ;;
-            esac
-            ;;
-        delete)
-            case "$pos_count" in
-                0) COMPREPLY=( $(compgen -W "$( _platalea_list_board_ids )" -- "$cur") ) ;;
-                1) COMPREPLY=( $(compgen -W "$( _platalea_list_message_ids "${_PLATALEA_POS[0]}" )" -- "$cur") ) ;;
-            esac
             ;;
         import-boardpack)
             if (( pos_count == 0 )); then
@@ -296,12 +419,13 @@ _platalea_zsh() {
     _platalea_split_argv "${args[@]}"
 
     cmd="$_PLATALEA_CMD"
+    sub="$_PLATALEA_SUB"
     cmd_pos=("${_PLATALEA_POS[@]}")
     pos_count=${#cmd_pos[@]}
 
     if _platalea_flag_expects_value "${words[CURRENT - 1]}"; then
         case "${words[CURRENT - 1]}" in
-            --attach|--config|--ca-cert)
+            --attach|--config|--ca-cert|-o|--output)
                 _files
                 return 0
                 ;;
@@ -311,6 +435,10 @@ _platalea_zsh() {
                 ;;
             --port)
                 compadd -S ' ' -- 8765
+                return 0
+                ;;
+            --board)
+                compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"}
                 return 0
                 ;;
         esac
@@ -330,12 +458,35 @@ _platalea_zsh() {
     if _platalea_is_server_cmd "$cmd"; then
         if [[ "${words[CURRENT]}" == -* ]]; then
             case "$cmd" in
-                init-config|init-tls) compadd -S ' ' -- --config --force --help -h ;;
                 start|status|stop) compadd -S ' ' -- --config --help -h ;;
                 *) compadd -S ' ' -- --help -h ;;
             esac
         elif [[ "${words[CURRENT - 1]}" == "--config" ]]; then
             _files
+        fi
+        return 0
+    fi
+
+    if _platalea_is_group_cmd "$cmd"; then
+        if [[ "${words[CURRENT]}" == -* ]]; then
+            return 0
+        fi
+        if [[ -z "$sub" ]]; then
+            compadd -S ' ' -- ${(f)"$( _platalea_group_subcommands "$cmd" )"}
+        elif [[ "$cmd" == "file" ]]; then
+            if (( pos_count == 0 )); then
+                _files
+            fi
+        elif [[ "$cmd" == "config" && "$sub" == "import" ]]; then
+            if (( pos_count == 0 )); then
+                _files
+            fi
+        elif [[ "$cmd" == "config" && ( "$sub" == "init" || "$sub" == "init-tls" ) ]]; then
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -S ' ' -- --config --force --help -h
+            elif [[ "${words[CURRENT - 1]}" == "--config" ]]; then
+                _files
+            fi
         fi
         return 0
     fi
@@ -346,7 +497,7 @@ _platalea_zsh() {
 
     if [[ "${words[CURRENT]}" == -* ]]; then
         case "$cmd" in
-            post|post-attachment|import-boardpack)
+            post|modify|import-boardpack|download-attachment)
                 compadd -S ' ' -- ${(f)"$( _platalea_api_flags )"}
                 ;;
             *)
@@ -356,37 +507,23 @@ _platalea_zsh() {
         return 0
     fi
 
+    local effective_board
+    effective_board="$(_platalea_effective_board)"
     case "$cmd" in
-        get-messages|delete-board|export-boardpack)
+        export-boardpack)
             if (( pos_count == 0 )); then
-                compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"}
-            elif [[ "$cmd" == "export-boardpack" ]] && (( pos_count == 1 )); then
                 _files
             fi
             ;;
-        post)
+        modify|delete)
             if (( pos_count == 0 )); then
-                compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"}
+                compadd -S ' ' -- ${(f)"$( _platalea_list_message_ids "$effective_board" )"}
             fi
             ;;
-        upload-attachment|post-attachment)
+        download-attachment)
             if (( pos_count == 0 )); then
-                compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"}
-            else
-                _files
+                compadd -S ' ' -- ${(f)"$( _platalea_list_attachment_ids "$effective_board" )"}
             fi
-            ;;
-        put)
-            case "$pos_count" in
-                0) compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"} ;;
-                1) compadd -S ' ' -- ${(f)"$( _platalea_list_message_ids "${cmd_pos[1]}" )"} ;;
-            esac
-            ;;
-        delete)
-            case "$pos_count" in
-                0) compadd -S ' ' -- ${(f)"$( _platalea_list_board_ids )"} ;;
-                1) compadd -S ' ' -- ${(f)"$( _platalea_list_message_ids "${cmd_pos[1]}" )"} ;;
-            esac
             ;;
         import-boardpack)
             if (( pos_count == 0 )); then

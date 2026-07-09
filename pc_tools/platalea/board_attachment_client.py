@@ -366,3 +366,138 @@ def upload_paths(
             print(file=sys.stderr)
         refs.append(ref)
     return refs
+
+
+def download_attachment_blob(
+    host: str,
+    port: int,
+    *,
+    board_id: str,
+    attachment_id: str,
+    password: str,
+    ca_cert: str,
+    tls_fingerprint: str,
+    file_id: str | None = None,
+) -> bytes:
+    if file_id:
+        path = f"/boards/{board_id}/attachments/{attachment_id}/files/{file_id}/blob"
+    else:
+        path = f"/boards/{board_id}/attachments/{attachment_id}/blob"
+    status, payload = request_api_bytes(
+        host,
+        port,
+        "GET",
+        path,
+        password=password,
+        body=None,
+        accept="application/octet-stream, */*",
+        content_type=None,
+        ca_cert=ca_cert,
+        tls_fingerprint=tls_fingerprint,
+        timeout=300,
+    )
+    if status >= 400:
+        detail = payload.decode("utf-8", errors="replace")
+        raise RuntimeError(f"下载附件失败 ({status}): {detail}")
+    return payload
+
+
+def resolve_directory_file_id(meta: dict[str, Any], rel_path: str) -> str:
+    normalized = rel_path.strip().replace("\\", "/").lstrip("/")
+    if not normalized:
+        raise ValueError("目录附件需指定 --file 相对路径")
+    for item in meta.get("files") or []:
+        if str(item.get("path", "")).replace("\\", "/") == normalized:
+            file_id = str(item.get("file_id", "")).strip()
+            if file_id:
+                return file_id
+    raise ValueError(f"目录附件中找不到文件: {rel_path}")
+
+
+def download_attachment_to_path(
+    host: str,
+    port: int,
+    *,
+    board_id: str,
+    attachment_id: str,
+    output: Path,
+    password: str,
+    ca_cert: str,
+    tls_fingerprint: str,
+    file_path: str = "",
+) -> Path:
+    meta = _fetch_attachment_meta(
+        host,
+        port,
+        board_id=board_id,
+        attachment_id=attachment_id,
+        password=password,
+        ca_cert=ca_cert,
+        tls_fingerprint=tls_fingerprint,
+    )
+    kind = str(meta.get("kind", "file"))
+    output = output.expanduser()
+
+    if kind == "directory":
+        rel = file_path.strip()
+        if rel:
+            file_id = resolve_directory_file_id(meta, rel)
+            blob = download_attachment_blob(
+                host,
+                port,
+                board_id=board_id,
+                attachment_id=attachment_id,
+                password=password,
+                ca_cert=ca_cert,
+                tls_fingerprint=tls_fingerprint,
+                file_id=file_id,
+            )
+            if output.exists() and output.is_dir():
+                target = output / Path(rel).name
+            else:
+                target = output
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blob)
+            return target
+
+        output.mkdir(parents=True, exist_ok=True)
+        files = meta.get("files") or []
+        if not files:
+            raise ValueError(f"目录附件为空: {attachment_id}")
+        for item in files:
+            rel_path = str(item.get("path", "")).replace("\\", "/")
+            file_id = str(item.get("file_id", "")).strip()
+            if not rel_path or not file_id:
+                continue
+            blob = download_attachment_blob(
+                host,
+                port,
+                board_id=board_id,
+                attachment_id=attachment_id,
+                password=password,
+                ca_cert=ca_cert,
+                tls_fingerprint=tls_fingerprint,
+                file_id=file_id,
+            )
+            target = output / rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(blob)
+        return output
+
+    blob = download_attachment_blob(
+        host,
+        port,
+        board_id=board_id,
+        attachment_id=attachment_id,
+        password=password,
+        ca_cert=ca_cert,
+        tls_fingerprint=tls_fingerprint,
+    )
+    if output.exists() and output.is_dir():
+        name = str(meta.get("name", attachment_id)).strip() or attachment_id
+        target = output / name
+    else:
+        target = output
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(blob)
+    return target

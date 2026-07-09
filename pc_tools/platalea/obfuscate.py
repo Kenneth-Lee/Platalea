@@ -86,7 +86,7 @@ def run_deobfuscate(argv: list[str] | None = None) -> int:
 
 def _run_mode(mode: str, argv: list[str] | None) -> int:
     ap = argparse.ArgumentParser(
-        prog=f"platalea {mode}",
+        prog=f"platalea file {mode}",
         description="与 Local Manager 兼容的快速混淆/反混淆（.qx 格式，原地修改文件头）",
     )
     ap.add_argument("input", type=Path, help="输入文件或目录")

@@ -2,15 +2,20 @@ config.json
 boards/
 instance_id
 
-# Python egg-info
+# Python build/package artifacts
 *.egg-info/
+build/
+dist/
+
+# Python cache/runtime artifacts
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+.pytest_cache/
 .Python
 *.so
 *.egg
+
+# Local virtual environments
 .venv/
 venv/
 ENV/

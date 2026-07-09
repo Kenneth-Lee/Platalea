@@ -101,6 +101,7 @@ def default_config_dict() -> dict:
         "board_root": BOARDS_DIR_NAME,
         "guest_password": "guest",
         "host_password": "host",
+        "default_board": "default",
         "max_import_bytes": 524288000,
         "cert_file": f"{TLS_DIR_NAME}/pc_server_cert.pem",
         "key_file": f"{TLS_DIR_NAME}/pc_server_key.pem",
