@@ -6,6 +6,7 @@ import platform
 import sys
 from pathlib import Path
 
+from .daemon import stop_server
 from .paths import config_path, service_control_paths
 from .service_control.models import (
     ActiveOwner,
@@ -111,7 +112,15 @@ def run_service_install(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         adapter = _select_adapter()
-        plan = build_install_plan(config=config_path(args.config or None))
+        cfg = config_path(args.config or None)
+        # Avoid launchd restart loop when an old manual/background server already holds the port.
+        stop_rc = stop_server(cfg)
+        if stop_rc != 0:
+            raise ServiceControlError(
+                "检测到现有服务占用端口且无法自动停止，请先执行 `platalea stop` 后重试安装。"
+            )
+
+        plan = build_install_plan(config=cfg)
         control_paths = service_control_paths()
         control_paths.logs_dir.mkdir(parents=True, exist_ok=True)
         user_logs_dir = Path(plan.user_server_spec.stdout_path).parent
