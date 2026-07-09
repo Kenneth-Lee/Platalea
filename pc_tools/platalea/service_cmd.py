@@ -128,9 +128,11 @@ def run_service_install(argv: list[str] | None = None) -> int:
         user_logs_dir.mkdir(parents=True, exist_ok=True)
         if os.geteuid() == 0:
             os.chown(user_logs_dir, plan.owner.uid, plan.owner.uid)
+        # Persist owner metadata before launchd starts the privileged broker so it can
+        # create its Unix socket with the correct access group.
+        save_control_state(control_paths.state_file, plan.control_state)
         adapter.install_privileged_unit(plan.privileged_spec)
         adapter.install_user_server_unit(plan.user_server_spec)
-        save_control_state(control_paths.state_file, plan.control_state)
         if plan.replaced_previous_owner and plan.previous_owner is not None:
             print(
                 "已覆盖旧 owner: "
