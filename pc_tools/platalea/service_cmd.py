@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .daemon import stop_server
 from .paths import config_path, service_control_paths
+from .service_control.broker_client import broker_socket_path
 from .service_control.models import (
     ActiveOwner,
     InstallPlan,
@@ -189,6 +190,12 @@ def run_service_uninstall(argv: list[str] | None = None) -> int:
         adapter = _select_adapter()
         control_paths = service_control_paths()
         adapter.uninstall_all_units(ignore_missing=True)
+        sock = broker_socket_path(control_paths.state_root)
+        if sock.exists():
+            sock.unlink()
+        audit = control_paths.state_root / "audit.log"
+        if audit.exists() and not args.keep_state:
+            audit.unlink()
         if control_paths.state_file.exists() and not args.keep_state:
             control_paths.state_file.unlink()
         print("已卸载 service control")

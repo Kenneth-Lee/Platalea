@@ -164,7 +164,7 @@ _platalea_service_subcommands() {
 }
 
 _platalea_power_subcommands() {
-    printf '%s\n' shutdown
+    printf '%s\n' status shutdown
 }
 
 _platalea_help_topics() {

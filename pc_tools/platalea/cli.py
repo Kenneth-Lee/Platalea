@@ -34,7 +34,7 @@ from .gpg_cmd import (
     run_quick_decrypt,
     run_quick_encrypt,
 )
-from .power_cmd import run_power_shutdown
+from .power_cmd import run_power_shutdown, run_power_status
 from .service_cmd import run_service_install, run_service_status, run_service_uninstall
 from .paths import (
     app_dir,
@@ -77,6 +77,7 @@ SERVICE_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
 }
 
 POWER_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
+    "status": run_power_status,
     "shutdown": run_power_shutdown,
 }
 
@@ -304,9 +305,11 @@ def _service_help() -> str:
 
 
 def _power_help() -> str:
-        return """系统电源控制（预留）:
-    power shutdown
-                                                请求系统关机（后续接入特权 broker）"""
+        return """系统电源控制:
+    power status
+                                                查询本机 power broker 状态
+    power shutdown --yes
+                                                请求系统关机（需显式 --yes）"""
 
 
 def _examples_help() -> str:

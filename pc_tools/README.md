@@ -76,6 +76,13 @@ platalea service uninstall
 
 这组命令的设计目标是为无头主机提供“当前用户 owner + 单机单实例 + 后装覆盖前装 + 可卸载”的系统控制面。当前版本已提供 CLI、状态文件与 macOS `launchctl` 接入（需在 macOS 上以 sudo 执行 install/uninstall）；远程关机的特权 broker 链路后续继续接入。
 
+**电源控制（通过本机 broker）**：
+
+```bash
+platalea power status
+platalea power shutdown --yes
+```
+
 写入 `~/.localmanager/gnupg/`（密钥）、`~/.localmanager/imported/`（Git/播放列表等存档）、`config.json` 的 `imported_from_mobile`（家庭网络显示名等）。
 
 连接远程设备时指定 `--host`，不会自动启动本机服务：
