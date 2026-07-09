@@ -55,13 +55,17 @@ class UserServerUnitSpec:
     working_directory: str
     stdout_path: str
     stderr_path: str
+    environment: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
 class PrivilegedUnitSpec:
     label: str
+    python_executable: str
     broker_module: str
     state_dir: str
+    working_directory: str
+    environment: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

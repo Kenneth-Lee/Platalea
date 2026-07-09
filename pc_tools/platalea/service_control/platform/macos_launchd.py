@@ -42,17 +42,20 @@ def render_privileged_plist(spec: PrivilegedUnitSpec) -> bytes:
     payload = {
         "Label": spec.label,
         "ProgramArguments": [
-            "/usr/bin/python3",
+            spec.python_executable,
             "-m",
             spec.broker_module,
             "--state-dir",
             spec.state_dir,
         ],
+        "WorkingDirectory": spec.working_directory,
         "RunAtLoad": True,
         "KeepAlive": True,
         "StandardOutPath": f"{spec.state_dir}/privileged.stdout.log",
         "StandardErrorPath": f"{spec.state_dir}/privileged.stderr.log",
     }
+    if spec.environment:
+        payload["EnvironmentVariables"] = spec.environment
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML)
 
 
@@ -67,6 +70,8 @@ def render_user_server_plist(spec: UserServerUnitSpec) -> bytes:
         "StandardOutPath": spec.stdout_path,
         "StandardErrorPath": spec.stderr_path,
     }
+    if spec.environment:
+        payload["EnvironmentVariables"] = spec.environment
     return plistlib.dumps(payload, fmt=plistlib.FMT_XML)
 
 

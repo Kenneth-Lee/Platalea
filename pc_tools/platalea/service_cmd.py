@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import sys
 from pathlib import Path
@@ -48,8 +49,10 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
     previous_owner = previous.active_owner if previous is not None else None
     replaced = previous_owner is not None and previous_owner.uid != active_owner.uid
     cfg = config or config_path()
-    stdout_path = str(control_paths.logs_dir / "user_server.stdout.log")
-    stderr_path = str(control_paths.logs_dir / "user_server.stderr.log")
+    source_root = Path(__file__).resolve().parent.parent
+    user_logs_dir = Path(active_owner.home) / ".localmanager" / "service_control_logs"
+    stdout_path = str(user_logs_dir / "user_server.stdout.log")
+    stderr_path = str(user_logs_dir / "user_server.stderr.log")
     program_arguments = [
         sys.executable,
         "-m",
@@ -62,14 +65,22 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
         label=USER_SERVER_LABEL,
         owner=active_owner,
         program_arguments=program_arguments,
-        working_directory=active_owner.home,
+        working_directory=str(source_root),
         stdout_path=stdout_path,
         stderr_path=stderr_path,
+        environment={
+            "PYTHONPATH": str(source_root),
+        },
     )
     privileged_spec = PrivilegedUnitSpec(
         label=PRIVILEGED_LABEL,
+        python_executable=sys.executable,
         broker_module="platalea.service_control.broker_server",
         state_dir=str(control_paths.state_root),
+        working_directory=str(source_root),
+        environment={
+            "PYTHONPATH": str(source_root),
+        },
     )
     state = build_control_state(
         owner=active_owner,
@@ -103,6 +114,10 @@ def run_service_install(argv: list[str] | None = None) -> int:
         plan = build_install_plan(config=config_path(args.config or None))
         control_paths = service_control_paths()
         control_paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        user_logs_dir = Path(plan.user_server_spec.stdout_path).parent
+        user_logs_dir.mkdir(parents=True, exist_ok=True)
+        if os.geteuid() == 0:
+            os.chown(user_logs_dir, plan.owner.uid, plan.owner.uid)
         adapter.install_privileged_unit(plan.privileged_spec)
         adapter.install_user_server_unit(plan.user_server_spec)
         save_control_state(control_paths.state_file, plan.control_state)

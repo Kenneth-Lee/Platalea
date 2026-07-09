@@ -27,13 +27,19 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
                 render_privileged_plist(
                     PrivilegedUnitSpec(
                         label=PRIVILEGED_LABEL,
+                        python_executable="/usr/bin/python3",
                         broker_module="platalea.service_control.broker_server",
                         state_dir=tmp,
+                        working_directory=tmp,
+                        environment={"PYTHONPATH": tmp},
                     )
                 )
             )
             self.assertEqual(payload["Label"], PRIVILEGED_LABEL)
             self.assertIn("platalea.service_control.broker_server", payload["ProgramArguments"])
+            self.assertEqual(payload["ProgramArguments"][0], "/usr/bin/python3")
+            self.assertEqual(payload["WorkingDirectory"], tmp)
+            self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], tmp)
             self.assertEqual(payload["RunAtLoad"], True)
             self.assertEqual(payload["KeepAlive"], True)
 
@@ -57,6 +63,7 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
                         working_directory=str(root),
                         stdout_path=str(root / "stdout.log"),
                         stderr_path=str(root / "stderr.log"),
+                        environment={"PYTHONPATH": str(root)},
                     )
                 )
             )
@@ -64,6 +71,7 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
             self.assertEqual(payload["UserName"], "kenny")
             self.assertIn("_serve-daemon", payload["ProgramArguments"])
             self.assertEqual(payload["WorkingDirectory"], str(root))
+            self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], str(root))
 
 
 class MacOSLaunchdAdapterTest(unittest.TestCase):
@@ -82,8 +90,10 @@ class MacOSLaunchdAdapterTest(unittest.TestCase):
             adapter = MacOSLaunchdAdapter(command_runner=fake_runner)
             spec = PrivilegedUnitSpec(
                 label=PRIVILEGED_LABEL,
+                python_executable="/usr/bin/python3",
                 broker_module="platalea.service_control.broker_server",
                 state_dir=tmp,
+                working_directory=tmp,
             )
             adapter.install_privileged_unit(spec)
             plist = str(launchd_layout().privileged_plist)

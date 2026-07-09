@@ -41,6 +41,9 @@ class ServiceInstallPlanTest(unittest.TestCase):
                 self.assertIn("platalea", plan.user_server_spec.program_arguments)
                 self.assertIn("_serve-daemon", plan.user_server_spec.program_arguments)
                 self.assertEqual(plan.user_server_spec.owner.username, "kenny")
+                self.assertTrue(plan.user_server_spec.working_directory.endswith("pc_tools"))
+                self.assertIn("PYTHONPATH", plan.user_server_spec.environment or {})
+                self.assertTrue(plan.user_server_spec.stdout_path.startswith(str(root / "home")))
             finally:
                 paths.service_control_paths = old_service_paths
                 sc.service_control_paths = old_sc_service_paths
