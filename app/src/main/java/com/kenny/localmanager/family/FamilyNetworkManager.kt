@@ -570,6 +570,39 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    /** 判断失败是否更可能是密码/权限问题，而非网络或 TLS 问题。 */
+    fun isLikelyAuthFailure(error: Throwable): Boolean {
+        var current: Throwable? = error
+        while (current != null) {
+            if (current is FamilyApiException) {
+                if (current.statusCode == 401 || current.statusCode == 403) {
+                    return true
+                }
+                val detailLower = current.detail.lowercase(Locale.ROOT)
+                if (
+                    detailLower.contains("unauthorized") ||
+                    detailLower.contains("forbidden") ||
+                    current.detail.contains("需要正确的网络服务密码") ||
+                    current.detail.contains("管理员权限")
+                ) {
+                    return true
+                }
+            }
+            val message = current.message.orEmpty()
+            val messageLower = message.lowercase(Locale.ROOT)
+            if (
+                messageLower.contains("unauthorized") ||
+                messageLower.contains("forbidden") ||
+                message.contains("需要正确的网络服务密码") ||
+                message.contains("管理员权限")
+            ) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
     fun createBoardEntry(
         service: FamilyDiscoveredService,
         accessPassword: String?,
@@ -2093,6 +2126,12 @@ class FamilyNetworkManager(context: Context) {
             } finally {
                 connection.disconnect()
             }
+        }.onFailure { error ->
+            Log.w(
+                TAG,
+                "boardApiRequest failed method=$method path=$path host=${service.host}:${service.port} service=${service.serviceName} error=${error.javaClass.simpleName}: ${error.message}",
+                error
+            )
         }
     }
 
@@ -2330,7 +2369,7 @@ class FamilyNetworkManager(context: Context) {
             val detail = runCatching { JSONObject(responseText).optString("message") }.getOrNull()
                 ?.takeIf { it.isNotBlank() }
                 ?: responseText.ifBlank { "HTTP $status" }
-            throw IllegalStateException(detail)
+            throw FamilyApiException(statusCode = status, detail = detail)
         }
         return responseText
     }
@@ -2616,3 +2655,8 @@ private class EmbeddedHttpServer(
         }
     }
 }
+
+    private class FamilyApiException(
+        val statusCode: Int,
+        val detail: String
+    ) : IllegalStateException(detail)

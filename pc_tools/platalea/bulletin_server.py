@@ -1076,6 +1076,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     https_server.store = store  # type: ignore[attr-defined]
     https_server.auth_service = auth_service  # type: ignore[attr-defined]
     https_server.max_import_bytes = config.max_import_bytes  # type: ignore[attr-defined]
+    https_server.supports_power_shutdown = config.supports_power_shutdown  # type: ignore[attr-defined]
 
     zeroconf_client: Zeroconf | None = None
     service_info = build_service_info(

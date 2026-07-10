@@ -349,6 +349,7 @@
     <string name="family_board_password_hint">请输入该设备的接入密码（普通用户或管理员密码；与你在本机配置中的密码无关）。</string>
     <string name="family_board_password_label">设备接入密码</string>
     <string name="family_board_password_wrong">密码错误</string>
+    <string name="family_board_password_probe_failed">连接失败（非密码错误）：%1$s</string>
     <string name="family_board_picker_title">选择留言板</string>
     <string name="family_board_picker_loading">正在加载留言板列表…</string>
     <string name="family_board_picker_empty">暂无留言板</string>

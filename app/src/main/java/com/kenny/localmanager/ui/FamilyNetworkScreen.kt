@@ -255,6 +255,17 @@ fun FamilyNetworkScreen(
         showBoardPasswordDialog = true
     }
 
+    fun boardPasswordProbeErrorMessage(error: Throwable): String {
+        return if (manager.isLikelyAuthFailure(error)) {
+            context.getString(R.string.family_board_password_wrong)
+        } else {
+            context.getString(
+                R.string.family_board_password_probe_failed,
+                error.message ?: error.javaClass.simpleName
+            )
+        }
+    }
+
     fun requestOpenBoard(service: FamilyDiscoveredService) {
         if (service.isSelf && !localServiceEnabled) {
             Toast.makeText(context, context.getString(R.string.family_network_local_service_disabled), Toast.LENGTH_SHORT).show()
@@ -273,7 +284,7 @@ fun FamilyNetworkScreen(
                 result.onSuccess { openBoardWithAccess(service, cached) }
                     .onFailure {
                         manager.forgetBoardAccessPassword(service.deviceKey)
-                        showPasswordDialog(service, wrongPassword = true)
+                        showPasswordDialog(service, wrongPassword = manager.isLikelyAuthFailure(it))
                     }
             }
             return
@@ -350,7 +361,9 @@ fun FamilyNetworkScreen(
                                 manager.rememberBoardAccessPassword(service.deviceKey, password)
                                 openBoardWithAccess(service, password)
                             } else {
-                                boardPasswordError = context.getString(R.string.family_board_password_wrong)
+                                boardPasswordError = boardPasswordProbeErrorMessage(
+                                    result.exceptionOrNull() ?: IllegalStateException("unknown probe failure")
+                                )
                             }
                         }
                     }
