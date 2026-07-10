@@ -89,57 +89,55 @@ def collect_local_addresses() -> list[ipaddress._BaseAddress]:
         except OSError as exc:
             LOGGER.debug("UDP 探测本地出口地址失败 family=%s target=%s exc=%s", family, target, exc)
 
-    # 方法2: 通过网络接口获取地址（如果方法1失败）
-    if not candidates:
+    # 方法2: 通过网络接口补充地址（即使方法1成功也继续，避免多网卡场景漏地址）
+    try:
+        import subprocess
+        result = subprocess.run(
+            ["ifconfig"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            import re
+            # 匹配 inet 地址（IPv4）
+            for match in re.finditer(r"inet\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", result.stdout):
+                addr = match.group(1)
+                if is_usable_ip(addr):
+                    candidates[addr] = ipaddress.ip_address(addr)
+            # 匹配 inet6 地址（IPv6）
+            for match in re.finditer(r"inet6\s+([0-9a-fA-F:]+)", result.stdout):
+                addr = match.group(1)
+                if is_usable_ip(addr):
+                    candidates[addr] = ipaddress.ip_address(addr)
+    except Exception as exc:
+        LOGGER.debug("ifconfig 获取地址失败: %s", exc)
+
+    # 方法3: 尝试解析主机名补充地址（但过滤掉公网地址）
+    hostnames = {socket.gethostname(), socket.getfqdn()}
+    for hostname in hostnames:
+        if not hostname:
+            continue
         try:
-            import subprocess
-            result = subprocess.run(
-                ["ifconfig"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
+            infos = socket.getaddrinfo(
+                hostname,
+                None,
+                family=socket.AF_UNSPEC,
+                type=socket.SOCK_STREAM,
             )
-            if result.returncode == 0:
-                import re
-                # 匹配 inet 地址（IPv4）
-                for match in re.finditer(r"inet\s+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)", result.stdout):
-                    addr = match.group(1)
-                    if is_usable_ip(addr):
-                        candidates[addr] = ipaddress.ip_address(addr)
-                # 匹配 inet6 地址（IPv6）
-                for match in re.finditer(r"inet6\s+([0-9a-fA-F:]+)", result.stdout):
-                    addr = match.group(1)
-                    if is_usable_ip(addr):
-                        candidates[addr] = ipaddress.ip_address(addr)
-        except Exception as exc:
-            LOGGER.debug("ifconfig 获取地址失败: %s", exc)
+        except OSError as exc:
+            LOGGER.debug("解析本机地址失败 hostname=%s exc=%s", hostname, exc)
+            continue
 
-    # 方法3: 尝试解析主机名（但过滤掉公网地址）
-    if not candidates:
-        hostnames = {socket.gethostname(), socket.getfqdn()}
-        for hostname in hostnames:
-            if not hostname:
-                continue
+        for info in infos:
+            sockaddr = info[4]
+            address_text = sockaddr[0]
             try:
-                infos = socket.getaddrinfo(
-                    hostname,
-                    None,
-                    family=socket.AF_UNSPEC,
-                    type=socket.SOCK_STREAM,
-                )
-            except OSError as exc:
-                LOGGER.debug("解析本机地址失败 hostname=%s exc=%s", hostname, exc)
-                continue
-
-            for info in infos:
-                sockaddr = info[4]
-                address_text = sockaddr[0]
-                try:
-                    if is_usable_ip(address_text):
-                        candidates[address_text] = ipaddress.ip_address(address_text)
-                except ValueError:
-                    LOGGER.debug("忽略无法识别的地址 %s", address_text)
+                if is_usable_ip(address_text):
+                    candidates[address_text] = ipaddress.ip_address(address_text)
+            except ValueError:
+                LOGGER.debug("忽略无法识别的地址 %s", address_text)
 
     addresses = sorted(
         candidates.values(),
