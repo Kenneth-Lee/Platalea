@@ -45,6 +45,7 @@ private const val FAMILY_VERSION = "0.2"
 private const val FAMILY_PREFERRED_PORT = 8765
 private const val FAMILY_LOG_LIMIT = 200
 private const val INSTANCE_ID_FILE = "family_network_instance_id"
+private const val FAMILY_IPV4_LIST_ATTR = "ipv4_list"
 
 data class FamilyDiscoveredService(
     val serviceName: String,
@@ -393,7 +394,8 @@ class FamilyNetworkManager(context: Context) {
             displayHostName = displayHostName,
             port = server.port,
             instanceId = instanceId,
-            tlsFingerprint = localIdentity.fingerprintSha256
+            tlsFingerprint = localIdentity.fingerprintSha256,
+            localIp = localIp
         )
     }
 
@@ -1670,7 +1672,8 @@ class FamilyNetworkManager(context: Context) {
         displayHostName: String,
         port: Int,
         instanceId: String,
-        tlsFingerprint: String
+        tlsFingerprint: String,
+        localIp: String?
     ) {
         val serviceInfo = NsdServiceInfo().apply {
             serviceName = requestedServiceName
@@ -1684,6 +1687,7 @@ class FamilyNetworkManager(context: Context) {
             setAttribute("platform", "android")
             setAttribute("tls", "1")
             setAttribute(FAMILY_TLS_FINGERPRINT_ATTR, tlsFingerprint)
+            localIp?.trim()?.takeIf { it.isNotEmpty() }?.let { setAttribute(FAMILY_IPV4_LIST_ATTR, it) }
             if (!networkPassword.isNullOrBlank()) {
                 setAttribute("auth", "1")
             }
@@ -1837,8 +1841,9 @@ class FamilyNetworkManager(context: Context) {
                     pendingResolveNames.remove(name)
                     resolveInProgress = false
                 }
-                val host = resolved.host?.hostAddress ?: resolved.host?.hostName ?: ""
                 val attributes = decodeAttributes(resolved)
+                val resolvedHost = resolved.host?.hostAddress ?: resolved.host?.hostName ?: ""
+                val host = selectPreferredServiceHost(resolvedHost, attributes, _state.value.localIp)
                 val instanceId = currentInstanceId
                 val entry = FamilyDiscoveredService(
                     serviceName = resolved.serviceName ?: "",
@@ -1852,6 +1857,9 @@ class FamilyNetworkManager(context: Context) {
                     appContext.getString(R.string.family_msg_83175, entry.displayHostName, entry.host, entry.port) +
                         if (entry.isSelf) appContext.getString(R.string.family_self_suffix) else ""
                 )
+                if (host != resolvedHost) {
+                    appendLog("mDNS 地址已改选: ${entry.displayHostName} resolved=$resolvedHost selected=$host local=${_state.value.localIp.orEmpty()}")
+                }
                 upsertDiscoveredService(entry)
                 drainResolveQueue()
             }
@@ -1958,7 +1966,8 @@ class FamilyNetworkManager(context: Context) {
             displayHostName = displayHostName,
             port = port,
             instanceId = instanceId,
-            tlsFingerprint = tlsFingerprint
+            tlsFingerprint = tlsFingerprint,
+            localIp = _state.value.localIp
         )
         appendLog(appContext.getString(R.string.family_msg_17804))
     }
@@ -2480,6 +2489,59 @@ class FamilyNetworkManager(context: Context) {
         return rawAttributes.mapValues { (_, value) ->
             value?.toString(StandardCharsets.UTF_8) ?: ""
         }
+    }
+
+    private fun selectPreferredServiceHost(
+        resolvedHost: String,
+        attributes: Map<String, String>,
+        localIp: String?
+    ): String {
+        val candidates = attributes[FAMILY_IPV4_LIST_ATTR]
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { isIpv4Address(it) }
+            .orEmpty()
+        if (candidates.isEmpty()) return resolvedHost
+
+        val local = localIp?.trim().orEmpty()
+        if (local.isNotEmpty()) {
+            candidates.firstOrNull { isSameSubnet(local, it) }?.let { return it }
+        }
+        if (isIpv4Address(resolvedHost)) {
+            candidates.firstOrNull { it == resolvedHost }?.let { return it }
+        }
+        return candidates.firstOrNull() ?: resolvedHost
+    }
+
+    private fun isSameSubnet(localIp: String, remoteIp: String): Boolean {
+        if (!isIpv4Address(localIp) || !isIpv4Address(remoteIp)) return false
+        val localInt = ipv4ToInt(localIp) ?: return false
+        val remoteInt = ipv4ToInt(remoteIp) ?: return false
+        val mask = wifiManager?.dhcpInfo?.netmask ?: 0
+        if (mask != 0) {
+            return (localInt and mask) == (remoteInt and mask)
+        }
+        val localParts = localIp.split('.')
+        val remoteParts = remoteIp.split('.')
+        return localParts.take(3) == remoteParts.take(3)
+    }
+
+    private fun isIpv4Address(value: String): Boolean {
+        val parts = value.split('.')
+        if (parts.size != 4) return false
+        return parts.all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }
+    }
+
+    private fun ipv4ToInt(ip: String): Int? {
+        val parts = ip.split('.')
+        if (parts.size != 4) return null
+        var value = 0
+        for (part in parts) {
+            val octet = part.toIntOrNull() ?: return null
+            if (octet !in 0..255) return null
+            value = (value shl 8) or octet
+        }
+        return value
     }
 
     private fun readResponseText(stream: java.io.InputStream?): String {

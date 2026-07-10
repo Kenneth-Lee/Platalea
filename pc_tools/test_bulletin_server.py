@@ -1,14 +1,90 @@
 from __future__ import annotations
 
+import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from platalea.bulletin_server import ServerConfig, run_server
+from platalea.bulletin_server import ServerConfig, load_config, run_server
 
 
 class BulletinServerShutdownFlagTest(unittest.TestCase):
+    def test_load_config_defaults_power_shutdown_on_for_legacy_configs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(
+                json.dumps(
+                    {
+                        "guest_password": "guest",
+                        "host_password": "host",
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": ""}, clear=False):
+                config, _agent = load_config(cfg)
+            self.assertTrue(config.supports_power_shutdown)
+
+    def test_load_config_uses_config_flag_without_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(
+                json.dumps(
+                    {
+                        "guest_password": "guest",
+                        "host_password": "host",
+                        "supports_power_shutdown": True,
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": ""}, clear=False):
+                config, _agent = load_config(cfg)
+            self.assertTrue(config.supports_power_shutdown)
+
+    def test_load_config_env_remains_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(
+                json.dumps(
+                    {
+                        "guest_password": "guest",
+                        "host_password": "host",
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": "1"}, clear=False):
+                config, _agent = load_config(cfg)
+            self.assertTrue(config.supports_power_shutdown)
+
+    def test_load_config_allows_explicit_disable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cfg = root / "config.json"
+            cfg.write_text(
+                json.dumps(
+                    {
+                        "guest_password": "guest",
+                        "host_password": "host",
+                        "supports_power_shutdown": False,
+                    },
+                    ensure_ascii=False,
+                ) + "\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": "1"}, clear=False):
+                config, _agent = load_config(cfg)
+            self.assertFalse(config.supports_power_shutdown)
+
     def test_run_server_attaches_power_shutdown_flag_to_https_server(self) -> None:
         class FakeHttpsServer:
             def __init__(self) -> None:

@@ -177,6 +177,7 @@ def build_service_properties(
     supports_power_shutdown: bool = False,
     platform: str = "python",
     host_name: str | None = None,
+    addresses: list[ipaddress._BaseAddress] | None = None,
 ) -> dict[str, str]:
     props = {
         "app": "LocalManager",
@@ -193,6 +194,10 @@ def build_service_properties(
         props["power_shutdown"] = "1"
     if host_name:
         props["host_name"] = host_name
+    if addresses:
+        ipv4_candidates = [address.compressed for address in addresses if address.version == 4]
+        if ipv4_candidates:
+            props["ipv4_list"] = ",".join(ipv4_candidates[:8])
     return props
 
 
@@ -229,6 +234,7 @@ def build_service_info(
         supports_power_shutdown=supports_power_shutdown,
         platform=platform,
         host_name=_display_host_name(service_name),
+        addresses=addresses,
     )
     return ServiceInfo(
         type_=service_type,

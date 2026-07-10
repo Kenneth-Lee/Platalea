@@ -92,6 +92,19 @@ def _env_flag(name: str) -> bool:
     return value in {"1", "true", "yes", "on"}
 
 
+def _config_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
+
+
 def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     if not config_path.exists():
         raise FileNotFoundError(
@@ -126,7 +139,10 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
         max_import_bytes=_parse_optional_positive_int(raw.get("max_import_bytes")),
-        supports_power_shutdown=_env_flag("PLATALEA_POWER_SHUTDOWN"),
+        supports_power_shutdown=_config_bool(
+            raw.get("supports_power_shutdown"),
+            default=True if raw.get("supports_power_shutdown") is None else _env_flag("PLATALEA_POWER_SHUTDOWN"),
+        ),
     )
     agent_raw = raw.get("agent")
     agent_config = load_agent_config(agent_raw if isinstance(agent_raw, dict) else None)
