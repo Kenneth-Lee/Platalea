@@ -88,6 +88,7 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
         owner=active_owner,
         privileged_label=PRIVILEGED_LABEL,
         user_server_label=USER_SERVER_LABEL,
+        broker_token=None,
         revision=(previous.service_revision + 1) if previous is not None else 1,
     )
     return InstallPlan(

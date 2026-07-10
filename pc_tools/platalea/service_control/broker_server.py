@@ -29,6 +29,13 @@ def _load_owner_uid(state_dir: Path) -> int:
     return int(state.active_owner.uid)
 
 
+def _load_broker_token(state_dir: Path) -> str:
+    state = load_control_state(state_dir / "state.json")
+    if state is None:
+        return ""
+    return state.broker_token
+
+
 def _peer_uid(conn: socket.socket) -> int:
     if hasattr(socket, "SO_PEERCRED"):
         try:
@@ -83,19 +90,7 @@ def _serve_connection(
     dry_run: bool,
 ) -> None:
     owner_uid = _load_owner_uid(state_dir)
-    uid = _peer_uid(conn)
-    if uid not in {0, owner_uid}:
-        _response(conn, {"ok": False, "error": "forbidden", "message": f"uid {uid} 无权限"})
-        _write_audit(
-            state_dir,
-            {
-                "ts": int(time.time()),
-                "uid": uid,
-                "action": "reject",
-                "reason": "forbidden",
-            },
-        )
-        return
+    expected_token = _load_broker_token(state_dir)
 
     raw = conn.recv(65536).decode("utf-8", errors="replace").strip()
     if not raw:
@@ -108,6 +103,21 @@ def _serve_connection(
         return
     if not isinstance(request, dict):
         _response(conn, {"ok": False, "error": "bad_request", "message": "request must be object"})
+        return
+
+    supplied_token = str(request.get("token", "")).strip()
+    uid = _peer_uid(conn)
+    if expected_token and supplied_token != expected_token:
+        _response(conn, {"ok": False, "error": "forbidden", "message": "token 无效"})
+        _write_audit(
+            state_dir,
+            {
+                "ts": int(time.time()),
+                "uid": uid,
+                "action": "reject",
+                "reason": "bad_token",
+            },
+        )
         return
 
     op = str(request.get("op", "")).strip().lower()

@@ -5,6 +5,8 @@ import socket
 from pathlib import Path
 from typing import Any
 
+from .state import load_control_token
+
 
 class BrokerClientError(RuntimeError):
     pass
@@ -25,9 +27,14 @@ def request_broker(
     if not sock_path.exists():
         raise BrokerClientError(f"broker socket 不存在: {sock_path}")
 
+    token = load_control_token(state_root / "state.json")
+    if not token:
+        raise BrokerClientError(f"控制面 token 不存在: {state_root / 'state.json'}")
+
     request_obj: dict[str, Any] = {"op": op}
     if payload:
         request_obj["payload"] = payload
+    request_obj["token"] = token
     req = json.dumps(request_obj, ensure_ascii=False).encode("utf-8") + b"\n"
 
     try:

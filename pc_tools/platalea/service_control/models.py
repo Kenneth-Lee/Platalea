@@ -4,6 +4,7 @@ import getpass
 import os
 import platform
 import pwd
+import secrets
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ class ActiveOwner:
 class ControlState:
     schema_version: int
     active_owner: ActiveOwner
+    broker_token: str
     installed_at: int
     platform: str
     service_revision: int
@@ -40,6 +42,7 @@ class ControlState:
         return cls(
             schema_version=int(raw.get("schema_version", 1)),
             active_owner=owner,
+            broker_token=str(raw.get("broker_token", "")).strip(),
             installed_at=int(raw.get("installed_at", 0)),
             platform=str(raw.get("platform", "")).strip(),
             service_revision=int(raw.get("service_revision", 1)),
@@ -113,11 +116,13 @@ def build_control_state(
     owner: ActiveOwner,
     privileged_label: str,
     user_server_label: str,
+    broker_token: str | None = None,
     revision: int = 1,
 ) -> ControlState:
     return ControlState(
         schema_version=1,
         active_owner=owner,
+        broker_token=broker_token or secrets.token_urlsafe(32),
         installed_at=int(time.time()),
         platform=platform.system().lower(),
         service_revision=revision,

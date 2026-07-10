@@ -21,3 +21,10 @@ def save_control_state(path: Path, state: ControlState) -> None:
         json.dumps(state.to_json_dict(), ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def load_control_token(path: Path) -> str:
+    state = load_control_state(path)
+    if state is None:
+        return ""
+    return state.broker_token
