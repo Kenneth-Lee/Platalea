@@ -148,7 +148,12 @@ def collect_local_addresses() -> list[ipaddress._BaseAddress]:
             "没有找到可用于 mDNS 广播的非回环地址。"
             "请确认当前机器已连接到局域网，并且网络栈已分配可用 IPv4 或 IPv6 地址。"
         )
-    return addresses
+    return prioritize_broadcast_addresses(addresses)
+
+
+def prioritize_broadcast_addresses(addresses: list[ipaddress._BaseAddress]) -> list[ipaddress._BaseAddress]:
+    preferred = [address for address in addresses if not address.is_link_local]
+    return preferred if preferred else addresses
 
 
 def pem_cert_fingerprint_sha256(cert_path: str | Path) -> str:
