@@ -39,10 +39,11 @@ class ServiceInstallPlanTest(unittest.TestCase):
                 self.assertFalse(plan.replaced_previous_owner)
                 self.assertIn("-m", plan.user_server_spec.program_arguments)
                 self.assertIn("platalea", plan.user_server_spec.program_arguments)
-                self.assertIn("_serve-daemon", plan.user_server_spec.program_arguments)
+                self.assertIn("start", plan.user_server_spec.program_arguments)
                 self.assertEqual(plan.user_server_spec.owner.username, "kenny")
                 self.assertTrue(plan.user_server_spec.working_directory.endswith("pc_tools"))
                 self.assertIn("PYTHONPATH", plan.user_server_spec.environment or {})
+                self.assertEqual(plan.user_server_spec.environment.get("PLATALEA_ALLOW_SERVICE_BOOTSTRAP"), "1")
                 self.assertEqual(plan.user_server_spec.environment.get("PLATALEA_POWER_SHUTDOWN"), "1")
                 self.assertTrue(plan.user_server_spec.stdout_path.startswith(str(root / "home")))
             finally:
@@ -90,7 +91,7 @@ class ServiceInstallPlanTest(unittest.TestCase):
                     build_control_state(
                         owner=previous,
                         privileged_label="com.localmanager.platalea.privileged",
-                        user_server_label="com.localmanager.platalea.server",
+                        user_server_label="com.localmanager.platalea.bootstrap",
                     ),
                 )
                 owner = ActiveOwner(uid=501, username="kenny", home=str(root / "kenny"))

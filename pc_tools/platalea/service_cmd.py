@@ -6,7 +6,6 @@ import platform
 import sys
 from pathlib import Path
 
-from .daemon import stop_server
 from .paths import config_path, service_control_paths
 from .service_control.broker_client import broker_socket_path
 from .service_control.models import (
@@ -19,9 +18,9 @@ from .service_control.models import (
     detect_active_owner,
 )
 from .service_control.platform.macos_launchd import (
+    BOOTSTRAP_LABEL,
     MacOSLaunchdAdapter,
     PRIVILEGED_LABEL,
-    USER_SERVER_LABEL,
 )
 from .service_control.state import load_control_state, save_control_state
 
@@ -59,12 +58,12 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
         sys.executable,
         "-m",
         "platalea",
-        "_serve-daemon",
+        "start",
         "--config",
         str(cfg),
     ]
     user_spec = UserServerUnitSpec(
-        label=USER_SERVER_LABEL,
+        label=BOOTSTRAP_LABEL,
         owner=active_owner,
         program_arguments=program_arguments,
         working_directory=str(source_root),
@@ -72,6 +71,7 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
         stderr_path=stderr_path,
         environment={
             "PYTHONPATH": str(source_root),
+            "PLATALEA_ALLOW_SERVICE_BOOTSTRAP": "1",
             "PLATALEA_POWER_SHUTDOWN": "1",
         },
     )
@@ -88,7 +88,7 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
     state = build_control_state(
         owner=active_owner,
         privileged_label=PRIVILEGED_LABEL,
-        user_server_label=USER_SERVER_LABEL,
+        user_server_label=BOOTSTRAP_LABEL,
         broker_token=None,
         revision=(previous.service_revision + 1) if previous is not None else 1,
     )
@@ -116,13 +116,6 @@ def run_service_install(argv: list[str] | None = None) -> int:
     try:
         adapter = _select_adapter()
         cfg = config_path(args.config or None)
-        # Avoid launchd restart loop when an old manual/background server already holds the port.
-        stop_rc = stop_server(cfg)
-        if stop_rc != 0:
-            raise ServiceControlError(
-                "检测到现有服务占用端口且无法自动停止，请先执行 `platalea stop` 后重试安装。"
-            )
-
         plan = build_install_plan(config=cfg)
         control_paths = service_control_paths()
         control_paths.logs_dir.mkdir(parents=True, exist_ok=True)
@@ -141,7 +134,7 @@ def run_service_install(argv: list[str] | None = None) -> int:
                 f"{plan.previous_owner.username} -> {plan.owner.username}"
             )
         else:
-            print(f"已安装 service control，owner={plan.owner.username}")
+            print(f"已安装 service control（独立 broker + 开机一次性 bootstrap），owner={plan.owner.username}")
         print(f"状态文件: {control_paths.state_file}")
         return 0
     except (ServiceControlError, OSError, ValueError) as exc:
@@ -154,7 +147,7 @@ def _format_status(status: SupervisorStatus, owner: str, state_path: Path) -> No
     print(f"已安装: {'是' if status.installed else '否'}")
     print(f"owner: {owner or '(unknown)'}")
     print(f"privileged unit: {status.privileged_unit}")
-    print(f"user server unit: {status.user_server_unit}")
+    print(f"bootstrap unit: {status.user_server_unit}")
     print(f"状态文件: {state_path}")
     for item in status.details:
         print(f"详情: {item}")
@@ -182,7 +175,7 @@ def run_service_status(argv: list[str] | None = None) -> int:
 def run_service_uninstall(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="platalea service uninstall",
-        description="卸载 platalea 系统控制面与托管服务",
+        description="卸载 platalea 独立系统服务（broker + bootstrap）",
     )
     ap.add_argument(
         "--keep-state",

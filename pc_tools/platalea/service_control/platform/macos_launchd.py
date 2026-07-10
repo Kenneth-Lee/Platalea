@@ -12,13 +12,13 @@ from ..models import PrivilegedUnitSpec, SupervisorStatus, UserServerUnitSpec
 from .base import PowerAction
 
 PRIVILEGED_LABEL = "com.localmanager.platalea.privileged"
-USER_SERVER_LABEL = "com.localmanager.platalea.server"
+BOOTSTRAP_LABEL = "com.localmanager.platalea.bootstrap"
 
 
 @dataclass(frozen=True)
 class LaunchdLayout:
     privileged_plist: Path
-    user_server_plist: Path
+    bootstrap_plist: Path
 
 
 def launchd_units_dir() -> Path:
@@ -34,7 +34,7 @@ def launchd_layout() -> LaunchdLayout:
     units_dir = launchd_units_dir()
     return LaunchdLayout(
         privileged_plist=units_dir / f"{PRIVILEGED_LABEL}.plist",
-        user_server_plist=units_dir / f"{USER_SERVER_LABEL}.plist",
+        bootstrap_plist=units_dir / f"{BOOTSTRAP_LABEL}.plist",
     )
 
 
@@ -66,7 +66,8 @@ def render_user_server_plist(spec: UserServerUnitSpec) -> bytes:
         "ProgramArguments": spec.program_arguments,
         "WorkingDirectory": spec.working_directory,
         "RunAtLoad": True,
-        "KeepAlive": True,
+        # Bootstrap unit: run once at load/boot, do not keepalive.
+        "KeepAlive": False,
         "StandardOutPath": spec.stdout_path,
         "StandardErrorPath": spec.stderr_path,
     }
@@ -113,15 +114,15 @@ class MacOSLaunchdAdapter:
 
     def install_user_server_unit(self, spec: UserServerUnitSpec) -> None:
         layout = launchd_layout()
-        layout.user_server_plist.parent.mkdir(parents=True, exist_ok=True)
-        layout.user_server_plist.write_bytes(render_user_server_plist(spec))
-        self._load_unit(layout.user_server_plist, spec.label)
+        layout.bootstrap_plist.parent.mkdir(parents=True, exist_ok=True)
+        layout.bootstrap_plist.write_bytes(render_user_server_plist(spec))
+        self._load_unit(layout.bootstrap_plist, spec.label)
 
     def uninstall_all_units(self, *, ignore_missing: bool = True) -> None:
         layout = launchd_layout()
         units = (
             (layout.privileged_plist, PRIVILEGED_LABEL),
-            (layout.user_server_plist, USER_SERVER_LABEL),
+            (layout.bootstrap_plist, BOOTSTRAP_LABEL),
         )
         for path, label in units:
             self._unload_unit(path, label)
@@ -137,22 +138,22 @@ class MacOSLaunchdAdapter:
     def query_status(self) -> SupervisorStatus:
         layout = launchd_layout()
         privileged_loaded = self._is_loaded(PRIVILEGED_LABEL)
-        user_loaded = self._is_loaded(USER_SERVER_LABEL)
+        bootstrap_loaded = self._is_loaded(BOOTSTRAP_LABEL)
         installed = (
             layout.privileged_plist.exists()
-            or layout.user_server_plist.exists()
+            or layout.bootstrap_plist.exists()
             or privileged_loaded
-            or user_loaded
+            or bootstrap_loaded
         )
         details = []
         details.append(f"privileged_plist={layout.privileged_plist}")
-        details.append(f"user_server_plist={layout.user_server_plist}")
+        details.append(f"bootstrap_plist={layout.bootstrap_plist}")
         details.append(f"privileged_loaded={'yes' if privileged_loaded else 'no'}")
-        details.append(f"user_server_loaded={'yes' if user_loaded else 'no'}")
+        details.append(f"bootstrap_loaded={'yes' if bootstrap_loaded else 'no'}")
         return SupervisorStatus(
             platform="macos",
             privileged_unit=PRIVILEGED_LABEL,
-            user_server_unit=USER_SERVER_LABEL,
+            user_server_unit=BOOTSTRAP_LABEL,
             active_owner="",
             installed=installed,
             details=details,

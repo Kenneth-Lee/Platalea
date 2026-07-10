@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import platform
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -43,9 +42,7 @@ from .paths import (
     ensure_app_layout,
     ensure_config,
     log_file,
-    service_control_paths,
 )
-from .service_control.platform.macos_launchd import launchd_layout
 from .tls_setup import ensure_tls_materials
 
 CLI_NAME = "platalea"
@@ -129,16 +126,6 @@ def _resolved_config(explicit: str) -> Path:
 
 
 def _cmd_start(args: argparse.Namespace) -> int:
-    if _is_macos_service_mode_installed():
-        print(
-            "检测到已安装系统 service（launchd 托管）。"
-            "请不要再使用 `platalea start` 启动手动后台进程，"
-            "否则会覆盖系统 service 运行模式。"
-            "请改用 `platalea service status` 检查状态，"
-            "或使用 `platalea service uninstall/install` 变更托管配置。",
-            file=sys.stderr,
-        )
-        return 1
     cfg_path = _resolved_config(args.config)
     try:
         ensure_tls_materials(cfg_path)
@@ -166,21 +153,6 @@ def _cmd_start(args: argparse.Namespace) -> int:
 def _cmd_stop(args: argparse.Namespace) -> int:
     cfg_path = _resolved_config(args.config) if getattr(args, "config", "") else ensure_config(None)
     return stop_server(cfg_path)
-
-
-def _is_macos_service_mode_installed() -> bool:
-    if platform.system().lower() != "darwin":
-        return False
-    try:
-        control_paths = service_control_paths()
-        layout = launchd_layout()
-        return (
-            control_paths.state_file.exists()
-            and (layout.user_server_plist.exists() or layout.privileged_plist.exists())
-        )
-    except Exception:
-        return False
-
 
 def _cmd_serve_daemon(args: argparse.Namespace) -> int:
     cfg_path = Path(args.config).expanduser().resolve()

@@ -11,9 +11,9 @@ from unittest import mock
 
 from platalea.service_control.models import ActiveOwner, PrivilegedUnitSpec, UserServerUnitSpec
 from platalea.service_control.platform.macos_launchd import (
+    BOOTSTRAP_LABEL,
     MacOSLaunchdAdapter,
     PRIVILEGED_LABEL,
-    USER_SERVER_LABEL,
     launchd_layout,
     render_privileged_plist,
     render_user_server_plist,
@@ -43,20 +43,20 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
             self.assertEqual(payload["RunAtLoad"], True)
             self.assertEqual(payload["KeepAlive"], True)
 
-    def test_render_user_server_plist_contains_owner_and_serve_daemon(self) -> None:
+    def test_render_user_server_plist_contains_owner_and_bootstrap_start(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             owner = ActiveOwner(uid=501, username="kenny", home=str(root))
             payload = plistlib.loads(
                 render_user_server_plist(
                     UserServerUnitSpec(
-                        label=USER_SERVER_LABEL,
+                        label=BOOTSTRAP_LABEL,
                         owner=owner,
                         program_arguments=[
                             "/usr/bin/python3",
                             "-m",
                             "platalea",
-                            "_serve-daemon",
+                            "start",
                             "--config",
                             str(root / "config.json"),
                         ],
@@ -67,11 +67,12 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
                     )
                 )
             )
-            self.assertEqual(payload["Label"], USER_SERVER_LABEL)
+            self.assertEqual(payload["Label"], BOOTSTRAP_LABEL)
             self.assertEqual(payload["UserName"], "kenny")
-            self.assertIn("_serve-daemon", payload["ProgramArguments"])
+            self.assertIn("start", payload["ProgramArguments"])
             self.assertEqual(payload["WorkingDirectory"], str(root))
             self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], str(root))
+            self.assertEqual(payload["KeepAlive"], False)
 
 
 class MacOSLaunchdAdapterTest(unittest.TestCase):
@@ -116,7 +117,7 @@ class MacOSLaunchdAdapterTest(unittest.TestCase):
             status = adapter.query_status()
             self.assertEqual(status.platform, "macos")
             self.assertTrue(any(cmd[:3] == ["/bin/launchctl", "print", "system/com.localmanager.platalea.privileged"] for cmd in calls))
-            self.assertTrue(any(cmd[:3] == ["/bin/launchctl", "print", "system/com.localmanager.platalea.server"] for cmd in calls))
+            self.assertTrue(any(cmd[:3] == ["/bin/launchctl", "print", "system/com.localmanager.platalea.bootstrap"] for cmd in calls))
 
 
 if __name__ == "__main__":
