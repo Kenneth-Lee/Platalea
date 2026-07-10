@@ -274,11 +274,8 @@ class BulletinBoardAgent:
         self._queue.put((board_id, message_id))
 
     def _worker_loop(self) -> None:
-        while not self._stop.is_set():
-            try:
-                item = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
+        while True:
+            item = self._queue.get()
             if item is None:
                 break
             board_id, message_id = item

@@ -1022,8 +1022,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
             tls_fingerprint,
         )
         LOGGER.info("服务就绪。Android 客户端可在同一局域网中发现并连接本机。")
-        while _thread.is_alive():
-            time.sleep(0.5)
+        _thread.join()
         return 0
     except KeyboardInterrupt:
         LOGGER.info("收到 Ctrl+C，准备退出。")
