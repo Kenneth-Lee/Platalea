@@ -101,6 +101,21 @@ class BulletinRolesTests(unittest.TestCase):
         self.assertTrue(auth.is_admin)
         self.assertEqual(auth.role_class, "admin")
 
+    def test_resolve_normalizes_password_input(self) -> None:
+        roles = load_roles_config(
+            {
+                "roles": {
+                    "admin": {"password": "secret", "label": "管理员"},
+                }
+            },
+            guest_password=None,
+            host_password=None,
+        )
+        auth = roles.resolve({"X-Network-Service-Password": "  secret  "})
+        self.assertIsNotNone(auth)
+        assert auth is not None
+        self.assertTrue(auth.is_admin)
+
     def test_auth_session_fields_include_role_class(self) -> None:
         guest = AuthContext(
             role_id="guest",

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+import secrets
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
 from .family_common import PASSWORD_HEADER
+
+LOGGER = logging.getLogger("local_manager.auth")
 
 ADMIN_ROLE_ID = "admin"
 LEGACY_GUEST_ROLE_ID = "guest"
@@ -61,18 +66,52 @@ class RolesConfig:
                 )
             return _auth_from_role(admin)
 
-        provided = headers.get(PASSWORD_HEADER, "").strip()
+        raw_provided = headers.get(PASSWORD_HEADER, "")
+        header_present = bool(str(raw_provided))
+        provided = _normalize_password(raw_provided)
         if not provided:
+            LOGGER.warning(
+                "认证失败: reason=empty_password header_present=%s raw_len=%d normalized_len=%d auth_required=%s",
+                header_present,
+                len(str(raw_provided)),
+                len(provided),
+                self.auth_required,
+            )
             return None
         admin_role = self.roles.get(ADMIN_ROLE_ID)
-        if admin_role is not None and admin_role.password and provided == admin_role.password:
+        if admin_role is not None and admin_role.password and _password_matches(provided, admin_role.password):
+            LOGGER.info(
+                "认证通过: role=%s role_class=admin normalized_len=%d",
+                ADMIN_ROLE_ID,
+                len(provided),
+            )
             return _auth_from_role(admin_role)
         for role_id, role in self.roles.items():
             if role_id == ADMIN_ROLE_ID:
                 continue
-            if role.password and provided == role.password:
+            if role.password and _password_matches(provided, role.password):
+                LOGGER.info(
+                    "认证通过: role=%s role_class=user normalized_len=%d",
+                    role_id,
+                    len(provided),
+                )
                 return _auth_from_role(role)
+        LOGGER.warning(
+            "认证失败: reason=password_mismatch header_present=%s raw_len=%d normalized_len=%d configured_roles=%s",
+            header_present,
+            len(str(raw_provided)),
+            len(provided),
+            ",".join(sorted(self.roles.keys())),
+        )
         return None
+
+
+def _normalize_password(value: str) -> str:
+    return unicodedata.normalize("NFKC", str(value)).strip()
+
+
+def _password_matches(provided: str, expected: str) -> bool:
+    return secrets.compare_digest(_normalize_password(provided), _normalize_password(expected))
 
 
 def _auth_from_role(role: RoleDefinition) -> AuthContext:

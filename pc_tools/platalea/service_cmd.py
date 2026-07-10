@@ -72,6 +72,7 @@ def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None 
         stderr_path=stderr_path,
         environment={
             "PYTHONPATH": str(source_root),
+            "PLATALEA_POWER_SHUTDOWN": "1",
         },
     )
     privileged_spec = PrivilegedUnitSpec(

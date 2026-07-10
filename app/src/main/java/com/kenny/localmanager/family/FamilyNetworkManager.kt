@@ -65,6 +65,10 @@ data class FamilyDiscoveredService(
     /** mDNS TXT `auth=1` 表示对端要求接入密码。 */
     val requiresPasswordAuth: Boolean
         get() = attributes["auth"]?.trim() == "1"
+
+    /** mDNS TXT `power_shutdown=1` 表示对端支持远程关机。 */
+    val supportsPowerShutdown: Boolean
+        get() = attributes["power_shutdown"]?.trim() == "1"
 }
 
 enum class BulletinAttachmentUploadPhase {
@@ -531,6 +535,39 @@ class FamilyNetworkManager(context: Context) {
     ): Boolean = withContext(Dispatchers.IO) {
         if (service.isSelf) return@withContext true
         fetchBoardList(service, accessPassword).getOrNull()?.canManage == true
+    }
+
+    fun requestRemotePowerShutdown(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        onComplete: (Result<Unit>) -> Unit = {}
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_18983)))
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "POST",
+                        path = "/power/shutdown",
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_19687)))
+                        }
+                        Unit
+                    }
+                }
+            }
+            result.onSuccess {
+                appendLog(appContext.getString(R.string.family_board_remote_shutdown_requested, service.displayHostName))
+            }.onFailure { error ->
+                appendError(appContext.getString(R.string.family_board_remote_shutdown_failed, error.message ?: error.javaClass.simpleName))
+            }
+            onComplete(result)
+        }
     }
 
     fun createBoardEntry(

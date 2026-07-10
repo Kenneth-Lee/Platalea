@@ -98,6 +98,7 @@ import com.kenny.localmanager.family.BulletinAttachmentDownloadProgress
 import com.kenny.localmanager.family.BulletinAttachmentUploadPhase
 import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
+import com.kenny.localmanager.family.BulletinBoardDefaults
 import com.kenny.localmanager.family.BulletinBoardInfo
 import com.kenny.localmanager.family.BulletinBoardMention
 import com.kenny.localmanager.family.BulletinMentionTextField
@@ -150,6 +151,8 @@ fun FamilyNetworkScreen(
     var showBoardMenu by remember { mutableStateOf(false) }
     var showDeleteBoardDialog by remember { mutableStateOf(false) }
     var deleteBoardInProgress by remember { mutableStateOf(false) }
+    var showRemoteShutdownDialog by remember { mutableStateOf(false) }
+    var remoteShutdownInProgress by remember { mutableStateOf(false) }
     var showRenameBoardDialog by remember { mutableStateOf(false) }
     var renameBoardName by remember { mutableStateOf("") }
     var renameBoardInProgress by remember { mutableStateOf(false) }
@@ -573,6 +576,40 @@ fun FamilyNetworkScreen(
         )
     }
 
+    if (showRemoteShutdownDialog && boardSession != null) {
+        val session = boardSession
+        AlertDialog(
+            onDismissRequest = { if (!remoteShutdownInProgress) showRemoteShutdownDialog = false },
+            title = { Text(context.getString(R.string.family_board_remote_shutdown_title)) },
+            text = { Text(context.getString(R.string.family_board_remote_shutdown_confirm, session.service.displayHostName)) },
+            confirmButton = {
+                Button(
+                    enabled = !remoteShutdownInProgress,
+                    onClick = {
+                        remoteShutdownInProgress = true
+                        manager.requestRemotePowerShutdown(session.service, session.accessPassword) { result ->
+                            remoteShutdownInProgress = false
+                            result.onSuccess {
+                                showRemoteShutdownDialog = false
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_remote_shutdown_requested, session.service.displayHostName),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !remoteShutdownInProgress,
+                    onClick = { showRemoteShutdownDialog = false }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -726,6 +763,23 @@ fun FamilyNetworkScreen(
                                                 showBoardMenu = false
                                                 messageForwardSelectionMode = true
                                                 selectedForwardMessageIds = emptySet()
+                                            }
+                                        )
+                                    }
+                                    if (canManageBoard &&
+                                        session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID &&
+                                        session.service.supportsPowerShutdown
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(R.string.family_board_remote_shutdown_title),
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                showRemoteShutdownDialog = true
                                             }
                                         )
                                     }

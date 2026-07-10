@@ -394,6 +394,10 @@
     <string name="family_board_import_name_conflict">归档包内名称「%1$s」与现有留言板重名，请指定新名称。</string>
     <string name="family_board_delete_board_title">删除留言板</string>
     <string name="family_board_menu">留言板操作</string>
+    <string name="family_board_remote_shutdown_title">远程关机</string>
+    <string name="family_board_remote_shutdown_confirm">确定要远程关机「%1$s」吗？</string>
+    <string name="family_board_remote_shutdown_requested">已向 %1$s 发送关机请求</string>
+    <string name="family_board_remote_shutdown_failed">远程关机失败：%1$s</string>
     <string name="family_board_delete_board_confirm">确定删除留言板「%1$s」吗？留言与附件将一并删除。</string>
     <string name="family_board_delete_last_board">至少保留一个留言板，无法删除。</string>
     <string name="family_board_export">导出 Markdown</string>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import json
 import logging
@@ -44,6 +45,7 @@ from .family_common import (
     read_request_body,
     start_https_server,
 )
+from .paths import service_control_paths
 
 LOGGER = logging.getLogger("local_manager.bulletin_server")
 
@@ -62,6 +64,7 @@ class ServerConfig:
     instance_id_file: Path
     log_level: str
     max_import_bytes: int | None
+    supports_power_shutdown: bool
 
     @property
     def auth_required(self) -> bool:
@@ -82,6 +85,11 @@ def _parse_optional_positive_int(value: Any) -> int | None:
     if parsed <= 0:
         return None
     return parsed
+
+
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
@@ -118,6 +126,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
         max_import_bytes=_parse_optional_positive_int(raw.get("max_import_bytes")),
+        supports_power_shutdown=_env_flag("PLATALEA_POWER_SHUTDOWN"),
     )
     agent_raw = raw.get("agent")
     agent_config = load_agent_config(agent_raw if isinstance(agent_raw, dict) else None)
@@ -224,6 +233,95 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 )
             else:
                 json_response(self, HTTPStatus.OK, agent._config.to_public_json())
+            return
+
+        if method == "POST" and normalized_path == "/power/shutdown":
+            if not getattr(self.server, "supports_power_shutdown", False):
+                LOGGER.warning("远程关机请求被拒绝: unsupported endpoint path=%s", normalized_path)
+                json_response(
+                    self,
+                    HTTPStatus.NOT_FOUND,
+                    {
+                        "ok": False,
+                        "error": "unsupported",
+                        "message": "当前设备未启用远程关机",
+                    },
+                )
+                return
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None and self.auth_service._roles.auth_required:
+                LOGGER.warning("远程关机请求被拒绝: 未认证 path=%s", normalized_path)
+                json_response(
+                    self,
+                    HTTPStatus.UNAUTHORIZED,
+                    {
+                        "ok": False,
+                        "error": "unauthorized",
+                        "message": "需要正确的网络服务密码",
+                    },
+                )
+                return
+            if auth is None or not auth.can_manage:
+                LOGGER.warning(
+                    "远程关机请求被拒绝: 非管理员 role=%s role_class=%s",
+                    auth.role_id if auth is not None else "(none)",
+                    auth.role_class if auth is not None else "(none)",
+                )
+                json_response(
+                    self,
+                    HTTPStatus.FORBIDDEN,
+                    {
+                        "ok": False,
+                        "error": "forbidden",
+                        "message": "远程关机需要管理员权限",
+                    },
+                )
+                return
+            try:
+                from .service_control.broker_client import BrokerClientError, request_broker
+
+                result = request_broker(state_root=service_control_paths().state_root, op="shutdown")
+            except BrokerClientError as exc:
+                json_response(
+                    self,
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {
+                        "ok": False,
+                        "error": "broker_unavailable",
+                        "message": str(exc),
+                    },
+                )
+                return
+            if result.get("ok"):
+                LOGGER.info(
+                    "远程关机请求已受理: role=%s role_class=%s",
+                    auth.role_id,
+                    auth.role_class,
+                )
+                json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "message": result.get("message", "shutdown requested"),
+                    },
+                )
+            else:
+                LOGGER.warning(
+                    "远程关机请求失败: role=%s role_class=%s error=%s",
+                    auth.role_id,
+                    auth.role_class,
+                    result.get("error", "shutdown_failed"),
+                )
+                json_response(
+                    self,
+                    HTTPStatus.BAD_GATEWAY,
+                    {
+                        "ok": False,
+                        "error": result.get("error", "shutdown_failed"),
+                        "message": result.get("message", "shutdown failed"),
+                    },
+                )
             return
 
         if method == "GET" and normalized_path in {"/", ""}:
@@ -988,6 +1086,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         instance_id=instance_id,
         tls_fingerprint=tls_fingerprint,
         auth_required=config.auth_required,
+            supports_power_shutdown=config.supports_power_shutdown,
         platform="python",
     )
 
@@ -1013,13 +1112,14 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         zeroconf_client = Zeroconf()
         zeroconf_client.register_service(service_info)
         LOGGER.info(
-            "mDNS 服务已注册: name=%s type=%s hostname=%s port=%s instance_id=%s fingerprint=%s",
+            "mDNS 服务已注册: name=%s type=%s hostname=%s port=%s instance_id=%s fingerprint=%s power_shutdown=%s",
             service_info.name,
             service_type,
             hostname,
             config.port,
             instance_id,
             tls_fingerprint,
+            config.supports_power_shutdown,
         )
         LOGGER.info("服务就绪。Android 客户端可在同一局域网中发现并连接本机。")
         _thread.join()

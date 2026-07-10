@@ -169,6 +169,7 @@ def build_service_properties(
     tls_fingerprint: str,
     *,
     auth_required: bool,
+    supports_power_shutdown: bool = False,
     platform: str = "python",
     host_name: str | None = None,
 ) -> dict[str, str]:
@@ -183,6 +184,8 @@ def build_service_properties(
     }
     if auth_required:
         props["auth"] = "1"
+    if supports_power_shutdown:
+        props["power_shutdown"] = "1"
     if host_name:
         props["host_name"] = host_name
     return props
@@ -205,6 +208,7 @@ def build_service_info(
     tls_fingerprint: str,
     *,
     auth_required: bool,
+    supports_power_shutdown: bool = False,
     platform: str = "python",
 ) -> ServiceInfo:
     addresses = collect_local_addresses()
@@ -217,6 +221,7 @@ def build_service_info(
         instance_id,
         tls_fingerprint,
         auth_required=auth_required,
+        supports_power_shutdown=supports_power_shutdown,
         platform=platform,
         host_name=_display_host_name(service_name),
     )
