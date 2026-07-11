@@ -72,7 +72,7 @@ class MacOSLaunchdRenderTest(unittest.TestCase):
             self.assertIn("start", payload["ProgramArguments"])
             self.assertEqual(payload["WorkingDirectory"], str(root))
             self.assertEqual(payload["EnvironmentVariables"]["PYTHONPATH"], str(root))
-            self.assertEqual(payload["KeepAlive"], False)
+            self.assertEqual(payload["KeepAlive"], {"SuccessfulExit": False})
 
 
 class MacOSLaunchdAdapterTest(unittest.TestCase):

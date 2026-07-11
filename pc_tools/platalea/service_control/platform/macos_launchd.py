@@ -66,8 +66,12 @@ def render_user_server_plist(spec: UserServerUnitSpec) -> bytes:
         "ProgramArguments": spec.program_arguments,
         "WorkingDirectory": spec.working_directory,
         "RunAtLoad": True,
-        # Bootstrap unit: run once at load/boot, do not keepalive.
-        "KeepAlive": False,
+        # Bootstrap command should run at load and retry only when it exits
+        # with a non-zero status (for transient boot-time failures such as
+        # network not ready yet).
+        "KeepAlive": {
+            "SuccessfulExit": False,
+        },
         "StandardOutPath": spec.stdout_path,
         "StandardErrorPath": spec.stderr_path,
     }

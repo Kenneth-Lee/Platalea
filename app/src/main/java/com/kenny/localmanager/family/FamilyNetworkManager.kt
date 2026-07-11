@@ -1832,7 +1832,7 @@ class FamilyNetworkManager(context: Context) {
                         pendingResolveQueue.addFirst(serviceInfo)
                     }
                 }
-                appendError(appContext.getString(R.string.family_msg_57086, serviceInfo.serviceName))
+                appendError(appContext.getString(R.string.family_msg_57086, name, errorCode))
                 drainResolveQueue()
             }
 
