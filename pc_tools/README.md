@@ -261,7 +261,7 @@ Agent 可通过 Ollama 工具调用（tool calling）使用以下能力（需模
 ### 4. 启动服务
 
 ```bash
-python3 pc_tools/bulletin_server.py --config pc_tools/config.json
+platalea start --config pc_tools/config.json
 ```
 
 日志中应出现：
@@ -279,7 +279,7 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 
 > 手机端使用 **user 角色密码** 可读写授权留言板；使用 **admin 密码** 连入后界面显示「远程管理员」，可管理 PC 留言板。
 
-## PC 命令行调试（board_client.py）
+## PC 命令行调试（platalea）
 
 本机启动 `platalea start` 后，可用 `platalea` 通过 HTTPS API 完成留言板的查看与管理，无需手机。
 
@@ -288,7 +288,7 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 1. `list-boards` — 列出所有留言板，记下 **board_id**（如 `default`、`kitchen`）
 2. `get-messages` — 查看默认板消息（`--board kitchen` 指定其它板；输出含 message id，供改删用）
 3. `post "内容"` — 发帖；可 `@模型名` 触发 Agent；`--attach` 可重复上传附件
-4. 需要管理时：`create-board`、`delete-board`、`modify`、`delete`（需 host 密码）
+4. 需要管理时：`create-board`、`delete-board`、`modify`、`delete`（需 admin 密码）
 
 ### 全局选项
 
@@ -348,7 +348,7 @@ platalea get-messages --password guest
 platalea --host 192.168.1.100 --password guest list-boards
 platalea --host 192.168.1.100 --password guest get-messages --board default
 
-# 改/删消息（host 密码）
+# 改/删消息（admin 密码）
 platalea --config pc_tools/config.json modify <message_id> "新内容"
 platalea --config pc_tools/config.json modify <message_id> --attach ./new.pdf
 platalea --config pc_tools/config.json delete <message_id>
@@ -397,11 +397,11 @@ board_root/
 
 ## 旧原型
 
-`mdns_server.py` / `send_message.py` 为早期 mDNS 与 `/message` 调试链路，已被 `bulletin_server.py` 取代。若只需验证 mDNS 发现，仍可使用旧脚本。
+`mDNS` 与 `/message` 的早期调试链路已经移除，当前只保留 `platalea` 主入口。
 
 ## 常见问题
 
 1. **手机看不到 PC**：检查防火墙是否放行 TCP `port` 与 UDP 5353；确认同一网段。
 2. **TLS 失败**：重新运行 `generate_tls_materials.sh` 并重启 PC 服务、重装 Android APK。
-3. **401 密码错误**：连 PC 时填 `config.json` 里的 `guest_password`，不是手机「网络服务密码」。
+3. **401 密码错误**：连 PC 时填 `config.json` 里的 `roles.admin.password`，不是手机「网络服务密码」。
 4. **改证书后连不上**：重启 `platalea start` 启动的服务，旧进程仍会用旧证书。

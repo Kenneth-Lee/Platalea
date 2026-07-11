@@ -690,7 +690,6 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
             body["role_ids"] = [item.strip() for item in role_ids_raw.split(",") if item.strip()]
         else:
             body["role_ids"] = []
-        path, method, body, password = "/boards", "POST", body, host_password
         path, method, body, request_password = "/boards", "POST", body, access_password
     elif args.command == "delete-board":
         path, method, body, request_password = f"/boards/{board_id}", "DELETE", None, access_password
@@ -714,7 +713,6 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         body = {"content": content, "author_label": args.author}
         if attachment_refs:
             body["attachments"] = attachment_refs
-        password = guest_password
         request_password = access_password
     elif args.command == "modify":
         result = _dispatch_modify(args, board_id, access_password)
@@ -759,32 +757,6 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         method = "GET"
         body = None
         request_password = access_password
-            request_password = access_password
-            path, method, body, request_password = "/boards/import.boardpack", "POST", body, access_password
-        try:
-            status, payload = request_api_bytes(
-                host,
-                port,
-                method,
-                path,
-                password=password,
-                body=None,
-                accept="application/zip, application/octet-stream, */*",
-                content_type=None,
-                ca_cert=args.ca_cert,
-                tls_fingerprint=args.tls_fingerprint,
-            )
-        except Exception as exc:
-            print(f"请求失败 ({host}:{port}): {exc}", file=sys.stderr)
-            return 1
-        if status >= 400:
-            detail = payload.decode("utf-8", errors="replace")
-            print(f"错误 ({status}): {detail}", file=sys.stderr)
-            return 1
-        output = Path(args.output).expanduser()
-        output.write_bytes(payload)
-        print(f"已导出 boardpack: {output} ({len(payload)} 字节)")
-        return 0
     elif args.command == "import-boardpack":
         pack_path = Path(args.input).expanduser()
         if not pack_path.exists():
@@ -804,14 +776,14 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
             path = f"{path}?{'&'.join(query_parts)}"
         method = "POST"
         body_bytes = pack_path.read_bytes()
-        password = host_password
+        request_password = access_password
         try:
             status, payload = request_api_bytes(
                 host,
                 port,
                 method,
                 path,
-                password=password,
+                password=request_password,
                 body=body_bytes,
                 accept="application/json",
                 content_type="application/vnd.localmanager.boardpack+zip",
