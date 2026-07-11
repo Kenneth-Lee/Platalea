@@ -17,6 +17,7 @@ GNUPG_DIR_NAME = "gnupg"
 IMPORTED_DIR_NAME = "imported"
 SERVICE_CONTROL_DIR_NAME = "service_control"
 INSTANCE_ID_NAME = "instance_id"
+EXAMPLE_CONFIG = PC_TOOLS_DIR / "config.example.json"
 
 CONFIG_NAME = "config.json"
 PID_NAME = "server.pid"
