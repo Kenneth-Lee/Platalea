@@ -16,6 +16,8 @@ from .paths import default_ca_cert, log_file, pid_file
 
 def load_server_probe(
     config_path: Path,
+    *,
+    require_roles: bool = True,
 ) -> tuple[str, int, Path, str]:
     """Return (probe_host, port, ca_cert, password) for health checks."""
     config_path = config_path.resolve()
@@ -25,11 +27,22 @@ def load_server_probe(
     port = int(raw.get("port", 8765))
     ca_cert = default_ca_cert(config_path)
     roles_raw = raw.get("roles")
+    password = ""
     if not isinstance(roles_raw, dict) or not roles_raw:
-        raise ValueError(f"配置文件缺少 roles: {config_path}")
+        if require_roles:
+            raise ValueError(
+                f"配置文件缺少 roles: {config_path}。"
+                "请在 config.json 中添加 roles.admin.password。"
+            )
+        return probe_host, port, ca_cert, password
     admin_role = roles_raw.get("admin")
     if not isinstance(admin_role, dict):
-        raise ValueError(f"配置文件缺少 admin 角色: {config_path}")
+        if require_roles:
+            raise ValueError(
+                f"配置文件缺少 admin 角色: {config_path}。"
+                "请在 config.json 中添加 roles.admin。"
+            )
+        return probe_host, port, ca_cert, password
     password = str(admin_role.get("password", "")).strip()
     return probe_host, port, ca_cert, password
 
@@ -231,7 +244,7 @@ def stop_server(config_path: Path | None = None) -> int:
     from .paths import ensure_config
 
     cfg = Path(config_path).expanduser().resolve() if config_path else ensure_config(None)
-    probe_host, port, ca_cert, password = load_server_probe(cfg)
+    probe_host, port, ca_cert, password = load_server_probe(cfg, require_roles=False)
 
     targets: list[int] = []
     pid_from_file = _read_pid()
