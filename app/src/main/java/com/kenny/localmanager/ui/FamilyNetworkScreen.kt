@@ -244,26 +244,31 @@ fun FamilyNetworkScreen(
         presentBoardPicker(service, accessPassword)
     }
 
-    fun showPasswordDialog(service: FamilyDiscoveredService, wrongPassword: Boolean) {
-        pendingBoardService = service
-        boardPasswordInput = ""
-        boardPasswordError = if (wrongPassword) {
-            context.getString(R.string.family_board_password_wrong)
-        } else {
-            null
-        }
-        showBoardPasswordDialog = true
-    }
-
     fun boardPasswordProbeErrorMessage(error: Throwable): String {
+        val detail = error.message ?: error.javaClass.simpleName
         return if (manager.isLikelyAuthFailure(error)) {
-            context.getString(R.string.family_board_password_wrong)
+            context.getString(R.string.family_board_password_wrong_detail, detail)
         } else {
             context.getString(
                 R.string.family_board_password_probe_failed,
-                error.message ?: error.javaClass.simpleName
+                detail
             )
         }
+    }
+
+    fun showPasswordDialog(
+        service: FamilyDiscoveredService,
+        wrongPassword: Boolean,
+        initialError: Throwable? = null
+    ) {
+        pendingBoardService = service
+        boardPasswordInput = ""
+        boardPasswordError = when {
+            initialError != null -> boardPasswordProbeErrorMessage(initialError)
+            wrongPassword -> context.getString(R.string.family_board_password_wrong)
+            else -> null
+        }
+        showBoardPasswordDialog = true
     }
 
     fun requestOpenBoard(service: FamilyDiscoveredService) {
@@ -282,9 +287,13 @@ fun FamilyNetworkScreen(
                 val result = manager.probeBoardAccess(service, accessPassword = cached)
                 boardPasswordInProgress = false
                 result.onSuccess { openBoardWithAccess(service, cached) }
-                    .onFailure {
+                    .onFailure { error ->
                         manager.forgetBoardAccessPassword(service.deviceKey)
-                        showPasswordDialog(service, wrongPassword = manager.isLikelyAuthFailure(it))
+                        showPasswordDialog(
+                            service,
+                            wrongPassword = manager.isLikelyAuthFailure(error),
+                            initialError = error
+                        )
                     }
             }
             return
@@ -1410,7 +1419,10 @@ private fun FamilyPeerListPane(
         }
 
         item {
-            FamilyWorkLogPane(state.logLines)
+            FamilyWorkLogPane(
+                logLines = state.logLines,
+                expandedContentModifier = Modifier.fillParentMaxHeight()
+            )
         }
     }
 }
@@ -2352,7 +2364,10 @@ private fun formatAttachmentSize(attachment: BulletinAttachmentRef): String {
 }
 
 @Composable
-private fun FamilyWorkLogPane(logLines: List<String>) {
+private fun FamilyWorkLogPane(
+    logLines: List<String>,
+    expandedContentModifier: Modifier = Modifier
+) {
     val context = LocalContext.current
     var expanded by remember { mutableStateOf(false) }
     Row(
@@ -2393,9 +2408,9 @@ private fun FamilyWorkLogPane(logLines: List<String>) {
     }
     if (expanded) {
         Box(
-            modifier = Modifier
+            modifier = expandedContentModifier
                 .fillMaxWidth()
-                .height(120.dp)
+                .heightIn(min = 120.dp)
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
         ) {
             val scrollState = rememberScrollState()

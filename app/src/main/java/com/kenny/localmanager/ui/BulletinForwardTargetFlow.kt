@@ -320,7 +320,13 @@ fun BulletinForwardTargetFlow(
                                     phase = ForwardPhase.BOARD
                                     loadBoards(service, password)
                                 } else {
-                                    passwordError = context.getString(R.string.family_board_password_wrong)
+                                    val error = result.exceptionOrNull()
+                                    val detail = error?.message ?: error?.javaClass?.simpleName ?: "unknown probe failure"
+                                    passwordError = if (error != null && manager.isLikelyAuthFailure(error)) {
+                                        context.getString(R.string.family_board_password_wrong_detail, detail)
+                                    } else {
+                                        context.getString(R.string.family_board_password_probe_failed, detail)
+                                    }
                                 }
                             }
                         }

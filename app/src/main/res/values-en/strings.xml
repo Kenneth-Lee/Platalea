@@ -293,6 +293,8 @@
     <string name="family_board_password_hint">Enter this device\'s access password (user or admin; not the passwords configured on your own device).</string>
     <string name="family_board_password_label">Device access password</string>
     <string name="family_board_password_wrong">Wrong password</string>
+    <string name="family_board_password_wrong_detail">Wrong password: %1$s</string>
+    <string name="family_board_password_probe_failed">Connection failed (not a password error): %1$s</string>
     <string name="family_board_picker_title">Select Bulletin Board</string>
     <string name="family_board_picker_loading">Loading bulletin boards…</string>
     <string name="family_board_picker_empty">No bulletin boards</string>
@@ -1892,4 +1894,10 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="player_diag_device_hdmi">HDMI</string>
     <string name="player_diag_output_type">Output %1$d</string>
     <string name="book_note_section_title">Book Notes</string>
+    <string name="family_board_probe_hint_public_remote">The target is a public IP while this device is on a private LAN. It may have resolved to a cellular address of the peer device. Please connect both devices to the same Wi-Fi and disable mobile data on the peer, then retry.</string>
+    <string name="family_board_probe_hint_diff_subnet">The target is not in the same subnet as this device. Please ensure both devices are on the same Wi-Fi.</string>
+    <string name="family_board_probe_hint_service_unreachable">Please verify the peer service is online and port %1$d is reachable.</string>
+    <string name="family_board_probe_recognized_none">No recognizable IPv4 declaration</string>
+    <string name="family_board_probe_no_same_subnet">No same-subnet target address was found. Connection attempt has been skipped (local=%1$s, attempted=%2$s, recognized=%3$s).</string>
+    <string name="family_board_probe_network_failure">Network connection failed: %1$s (local=%2$s, remote=%3$s, attempted=%4$s, recognized=%5$s). %6$s</string>
 </resources>

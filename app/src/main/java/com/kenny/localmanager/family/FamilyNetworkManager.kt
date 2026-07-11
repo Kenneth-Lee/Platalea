@@ -15,6 +15,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.util.Locale
@@ -1771,12 +1772,12 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onDiscoveryStarted(serviceType: String) {
-                appendLog(appContext.getString(R.string.family_msg_94230))
+                appendLog(appContext.getString(R.string.family_msg_94230, serviceType))
                 _state.update { it.copy(isDiscovering = true, lastError = null) }
             }
 
             override fun onDiscoveryStopped(serviceType: String) {
-                appendLog(appContext.getString(R.string.family_msg_01436))
+                appendLog(appContext.getString(R.string.family_msg_01436, serviceType))
                 _state.update { it.copy(isDiscovering = false) }
             }
 
@@ -1784,7 +1785,7 @@ class FamilyNetworkManager(context: Context) {
                 if (!serviceTypeMatches(serviceInfo.serviceType)) return
                 val candidateName = serviceInfo.serviceName?.trim().orEmpty()
                 if (candidateName.isEmpty()) return
-                appendLog(appContext.getString(R.string.family_msg_81223))
+                appendLog(appContext.getString(R.string.family_msg_81223, candidateName))
                 enqueueResolve(serviceInfo)
             }
 
@@ -1843,6 +1844,11 @@ class FamilyNetworkManager(context: Context) {
                 }
                 val attributes = decodeAttributes(resolved)
                 val resolvedHost = resolved.host?.hostAddress ?: resolved.host?.hostName ?: ""
+                val candidateHosts = attributes[FAMILY_IPV4_LIST_ATTR]
+                    ?.split(',')
+                    ?.map { it.trim() }
+                    ?.filter { isIpv4Address(it) }
+                    .orEmpty()
                 val host = selectPreferredServiceHost(resolvedHost, attributes, _state.value.localIp)
                 val instanceId = currentInstanceId
                 val entry = FamilyDiscoveredService(
@@ -1856,6 +1862,9 @@ class FamilyNetworkManager(context: Context) {
                 appendLog(
                     appContext.getString(R.string.family_msg_83175, entry.displayHostName, entry.host, entry.port) +
                         if (entry.isSelf) appContext.getString(R.string.family_self_suffix) else ""
+                )
+                appendLog(
+                    "mDNS 解析详情: name=${entry.displayHostName} resolved=$resolvedHost candidates=${formatRecognizedEndpoints(candidateHosts, entry.port)} local=${_state.value.localIp.orEmpty()}"
                 )
                 if (host != resolvedHost) {
                     appendLog("mDNS 地址已改选: ${entry.displayHostName} resolved=$resolvedHost selected=$host local=${_state.value.localIp.orEmpty()}")
@@ -1942,7 +1951,7 @@ class FamilyNetworkManager(context: Context) {
                 isSelf = true
             )
         )
-        appendLog(appContext.getString(R.string.family_msg_74498))
+        appendLog(appContext.getString(R.string.family_msg_74498, displayHostName, resolvedHost, port))
     }
 
     private fun reregisterMdnsService() {
@@ -1969,7 +1978,7 @@ class FamilyNetworkManager(context: Context) {
             tlsFingerprint = tlsFingerprint,
             localIp = _state.value.localIp
         )
-        appendLog(appContext.getString(R.string.family_msg_17804))
+        appendLog(appContext.getString(R.string.family_msg_17804, requestedServiceName))
     }
 
     private fun resolveLocalDisplayHostName(instanceId: String): String =
@@ -2102,7 +2111,8 @@ class FamilyNetworkManager(context: Context) {
         body: String? = null,
         accessPassword: String? = null
     ): Result<String> {
-        return runCatching {
+        var attemptedHost = service.host.trim().ifEmpty { service.host }
+        val result = runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
             if (protocol != FAMILY_TLS_PROTOCOL) {
                 throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
@@ -2111,7 +2121,36 @@ class FamilyNetworkManager(context: Context) {
                 ?.trim()
                 ?.takeIf { it.isNotEmpty() }
                 ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val localIp = _state.value.localIp?.trim().orEmpty()
+            val recognizedHosts = collectRecognizedServiceHosts(service)
+            val sameSubnetHosts = if (isIpv4Address(localIp)) {
+                recognizedHosts.filter { isSameSubnet(localIp, it) }
+            } else {
+                emptyList()
+            }
+            appendLog(
+                "留言板连接预检: service=${service.displayHostName} local=${localIp.ifEmpty { "unknown" }} recognized=${formatRecognizedEndpoints(recognizedHosts, service.port)} sameSubnet=${formatRecognizedEndpoints(sameSubnetHosts, service.port)}"
+            )
+            if (isIpv4Address(localIp) && isPrivateIpv4(localIp) && sameSubnetHosts.isEmpty()) {
+                val recognized = formatRecognizedEndpoints(recognizedHosts, service.port)
+                appendLog(
+                    "留言板连接已跳过: service=${service.displayHostName} reason=no_same_subnet local=$localIp recognized=$recognized"
+                )
+                throw IllegalStateException(
+                    appContext.getString(
+                        R.string.family_board_probe_no_same_subnet,
+                        localIp,
+                        "skipped",
+                        recognized
+                    )
+                )
+            }
+            val targetHost = sameSubnetHosts.firstOrNull() ?: service.host
+            attemptedHost = targetHost
+            appendLog(
+                "留言板连接尝试: method=$method path=$path remote=${service.host}:${service.port} attempted=$attemptedHost:${service.port}"
+            )
+            val endpoint = URL("https://$targetHost:${service.port}$path")
             val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
                 requestMethod = method
                 connectTimeout = 8000
@@ -2135,13 +2174,76 @@ class FamilyNetworkManager(context: Context) {
             } finally {
                 connection.disconnect()
             }
-        }.onFailure { error ->
-            Log.w(
-                TAG,
-                "boardApiRequest failed method=$method path=$path host=${service.host}:${service.port} service=${service.serviceName} error=${error.javaClass.simpleName}: ${error.message}",
-                error
-            )
         }
+        return result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { error ->
+                val enrichedError = enrichBoardApiFailure(service, attemptedHost, error)
+                appendLog(
+                    "留言板连接失败: method=$method path=$path remote=${service.host}:${service.port} attempted=$attemptedHost:${service.port} error=${summarizeThrowable(enrichedError)}"
+                )
+                Log.w(
+                    TAG,
+                    "boardApiRequest failed method=$method path=$path host=${service.host}:${service.port} service=${service.serviceName} error=${enrichedError.javaClass.simpleName}: ${enrichedError.message}",
+                    enrichedError
+                )
+                Result.failure(enrichedError)
+            }
+        )
+    }
+
+    private fun enrichBoardApiFailure(service: FamilyDiscoveredService, attemptedHost: String, error: Throwable): Throwable {
+        if (isLikelyAuthFailure(error)) return error
+        val root = rootCause(error)
+        val rootMessage = root.message.orEmpty()
+        val lower = rootMessage.lowercase(Locale.ROOT)
+        val isConnectivityIssue =
+            root is SocketTimeoutException ||
+                root is java.net.ConnectException ||
+                root is java.net.UnknownHostException ||
+                lower.contains("failed to connect") ||
+                lower.contains("faled to connect") ||
+                (lower.contains("to connect") && lower.contains("after")) ||
+                lower.contains("timed out")
+        if (!isConnectivityIssue) return error
+
+        val localIp = _state.value.localIp?.trim().takeUnless { it.isNullOrEmpty() } ?: "unknown"
+        val remoteIp = service.host.trim()
+        val recognized = formatRecognizedEndpoints(collectRecognizedServiceHosts(service), service.port)
+        val localIsPrivate = isIpv4Address(localIp) && isPrivateIpv4(localIp)
+        val remoteIsPublic = isIpv4Address(remoteIp) && !isPrivateIpv4(remoteIp)
+        val sameSubnet =
+            if (isIpv4Address(localIp) && isIpv4Address(remoteIp)) isSameSubnet(localIp, remoteIp) else null
+        val hint = when {
+            remoteIsPublic && localIsPrivate -> appContext.getString(R.string.family_board_probe_hint_public_remote)
+            sameSubnet == false -> appContext.getString(R.string.family_board_probe_hint_diff_subnet)
+            else -> appContext.getString(R.string.family_board_probe_hint_service_unreachable, service.port)
+        }
+        val detail = rootMessage.ifBlank { root.javaClass.simpleName }
+        val message = appContext.getString(
+            R.string.family_board_probe_network_failure,
+            detail,
+            localIp,
+            "${service.host}:${service.port}",
+            "$attemptedHost:${service.port}",
+            recognized,
+            hint
+        )
+        return IllegalStateException(message, error)
+    }
+
+    private fun rootCause(error: Throwable): Throwable {
+        var current = error
+        while (current.cause != null && current.cause !== current) {
+            current = current.cause!!
+        }
+        return current
+    }
+
+    private fun summarizeThrowable(error: Throwable): String {
+        val root = rootCause(error)
+        val detail = root.message?.trim().takeUnless { it.isNullOrEmpty() } ?: root.javaClass.simpleName
+        return "${root.javaClass.simpleName}: $detail"
     }
 
     private fun boardApiTextRequest(
@@ -2513,23 +2615,71 @@ class FamilyNetworkManager(context: Context) {
         return candidates.firstOrNull() ?: resolvedHost
     }
 
+    private fun collectRecognizedServiceHosts(service: FamilyDiscoveredService): List<String> {
+        val ordered = linkedSetOf<String>()
+        val primary = service.host.trim()
+        if (isIpv4Address(primary)) {
+            ordered += primary
+        }
+        service.attributes[FAMILY_IPV4_LIST_ATTR]
+            ?.split(',')
+            ?.asSequence()
+            ?.map { it.trim() }
+            ?.filter { isIpv4Address(it) }
+            ?.forEach { ordered += it }
+        return ordered.toList()
+    }
+
+    private fun formatRecognizedEndpoints(hosts: List<String>, port: Int): String {
+        if (hosts.isEmpty()) return appContext.getString(R.string.family_board_probe_recognized_none)
+        return hosts.joinToString(", ") { "$it:$port" }
+    }
+
     private fun isSameSubnet(localIp: String, remoteIp: String): Boolean {
         if (!isIpv4Address(localIp) || !isIpv4Address(remoteIp)) return false
         val localInt = ipv4ToInt(localIp) ?: return false
         val remoteInt = ipv4ToInt(remoteIp) ?: return false
-        val mask = wifiManager?.dhcpInfo?.netmask ?: 0
-        if (mask != 0) {
-            return (localInt and mask) == (remoteInt and mask)
+        val rawMask = wifiManager?.dhcpInfo?.netmask ?: 0
+        if (rawMask != 0) {
+            val mask = normalizeDhcpNetmask(rawMask)
+            if (mask != 0) {
+                return (localInt and mask) == (remoteInt and mask)
+            }
         }
         val localParts = localIp.split('.')
         val remoteParts = remoteIp.split('.')
         return localParts.take(3) == remoteParts.take(3)
     }
 
+    private fun normalizeDhcpNetmask(rawMask: Int): Int {
+        // DhcpInfo usually stores IPv4 integers in little-endian form on Android.
+        val reversed = Integer.reverseBytes(rawMask)
+        return when {
+            reversed != 0 -> reversed
+            else -> rawMask
+        }
+    }
+
     private fun isIpv4Address(value: String): Boolean {
         val parts = value.split('.')
         if (parts.size != 4) return false
         return parts.all { part -> part.toIntOrNull()?.let { it in 0..255 } == true }
+    }
+
+    private fun isPrivateIpv4(ip: String): Boolean {
+        val parts = ip.split('.')
+        if (parts.size != 4) return false
+        val a = parts[0].toIntOrNull() ?: return false
+        val b = parts[1].toIntOrNull() ?: return false
+        if (a !in 0..255 || b !in 0..255) return false
+        return when {
+            a == 10 -> true
+            a == 172 && b in 16..31 -> true
+            a == 192 && b == 168 -> true
+            a == 127 -> true
+            a == 169 && b == 254 -> true
+            else -> false
+        }
     }
 
     private fun ipv4ToInt(ip: String): Int? {
