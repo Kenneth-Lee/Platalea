@@ -3,10 +3,21 @@ from __future__ import annotations
 import ipaddress
 import unittest
 
-from platalea.family_common import build_service_properties, prioritize_broadcast_addresses
+from platalea.family_common import (
+    build_service_properties,
+    is_usable_ip,
+    prioritize_broadcast_addresses,
+)
 
 
 class FamilyCommonAddressSelectionTest(unittest.TestCase):
+    def test_is_usable_ip_filters_non_lan_special_ranges(self) -> None:
+        self.assertTrue(is_usable_ip("192.168.8.10"))
+        self.assertTrue(is_usable_ip("10.0.0.5"))
+        self.assertTrue(is_usable_ip("fc00::1"))
+        self.assertFalse(is_usable_ip("253.157.14.165"))
+        self.assertFalse(is_usable_ip("2001::1"))
+
     def test_prefer_non_link_local_when_available(self) -> None:
         addresses = [
             ipaddress.ip_address("169.254.1.134"),

@@ -15,6 +15,14 @@ from zeroconf import ServiceInfo
 
 LOGGER = logging.getLogger("local_manager.family")
 
+RFC1918_IPV4_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
+LINK_LOCAL_IPV4_NETWORK = ipaddress.ip_network("169.254.0.0/16")
+ULA_IPV6_NETWORK = ipaddress.ip_network("fc00::/7")
+
 FAMILY_SERVICE_TYPE = "_localmanager._tcp.local."
 FAMILY_VERSION = "0.2"
 FAMILY_TLS_PROTOCOL = "https"
@@ -55,21 +63,14 @@ def normalize_hostname(hostname: str) -> str:
 
 def is_usable_ip(address_text: str) -> bool:
     ip_value = ipaddress.ip_address(address_text)
-    # 排除回环、未指定、组播和公网地址
-    # 只保留私有地址（RFC 1918）和链路本地地址
+    # 仅保留局域网可达地址，避免把文档地址/保留地址（如 2001::1、253.x.x.x）写入 mDNS。
     if ip_value.is_loopback or ip_value.is_unspecified or ip_value.is_multicast:
         return False
-    # 对于 IPv4，只保留私有地址范围
     if ip_value.version == 4:
-        # RFC 1918 私有地址范围: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-        # 以及链路本地: 169.254.0.0/16
-        return (
-            ip_value.is_private
-            or ip_value.is_link_local
-            or str(ip_value).startswith("100.")  # CGNAT
-        )
-    # 对于 IPv6，保留唯一本地地址和链路本地地址
-    return ip_value.is_private or ip_value.is_link_local
+        ipv4 = ip_value
+        return any(ipv4 in network for network in RFC1918_IPV4_NETWORKS) or ipv4 in LINK_LOCAL_IPV4_NETWORK
+    ipv6 = ip_value
+    return ipv6 in ULA_IPV6_NETWORK or ipv6.is_link_local
 
 
 def collect_local_addresses() -> list[ipaddress._BaseAddress]:
@@ -168,13 +169,15 @@ def collect_mdns_broadcast_addresses(
             addresses = []
         else:
             last_addresses = addresses
-            if any(not address.is_link_local for address in addresses):
+            # Android 端连接诊断与地址回退策略都依赖 IPv4；若尚无局域网 IPv4，继续等待。
+            has_lan_ipv4 = any(address.version == 4 and not address.is_link_local for address in addresses)
+            if has_lan_ipv4:
                 return prioritize_broadcast_addresses(addresses)
 
         if time.monotonic() >= deadline:
             break
         LOGGER.info(
-            "尚未获取到可用于 mDNS 广播的 LAN 地址，%s 秒后重试... 当前地址=%s",
+            "尚未获取到可用于 mDNS 广播的 LAN IPv4 地址，%s 秒后重试... 当前地址=%s",
             poll_interval_seconds,
             ", ".join(address.compressed for address in last_addresses) or "<none>",
         )
@@ -182,11 +185,11 @@ def collect_mdns_broadcast_addresses(
 
     if last_error is not None:
         raise RuntimeError(
-            "启动 mDNS 前未能获取到可广播的局域网地址。"
+            "启动 mDNS 前未能获取到可广播的局域网 IPv4 地址。"
             "请确认网络已连通后再启动服务。"
         ) from last_error
     raise RuntimeError(
-        "启动 mDNS 前未能获取到可广播的局域网地址。"
+        "启动 mDNS 前未能获取到可广播的局域网 IPv4 地址。"
         f"最后一次扫描到的地址: {', '.join(address.compressed for address in last_addresses) or '<none>'}"
     )
 
