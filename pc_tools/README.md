@@ -33,7 +33,7 @@ platalea post "说明" --attach ./report.pdf --board kitchen
 platalea modify <message_id> "更新后的正文"
 platalea delete <message_id>
 platalea download-attachment <attachment_id> -o ./downloads/
-platalea create-board "厨房留言"    # 需 host 密码
+platalea create-board "厨房留言"    # 需 admin 密码
 platalea delete-board --board kitchen
 platalea export-boardpack ./kitchen.boardpack --board kitchen
 platalea import-boardpack ./kitchen.boardpack --name "厨房留言(导入)"
@@ -111,7 +111,6 @@ source "$(dirname "$(dirname "$(command -v platalea)")")/share/platalea/platalea
 
 ```bash
 export PLATALEA_HOME=/path/to/.localmanager
-# 兼容旧变量名：LMSERVER_HOME
 source .../platalea-completion.sh
 ```
 
@@ -121,7 +120,7 @@ source .../platalea-completion.sh
 
 ---
 
-当前运行时代码仍为 **guest / host 双密码、全板可见**。下列设计文档描述下一阶段目标，**尚未全部实现**：
+当前运行时代码使用 **roles** 角色配置。下列设计文档描述相关协议与能力：
 
 | 文档 | 内容 |
 |------|------|
@@ -135,11 +134,7 @@ source .../platalea-completion.sh
 |------|------|
 | `platalea/` | **pip 包**：CLI、服务、存储、Agent、文件工具 |
 | `pyproject.toml` | pip 安装入口（包名 `platalea`，命令 `platalea`） |
-| `bulletin_server.py` | 兼容包装（转发到 `platalea`） |
-| `board_client.py` | 兼容包装（转发到 `platalea`） |
 | `config.example.json` | 配置示例（`config init` 会基于此生成用户目录配置） |
-| `mdns_server.py` | 早期 mDNS 原型（调试用，可保留） |
-| `send_message.py` | 早期 `/message` 调试脚本（已过时） |
 | `generate_tls_materials.sh` | 生成私有 CA、PC 证书、Android 资产 |
 
 ## 快速开始（双机测试）
@@ -168,7 +163,7 @@ bash pc_tools/generate_tls_materials.sh
 
 ```bash
 cp pc_tools/config.example.json pc_tools/config.json
-# 编辑 guest_password / host_password / board_root 等
+# 编辑 roles / board_root 等
 ```
 
 配置项说明：
@@ -177,17 +172,13 @@ cp pc_tools/config.example.json pc_tools/config.json
 |------|------|
 | `port` | HTTPS 监听端口，默认 8765 |
 | `board_root` | 留言板数据目录（相对配置文件路径） |
-| `guest_password` | **兼容项**：未配置 `roles` 时映射为 `guest` 角色密码 |
-| `host_password` | **兼容项**：未配置 `roles` 时映射为 `admin` 角色密码（管理员） |
 | `roles` | 多角色配置（须含 `admin`）；见 [角色与权限文档](../docs/家庭网络留言板角色与权限.md) |
 | `service_name` | mDNS 实例名，留空则用 `LocalManager-<主机名>` |
 | `hostname` | mDNS 主机名，留空则用系统主机名 |
 
-留空 `guest_password` 与 `host_password` 表示免密接入（不推荐在真实网络中使用）。
-
 ### AI Agent（可选，V1）
 
-在 `config.json` 中配置 `agent` 段并设 `enabled: true`。Agent 随 `bulletin_server.py` 在后台运行：**发帖时若含 `@model_name` 会立即触发**（不再轮询留言板）。
+在 `config.json` 中配置 `agent` 段并设 `enabled: true`。Agent 随 `platalea start` 启动的服务在后台运行：**发帖时若含 `@model_name` 会立即触发**（不再轮询留言板）。
 
 | 字段 | 说明 |
 |------|------|
@@ -222,7 +213,7 @@ cp pc_tools/config.example.json pc_tools/config.json
 
 1. 本机安装并启动 Ollama，拉取 `models` 中列出的模型
 2. 在 `config.json` 中设 `agent.enabled: true` 与 `models`
-3. 启动 `bulletin_server.py`
+3. 启动 `platalea start`
 4. 在留言板用 @ 菜单或手写 `@模型名 问题` 发帖（不同模型 @ 不同名字）
 5. Agent 应异步回复；失败时会发一条含错误原因的回复
 
@@ -283,14 +274,14 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 
 1. PC 与手机在同一局域网
 2. 手机打开「家庭网络」，应发现 PC 服务（带锁图标表示需要密码）
-3. 点击进入，输入 **`guest_password`**（不是手机全局配置里的本机密码）
+3. 点击进入，输入 **管理员密码**（即 `config.json` 里的 `roles.admin.password`，不是手机全局配置里的本机密码）
 4. 进入默认留言板，可查看与发送消息
 
-> 手机端使用 **guest_password**（user）可读写授权留言板；使用 **host_password**（admin）连入后界面显示「远程管理员」，可管理 PC 留言板。
+> 手机端使用 **user 角色密码** 可读写授权留言板；使用 **admin 密码** 连入后界面显示「远程管理员」，可管理 PC 留言板。
 
 ## PC 命令行调试（board_client.py）
 
-本机启动 `bulletin_server.py` 后，可用 `board_client.py` 通过 HTTPS API 完成留言板的查看与管理，无需手机。
+本机启动 `platalea start` 后，可用 `platalea` 通过 HTTPS API 完成留言板的查看与管理，无需手机。
 
 ### 典型流程
 
@@ -306,9 +297,8 @@ python3 pc_tools/bulletin_server.py --config pc_tools/config.json
 | `--host` | 目标主机，默认 `127.0.0.1`（本机服务） |
 | `--port` | HTTPS 端口；未指定时从 `--config` 读取，否则 8765 |
 | `--board` | 留言板 ID；未指定时读 config.json 的 `default_board`（默认 `default`） |
-| `--config` | 读取 `config.json` 中的 `port`、`guest_password`、`host_password`、`default_board` |
-| `--password` | guest 密码（读板、发帖）；未指定时从 config 读取 |
-| `--host-password` | host 密码（创建/删除板、改删消息）；未指定时从 config 读取 |
+| `--config` | 读取 `config.json` 中的 `port`、`roles.admin.password`、`default_board` |
+| `--password` | 接入密码；未指定时从 config 读取 `roles.admin.password` |
 | `--ca-cert` | TLS CA 证书，默认 `pc_tools/tls/ca_cert.pem` |
 | `--tls-fingerprint` | 可选，服务端证书 SHA-256 指纹固定 |
 | `--json` | 输出原始 JSON；默认为人可读格式 |
@@ -414,4 +404,4 @@ board_root/
 1. **手机看不到 PC**：检查防火墙是否放行 TCP `port` 与 UDP 5353；确认同一网段。
 2. **TLS 失败**：重新运行 `generate_tls_materials.sh` 并重启 PC 服务、重装 Android APK。
 3. **401 密码错误**：连 PC 时填 `config.json` 里的 `guest_password`，不是手机「网络服务密码」。
-4. **改证书后连不上**：重启 `bulletin_server.py`，旧进程仍会用旧证书。
+4. **改证书后连不上**：重启 `platalea start` 启动的服务，旧进程仍会用旧证书。

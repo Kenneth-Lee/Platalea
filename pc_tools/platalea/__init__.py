@@ -28,12 +28,7 @@ def _read_version() -> str:
 
         return version("platalea")
     except PackageNotFoundError:
-        try:
-            from importlib.metadata import version as pkg_version
-
-            return pkg_version("lmserver")
-        except PackageNotFoundError:
-            pass
+        pass
     except Exception:
         pass
     return "0.0.0"

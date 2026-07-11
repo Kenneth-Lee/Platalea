@@ -11,15 +11,17 @@ from platalea.bulletin_server import ServerConfig, load_config, run_server
 
 
 class BulletinServerShutdownFlagTest(unittest.TestCase):
-    def test_load_config_defaults_power_shutdown_on_for_legacy_configs(self) -> None:
+    def test_load_config_defaults_power_shutdown_on(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = root / "config.json"
             cfg.write_text(
                 json.dumps(
                     {
-                        "guest_password": "guest",
-                        "host_password": "host",
+                        "roles": {
+                            "admin": {"password": "host"},
+                            "guest": {"password": "guest"},
+                        },
                     },
                     ensure_ascii=False,
                 ) + "\n",
@@ -36,8 +38,10 @@ class BulletinServerShutdownFlagTest(unittest.TestCase):
             cfg.write_text(
                 json.dumps(
                     {
-                        "guest_password": "guest",
-                        "host_password": "host",
+                        "roles": {
+                            "admin": {"password": "host"},
+                            "guest": {"password": "guest"},
+                        },
                         "supports_power_shutdown": True,
                     },
                     ensure_ascii=False,
@@ -55,8 +59,10 @@ class BulletinServerShutdownFlagTest(unittest.TestCase):
             cfg.write_text(
                 json.dumps(
                     {
-                        "guest_password": "guest",
-                        "host_password": "host",
+                        "roles": {
+                            "admin": {"password": "host"},
+                            "guest": {"password": "guest"},
+                        },
                     },
                     ensure_ascii=False,
                 ) + "\n",
@@ -73,8 +79,10 @@ class BulletinServerShutdownFlagTest(unittest.TestCase):
             cfg.write_text(
                 json.dumps(
                     {
-                        "guest_password": "guest",
-                        "host_password": "host",
+                        "roles": {
+                            "admin": {"password": "host"},
+                            "guest": {"password": "guest"},
+                        },
                         "supports_power_shutdown": False,
                     },
                     ensure_ascii=False,

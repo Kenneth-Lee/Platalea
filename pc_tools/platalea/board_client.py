@@ -52,19 +52,19 @@ BOARD_COMMAND_META: dict[str, dict[str, str]] = {
     },
     "create-board": {
         "usage": "create-board NAME",
-        "summary": "创建留言板（需 host 密码）",
+        "summary": "创建留言板（需 admin 密码）",
     },
     "delete-board": {
         "usage": "delete-board",
-        "summary": "删除留言板（需 host 密码，--board 指定板）",
+        "summary": "删除留言板（需 admin 密码，--board 指定板）",
     },
     "modify": {
         "usage": "modify MSG_ID [CONTENT] [--attach PATH]",
-        "summary": "修改留言（需 host 密码；无 --attach 仅改正文，有 --attach 则替换附件）",
+        "summary": "修改留言（需 admin 密码；无 --attach 仅改正文，有 --attach 则替换附件）",
     },
     "delete": {
         "usage": "delete MSG_ID",
-        "summary": "删除留言（需 host 密码）",
+        "summary": "删除留言（需 admin 密码）",
     },
     "download-attachment": {
         "usage": "download-attachment ATTACHMENT_ID [-o PATH] [--file REL]",
@@ -76,7 +76,7 @@ BOARD_COMMAND_META: dict[str, dict[str, str]] = {
     },
     "import-boardpack": {
         "usage": "import-boardpack FILE",
-        "summary": "从归档包导入留言板（需 host 密码）",
+        "summary": "从归档包导入留言板（需 admin 密码）",
     },
 }
 
@@ -139,12 +139,7 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
     parser.add_argument(
         "--password",
         default="",
-        help="接入密码（guest 或 host）；未指定时从 --config 读取 guest_password",
-    )
-    parser.add_argument(
-        "--host-password",
-        default="",
-        help="宿主密码；create/delete 等操作优先使用此密码",
+        help="接入密码；未指定时从 --config 读取 roles.admin.password",
     )
     parser.add_argument(
         "--board",
@@ -285,13 +280,14 @@ def resolve_board_id_for_request(
     *,
     host: str,
     port: int,
-    guest_password: str,
+    access_password: str,
 ) -> str:
     """Resolve --board to an actual board ID.
 
     Accepts exact board ID and board name. For the common legacy case where user passes
     --board default but multiple boards exist, prefer the board whose *name* is "default"
     (case-insensitive), then fallback to ID match.
+    Accepts exact board ID and board name.
     """
     requested = resolve_board_id(args)
     if not requested:
@@ -307,7 +303,7 @@ def resolve_board_id_for_request(
             port,
             "GET",
             "/boards",
-            password=guest_password,
+            password=access_password,
             body=None,
             ca_cert=args.ca_cert,
             tls_fingerprint=args.tls_fingerprint,
@@ -368,9 +364,14 @@ def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str, st
     config = load_config_defaults(args.config)
     host = args.host or "127.0.0.1"
     port = args.port if args.port is not None else int(config.get("port", 8765))
-    guest_password = args.password or str(config.get("guest_password", ""))
-    host_password = args.host_password or str(config.get("host_password", "")) or guest_password
-    return host, port, guest_password, host_password
+    roles = config.get("roles") if isinstance(config, dict) else None
+    admin_password = ""
+    if isinstance(roles, dict):
+        admin = roles.get("admin")
+        if isinstance(admin, dict):
+            admin_password = str(admin.get("password", ""))
+    password = args.password or admin_password
+    return host, port, password, password
 
 
 def request_api(
@@ -492,10 +493,7 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
             )
             role_ids = board.get("role_ids")
             if "role_ids" in board:
-                if role_ids is None:
-                    line += "  roles=(legacy)"
-                else:
-                    line += f"  roles={role_ids}"
+                line += f"  roles={role_ids}"
             print(line)
         return
 
@@ -565,10 +563,10 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
         role_ids = board.get("role_ids")
         print(f"已创建留言板: {created_id} 「{board_name}」")
         if role_ids is None:
-            print("  可见角色: (legacy，所有非 admin 角色可见)")
+            print("  可见角色: (仅 admin)")
         elif not role_ids:
-            print("  可见角色: (无，仅 host/admin 可见)")
-            print("  提示: guest 执行 list-boards 看不到此板；可用 --role-ids guest 创建，或以 host 密码 list-boards")
+            print("  可见角色: (仅 admin)")
+            print("  提示: 可用 --role-ids guest 创建可见板，或显式指定其它角色")
         else:
             print(f"  可见角色: {', '.join(role_ids)}")
         return
@@ -608,7 +606,7 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
 def _upload_attachment_refs(args: argparse.Namespace, board_id: str, paths: list[str]) -> list[dict[str, Any]]:
     from .board_attachment_client import upload_paths
 
-    host, port, guest_password, _host_password = resolve_connection_args(args)
+    host, port, access_password = resolve_connection_args(args)
     if not paths:
         raise ValueError("至少指定一个文件或目录路径")
     return upload_paths(
@@ -616,7 +614,7 @@ def _upload_attachment_refs(args: argparse.Namespace, board_id: str, paths: list
         port,
         board_id=board_id,
         paths=[Path(item) for item in paths],
-        password=guest_password,
+        password=access_password,
         ca_cert=args.ca_cert,
         tls_fingerprint=args.tls_fingerprint,
         verbose=not args.json,
@@ -627,7 +625,7 @@ def _default_attachment_message(count: int) -> str:
     return f"[{count} 个附件]"
 
 
-def _dispatch_modify(args: argparse.Namespace, board_id: str, guest_password: str, host_password: str) -> tuple[str, str, dict[str, Any] | None, str] | int:
+    def _dispatch_modify(args: argparse.Namespace, board_id: str, access_password: str) -> tuple[str, str, dict[str, Any] | None, str] | int:
     attach_paths = [item for item in (args.attach or []) if str(item).strip()]
     content = args.content
     has_content = content is not None and str(content).strip()
@@ -650,12 +648,12 @@ def _dispatch_modify(args: argparse.Namespace, board_id: str, guest_password: st
         f"/boards/{board_id}/messages/{args.message_id}",
         "PUT",
         body,
-        host_password,
+        access_password,
     )
 
 
 def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
-    host, port, guest_password, host_password = resolve_connection_args(args)
+    host, port, access_password = resolve_connection_args(args)
 
     board_id = ""
     board_scoped = {
@@ -673,18 +671,18 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
                 args,
                 host=host,
                 port=port,
-                guest_password=guest_password,
+                access_password=access_password,
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
 
     if args.command == "list-boards":
-        path, method, body, password = "/boards", "GET", None, guest_password
+        path, method, body, request_password = "/boards", "GET", None, access_password
     elif args.command == "get-messages":
-        path, method, body, password = f"/boards/{board_id}/messages", "GET", None, guest_password
+        path, method, body, request_password = f"/boards/{board_id}/messages", "GET", None, access_password
     elif args.command == "get-agent":
-        path, method, body, password = "/agent", "GET", None, guest_password
+        path, method, body, request_password = "/agent", "GET", None, access_password
     elif args.command == "create-board":
         body: dict[str, Any] = {"name": args.name}
         role_ids_raw = args.role_ids.strip()
@@ -693,8 +691,9 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         else:
             body["role_ids"] = []
         path, method, body, password = "/boards", "POST", body, host_password
+        path, method, body, request_password = "/boards", "POST", body, access_password
     elif args.command == "delete-board":
-        path, method, body, password = f"/boards/{board_id}", "DELETE", None, host_password
+        path, method, body, request_password = f"/boards/{board_id}", "DELETE", None, access_password
     elif args.command == "post":
         attach_paths = [item for item in (args.attach or []) if str(item).strip()]
         content = (args.content or "").strip()
@@ -716,16 +715,17 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         if attachment_refs:
             body["attachments"] = attachment_refs
         password = guest_password
+        request_password = access_password
     elif args.command == "modify":
-        result = _dispatch_modify(args, board_id, guest_password, host_password)
+        result = _dispatch_modify(args, board_id, access_password)
         if isinstance(result, int):
             return result
-        path, method, body, password = result
+        path, method, body, request_password = result
     elif args.command == "delete":
         path = f"/boards/{board_id}/messages/{args.message_id}"
         method = "DELETE"
         body = None
-        password = host_password
+        request_password = access_password
     elif args.command == "download-attachment":
         from .board_attachment_client import download_attachment_to_path
 
@@ -741,7 +741,7 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
                 board_id=board_id,
                 attachment_id=args.attachment_id,
                 output=output,
-                password=guest_password,
+                password=access_password,
                 ca_cert=args.ca_cert,
                 tls_fingerprint=args.tls_fingerprint,
                 file_path=args.file or "",
@@ -758,7 +758,9 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
         path = f"/boards/{board_id}/export.boardpack"
         method = "GET"
         body = None
-        password = guest_password
+        request_password = access_password
+            request_password = access_password
+            path, method, body, request_password = "/boards/import.boardpack", "POST", body, access_password
         try:
             status, payload = request_api_bytes(
                 host,
@@ -840,6 +842,7 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
             method,
             path,
             password=password,
+            password=request_password,
             body=body,
             ca_cert=args.ca_cert,
             tls_fingerprint=args.tls_fingerprint,
@@ -862,7 +865,7 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
                 port,
                 "GET",
                 "/boards",
-                password=guest_password,
+                password=access_password,
                 body=None,
                 ca_cert=args.ca_cert,
                 tls_fingerprint=args.tls_fingerprint,

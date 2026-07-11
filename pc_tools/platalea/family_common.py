@@ -5,6 +5,7 @@ import ipaddress
 import logging
 import socket
 import ssl
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -151,6 +152,45 @@ def collect_local_addresses() -> list[ipaddress._BaseAddress]:
     return prioritize_broadcast_addresses(addresses)
 
 
+def collect_mdns_broadcast_addresses(
+    timeout_seconds: float = 30.0,
+    poll_interval_seconds: float = 1.0,
+) -> list[ipaddress._BaseAddress]:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    last_addresses: list[ipaddress._BaseAddress] = []
+
+    while True:
+        try:
+            addresses = collect_local_addresses()
+        except Exception as exc:
+            last_error = exc
+            addresses = []
+        else:
+            last_addresses = addresses
+            if any(not address.is_link_local for address in addresses):
+                return prioritize_broadcast_addresses(addresses)
+
+        if time.monotonic() >= deadline:
+            break
+        LOGGER.info(
+            "尚未获取到可用于 mDNS 广播的 LAN 地址，%s 秒后重试... 当前地址=%s",
+            poll_interval_seconds,
+            ", ".join(address.compressed for address in last_addresses) or "<none>",
+        )
+        time.sleep(poll_interval_seconds)
+
+    if last_error is not None:
+        raise RuntimeError(
+            "启动 mDNS 前未能获取到可广播的局域网地址。"
+            "请确认网络已连通后再启动服务。"
+        ) from last_error
+    raise RuntimeError(
+        "启动 mDNS 前未能获取到可广播的局域网地址。"
+        f"最后一次扫描到的地址: {', '.join(address.compressed for address in last_addresses) or '<none>'}"
+    )
+
+
 def prioritize_broadcast_addresses(addresses: list[ipaddress._BaseAddress]) -> list[ipaddress._BaseAddress]:
     preferred = [address for address in addresses if not address.is_link_local]
     return preferred if preferred else addresses
@@ -221,7 +261,7 @@ def build_service_info(
     supports_power_shutdown: bool = False,
     platform: str = "python",
 ) -> ServiceInfo:
-    addresses = collect_local_addresses()
+    addresses = collect_mdns_broadcast_addresses()
     LOGGER.info(
         "用于 mDNS 广播的本地地址: %s",
         ", ".join(address.compressed for address in addresses),

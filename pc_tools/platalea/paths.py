@@ -9,21 +9,18 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
+PC_TOOLS_DIR = Path(__file__).resolve().parents[1]
 APP_DIR_NAME = ".localmanager"
-CONFIG_NAME = "config.json"
-PID_NAME = "server.pid"
-LOG_NAME = "server.log"
-INSTANCE_ID_NAME = "instance_id"
 BOARDS_DIR_NAME = "boards"
 TLS_DIR_NAME = "tls"
 GNUPG_DIR_NAME = "gnupg"
 IMPORTED_DIR_NAME = "imported"
 SERVICE_CONTROL_DIR_NAME = "service_control"
+INSTANCE_ID_NAME = "instance_id"
 
-PACKAGE_DIR = Path(__file__).resolve().parent
-PC_TOOLS_DIR = PACKAGE_DIR.parent
-REPO_ROOT = PC_TOOLS_DIR.parent
-EXAMPLE_CONFIG = PC_TOOLS_DIR / "config.example.json"
+CONFIG_NAME = "config.json"
+PID_NAME = "server.pid"
+LOG_NAME = "server.log"
 
 
 def app_dir() -> Path:
@@ -131,11 +128,23 @@ def default_config_dict() -> dict:
         "hostname": "",
         "service_type": "_localmanager._tcp.local.",
         "board_root": BOARDS_DIR_NAME,
-        "guest_password": "guest",
-        "host_password": "host",
         "supports_power_shutdown": True,
         "default_board": "default",
         "max_import_bytes": 524288000,
+        "roles": {
+            "admin": {
+                "password": "host",
+                "label": "管理员",
+                "can_create_boards": True,
+                "can_manage_boards": True,
+            },
+            "guest": {
+                "password": "guest",
+                "label": "客人",
+                "can_create_boards": False,
+                "can_manage_boards": False,
+            },
+        },
         "cert_file": f"{TLS_DIR_NAME}/pc_server_cert.pem",
         "key_file": f"{TLS_DIR_NAME}/pc_server_key.pem",
         "instance_id_file": INSTANCE_ID_NAME,

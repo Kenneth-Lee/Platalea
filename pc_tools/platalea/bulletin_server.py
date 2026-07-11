@@ -119,9 +119,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     hostname = str(raw.get("hostname", "")).strip() or socket.gethostname()
     service_name = str(raw.get("service_name", "")).strip() or f"LocalManager-{hostname}"
 
-    guest_password = str(raw.get("guest_password", "")).strip() or None
-    host_password = str(raw.get("host_password", "")).strip() or None
-    roles = load_roles_config(raw, guest_password=guest_password, host_password=host_password)
+    roles = load_roles_config(raw)
 
     server_config = ServerConfig(
         listen_host=str(raw.get("listen_host", "0.0.0.0")).strip() or "0.0.0.0",

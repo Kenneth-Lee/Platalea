@@ -16,8 +16,6 @@ from .paths import default_ca_cert, log_file, pid_file
 
 def load_server_probe(
     config_path: Path,
-    *,
-    guest_password: str = "",
 ) -> tuple[str, int, Path, str]:
     """Return (probe_host, port, ca_cert, password) for health checks."""
     config_path = config_path.resolve()
@@ -26,15 +24,20 @@ def load_server_probe(
     probe_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
     port = int(raw.get("port", 8765))
     ca_cert = default_ca_cert(config_path)
-    password = guest_password or str(raw.get("guest_password", ""))
+    roles_raw = raw.get("roles")
+    if not isinstance(roles_raw, dict) or not roles_raw:
+        raise ValueError(f"配置文件缺少 roles: {config_path}")
+    admin_role = roles_raw.get("admin")
+    if not isinstance(admin_role, dict):
+        raise ValueError(f"配置文件缺少 admin 角色: {config_path}")
+    password = str(admin_role.get("password", "")).strip()
     return probe_host, port, ca_cert, password
 
 
-def already_running_message(config_path: Path, *, guest_password: str = "") -> str | None:
+def already_running_message(config_path: Path) -> str | None:
     """If a server is already up, return a user-facing message; otherwise None."""
     probe_host, port, ca_cert, password = load_server_probe(
         config_path,
-        guest_password=guest_password,
     )
     responding = is_server_responding(probe_host, port, ca_cert=ca_cert, password=password)
     pid = _read_pid()
@@ -327,17 +330,16 @@ def wait_until_ready(
     return False
 
 
-def ensure_server_running(config_path: Path, *, guest_password: str = "") -> None:
+def ensure_server_running(config_path: Path) -> None:
     config_path = config_path.resolve()
     probe_host, port, ca_cert, password = load_server_probe(
         config_path,
-        guest_password=guest_password,
     )
 
     if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
         return
 
-    message = already_running_message(config_path, guest_password=guest_password)
+    message = already_running_message(config_path)
     if message and "starting up" in message:
         if wait_until_ready(probe_host, port, ca_cert=ca_cert, password=password):
             return

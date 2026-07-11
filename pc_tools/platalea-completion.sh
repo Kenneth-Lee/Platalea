@@ -5,8 +5,6 @@
 #
 # Optional:
 #   export PLATALEA_HOME=/path/to/.localmanager
-#   # backward compatible:
-#   export LMSERVER_HOME=/path/to/.localmanager
 
 _platalea_completion_loaded=0
 
@@ -17,8 +15,6 @@ _platalea_warn() {
 _platalea_app_dir() {
     if [[ -n "${PLATALEA_HOME:-}" ]]; then
         printf '%s' "$PLATALEA_HOME"
-    elif [[ -n "${LMSERVER_HOME:-}" ]]; then
-        printf '%s' "$LMSERVER_HOME"
     else
         printf '%s/.localmanager' "$HOME"
     fi

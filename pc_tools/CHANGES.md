@@ -58,4 +58,4 @@ python -c "from platalea import __version__; print(__version__)"  # 输出: 0.21
 
 **已清理的调试代码:**
 - 删除了临时添加的密码验证DEBUG日志
-- 恢复bulletin_server.py为原始代码
+- 恢复 platalea 主入口为唯一 PC 端命令入口

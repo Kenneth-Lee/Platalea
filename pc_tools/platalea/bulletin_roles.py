@@ -11,8 +11,6 @@ from .family_common import PASSWORD_HEADER
 LOGGER = logging.getLogger("local_manager.auth")
 
 ADMIN_ROLE_ID = "admin"
-LEGACY_GUEST_ROLE_ID = "guest"
-
 
 @dataclass(frozen=True)
 class RoleDefinition:
@@ -126,14 +124,11 @@ def _auth_from_role(role: RoleDefinition) -> AuthContext:
 
 def load_roles_config(
     raw: dict[str, Any],
-    *,
-    guest_password: str | None,
-    host_password: str | None,
 ) -> RolesConfig:
     roles_raw = raw.get("roles")
     if isinstance(roles_raw, dict) and roles_raw:
         return _parse_roles_config(roles_raw)
-    return _legacy_roles_from_passwords(guest_password, host_password)
+    raise ValueError("配置文件必须包含非空 roles 对象")
 
 
 def _parse_roles_config(roles_raw: dict[str, Any]) -> RolesConfig:
@@ -158,39 +153,6 @@ def _parse_roles_config(roles_raw: dict[str, Any]) -> RolesConfig:
         )
     if ADMIN_ROLE_ID not in roles:
         raise ValueError(f"roles 必须包含 admin 角色（{ADMIN_ROLE_ID!r}）")
-    _ensure_unique_passwords(roles)
-    return RolesConfig(roles=roles)
-
-
-def _legacy_roles_from_passwords(
-    guest_password: str | None,
-    host_password: str | None,
-) -> RolesConfig:
-    roles: dict[str, RoleDefinition] = {}
-    if host_password:
-        roles[ADMIN_ROLE_ID] = RoleDefinition(
-            role_id=ADMIN_ROLE_ID,
-            password=host_password,
-            label="管理员",
-            can_create_boards=True,
-            can_manage_boards=True,
-        )
-    if guest_password:
-        roles[LEGACY_GUEST_ROLE_ID] = RoleDefinition(
-            role_id=LEGACY_GUEST_ROLE_ID,
-            password=guest_password,
-            label="访客",
-            can_create_boards=False,
-            can_manage_boards=False,
-        )
-    if not roles:
-        roles[ADMIN_ROLE_ID] = RoleDefinition(
-            role_id=ADMIN_ROLE_ID,
-            password=None,
-            label=None,
-            can_create_boards=True,
-            can_manage_boards=True,
-        )
     _ensure_unique_passwords(roles)
     return RolesConfig(roles=roles)
 
@@ -231,7 +193,7 @@ def can_access_board(auth: AuthContext, board_role_ids: tuple[str, ...] | None) 
     if auth.is_admin:
         return True
     if board_role_ids is None:
-        return True
+        return False
     return auth.role_id in board_role_ids
 
 

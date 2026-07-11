@@ -5,11 +5,9 @@
   "hostname": "",
   "service_type": "_localmanager._tcp.local.",
   "board_root": "./boards",
-  "guest_password": "guest",
-  "host_password": "host",
   "default_board": "default",
   "max_import_bytes": 524288000,
-  "roles_example": {
+  "roles": {
     "admin": {
       "password": "host",
       "label": "管理员",

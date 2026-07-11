@@ -217,10 +217,8 @@ def _run_board_with_auto_start(argv: list[str]) -> int:
     local_hosts = {"127.0.0.1", "localhost", "::1"}
     if host in local_hosts:
         cfg_path = _resolved_config(args.config)
-        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
-        guest_password = args.password or str(raw.get("guest_password", ""))
         try:
-            ensure_server_running(cfg_path, guest_password=guest_password)
+            ensure_server_running(cfg_path)
         except RuntimeError as exc:
             print(str(exc), file=sys.stderr)
             return 1

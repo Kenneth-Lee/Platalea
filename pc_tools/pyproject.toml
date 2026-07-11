@@ -16,7 +16,6 @@ dependencies = [
 
 [project.scripts]
 platalea = "platalea.cli:main"
-lmserver = "platalea.compat:main_lmserver"
 
 [project.urls]
 Homepage = "https://github.com/Kenneth-Lee-2025/local_manager"
