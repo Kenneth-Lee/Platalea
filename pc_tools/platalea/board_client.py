@@ -625,7 +625,7 @@ def _default_attachment_message(count: int) -> str:
     return f"[{count} 个附件]"
 
 
-    def _dispatch_modify(args: argparse.Namespace, board_id: str, access_password: str) -> tuple[str, str, dict[str, Any] | None, str] | int:
+def _dispatch_modify(args: argparse.Namespace, board_id: str, access_password: str) -> tuple[str, str, dict[str, Any] | None, str] | int:
     attach_paths = [item for item in (args.attach or []) if str(item).strip()]
     content = args.content
     has_content = content is not None and str(content).strip()
@@ -813,7 +813,6 @@ def _dispatch_board_client(args: argparse.Namespace, parser: argparse.ArgumentPa
             port,
             method,
             path,
-            password=password,
             password=request_password,
             body=body,
             ca_cert=args.ca_cert,
