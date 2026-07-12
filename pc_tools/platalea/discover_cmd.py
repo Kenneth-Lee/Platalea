@@ -84,8 +84,9 @@ class _Listener(ServiceListener):
             self._pending_names.add(name)
             return False
         record = _build_record(info)
-        key = record.instance_id or record.name or record.display_name
-        self.records[key] = record
+        # Use the DNS-SD full service name as the map key. Different devices may
+        # share instance_id when config is copied, but mDNS instance names remain distinct.
+        self.records[name] = record
         self._pending_names.discard(name)
         return True
 
@@ -108,9 +109,7 @@ class _Listener(ServiceListener):
 
     def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
         self._pending_names.discard(name)
-        stale = [key for key, value in self.records.items() if value.name == name.removesuffix(f".{service_type}")]
-        for key in stale:
-            self.records.pop(key, None)
+        self.records.pop(name, None)
 
 
 def discover_family_services(

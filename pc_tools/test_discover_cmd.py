@@ -120,6 +120,46 @@ class DiscoverCmdTest(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].display_name, "klmm")
 
+    def test_discover_family_services_does_not_merge_same_instance_id(self) -> None:
+        class _DuplicateInstanceInfo(_FakeInfo):
+            pass
+
+        class _DuplicateInstanceZeroconf(_FakeZeroconf):
+            def get_service_info(self, service_type: str, name: str, timeout: int = 1500):
+                if name == "LocalManager-linux._localmanager._tcp.local.":
+                    info = _FakeInfo()
+                    info.properties = dict(_FakeInfo.properties)
+                    info.properties[b"host_name"] = b"linux-host"
+                    info.properties[b"instance_id"] = b"same-instance-id"
+                    info.server = "linux.local."
+                    return info
+                if name == "LocalManager-android._localmanager._tcp.local.":
+                    info = _DuplicateInstanceInfo()
+                    info.properties = dict(_FakeInfo.properties)
+                    info.properties[b"host_name"] = b"android-host"
+                    info.properties[b"instance_id"] = b"same-instance-id"
+                    info.server = "android.local."
+                    return info
+                return None
+
+        class _TwoServicesBrowser:
+            def __init__(self, zc, service_type, listener=None, handlers=None, **_kwargs) -> None:
+                active_listener = listener or handlers
+                active_listener.add_service(zc, service_type, "LocalManager-linux._localmanager._tcp.local.")
+                active_listener.add_service(zc, service_type, "LocalManager-android._localmanager._tcp.local.")
+
+            def cancel(self) -> None:
+                pass
+
+        records = discover_family_services(
+            timeout_seconds=0,
+            zeroconf_factory=_DuplicateInstanceZeroconf,
+            browser_factory=_TwoServicesBrowser,
+        )
+        self.assertEqual(len(records), 2)
+        names = sorted(item.display_name for item in records)
+        self.assertEqual(names, ["android-host", "linux-host"])
+
 
 if __name__ == "__main__":
     unittest.main()
