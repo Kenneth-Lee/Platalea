@@ -1197,7 +1197,14 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess { count ->
-                appendLog(appContext.getString(R.string.family_msg_97773, target.service.displayHostName, target.boardName))
+                appendLog(
+                    appContext.getString(
+                        R.string.family_msg_97773,
+                        count,
+                        target.service.displayHostName,
+                        target.boardName
+                    )
+                )
                 if (_state.value.openBoardSession?.service?.deviceKey == target.service.deviceKey &&
                     _state.value.openBoardSession?.boardId == target.boardId
                 ) {

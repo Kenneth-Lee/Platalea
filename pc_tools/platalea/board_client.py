@@ -360,7 +360,7 @@ def resolve_board_id_for_request(
     return requested
 
 
-def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str, str]:
+def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str]:
     config = load_config_defaults(args.config)
     host = args.host or "127.0.0.1"
     port = args.port if args.port is not None else int(config.get("port", 8765))
@@ -371,7 +371,7 @@ def resolve_connection_args(args: argparse.Namespace) -> tuple[str, int, str, st
         if isinstance(admin, dict):
             admin_password = str(admin.get("password", ""))
     password = args.password or admin_password
-    return host, port, password, password
+    return host, port, password
 
 
 def request_api(
