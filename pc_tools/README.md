@@ -10,6 +10,7 @@ pip install .          # 或 pip install -e . 开发模式
 platalea config init   # 写入 ~/.localmanager/config.json
 platalea start         # 后台守护进程，日志 ~/.localmanager/server.log
 platalea stop          # 停止服务
+platalea discover      # 列出局域网内的家庭网络设备
 ```
 
 安装后统一使用 **`platalea`** 命令。配置与数据目录（Mac / Linux / Windows 相同）：
@@ -83,6 +84,14 @@ platalea power status
 platalea power shutdown --yes
 ```
 
+发现当前局域网内提供家庭网络服务的设备：
+
+```bash
+platalea discover
+platalea discover --timeout 5
+platalea discover --json
+```
+
 写入 `~/.localmanager/gnupg/`（密钥）、`~/.localmanager/imported/`（Git/播放列表等存档）、`config.json` 的 `imported_from_mobile`（家庭网络显示名等）。
 
 连接远程设备时指定 `--host`，不会自动启动本机服务：
@@ -93,7 +102,7 @@ platalea --host 192.168.1.10 list-boards
 
 版本号来自仓库根目录的 **`VERSION`** 文件（Android 与 `platalea` 各自在构建/打包时读取，互不读对方源码）。
 
-其它管理命令：`platalea stop`、`platalea status`、`platalea help`（或 `platalea help board|gpg|file|service|power` 查看分组说明）。
+其它管理命令：`platalea stop`、`platalea status`、`platalea discover`、`platalea help`（或 `platalea help board|gpg|file|service|discover|power` 查看分组说明）。
 
 ### Shell 自动补全（bash / zsh）
 

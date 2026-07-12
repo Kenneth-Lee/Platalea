@@ -136,7 +136,7 @@ PY
 _platalea_commands() {
     printf '%s\n' \
         start stop status help \
-    gpg file config service power \
+    gpg file config service discover power \
         list-boards get-agent get-messages \
         post modify delete download-attachment \
         create-board delete-board \
@@ -164,7 +164,7 @@ _platalea_power_subcommands() {
 }
 
 _platalea_help_topics() {
-    printf '%s\n' serve board gpg file config service power
+    printf '%s\n' serve board gpg file config service discover power
 }
 
 _platalea_is_group_cmd() {
