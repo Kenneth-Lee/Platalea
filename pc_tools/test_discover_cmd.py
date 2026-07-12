@@ -100,6 +100,26 @@ class DiscoverCmdTest(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].display_name, "klmm")
 
+    def test_discover_family_services_retries_pending_resolution(self) -> None:
+        class _DelayedZeroconf(_FakeZeroconf):
+            def __init__(self, *args, **kwargs) -> None:
+                super().__init__(*args, **kwargs)
+                self._calls = 0
+
+            def get_service_info(self, service_type: str, name: str, timeout: int = 1500):
+                self._calls += 1
+                if self._calls == 1:
+                    return None
+                return super().get_service_info(service_type, name, timeout=timeout)
+
+        records = discover_family_services(
+            timeout_seconds=0,
+            zeroconf_factory=_DelayedZeroconf,
+            browser_factory=_FakeBrowser,
+        )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].display_name, "klmm")
+
 
 if __name__ == "__main__":
     unittest.main()

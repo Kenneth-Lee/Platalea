@@ -76,22 +76,38 @@ class _Listener(ServiceListener):
         self._zc = zc
         self._service_type = service_type
         self.records: dict[str, DiscoveredService] = {}
+        self._pending_names: set[str] = set()
 
-    def _refresh(self, name: str) -> None:
-        info = self._zc.get_service_info(self._service_type, name, timeout=1500)
+    def _refresh(self, name: str, *, timeout_ms: int = 1500) -> bool:
+        info = self._zc.get_service_info(self._service_type, name, timeout=timeout_ms)
         if info is None:
-            return
+            self._pending_names.add(name)
+            return False
         record = _build_record(info)
         key = record.instance_id or record.name or record.display_name
         self.records[key] = record
+        self._pending_names.discard(name)
+        return True
+
+    def resolve_pending(self, *, attempts: int = 2, timeout_ms: int = 2500) -> None:
+        for _ in range(max(0, attempts)):
+            if not self._pending_names:
+                return
+            for service_name in list(self._pending_names):
+                self._refresh(service_name, timeout_ms=timeout_ms)
+            if self._pending_names:
+                time.sleep(0.15)
 
     def add_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        self._pending_names.add(name)
         self._refresh(name)
 
     def update_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        self._pending_names.add(name)
         self._refresh(name)
 
     def remove_service(self, zc: Zeroconf, service_type: str, name: str) -> None:
+        self._pending_names.discard(name)
         stale = [key for key, value in self.records.items() if value.name == name.removesuffix(f".{service_type}")]
         for key in stale:
             self.records.pop(key, None)
@@ -117,6 +133,8 @@ def discover_family_services(
         browser = browser_factory(zc, service_type, handlers=listener)
     try:
         time.sleep(max(0.0, timeout_seconds))
+        # Retry unresolved services to handle mDNS callback/resolve races seen on some macOS environments.
+        listener.resolve_pending(attempts=3, timeout_ms=2500)
         return sorted(
             listener.records.values(),
             key=lambda item: (item.display_name.lower(), item.host_name.lower(), item.port),
