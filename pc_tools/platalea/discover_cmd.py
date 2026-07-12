@@ -116,11 +116,12 @@ def discover_family_services(
     *,
     timeout_seconds: float = 5.0,
     service_type: str = FAMILY_SERVICE_TYPE,
+    ip_version: IPVersion = IPVersion.All,
     zeroconf_factory=Zeroconf,
     browser_factory=ServiceBrowser,
 ) -> list[DiscoveredService]:
     try:
-        zc = zeroconf_factory(ip_version=IPVersion.All)
+        zc = zeroconf_factory(ip_version=ip_version)
     except TypeError:
         # Older zeroconf builds (seen on some macOS Python envs) may not accept ip_version.
         zc = zeroconf_factory()
@@ -143,6 +144,36 @@ def discover_family_services(
         if callable(cancel):
             cancel()
         zc.close()
+
+
+def discover_family_services_multi_stack(
+    *,
+    timeout_seconds: float,
+    service_type: str,
+    debug: bool = False,
+    zeroconf_factory=Zeroconf,
+    browser_factory=ServiceBrowser,
+) -> list[DiscoveredService]:
+    merged: dict[str, DiscoveredService] = {}
+    stack_plan = [IPVersion.All, IPVersion.V4Only]
+    for stack in stack_plan:
+        records = discover_family_services(
+            timeout_seconds=timeout_seconds,
+            service_type=service_type,
+            ip_version=stack,
+            zeroconf_factory=zeroconf_factory,
+            browser_factory=browser_factory,
+        )
+        if debug:
+            print(f"[debug] stack={stack.name} hits={len(records)}", file=sys.stderr)
+        for item in records:
+            # Keep records distinct per service identity to avoid cross-device collapsing.
+            key = f"{item.name}|{item.host_name}|{item.port}"
+            merged[key] = item
+    return sorted(
+        merged.values(),
+        key=lambda item: (item.display_name.lower(), item.host_name.lower(), item.port),
+    )
 
 
 def _print_human(records: list[DiscoveredService], service_type: str, timeout_seconds: float) -> None:
@@ -184,6 +215,7 @@ def run_discover(argv: list[str] | None = None) -> int:
     parser.add_argument("--service-type", default=FAMILY_SERVICE_TYPE, help=f"要发现的服务类型（默认 {FAMILY_SERVICE_TYPE}）")
     parser.add_argument("--timeout", type=float, default=5.0, help="等待发现的秒数（默认 5）")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出发现结果")
+    parser.add_argument("--debug", action="store_true", help="输出发现阶段调试信息（stderr）")
     args = parser.parse_args(argv)
 
     if args.timeout < 0:
@@ -196,7 +228,11 @@ def run_discover(argv: list[str] | None = None) -> int:
         print(f"发现失败: {exc}", file=sys.stderr)
         return 1
 
-    records = discover_family_services(timeout_seconds=args.timeout, service_type=service_type)
+    records = discover_family_services_multi_stack(
+        timeout_seconds=args.timeout,
+        service_type=service_type,
+        debug=args.debug,
+    )
     if args.json:
         print(json.dumps([asdict(record) for record in records], ensure_ascii=False, indent=2))
     else:

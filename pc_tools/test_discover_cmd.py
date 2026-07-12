@@ -5,8 +5,9 @@ import json
 import unittest
 from contextlib import redirect_stdout
 from unittest import mock
+from zeroconf import IPVersion
 
-from platalea.discover_cmd import discover_family_services, run_discover
+from platalea.discover_cmd import discover_family_services, discover_family_services_multi_stack, run_discover
 
 
 class _FakeInfo:
@@ -159,6 +160,53 @@ class DiscoverCmdTest(unittest.TestCase):
         self.assertEqual(len(records), 2)
         names = sorted(item.display_name for item in records)
         self.assertEqual(names, ["android-host", "linux-host"])
+
+    def test_discover_family_services_multi_stack_merges_results(self) -> None:
+        calls: list[IPVersion] = []
+
+        def _fake_discover(*, timeout_seconds, service_type, ip_version=IPVersion.All, **kwargs):
+            calls.append(ip_version)
+            if ip_version == IPVersion.All:
+                return [
+                    mock.Mock(
+                        name="LocalManager-android",
+                        service_type=service_type,
+                        display_name="android",
+                        host_name="Android.local",
+                        addresses=["192.168.3.74"],
+                        port=8765,
+                        requires_password=True,
+                        supports_power_shutdown=False,
+                        platform="android",
+                        instance_id="id-android",
+                        tls_fingerprint="fp-a",
+                    )
+                ]
+            return [
+                mock.Mock(
+                    name="LocalManager-linux",
+                    service_type=service_type,
+                    display_name="linux",
+                    host_name="linux.local",
+                    addresses=["192.168.3.26"],
+                    port=8765,
+                    requires_password=True,
+                    supports_power_shutdown=True,
+                    platform="python",
+                    instance_id="id-linux",
+                    tls_fingerprint="fp-l",
+                )
+            ]
+
+        with mock.patch("platalea.discover_cmd.discover_family_services", side_effect=_fake_discover):
+            records = discover_family_services_multi_stack(
+                timeout_seconds=0,
+                service_type="_localmanager._tcp.local.",
+            )
+
+        self.assertEqual(calls, [IPVersion.All, IPVersion.V4Only])
+        self.assertEqual(len(records), 2)
+        self.assertEqual(sorted(item.display_name for item in records), ["android", "linux"])
 
 
 if __name__ == "__main__":
