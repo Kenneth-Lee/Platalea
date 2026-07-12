@@ -99,14 +99,22 @@ class _Listener(ServiceListener):
 
 def discover_family_services(
     *,
-    timeout_seconds: float = 3.0,
+    timeout_seconds: float = 5.0,
     service_type: str = FAMILY_SERVICE_TYPE,
     zeroconf_factory=Zeroconf,
     browser_factory=ServiceBrowser,
 ) -> list[DiscoveredService]:
-    zc = zeroconf_factory(ip_version=IPVersion.All)
+    try:
+        zc = zeroconf_factory(ip_version=IPVersion.All)
+    except TypeError:
+        # Older zeroconf builds (seen on some macOS Python envs) may not accept ip_version.
+        zc = zeroconf_factory()
     listener = _Listener(zc, service_type)
-    browser = browser_factory(zc, service_type, listener=listener)
+    try:
+        browser = browser_factory(zc, service_type, listener=listener)
+    except TypeError:
+        # Compatibility fallback for zeroconf variants that use handlers instead of listener.
+        browser = browser_factory(zc, service_type, handlers=listener)
     try:
         time.sleep(max(0.0, timeout_seconds))
         return sorted(
@@ -120,9 +128,13 @@ def discover_family_services(
         zc.close()
 
 
-def _print_human(records: list[DiscoveredService], service_type: str) -> None:
+def _print_human(records: list[DiscoveredService], service_type: str, timeout_seconds: float) -> None:
     if not records:
         print(f"未发现 {service_type} 服务")
+        print("排查建议:")
+        print(f"  1) 增加等待时间后重试：platalea discover --timeout {max(8, int(timeout_seconds) + 3)}")
+        print("  2) 确认服务端已运行并在广播 mDNS（platalea status / platalea start）")
+        print("  3) macOS 下确认同一网段且未被防火墙拦截 Bonjour/mDNS（UDP 5353）")
         return
     for idx, item in enumerate(records, start=1):
         addresses = ", ".join(item.addresses) if item.addresses else "<unknown>"
@@ -153,7 +165,7 @@ def run_discover(argv: list[str] | None = None) -> int:
         description="发现当前局域网内提供家庭网络服务的设备。",
     )
     parser.add_argument("--service-type", default=FAMILY_SERVICE_TYPE, help=f"要发现的服务类型（默认 {FAMILY_SERVICE_TYPE}）")
-    parser.add_argument("--timeout", type=float, default=3.0, help="等待发现的秒数（默认 3）")
+    parser.add_argument("--timeout", type=float, default=5.0, help="等待发现的秒数（默认 5）")
     parser.add_argument("--json", action="store_true", help="以 JSON 输出发现结果")
     args = parser.parse_args(argv)
 
@@ -171,5 +183,5 @@ def run_discover(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps([asdict(record) for record in records], ensure_ascii=False, indent=2))
     else:
-        _print_human(records, service_type)
+        _print_human(records, service_type, args.timeout)
     return 0

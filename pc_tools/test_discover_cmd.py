@@ -82,6 +82,24 @@ class DiscoverCmdTest(unittest.TestCase):
         parsed = json.loads(output.getvalue())
         self.assertEqual(parsed[0]["display_name"], "klmm")
 
+    def test_discover_family_services_supports_legacy_browser_signature(self) -> None:
+        class _LegacyBrowser:
+            def __init__(self, zc, service_type, handlers=None, **_kwargs) -> None:
+                if handlers is None:
+                    raise TypeError("missing handlers")
+                handlers.add_service(zc, service_type, "LocalManager-klmm._localmanager._tcp.local.")
+
+            def cancel(self) -> None:
+                pass
+
+        records = discover_family_services(
+            timeout_seconds=0,
+            zeroconf_factory=_FakeZeroconf,
+            browser_factory=_LegacyBrowser,
+        )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].display_name, "klmm")
+
 
 if __name__ == "__main__":
     unittest.main()
