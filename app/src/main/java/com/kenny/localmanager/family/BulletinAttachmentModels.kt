@@ -4,7 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object BulletinAttachmentDefaults {
-    const val CHUNK_SIZE = 262144
+    const val CHUNK_SIZE = 1048576
 }
 
 enum class BulletinAttachmentKind(val wire: String) {

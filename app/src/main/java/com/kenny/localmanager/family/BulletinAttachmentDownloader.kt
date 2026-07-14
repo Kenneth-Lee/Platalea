@@ -6,7 +6,6 @@ import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
-import com.kenny.localmanager.family.BulletinAttachmentDefaults.CHUNK_SIZE
 import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -92,18 +91,25 @@ object BulletinAttachmentDownloader {
         totalBytes: Long,
         onProgress: ((Long, Long) -> Unit)?
     ): Uri? {
-        val cacheFile = cachePartFile(context, ref.id, null)
-        downloadToCacheFile(
-            context = context,
-            transport = transport,
-            boardId = boardId,
-            attachmentId = ref.id,
-            fileId = null,
-            totalSize = ref.size,
-            cacheFile = cacheFile,
-            onProgress = { downloaded, _ -> onProgress?.invoke(downloaded, totalBytes) }
-        )
-        return exportCacheFileToSaf(context, cacheFile, downloadDir, targetName, ref.name)
+        val mime = guessMimeType(ref.name)
+        val created = downloadDir.createFile(mime, targetName)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
+        return try {
+            downloadToSafFile(
+                context = context,
+                transport = transport,
+                boardId = boardId,
+                attachmentId = ref.id,
+                fileId = null,
+                totalSize = ref.size,
+                targetUri = created.uri,
+                onProgress = { downloaded, _ -> onProgress?.invoke(downloaded, totalBytes) }
+            )
+            created.uri
+        } catch (e: Throwable) {
+            deleteSafEntry(context, created)
+            throw e
+        }
     }
 
     private suspend fun downloadDirectory(
@@ -149,6 +155,37 @@ object BulletinAttachmentDownloader {
         return attachmentDir.uri
     }
 
+    private suspend fun downloadToSafFile(
+        context: Context,
+        transport: BulletinAttachmentDownloadTransport,
+        boardId: String,
+        attachmentId: String,
+        fileId: String?,
+        totalSize: Long,
+        targetUri: Uri,
+        onProgress: ((downloadedInFile: Long, totalInFile: Long) -> Unit)?
+    ) {
+        var offset = 0L
+        context.contentResolver.openOutputStream(targetUri, "wt")?.use { output ->
+            while (offset < totalSize) {
+                coroutineContext.ensureActive()
+                val end = minOf(offset + DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES - 1, totalSize - 1)
+                val chunk = transport.downloadBlob(boardId, attachmentId, fileId, offset, end)
+                    .getOrElse { throw it }
+                if (chunk.bytes.isEmpty()) {
+                    throw IllegalStateException(context.getString(R.string.family_msg_00942, offset))
+                }
+                output.write(chunk.bytes)
+                offset += chunk.bytes.size
+                onProgress?.invoke(offset, totalSize)
+            }
+            output.flush()
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_80037))
+        if (offset < totalSize) {
+            throw IllegalStateException(context.getString(R.string.family_msg_14374, offset, totalSize))
+        }
+    }
+
     private suspend fun downloadToCacheFile(
         context: Context,
         transport: BulletinAttachmentDownloadTransport,
@@ -165,7 +202,7 @@ object BulletinAttachmentDownloader {
         RandomAccessFile(cacheFile, "rw").use { raf ->
             while (offset < totalSize) {
                 coroutineContext.ensureActive()
-                val end = minOf(offset + CHUNK_SIZE - 1, totalSize - 1)
+                val end = minOf(offset + DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES - 1, totalSize - 1)
                 val chunk = transport.downloadBlob(boardId, attachmentId, fileId, offset, end)
                     .getOrElse { throw it }
                 if (chunk.bytes.isEmpty()) {
@@ -180,19 +217,6 @@ object BulletinAttachmentDownloader {
         if (offset < totalSize) {
             throw IllegalStateException(context.getString(R.string.family_msg_14374, offset, totalSize))
         }
-    }
-
-    private fun exportCacheFileToSaf(
-        context: Context,
-        cacheFile: File,
-        parentDir: DocumentFile,
-        targetName: String,
-        originalName: String
-    ): Uri? {
-        val mime = guessMimeType(originalName)
-        val created = parentDir.createFile(mime, targetName) ?: return null
-        copyFileToUri(context, cacheFile, created.uri)
-        return created.uri
     }
 
     private fun exportCacheFileToSafPath(

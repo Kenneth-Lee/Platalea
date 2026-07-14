@@ -2261,6 +2261,16 @@ private fun formatByteCount(bytes: Long): String {
     }
 }
 
+private fun formatSpeed(bytesPerSecond: Long): String {
+    if (bytesPerSecond <= 0) return "0 B/s"
+    return when {
+        bytesPerSecond < 1024 -> "$bytesPerSecond B/s"
+        bytesPerSecond < 1024 * 1024 -> "${"%.1f".format(bytesPerSecond / 1024.0)} KB/s"
+        bytesPerSecond < 1024 * 1024 * 1024 -> "${"%.1f".format(bytesPerSecond / (1024.0 * 1024))} MB/s"
+        else -> "${"%.2f".format(bytesPerSecond / (1024.0 * 1024 * 1024))} GB/s"
+    }
+}
+
 @Composable
 private fun AttachmentDownloadProgressBar(
     progress: BulletinAttachmentDownloadProgress,
@@ -2290,11 +2300,18 @@ private fun AttachmentDownloadProgressBar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "${formatByteCount(progress.downloadedBytes)} / ${formatByteCount(progress.totalBytes)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column {
+                Text(
+                    "${formatByteCount(progress.downloadedBytes)} / ${formatByteCount(progress.totalBytes)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stringResource(R.string.attachment_download_speed, formatSpeed(progress.speedBytesPerSecond)),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             TextButton(onClick = onCancel) {
                 Text(stringResource(R.string.attachment_download_cancel))
             }

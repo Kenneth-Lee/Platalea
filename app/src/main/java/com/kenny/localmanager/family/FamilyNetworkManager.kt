@@ -48,6 +48,8 @@ private const val FAMILY_LOG_LIMIT = 200
 private const val INSTANCE_ID_FILE = "family_network_instance_id"
 private const val FAMILY_IPV4_LIST_ATTR = "ipv4_list"
 
+const val DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES = 1024L * 1024L
+
 data class FamilyDiscoveredService(
     val serviceName: String,
     val serviceType: String,
@@ -89,7 +91,8 @@ data class BulletinAttachmentDownloadProgress(
     val attachmentId: String,
     val itemName: String,
     val downloadedBytes: Long,
-    val totalBytes: Long
+    val totalBytes: Long,
+    val speedBytesPerSecond: Long = 0L
 )
 
 data class BulletinForwardTarget(
@@ -1244,6 +1247,7 @@ class FamilyNetworkManager(context: Context) {
                 BulletinAttachmentKind.FILE -> ref.size.coerceAtLeast(1L)
                 BulletinAttachmentKind.DIRECTORY -> ref.totalSize.coerceAtLeast(ref.size).coerceAtLeast(1L)
             }
+            val startedAtMs = System.currentTimeMillis()
             try {
                 _state.update {
                     it.copy(
@@ -1251,7 +1255,8 @@ class FamilyNetworkManager(context: Context) {
                             attachmentId = ref.id,
                             itemName = ref.name,
                             downloadedBytes = 0L,
-                            totalBytes = totalBytes
+                            totalBytes = totalBytes,
+                            speedBytesPerSecond = 0L
                         )
                     )
                 }
@@ -1265,13 +1270,16 @@ class FamilyNetworkManager(context: Context) {
                         transport = transport,
                         conflict = conflict,
                         onProgress = { downloaded, total ->
+                            val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
+                            val speedBytesPerSecond = (downloaded * 1000L / elapsedMs).coerceAtLeast(0L)
                             _state.update { state ->
                                 state.copy(
                                     attachmentDownload = BulletinAttachmentDownloadProgress(
                                         attachmentId = ref.id,
                                         itemName = ref.name,
                                         downloadedBytes = downloaded,
-                                        totalBytes = total.coerceAtLeast(1L)
+                                        totalBytes = total.coerceAtLeast(1L),
+                                        speedBytesPerSecond = speedBytesPerSecond
                                     )
                                 )
                             }

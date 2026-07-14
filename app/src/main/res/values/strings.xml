@@ -171,6 +171,7 @@
     <string name="attachment_upload_posting">正在发布留言…</string>
     <string name="attachment_upload_cancel">取消上传</string>
     <string name="attachment_download_progress">正在下载 %1$s</string>
+    <string name="attachment_download_speed">速度：%1$s</string>
     <string name="attachment_download_cancel">取消下载</string>
     <string name="attachment_downloading">下载中</string>
     <string name="attachment_download_conflict_title">文件已存在</string>

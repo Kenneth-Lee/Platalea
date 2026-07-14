@@ -303,6 +303,7 @@ import com.kenny.localmanager.requestPinnedTabShortcut
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
+import com.kenny.localmanager.family.DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay

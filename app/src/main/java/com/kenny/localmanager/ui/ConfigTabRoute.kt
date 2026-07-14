@@ -12,7 +12,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -40,6 +42,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -242,7 +247,8 @@ private fun ConfigPanel(
                             Text(context.getString(R.string.config_local_network_service_enabled))
                             Text(
                                 context.getString(R.string.config_local_network_service_enabled_hint),
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -265,7 +271,8 @@ private fun ConfigPanel(
                             Text(
                                 context.getString(R.string.config_family_network_user_name_hint),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic
                             )
                         }
                     )
@@ -283,7 +290,8 @@ private fun ConfigPanel(
                             Text(
                                 context.getString(R.string.config_family_network_host_name_hint),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic
                             )
                         }
                     )
@@ -302,7 +310,8 @@ private fun ConfigPanel(
                             Text(
                                 context.getString(R.string.config_ftp_password_hint),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic
                             )
                         }
                     )
@@ -321,7 +330,8 @@ private fun ConfigPanel(
                             Text(
                                 context.getString(R.string.config_ftp_timeout_hint),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall
+                                style = MaterialTheme.typography.labelSmall,
+                                fontStyle = FontStyle.Italic
                             )
                         }
                     )
@@ -804,6 +814,8 @@ fun ConfigDialog(
     onFamilyNetworkUserNameChange: (String) -> Unit,
     familyNetworkHostName: String,
     onFamilyNetworkHostNameChange: (String) -> Unit,
+    familyNetworkDownloadChunkKb: Int,
+    onFamilyNetworkDownloadChunkKbChange: (Int) -> Unit,
     onOpenGitConfig: () -> Unit,
     onManageKeys: () -> Unit,
     onOpenCacheManagement: () -> Unit,
