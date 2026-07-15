@@ -7,13 +7,14 @@ import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
 import kotlin.coroutines.coroutineContext
+import java.io.Closeable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import java.io.InputStream
 import java.io.File
-import java.io.RandomAccessFile
 
 data class BlobDownloadResult(
     val statusCode: Int,
@@ -22,8 +23,27 @@ data class BlobDownloadResult(
     val contentRange: String?
 )
 
+data class BlobDownloadStream(
+    val statusCode: Int,
+    val totalSize: Long,
+    val contentRange: String?,
+    val inputStream: InputStream,
+    private val closeAction: () -> Unit = {}
+) : Closeable {
+    override fun close() {
+        runCatching { inputStream.close() }
+        runCatching { closeAction() }
+    }
+}
+
 interface BulletinAttachmentDownloadTransport {
     fun getAttachmentMeta(boardId: String, attachmentId: String): Result<JSONObject>
+
+    fun downloadBlobStream(
+        boardId: String,
+        attachmentId: String,
+        fileId: String?
+    ): Result<BlobDownloadStream>
 
     fun downloadBlob(
         boardId: String,
@@ -95,7 +115,7 @@ object BulletinAttachmentDownloader {
         val created = downloadDir.createFile(mime, targetName)
             ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
         return try {
-            downloadToSafFile(
+            downloadToSafFileStream(
                 context = context,
                 transport = transport,
                 boardId = boardId,
@@ -135,27 +155,26 @@ object BulletinAttachmentDownloader {
             val fileId = entry.getString("file_id")
             val relativePath = entry.getString("path")
             val fileSize = entry.getLong("size")
-            val cacheFile = cachePartFile(context, ref.id, fileId)
             val before = aggregateDownloaded
-            downloadToCacheFile(
+            downloadToDirectoryEntryStream(
                 context = context,
                 transport = transport,
                 boardId = boardId,
                 attachmentId = ref.id,
                 fileId = fileId,
                 totalSize = fileSize,
-                cacheFile = cacheFile,
+                attachmentDir = attachmentDir,
+                relativePath = relativePath,
                 onProgress = { downloaded, _ ->
                     onProgress?.invoke(before + downloaded, totalBytes)
                 }
             )
             aggregateDownloaded += fileSize
-            exportCacheFileToSafPath(context, cacheFile, attachmentDir, relativePath)
         }
         return attachmentDir.uri
     }
 
-    private suspend fun downloadToSafFile(
+    private suspend fun downloadToSafFileStream(
         context: Context,
         transport: BulletinAttachmentDownloadTransport,
         boardId: String,
@@ -165,69 +184,43 @@ object BulletinAttachmentDownloader {
         targetUri: Uri,
         onProgress: ((downloadedInFile: Long, totalInFile: Long) -> Unit)?
     ) {
-        var offset = 0L
-        context.contentResolver.openOutputStream(targetUri, "wt")?.use { output ->
-            while (offset < totalSize) {
-                coroutineContext.ensureActive()
-                val end = minOf(offset + DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES - 1, totalSize - 1)
-                val chunk = transport.downloadBlob(boardId, attachmentId, fileId, offset, end)
-                    .getOrElse { throw it }
-                if (chunk.bytes.isEmpty()) {
-                    throw IllegalStateException(context.getString(R.string.family_msg_00942, offset))
-                }
-                output.write(chunk.bytes)
-                offset += chunk.bytes.size
-                onProgress?.invoke(offset, totalSize)
+        val stream = transport.downloadBlobStream(boardId, attachmentId, fileId).getOrElse { throw it }
+        stream.use {
+            if (stream.statusCode !in listOf(200, 206)) {
+                throw IllegalStateException(context.getString(R.string.family_msg_96683))
             }
-            output.flush()
-        } ?: throw IllegalStateException(context.getString(R.string.family_msg_80037))
-        if (offset < totalSize) {
-            throw IllegalStateException(context.getString(R.string.family_msg_14374, offset, totalSize))
+            context.contentResolver.openOutputStream(targetUri, "wt")?.use { output ->
+                val buffer = ByteArray(DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES.toInt())
+                var totalRead = 0L
+                while (true) {
+                    coroutineContext.ensureActive()
+                    val read = stream.inputStream.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                    totalRead += read
+                    onProgress?.invoke(totalRead, totalSize)
+                }
+                output.flush()
+                if (totalRead < totalSize) {
+                    throw IllegalStateException(context.getString(R.string.family_msg_14374, totalRead, totalSize))
+                }
+            } ?: throw IllegalStateException(context.getString(R.string.family_msg_80037))
         }
     }
 
-    private suspend fun downloadToCacheFile(
+    private suspend fun downloadToDirectoryEntryStream(
         context: Context,
         transport: BulletinAttachmentDownloadTransport,
         boardId: String,
         attachmentId: String,
         fileId: String?,
         totalSize: Long,
-        cacheFile: File,
-        onProgress: ((downloadedInFile: Long, totalInFile: Long) -> Unit)?
-    ) {
-        cacheFile.parentFile?.mkdirs()
-        cacheFile.delete()
-        var offset = 0L
-        RandomAccessFile(cacheFile, "rw").use { raf ->
-            while (offset < totalSize) {
-                coroutineContext.ensureActive()
-                val end = minOf(offset + DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES - 1, totalSize - 1)
-                val chunk = transport.downloadBlob(boardId, attachmentId, fileId, offset, end)
-                    .getOrElse { throw it }
-                if (chunk.bytes.isEmpty()) {
-                    throw IllegalStateException(context.getString(R.string.family_msg_00942, offset))
-                }
-                raf.seek(offset)
-                raf.write(chunk.bytes)
-                offset += chunk.bytes.size
-                onProgress?.invoke(offset, totalSize)
-            }
-        }
-        if (offset < totalSize) {
-            throw IllegalStateException(context.getString(R.string.family_msg_14374, offset, totalSize))
-        }
-    }
-
-    private fun exportCacheFileToSafPath(
-        context: Context,
-        cacheFile: File,
         attachmentDir: DocumentFile,
-        relativePath: String
+        relativePath: String,
+        onProgress: ((downloadedInFile: Long, totalInFile: Long) -> Unit)?
     ) {
         val parts = relativePath.split('/').filter { it.isNotEmpty() }
         if (parts.isEmpty()) throw IllegalStateException(context.getString(R.string.family_msg_37067))
-        val fileName = BulletinAttachmentDownloadPaths.sanitizeSegment(parts.last())
         var parent = attachmentDir
         for (segment in parts.dropLast(1)) {
             val safe = BulletinAttachmentDownloadPaths.sanitizeSegment(segment)
@@ -235,6 +228,7 @@ object BulletinAttachmentDownloader {
                 ?: parent.createDirectory(safe)
                 ?: throw IllegalStateException(context.getString(R.string.family_msg_05412))
         }
+        val fileName = BulletinAttachmentDownloadPaths.sanitizeSegment(parts.last())
         parent.findFile(fileName)?.let { existing ->
             if (!existing.isDirectory) {
                 deleteSafEntry(context, existing)
@@ -243,19 +237,20 @@ object BulletinAttachmentDownloader {
         val mime = guessMimeType(fileName)
         val created = parent.createFile(mime, fileName)
             ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
-        copyFileToUri(context, cacheFile, created.uri)
+        downloadToSafFileStream(
+            context = context,
+            transport = transport,
+            boardId = boardId,
+            attachmentId = attachmentId,
+            fileId = fileId,
+            totalSize = totalSize,
+            targetUri = created.uri,
+            onProgress = onProgress
+        )
     }
 
     private fun deleteSafEntry(context: Context, doc: DocumentFile) {
         runCatching { DocumentsContract.deleteDocument(context.contentResolver, doc.uri) }
-    }
-
-    private fun copyFileToUri(context: Context, source: File, destUri: Uri) {
-        source.inputStream().use { input ->
-            context.contentResolver.openOutputStream(destUri)?.use { output ->
-                input.copyTo(output)
-            } ?: throw IllegalStateException(context.getString(R.string.family_msg_80037))
-        }
     }
 
     private fun cachePartFile(context: Context, attachmentId: String, fileId: String?): File {
@@ -279,6 +274,19 @@ class LocalBulletinAttachmentDownloadTransport(
                 ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_34495, attachmentId))
         }
 
+    override fun downloadBlobStream(
+        boardId: String,
+        attachmentId: String,
+        fileId: String?
+    ): Result<BlobDownloadStream> = runCatching {
+        val result = if (fileId != null) {
+            store.attachments.openDirectoryFileBlob(boardId, attachmentId, fileId)
+        } else {
+            store.attachments.openFileBlob(boardId, attachmentId)
+        } ?: throw IllegalStateException(store.appContext.getString(R.string.family_msg_96683))
+        BlobDownloadStream(result.statusCode, result.totalSize, result.contentRange, result.inputStream)
+    }
+
     override fun downloadBlob(
         boardId: String,
         attachmentId: String,
@@ -297,6 +305,8 @@ class LocalBulletinAttachmentDownloadTransport(
 }
 
 class RemoteBulletinAttachmentDownloadTransport(
+    private val service: FamilyDiscoveredService,
+    private val openBlobConnection: (java.net.URL, String) -> java.net.HttpURLConnection,
     private val downloadBlobRequest: (
         path: String,
         rangeStart: Long,
@@ -306,6 +316,48 @@ class RemoteBulletinAttachmentDownloadTransport(
 ) : BulletinAttachmentDownloadTransport {
     override fun getAttachmentMeta(boardId: String, attachmentId: String): Result<JSONObject> =
         fetchMeta(boardId, attachmentId)
+
+    override fun downloadBlobStream(
+        boardId: String,
+        attachmentId: String,
+        fileId: String?
+    ): Result<BlobDownloadStream> {
+        val path = if (fileId != null) {
+            "/boards/$boardId/attachments/$attachmentId/files/$fileId/blob"
+        } else {
+            "/boards/$boardId/attachments/$attachmentId/blob"
+        }
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException("unsupported protocol: ${service.serviceName}")
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException("missing fingerprint: ${service.serviceName}")
+            val endpoint = java.net.URL("https://${service.host}:${service.port}$path")
+            val connection = openBlobConnection(endpoint, fingerprint)
+            val status = connection.responseCode
+            if (status !in listOf(200, 206)) {
+                val detail = connection.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) }.orEmpty()
+                connection.disconnect()
+                throw IllegalStateException(detail.ifBlank { "HTTP $status" })
+            }
+            val contentRange = connection.getHeaderField("Content-Range")
+            val totalSize = connection.getHeaderField("Content-Length")?.toLongOrNull()
+                ?: connection.contentLengthLong.takeIf { it > 0 }
+                ?: parseTotalSizeFromContentRange(contentRange)
+                ?: -1L
+            BlobDownloadStream(
+                statusCode = status,
+                totalSize = totalSize,
+                contentRange = contentRange,
+                inputStream = connection.inputStream,
+                closeAction = { connection.disconnect() }
+            )
+        }
+    }
 
     override fun downloadBlob(
         boardId: String,
@@ -320,5 +372,10 @@ class RemoteBulletinAttachmentDownloadTransport(
             "/boards/$boardId/attachments/$attachmentId/blob"
         }
         return downloadBlobRequest(path, rangeStart, rangeEndInclusive)
+    }
+
+    private fun parseTotalSizeFromContentRange(header: String?): Long? {
+        if (header.isNullOrBlank()) return null
+        return header.substringAfter('/', "").toLongOrNull()?.takeIf { it > 0 }
     }
 }

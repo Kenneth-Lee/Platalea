@@ -3,6 +3,7 @@ package com.kenny.localmanager.family
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.FileInputStream
 import java.io.RandomAccessFile
 import java.security.MessageDigest
 import java.util.UUID
@@ -221,6 +222,14 @@ class BulletinAttachmentStore(private val boardsRoot: File) {
             readBlobWithRange(blob, meta.optLong("size"), rangeHeader)
         }
 
+    fun openFileBlob(boardId: String, attachmentId: String): BlobStreamResult? = lock.read {
+        val meta = readAttachmentMeta(boardId, attachmentId) ?: return@read null
+        if (meta.optString("status") != BulletinAttachmentStatus.READY.wire) return@read null
+        if (meta.optString("kind") != BulletinAttachmentKind.FILE.wire) return@read null
+        val blob = File(attachmentDir(boardId, attachmentId), "blob")
+        BlobStreamResult(FileInputStream(blob), meta.optLong("size"), null, 200)
+    }
+
     fun readDirectoryFileBlob(
         boardId: String,
         attachmentId: String,
@@ -234,6 +243,16 @@ class BulletinAttachmentStore(private val boardsRoot: File) {
         val fileMeta = readFileMemberMeta(fileDir) ?: return@read null
         val blob = File(fileDir, "blob")
         readBlobWithRange(blob, fileMeta.optLong("size"), rangeHeader)
+    }
+
+    fun openDirectoryFileBlob(boardId: String, attachmentId: String, fileId: String): BlobStreamResult? = lock.read {
+        val meta = readAttachmentMeta(boardId, attachmentId) ?: return@read null
+        if (meta.optString("status") != BulletinAttachmentStatus.READY.wire) return@read null
+        if (meta.optString("kind") != BulletinAttachmentKind.DIRECTORY.wire) return@read null
+        val fileDir = File(File(attachmentDir(boardId, attachmentId), "files"), fileId)
+        val fileMeta = readFileMemberMeta(fileDir) ?: return@read null
+        val blob = File(fileDir, "blob")
+        BlobStreamResult(FileInputStream(blob), fileMeta.optLong("size"), null, 200)
     }
 
     fun deleteAttachment(boardId: String, attachmentId: String): Boolean = lock.write {
@@ -484,4 +503,11 @@ data class BlobReadResult(
     val bytes: ByteArray,
     val totalSize: Long,
     val contentRange: String?
+)
+
+data class BlobStreamResult(
+    val inputStream: java.io.InputStream,
+    val totalSize: Long,
+    val contentRange: String?,
+    val statusCode: Int
 )

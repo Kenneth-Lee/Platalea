@@ -5,6 +5,7 @@ import com.kenny.localmanager.R
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.InputStream
 
 class BulletinBoardHttpHandler(
     private val context: Context,
@@ -151,6 +152,11 @@ class BulletinBoardHttpHandler(
         val dirBlob = Regex("""/boards/([^/]+)/attachments/([^/]+)/files/([^/]+)/blob""").find(path)
         if (dirBlob != null) {
             val (boardId, attachmentId, fileId) = dirBlob.destructured
+            if (rangeHeader.isNullOrBlank()) {
+                val stream = store.attachments.openDirectoryFileBlob(boardId, attachmentId, fileId)
+                    ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
+                return streamBlobResponse(stream)
+            }
             val result = store.attachments.readDirectoryFileBlob(boardId, attachmentId, fileId, rangeHeader)
                 ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
             return blobResponse(result)
@@ -158,6 +164,11 @@ class BulletinBoardHttpHandler(
         val fileBlob = Regex("""/boards/([^/]+)/attachments/([^/]+)/blob""").find(path)
             ?: return notFound()
         val (boardId, attachmentId) = fileBlob.destructured
+        if (rangeHeader.isNullOrBlank()) {
+            val stream = store.attachments.openFileBlob(boardId, attachmentId)
+                ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
+            return streamBlobResponse(stream)
+        }
         val result = store.attachments.readFileBlob(boardId, attachmentId, rangeHeader)
             ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_48095)))
         return blobResponse(result)
@@ -169,11 +180,29 @@ class BulletinBoardHttpHandler(
         if (result.contentRange != null) {
             headers["Content-Range"] = result.contentRange
         }
+        headers["X-Blob-Stream"] = "0"
         return FamilyHttpResponse(
             statusCode = result.statusCode,
             bodyBytes = result.bytes,
             contentType = "application/octet-stream",
             extraHeaders = headers
+        )
+    }
+
+    private fun streamBlobResponse(streamResult: BlobStreamResult): FamilyHttpResponse {
+        val headers = mutableMapOf<String, String>()
+        headers["Accept-Ranges"] = "bytes"
+        if (streamResult.contentRange != null) {
+            headers["Content-Range"] = streamResult.contentRange
+        }
+        headers["X-Blob-Stream"] = "1"
+        return FamilyHttpResponse(
+            statusCode = streamResult.statusCode,
+            bodyBytes = ByteArray(0),
+            contentType = "application/octet-stream",
+            extraHeaders = headers,
+            bodyStream = streamResult.inputStream,
+            bodyLength = streamResult.totalSize
         )
     }
 
@@ -502,7 +531,9 @@ data class FamilyHttpResponse(
     val statusCode: Int,
     val bodyBytes: ByteArray,
     val contentType: String = "application/json; charset=utf-8",
-    val extraHeaders: Map<String, String> = emptyMap()
+    val extraHeaders: Map<String, String> = emptyMap(),
+    val bodyStream: java.io.InputStream? = null,
+    val bodyLength: Long? = null
 ) {
     constructor(statusCode: Int, body: String, contentType: String = "application/json; charset=utf-8") :
         this(statusCode, body.toByteArray(Charsets.UTF_8), contentType)

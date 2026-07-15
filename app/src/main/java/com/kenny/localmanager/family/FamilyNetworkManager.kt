@@ -1306,6 +1306,10 @@ class FamilyNetworkManager(context: Context) {
             LocalBulletinAttachmentDownloadTransport(boardStore)
         } else {
             RemoteBulletinAttachmentDownloadTransport(
+                service = session.service,
+                openBlobConnection = { endpoint, fingerprint ->
+                    openHttpsConnectionForBlob(endpoint, fingerprint, session.accessPassword)
+                },
                 downloadBlobRequest = { path, rangeStart, rangeEnd ->
                     boardApiBlobDownload(session.service, path, rangeStart, rangeEnd, session.accessPassword)
                 },
@@ -2339,6 +2343,18 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    internal fun openHttpsConnectionForBlob(endpoint: URL, fingerprint: String, accessPassword: String?): HttpURLConnection {
+        return tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 120000
+            setRequestProperty("Accept", "application/octet-stream")
+            accessPassword?.let {
+                setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+            }
+        }
+    }
+
     private fun parseTotalSizeFromContentRange(header: String?): Long? {
         if (header.isNullOrBlank()) return null
         val total = header.substringAfter('/', "").toLongOrNull()
@@ -2822,7 +2838,7 @@ private class EmbeddedHttpServer(
             val responseHead = buildString {
                 append("HTTP/1.1 ${response.statusCode} ${httpStatusText(response.statusCode)}\r\n")
                 append("Content-Type: ${response.contentType}\r\n")
-                append("Content-Length: ${response.bodyBytes.size}\r\n")
+                append("Content-Length: ${response.bodyLength ?: response.bodyBytes.size.toLong()}\r\n")
                 response.extraHeaders.forEach { (name, value) ->
                     append("$name: $value\r\n")
                 }
@@ -2830,7 +2846,14 @@ private class EmbeddedHttpServer(
                 append("\r\n")
             }.toByteArray(StandardCharsets.ISO_8859_1)
             output.write(responseHead)
-            output.write(response.bodyBytes)
+            response.bodyStream?.use { input ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read <= 0) break
+                    output.write(buffer, 0, read)
+                }
+            } ?: output.write(response.bodyBytes)
             output.flush()
         }
     }
