@@ -84,6 +84,12 @@ def _resolve_windows_install_credentials(
     return service_user, password
 
 
+def _resolve_install_config_path(*, owner: ActiveOwner, config_arg: str) -> Path:
+    if config_arg.strip():
+        return config_path(config_arg)
+    return (Path(owner.home) / ".localmanager" / "config.json").expanduser().resolve()
+
+
 def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None = None) -> InstallPlan:
     active_owner = owner or detect_active_owner()
     control_paths = service_control_paths()
@@ -166,8 +172,9 @@ def run_service_install(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     try:
         backend = detect_platform_backend()
-        cfg = config_path(args.config or None)
-        plan = build_install_plan(config=cfg)
+        owner = detect_active_owner()
+        cfg = _resolve_install_config_path(owner=owner, config_arg=args.config)
+        plan = build_install_plan(owner=owner, config=cfg)
         if backend == "windows":
             win_user, win_password = _resolve_windows_install_credentials(
                 default_user=plan.owner.username,

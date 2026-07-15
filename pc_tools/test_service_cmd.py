@@ -185,5 +185,50 @@ class ServiceWindowsCredentialTest(unittest.TestCase):
                 )
 
 
+class ServiceInstallConfigPathTest(unittest.TestCase):
+    def test_resolve_install_config_path_defaults_to_owner_home(self) -> None:
+        owner = ActiveOwner(uid=1000, username="kenny", home="/home/kenny")
+        path = service_cmd._resolve_install_config_path(owner=owner, config_arg="")
+        self.assertEqual(path, Path("/home/kenny/.localmanager/config.json"))
+
+    def test_resolve_install_config_path_uses_explicit_arg(self) -> None:
+        owner = ActiveOwner(uid=1000, username="kenny", home="/home/kenny")
+        path = service_cmd._resolve_install_config_path(owner=owner, config_arg="./my-config.json")
+        self.assertTrue(str(path).endswith("my-config.json"))
+
+    def test_run_service_install_passes_owner_based_config_to_plan(self) -> None:
+        owner = ActiveOwner(uid=1000, username="kenny", home="/home/kenny")
+
+        with mock.patch.object(service_cmd, "detect_platform_backend", return_value="linux"), mock.patch.object(
+            service_cmd, "detect_active_owner", return_value=owner
+        ), mock.patch.object(service_cmd, "_select_adapter") as mock_select_adapter, mock.patch.object(
+            service_cmd, "build_install_plan"
+        ) as mock_build_plan, mock.patch.object(service_cmd, "service_control_paths") as mock_paths, mock.patch.object(
+            service_cmd, "save_control_state"
+        ):
+            adapter = mock.Mock()
+            mock_select_adapter.return_value = adapter
+
+            plan = mock.Mock()
+            plan.user_server_spec.stdout_path = "/tmp/user.stdout.log"
+            plan.user_server_spec.owner = owner
+            plan.privileged_spec = mock.Mock()
+            plan.control_state = mock.Mock()
+            plan.replaced_previous_owner = False
+            plan.owner = owner
+            mock_build_plan.return_value = plan
+
+            paths_obj = mock.Mock()
+            paths_obj.logs_dir = Path("/tmp/platalea_logs")
+            paths_obj.state_file = Path("/tmp/platalea_state.json")
+            mock_paths.return_value = paths_obj
+
+            exit_code = service_cmd.run_service_install([])
+            self.assertEqual(exit_code, 0)
+            called_kwargs = mock_build_plan.call_args.kwargs
+            self.assertEqual(called_kwargs["owner"], owner)
+            self.assertEqual(called_kwargs["config"], Path("/home/kenny/.localmanager/config.json"))
+
+
 if __name__ == "__main__":
     unittest.main()

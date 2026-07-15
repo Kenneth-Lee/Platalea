@@ -9,6 +9,11 @@ from pathlib import Path
 
 from dataclasses import dataclass
 
+try:
+    import pwd
+except ImportError:  # pragma: no cover - only on non-POSIX platforms.
+    pwd = None  # type: ignore[assignment]
+
 PC_TOOLS_DIR = Path(__file__).resolve().parents[1]
 APP_DIR_NAME = ".localmanager"
 BOARDS_DIR_NAME = "boards"
@@ -100,6 +105,8 @@ def service_control_paths() -> ServiceControlPaths:
         current = platform.system().lower()
         if current == "darwin":
             root = Path("/Library/LocalManager") / SERVICE_CONTROL_DIR_NAME
+        elif current == "linux":
+            root = _linux_service_control_root()
         else:
             root = app_dir() / SERVICE_CONTROL_DIR_NAME
     return ServiceControlPaths(
@@ -108,6 +115,39 @@ def service_control_paths() -> ServiceControlPaths:
         state_file=root / "state.json",
         logs_dir=root / "logs",
     )
+
+
+def _linux_service_control_root() -> Path:
+    geteuid = getattr(os, "geteuid", None)
+    if callable(geteuid) and geteuid() == 0:
+        sudo_home = _detect_sudo_home()
+        if sudo_home is not None:
+            return sudo_home / APP_DIR_NAME / SERVICE_CONTROL_DIR_NAME
+    return app_dir() / SERVICE_CONTROL_DIR_NAME
+
+
+def _detect_sudo_home() -> Path | None:
+    sudo_home = os.environ.get("SUDO_HOME", "").strip()
+    if sudo_home:
+        return Path(sudo_home).expanduser().resolve()
+
+    sudo_uid = os.environ.get("SUDO_UID", "").strip()
+    if sudo_uid:
+        try:
+            uid = int(sudo_uid)
+            if pwd is not None:
+                return Path(pwd.getpwuid(uid).pw_dir).resolve()
+        except (ValueError, KeyError):
+            pass
+
+    sudo_user = os.environ.get("SUDO_USER", "").strip()
+    if sudo_user and pwd is not None:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir).resolve()
+        except KeyError:
+            return None
+
+    return None
 
 
 def ensure_app_layout() -> Path:
