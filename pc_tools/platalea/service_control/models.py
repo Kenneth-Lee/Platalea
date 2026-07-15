@@ -3,12 +3,16 @@ from __future__ import annotations
 import getpass
 import os
 import platform
-import pwd
 import secrets
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
+
+try:
+    import pwd
+except ImportError:  # pragma: no cover - only on non-POSIX platforms.
+    pwd = None  # type: ignore[assignment]
 
 
 @dataclass(frozen=True)
@@ -92,12 +96,17 @@ class InstallPlan:
 
 
 def detect_active_owner() -> ActiveOwner:
-    if os.geteuid() == 0:
+    geteuid = getattr(os, "geteuid", None)
+    getuid = getattr(os, "getuid", None)
+
+    if callable(geteuid) and geteuid() == 0:
         sudo_uid = os.environ.get("SUDO_UID", "").strip()
         sudo_user = os.environ.get("SUDO_USER", "").strip()
         if sudo_uid and sudo_user:
             uid = int(sudo_uid)
             try:
+                if pwd is None:
+                    raise KeyError(uid)
                 ent = pwd.getpwuid(uid)
                 home = ent.pw_dir
                 username = ent.pw_name
@@ -108,7 +117,8 @@ def detect_active_owner() -> ActiveOwner:
 
     username = getpass.getuser().strip()
     home = str(Path.home().resolve())
-    return ActiveOwner(uid=os.getuid(), username=username, home=home)
+    uid = int(getuid()) if callable(getuid) else -1
+    return ActiveOwner(uid=uid, username=username, home=home)
 
 
 def build_control_state(

@@ -11,6 +11,7 @@ from unittest import mock
 from platalea.service_cmd import build_install_plan
 from platalea.service_control.models import ActiveOwner, build_control_state, detect_active_owner
 from platalea.service_control.state import save_control_state
+import platalea.service_cmd as service_cmd
 
 
 class ServiceInstallPlanTest(unittest.TestCase):
@@ -65,6 +66,32 @@ class ServiceInstallPlanTest(unittest.TestCase):
             self.assertEqual(owner.username, "kenny")
             self.assertEqual(owner.home, "/Users/kenny")
 
+    def test_detect_active_owner_works_without_pwd_module(self) -> None:
+        with mock.patch("platalea.service_control.models.pwd", None), mock.patch(
+            "os.geteuid", return_value=0
+        ), mock.patch.dict(
+            os.environ,
+            {
+                "SUDO_UID": "1001",
+                "SUDO_USER": "tester",
+                "SUDO_HOME": "/tmp/tester",
+            },
+            clear=False,
+        ):
+            owner = detect_active_owner()
+            self.assertEqual(owner.uid, 1001)
+            self.assertEqual(owner.username, "tester")
+            self.assertEqual(owner.home, "/tmp/tester")
+
+    def test_detect_active_owner_works_without_getuid(self) -> None:
+        with mock.patch.object(os, "geteuid", None), mock.patch.object(os, "getuid", None), mock.patch(
+            "getpass.getuser", return_value="plainuser"
+        ), mock.patch("pathlib.Path.home", return_value=Path("/tmp/plainuser")):
+            owner = detect_active_owner()
+            self.assertEqual(owner.uid, -1)
+            self.assertEqual(owner.username, "plainuser")
+            self.assertEqual(owner.home, "/tmp/plainuser")
+
     def test_build_install_plan_marks_replaced_previous_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -104,6 +131,58 @@ class ServiceInstallPlanTest(unittest.TestCase):
             finally:
                 paths.service_control_paths = old_service_paths
                 sc.service_control_paths = old_sc_service_paths
+
+
+class ServicePlatformBackendTest(unittest.TestCase):
+    def test_detect_platform_backend_supports_linux_windows_macos(self) -> None:
+        with mock.patch("platform.system", return_value="Darwin"):
+            self.assertEqual(service_cmd.detect_platform_backend(), "macos")
+        with mock.patch("platform.system", return_value="Linux"):
+            self.assertEqual(service_cmd.detect_platform_backend(), "linux")
+        with mock.patch("platform.system", return_value="Windows"):
+            self.assertEqual(service_cmd.detect_platform_backend(), "windows")
+
+    def test_select_adapter_by_backend(self) -> None:
+        with mock.patch.object(service_cmd, "detect_platform_backend", return_value="macos"):
+            adapter = service_cmd._select_adapter()
+            self.assertEqual(adapter.__class__.__name__, "MacOSLaunchdAdapter")
+        with mock.patch.object(service_cmd, "detect_platform_backend", return_value="linux"):
+            adapter = service_cmd._select_adapter()
+            self.assertEqual(adapter.__class__.__name__, "LinuxSystemdAdapter")
+        with mock.patch.object(service_cmd, "detect_platform_backend", return_value="windows"):
+            adapter = service_cmd._select_adapter()
+            self.assertEqual(adapter.__class__.__name__, "WindowsServiceAdapter")
+
+
+class ServiceWindowsCredentialTest(unittest.TestCase):
+    def test_resolve_windows_install_credentials_from_env(self) -> None:
+        with mock.patch.dict(os.environ, {"PLATALEA_TEST_WIN_PASS": "abc123"}, clear=False):
+            user, password = service_cmd._resolve_windows_install_credentials(
+                default_user="kenny",
+                override_user="",
+                password_env="PLATALEA_TEST_WIN_PASS",
+            )
+            self.assertEqual(user, "kenny")
+            self.assertEqual(password, "abc123")
+
+    def test_resolve_windows_install_credentials_from_prompt(self) -> None:
+        with mock.patch("getpass.getpass", return_value="secret-pass"):
+            user, password = service_cmd._resolve_windows_install_credentials(
+                default_user="kenny",
+                override_user="domain\\kenny",
+                password_env="",
+            )
+            self.assertEqual(user, "domain\\kenny")
+            self.assertEqual(password, "secret-pass")
+
+    def test_resolve_windows_install_credentials_empty_env_raises(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(service_cmd.ServiceControlError):
+                service_cmd._resolve_windows_install_credentials(
+                    default_user="kenny",
+                    override_user="",
+                    password_env="PLATALEA_TEST_WIN_PASS",
+                )
 
 
 if __name__ == "__main__":

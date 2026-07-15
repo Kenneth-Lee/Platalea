@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import os
 import platform
 import sys
@@ -22,6 +23,8 @@ from .service_control.platform.macos_launchd import (
     MacOSLaunchdAdapter,
     PRIVILEGED_LABEL,
 )
+from .service_control.platform.linux_systemd import LinuxSystemdAdapter
+from .service_control.platform.windows_sc import WindowsServiceAdapter
 from .service_control.state import load_control_state, save_control_state
 
 
@@ -33,14 +36,52 @@ def detect_platform_backend() -> str:
     current = platform.system().lower()
     if current == "darwin":
         return "macos"
+    if current == "linux":
+        return "linux"
+    if current == "windows":
+        return "windows"
     raise ServiceControlError(f"当前平台暂不支持 service control: {current}")
 
 
-def _select_adapter() -> MacOSLaunchdAdapter:
+def _select_adapter(
+    *,
+    windows_service_user: str | None = None,
+    windows_service_password: str | None = None,
+):
     backend = detect_platform_backend()
     if backend == "macos":
         return MacOSLaunchdAdapter()
+    if backend == "linux":
+        return LinuxSystemdAdapter()
+    if backend == "windows":
+        return WindowsServiceAdapter(
+            service_user=windows_service_user,
+            service_password=windows_service_password,
+        )
     raise ServiceControlError(f"未知平台后端: {backend}")
+
+
+def _resolve_windows_install_credentials(
+    *,
+    default_user: str,
+    override_user: str,
+    password_env: str,
+) -> tuple[str, str]:
+    service_user = (override_user or "").strip() or default_user
+    if not service_user:
+        raise ServiceControlError("Windows 安装失败：无法确定服务运行用户")
+
+    if password_env:
+        password = os.environ.get(password_env, "").strip()
+        if not password:
+            raise ServiceControlError(f"Windows 安装失败：环境变量 {password_env} 为空")
+        return service_user, password
+
+    prompt = f"请输入 Windows 服务账户 {service_user} 的密码: "
+    password = getpass.getpass(prompt).strip()
+    if not password:
+        raise ServiceControlError("Windows 安装失败：服务账户密码不能为空")
+    return service_user, password
 
 
 def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None = None) -> InstallPlan:
@@ -112,16 +153,39 @@ def run_service_install(argv: list[str] | None = None) -> int:
         default="",
         help=f"业务服务配置文件路径（默认 {config_path()}）",
     )
+    ap.add_argument(
+        "--windows-user",
+        default="",
+        help="仅 Windows：指定 bootstrap 服务运行账户（默认当前 owner）",
+    )
+    ap.add_argument(
+        "--windows-password-env",
+        default="",
+        help="仅 Windows：从该环境变量读取服务账户密码（避免交互输入）",
+    )
     args = ap.parse_args(argv)
     try:
-        adapter = _select_adapter()
+        backend = detect_platform_backend()
         cfg = config_path(args.config or None)
         plan = build_install_plan(config=cfg)
+        if backend == "windows":
+            win_user, win_password = _resolve_windows_install_credentials(
+                default_user=plan.owner.username,
+                override_user=args.windows_user,
+                password_env=args.windows_password_env,
+            )
+            adapter = _select_adapter(
+                windows_service_user=win_user,
+                windows_service_password=win_password,
+            )
+        else:
+            adapter = _select_adapter()
         control_paths = service_control_paths()
         control_paths.logs_dir.mkdir(parents=True, exist_ok=True)
         user_logs_dir = Path(plan.user_server_spec.stdout_path).parent
         user_logs_dir.mkdir(parents=True, exist_ok=True)
-        if os.geteuid() == 0:
+        geteuid = getattr(os, "geteuid", None)
+        if callable(geteuid) and geteuid() == 0:
             os.chown(user_logs_dir, plan.owner.uid, plan.owner.uid)
         # Persist owner metadata before launchd starts the privileged broker so it can
         # create its Unix socket with the correct access group.
