@@ -13,6 +13,10 @@ from .base import PowerAction
 
 PRIVILEGED_LABEL = "com.localmanager.platalea.privileged"
 BOOTSTRAP_LABEL = "com.localmanager.platalea.bootstrap"
+# commit 2078f95 把用户态单元标签从 .server 改名为 .bootstrap。升级安装时必须清理旧标签，
+# 否则旧单元（KeepAlive=true、直接跑 _serve-daemon）会在每次开机时与新 .bootstrap 单元同时
+# 启动，抢端口 8765 并用同名注册 mDNS，导致其他设备无法发现本机服务。
+LEGACY_USER_SERVER_LABEL = "com.localmanager.platalea.server"
 
 
 @dataclass(frozen=True)
@@ -116,7 +120,16 @@ class MacOSLaunchdAdapter:
         layout.privileged_plist.write_bytes(render_privileged_plist(spec))
         self._load_unit(layout.privileged_plist, spec.label)
 
+    def _cleanup_legacy_user_server(self) -> None:
+        """Remove the pre-2078f95 user server unit so it cannot double-start the daemon."""
+        units_dir = launchd_units_dir()
+        legacy_plist = units_dir / f"{LEGACY_USER_SERVER_LABEL}.plist"
+        self._unload_unit(legacy_plist, LEGACY_USER_SERVER_LABEL)
+        if legacy_plist.exists():
+            legacy_plist.unlink()
+
     def install_user_server_unit(self, spec: UserServerUnitSpec) -> None:
+        self._cleanup_legacy_user_server()
         layout = launchd_layout()
         layout.bootstrap_plist.parent.mkdir(parents=True, exist_ok=True)
         layout.bootstrap_plist.write_bytes(render_user_server_plist(spec))
@@ -134,6 +147,8 @@ class MacOSLaunchdAdapter:
                 path.unlink()
             elif not ignore_missing:
                 raise FileNotFoundError(f"launchd plist 不存在: {path}")
+        # 同步清理遗留的旧标签单元（install 之外的卸载路径也要兜底）。
+        self._cleanup_legacy_user_server()
 
     def _is_loaded(self, label: str) -> bool:
         proc = self._run_launchctl("print", f"system/{label}", allow_failure=True)

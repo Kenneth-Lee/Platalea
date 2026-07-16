@@ -8,6 +8,7 @@ import json
 import logging
 import socket
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from http import HTTPStatus
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
-from zeroconf import Zeroconf
+from zeroconf import ServiceInfo, Zeroconf
 
 from .bulletin_attachment_store import DirectoryEntry
 from .bulletin_agent import AgentConfig, BulletinBoardAgent, load_agent_config, start_agent
@@ -37,6 +38,7 @@ from .family_common import (
     PASSWORD_HEADER,
     binary_response,
     build_service_info,
+    current_lan_ipv4_addresses,
     json_response,
     text_response,
     load_or_create_instance_id,
@@ -48,6 +50,9 @@ from .family_common import (
 from .paths import service_control_paths
 
 LOGGER = logging.getLogger("local_manager.bulletin_server")
+
+# 后台 watcher 检测局域网 IPv4 变化（WiFi 晚到、DHCP 换 IP）的轮询间隔。
+_MDNS_REFRESH_INTERVAL_SECONDS = 15.0
 
 
 @dataclass(frozen=True)
@@ -1092,18 +1097,77 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     https_server.max_import_bytes = config.max_import_bytes  # type: ignore[attr-defined]
     https_server.supports_power_shutdown = config.supports_power_shutdown  # type: ignore[attr-defined]
 
-    zeroconf_client: Zeroconf | None = None
-    service_info = build_service_info(
-        service_type=service_type,
-        service_name=config.service_name,
-        hostname=hostname,
-        port=config.port,
-        instance_id=instance_id,
-        tls_fingerprint=tls_fingerprint,
-        auth_required=config.auth_required,
+    registration_lock = threading.Lock()
+    mdns_state: dict[str, Any] = {"zc": None, "info": None}
+    mdns_stop = threading.Event()
+
+    def _build_service_info() -> ServiceInfo:
+        return build_service_info(
+            service_type=service_type,
+            service_name=config.service_name,
+            hostname=hostname,
+            port=config.port,
+            instance_id=instance_id,
+            tls_fingerprint=tls_fingerprint,
+            auth_required=config.auth_required,
             supports_power_shutdown=config.supports_power_shutdown,
-        platform="python",
-    )
+            platform="python",
+        )
+
+    def _register_mdns() -> None:
+        """（重建并）注册 mDNS 服务。
+
+        Zeroconf 只在构造那一刻为当时存在的接口开 multicast 监听 socket。开机时若只有
+        ZeroTier/VPN 虚拟网卡就绪，它只会听虚拟网卡；WiFi 等物理网卡后来才 up 时，
+        必须【重建 Zeroconf】才能在该接口上应答 mDNS 查询——仅重新注册 ServiceInfo
+        只会改广播的地址列表，收不到来自该接口的查询。
+        """
+        new_info = _build_service_info()
+        new_zc = Zeroconf()
+        new_zc.register_service(new_info)
+        old_zc = mdns_state["zc"]
+        old_info = mdns_state["info"]
+        mdns_state["zc"] = new_zc
+        mdns_state["info"] = new_info
+        if old_zc is not None and old_info is not None:
+            try:
+                old_zc.unregister_service(old_info)
+            except Exception as exc:
+                LOGGER.warning("注销旧 mDNS 服务失败: %s", exc)
+        if old_zc is not None:
+            try:
+                old_zc.close()
+            except Exception:
+                pass
+        LOGGER.info(
+            "mDNS 服务已注册: name=%s type=%s hostname=%s port=%s instance_id=%s fingerprint=%s power_shutdown=%s ipv4=%s",
+            new_info.name,
+            service_type,
+            hostname,
+            config.port,
+            instance_id,
+            tls_fingerprint,
+            config.supports_power_shutdown,
+            ",".join(current_lan_ipv4_addresses()) or "<none>",
+        )
+
+    def _mdns_refresh_loop() -> None:
+        """轮询局域网 IPv4 变化，WiFi 晚到 / DHCP 换 IP 时自动重建并重新注册。"""
+        last_set = set(current_lan_ipv4_addresses())
+        while not mdns_stop.wait(_MDNS_REFRESH_INTERVAL_SECONDS):
+            current = set(current_lan_ipv4_addresses())
+            if current == last_set:
+                continue
+            last_set = current
+            LOGGER.info(
+                "检测到局域网 IPv4 变化，重建 mDNS 绑定: %s",
+                ",".join(sorted(current)) or "<none>",
+            )
+            with registration_lock:
+                try:
+                    _register_mdns()
+                except Exception as exc:
+                    LOGGER.warning("mDNS 重新注册失败: %s", exc)
 
     LOGGER.info("留言板数据目录: %s", config.board_root)
     LOGGER.info(
@@ -1124,34 +1188,33 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
         )
 
     try:
-        zeroconf_client = Zeroconf()
-        zeroconf_client.register_service(service_info)
-        LOGGER.info(
-            "mDNS 服务已注册: name=%s type=%s hostname=%s port=%s instance_id=%s fingerprint=%s power_shutdown=%s",
-            service_info.name,
-            service_type,
-            hostname,
-            config.port,
-            instance_id,
-            tls_fingerprint,
-            config.supports_power_shutdown,
-        )
+        with registration_lock:
+            _register_mdns()
         LOGGER.info("服务就绪。Android 客户端可在同一局域网中发现并连接本机。")
+        refresh_thread = threading.Thread(
+            target=_mdns_refresh_loop, name="mdns-refresh", daemon=True
+        )
+        refresh_thread.start()
         _thread.join()
         return 0
     except KeyboardInterrupt:
         LOGGER.info("收到 Ctrl+C，准备退出。")
         return 0
     finally:
+        mdns_stop.set()
         if agent_handle is not None:
             agent_handle.stop()
-        if zeroconf_client is not None:
-            try:
-                zeroconf_client.unregister_service(service_info)
-                LOGGER.info("mDNS 服务已注销: %s", service_info.name)
-            except Exception as exc:
-                LOGGER.warning("注销 mDNS 服务失败: %s", exc)
-            zeroconf_client.close()
+        with registration_lock:
+            zc = mdns_state["zc"]
+            info = mdns_state["info"]
+            if zc is not None and info is not None:
+                try:
+                    zc.unregister_service(info)
+                    LOGGER.info("mDNS 服务已注销: %s", info.name)
+                except Exception as exc:
+                    LOGGER.warning("注销 mDNS 服务失败: %s", exc)
+            if zc is not None:
+                zc.close()
         https_server.shutdown()
         https_server.server_close()
         clear_server_pid()

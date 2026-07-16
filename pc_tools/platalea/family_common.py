@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import logging
+import re
 import socket
 import ssl
+import sys
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -153,6 +155,105 @@ def collect_local_addresses() -> list[ipaddress._BaseAddress]:
     return prioritize_broadcast_addresses(addresses)
 
 
+def _default_route_interface() -> str | None:
+    """返回默认路由出口接口名（如 en1/eth0）；无法确定时返回 None。"""
+    import subprocess
+
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["route", "-n", "get", "default"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode == 0:
+            match = re.search(r"interface:\s*(\S+)", result.stdout)
+            if match:
+                return match.group(1)
+        return None
+
+    # Linux
+    try:
+        result = subprocess.run(
+            ["ip", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode == 0:
+        match = re.search(r"\bdev\s+(\S+)", result.stdout)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _interface_ipv4_addresses(iface: str) -> list[str]:
+    """返回指定接口上的 IPv4 地址列表。"""
+    import subprocess
+
+    addresses: list[str] = []
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(
+                ["ifconfig", iface],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return addresses
+        if result.returncode == 0:
+            for match in re.finditer(r"inet\s+(\d{1,3}(?:\.\d{1,3}){3})", result.stdout):
+                addresses.append(match.group(1))
+    else:
+        try:
+            result = subprocess.run(
+                ["ip", "-o", "-4", "addr", "show", iface],
+                capture_output=True,
+                text=True,
+                timeout=3,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return addresses
+        if result.returncode == 0:
+            for line in result.stdout.splitlines():
+                parts = line.split()
+                # 形如: "3: en1    inet 192.168.1.160/24 ..."
+                if "inet" in parts:
+                    idx = parts.index("inet")
+                    if idx + 1 < len(parts):
+                        addresses.append(parts[idx + 1].split("/")[0])
+    return addresses
+
+
+def _default_route_ready() -> bool:
+    """默认路由出口接口是否已获得可用 IPv4。
+
+    家庭网络可达性由默认路由决定。开机时 ZeroTier/VPN 等虚拟接口常先于物理网卡就绪，
+    若仅凭“存在任意 LAN IPv4”就注册 mDNS，会把广播地址锚定在虚拟接口上。这里要求
+    默认路由接口也拿到地址；无法判定默认路由时不阻塞（返回 True）。
+    """
+    iface = _default_route_interface()
+    if not iface:
+        return True
+    addresses = _interface_ipv4_addresses(iface)
+    if not addresses:
+        return False
+    return any(
+        is_usable_ip(addr) and not ipaddress.ip_address(addr).is_link_local
+        for addr in addresses
+    )
+
+
 def collect_mdns_broadcast_addresses(
     timeout_seconds: float = 30.0,
     poll_interval_seconds: float = 1.0,
@@ -171,8 +272,16 @@ def collect_mdns_broadcast_addresses(
             last_addresses = addresses
             # Android 端连接诊断与地址回退策略都依赖 IPv4；若尚无局域网 IPv4，继续等待。
             has_lan_ipv4 = any(address.version == 4 and not address.is_link_local for address in addresses)
-            if has_lan_ipv4:
+            # 仅当默认路由出口接口（家庭网关所在的真实物理网卡）也已获得 IPv4 时才视为就绪。
+            # 否则开机时 ZeroTier/VPN 等虚拟网卡会先 up 并被当成 LAN 地址，导致 mDNS 过早注册在
+            # 虚拟接口上，家庭局域网内的其他设备既收不到 multicast 应答、解析到的虚拟地址也连不上。
+            if has_lan_ipv4 and _default_route_ready():
                 return prioritize_broadcast_addresses(addresses)
+            if has_lan_ipv4:
+                LOGGER.info(
+                    "已检测到局域网地址，但默认路由接口尚未获得 IPv4（等待 DHCP/物理网卡就绪），%s 秒后重试...",
+                    poll_interval_seconds,
+                )
 
         if time.monotonic() >= deadline:
             break
@@ -183,6 +292,16 @@ def collect_mdns_broadcast_addresses(
         )
         time.sleep(poll_interval_seconds)
 
+    # 超时兜底：宁可带着现有地址先注册（后台 watcher 会在物理网卡就绪后重新绑定），
+    # 也不要让 daemon 崩溃——当前 bootstrap 设计下崩溃后不会被 launchd 重新拉起。
+    if last_addresses:
+        LOGGER.warning(
+            "等待默认路由接口就绪超时（%ss），先用现有地址注册 mDNS: %s；"
+            "后台会在物理网卡就绪后自动重新绑定。",
+            timeout_seconds,
+            ", ".join(address.compressed for address in last_addresses),
+        )
+        return prioritize_broadcast_addresses(last_addresses)
     if last_error is not None:
         raise RuntimeError(
             "启动 mDNS 前未能获取到可广播的局域网 IPv4 地址。"
@@ -192,6 +311,22 @@ def collect_mdns_broadcast_addresses(
         "启动 mDNS 前未能获取到可广播的局域网 IPv4 地址。"
         f"最后一次扫描到的地址: {', '.join(address.compressed for address in last_addresses) or '<none>'}"
     )
+
+
+def current_lan_ipv4_addresses() -> list[str]:
+    """返回当前可用于 mDNS 的局域网 IPv4（压缩字符串）；无法获取时返回空列表，不抛异常。
+
+    供后台 watcher 比对地址集合是否变化（WiFi 晚到、DHCP 换 IP 等）。
+    """
+    try:
+        addresses = collect_local_addresses()
+    except Exception:
+        return []
+    return [
+        address.compressed
+        for address in addresses
+        if address.version == 4 and not address.is_link_local
+    ]
 
 
 def prioritize_broadcast_addresses(addresses: list[ipaddress._BaseAddress]) -> list[ipaddress._BaseAddress]:

@@ -12,6 +12,7 @@ from unittest import mock
 from platalea.service_control.models import ActiveOwner, PrivilegedUnitSpec, UserServerUnitSpec
 from platalea.service_control.platform.macos_launchd import (
     BOOTSTRAP_LABEL,
+    LEGACY_USER_SERVER_LABEL,
     MacOSLaunchdAdapter,
     PRIVILEGED_LABEL,
     launchd_layout,
@@ -100,6 +101,69 @@ class MacOSLaunchdAdapterTest(unittest.TestCase):
             plist = str(launchd_layout().privileged_plist)
             self.assertTrue(any(cmd[:3] == ["/bin/launchctl", "bootstrap", "system"] and cmd[3] == plist for cmd in calls))
             self.assertTrue(any(cmd[:3] == ["/bin/launchctl", "kickstart", "-k"] for cmd in calls))
+
+    def test_install_user_server_cleans_up_legacy_server_unit(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_runner(cmd, check, capture_output, text):
+            calls.append(cmd)
+
+            class P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return P()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"PLATALEA_LAUNCHD_DIR": tmp}):
+            units_dir = Path(tmp)
+            legacy_plist = units_dir / f"{LEGACY_USER_SERVER_LABEL}.plist"
+            legacy_plist.write_bytes(b"<plist/>")
+            self.assertTrue(legacy_plist.exists())
+
+            adapter = MacOSLaunchdAdapter(command_runner=fake_runner)
+            owner = ActiveOwner(uid=501, username="kenny", home=tmp)
+            spec = UserServerUnitSpec(
+                label=BOOTSTRAP_LABEL,
+                owner=owner,
+                program_arguments=["/usr/bin/python3", "-m", "platalea", "start"],
+                working_directory=tmp,
+                stdout_path=str(units_dir / "stdout.log"),
+                stderr_path=str(units_dir / "stderr.log"),
+                environment={},
+            )
+            adapter.install_user_server_unit(spec)
+
+            # 旧标签必须被 bootout 并删除文件，否则开机会双开守护进程。
+            self.assertTrue(
+                any(
+                    cmd[:2] == ["/bin/launchctl", "bootout"]
+                    and f"system/{LEGACY_USER_SERVER_LABEL}" in cmd
+                    for cmd in calls
+                )
+            )
+            self.assertFalse(legacy_plist.exists())
+
+    def test_uninstall_cleans_up_legacy_server_unit(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_runner(cmd, check, capture_output, text):
+            calls.append(cmd)
+
+            class P:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return P()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"PLATALEA_LAUNCHD_DIR": tmp}):
+            units_dir = Path(tmp)
+            legacy_plist = units_dir / f"{LEGACY_USER_SERVER_LABEL}.plist"
+            legacy_plist.write_bytes(b"<plist/>")
+
+            adapter = MacOSLaunchdAdapter(command_runner=fake_runner)
+            adapter.uninstall_all_units(ignore_missing=True)
+
+            self.assertFalse(legacy_plist.exists())
 
     def test_query_status_uses_launchctl_print(self) -> None:
         calls: list[list[str]] = []
