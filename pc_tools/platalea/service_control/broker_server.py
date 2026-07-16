@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import socket
 import struct
 import subprocess
@@ -11,6 +12,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .broker_client import WINDOWS_BROKER_HOST, WINDOWS_BROKER_PORT
 from .state import load_control_state
 
 
@@ -66,15 +68,20 @@ def _response(conn: socket.socket, body: dict[str, Any]) -> None:
     conn.sendall(data)
 
 
+def _is_windows() -> bool:
+    return platform.system().lower() == "windows"
+
+
 def _handle_shutdown(*, dry_run: bool) -> tuple[bool, str]:
     if dry_run:
         return True, "dry-run: skip shutdown"
-    proc = subprocess.run(
-        ["/sbin/shutdown", "-h", "now"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    if _is_windows():
+        # Windows：shutdown.exe（LocalSystem 服务拥有 SeShutdownPrivilege）。
+        # /s 关机 /t 0 立即 /f 强制关闭应用。
+        cmd = ["shutdown", "/s", "/t", "0", "/f"]
+    else:
+        cmd = ["/sbin/shutdown", "-h", "now"]
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
     if proc.returncode == 0:
         return True, "shutdown command accepted"
     detail = (proc.stderr or proc.stdout or "").strip()
@@ -154,27 +161,43 @@ def _serve_connection(
     _response(conn, {"ok": False, "error": "unsupported_op", "message": f"unsupported op: {op}"})
 
 
-def run_broker(*, state_dir: Path, dry_run: bool) -> int:
-    state_dir.mkdir(parents=True, exist_ok=True)
+def _create_listen_socket(state_dir: Path) -> tuple[socket.socket, Path | None]:
+    """创建监听 socket（平台隔离）。
+
+    Windows：TCP localhost（AF_UNIX 在 Windows Python 不可用），认证依赖 broker_token。
+    Unix：AF_UNIX domain socket + 文件权限/属主，认证依赖 peer uid + 文件权限。
+    返回 (server_socket, socket_path_or_None)。
+    """
+    if _is_windows():
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind((WINDOWS_BROKER_HOST, WINDOWS_BROKER_PORT))
+        server.listen(16)
+        return server, None
     sock_path = _socket_path(state_dir)
     if sock_path.exists():
         sock_path.unlink()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    os.chmod(sock_path, 0o660)
+    owner_uid = _load_owner_uid(state_dir)
+    if owner_uid >= 0:
+        try:
+            # owner user can connect; root keeps ownership.
+            import pwd
 
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
-        server.bind(str(sock_path))
-        os.chmod(sock_path, 0o660)
-        owner_uid = _load_owner_uid(state_dir)
-        if owner_uid >= 0:
-            try:
-                # owner user can connect; root keeps ownership.
-                import pwd
+            pw = pwd.getpwuid(owner_uid)
+            os.chown(sock_path, 0, pw.pw_gid)
+        except Exception:
+            pass
+    server.listen(16)
+    return server, sock_path
 
-                pw = pwd.getpwuid(owner_uid)
-                os.chown(sock_path, 0, pw.pw_gid)
-            except Exception:
-                pass
-        server.listen(16)
 
+def run_broker(*, state_dir: Path, dry_run: bool) -> int:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    server, _sock_path = _create_listen_socket(state_dir)
+    try:
         while True:
             try:
                 conn, _ = server.accept()
@@ -188,7 +211,11 @@ def run_broker(*, state_dir: Path, dry_run: bool) -> int:
                     _response(conn, {"ok": False, "error": "internal_error", "message": str(exc)})
                 except Exception:
                     pass
-
+    finally:
+        try:
+            server.close()
+        except Exception:
+            pass
     return 0
 
 
