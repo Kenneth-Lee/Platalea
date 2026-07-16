@@ -32,7 +32,31 @@ class PowerCmdTest(unittest.TestCase):
                 with redirect_stdout(out):
                     rc = pc.run_power_shutdown(["--yes"])
                 self.assertEqual(rc, 0)
+                self.assertIn("服务器已受理关机请求", out.getvalue())
                 self.assertIn("submitted", out.getvalue())
+            finally:
+                pc.service_control_paths = old_paths
+                pc.request_broker = old_req
+
+    def test_shutdown_rejected_prints_server_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_paths = pc.service_control_paths
+            old_req = pc.request_broker
+            try:
+                class P:
+                    state_root = __import__("pathlib").Path(tmp)
+
+                pc.service_control_paths = lambda: P()
+                pc.request_broker = lambda **_kwargs: {"ok": False, "error": "forbidden", "message": "管理员权限不足"}
+
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    rc = pc.run_power_shutdown(["--yes"])
+                self.assertEqual(rc, 1)
+                text = err.getvalue()
+                self.assertIn("服务器拒绝关机请求", text)
+                self.assertIn("forbidden", text)
+                self.assertIn("管理员权限不足", text)
             finally:
                 pc.service_control_paths = old_paths
                 pc.request_broker = old_req

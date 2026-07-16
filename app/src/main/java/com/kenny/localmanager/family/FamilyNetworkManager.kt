@@ -546,7 +546,7 @@ class FamilyNetworkManager(context: Context) {
     fun requestRemotePowerShutdown(
         service: FamilyDiscoveredService,
         accessPassword: String?,
-        onComplete: (Result<Unit>) -> Unit = {}
+        onComplete: (Result<String>) -> Unit = {}
     ) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -563,12 +563,12 @@ class FamilyNetworkManager(context: Context) {
                         if (!json.optBoolean("ok", false)) {
                             throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_19687)))
                         }
-                        Unit
+                        json.optString("message", appContext.getString(R.string.family_msg_19687))
                     }
                 }
             }
             result.onSuccess {
-                appendLog(appContext.getString(R.string.family_board_remote_shutdown_requested, service.displayHostName))
+                appendLog(appContext.getString(R.string.family_board_remote_shutdown_requested, service.displayHostName) + "：" + it)
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_board_remote_shutdown_failed, error.message ?: error.javaClass.simpleName))
             }

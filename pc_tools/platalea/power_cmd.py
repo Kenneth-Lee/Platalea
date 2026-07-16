@@ -51,7 +51,10 @@ def run_power_shutdown(argv: list[str] | None = None) -> int:
         return 1
 
     if resp.get("ok", False):
-        print(str(resp.get("message", "关机请求已提交")))
+        print(f"服务器已受理关机请求: {resp.get('message', '关机请求已提交')}")
         return 0
-    print(str(resp.get("message", "关机请求被拒绝")), file=sys.stderr)
+    print(
+        f"服务器拒绝关机请求: {resp.get('error', 'shutdown_failed')} - {resp.get('message', '关机请求被拒绝')}",
+        file=sys.stderr,
+    )
     return 1

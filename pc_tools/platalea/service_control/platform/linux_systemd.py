@@ -47,6 +47,18 @@ def _render_environment(env: dict[str, str] | None) -> str:
     return "\n".join(lines)
 
 
+def _systemd_exec_arguments(spec: UserServerUnitSpec) -> list[str]:
+    args = list(spec.program_arguments)
+    try:
+        module_idx = args.index("-m")
+    except ValueError:
+        return args
+    command_idx = module_idx + 2
+    if command_idx < len(args) and args[command_idx] == "start":
+        args[command_idx] = "_serve-daemon"
+    return args
+
+
 def render_privileged_unit(spec: PrivilegedUnitSpec) -> str:
     env_block = _render_environment(spec.environment)
     env_line = f"{env_block}\n" if env_block else ""
@@ -78,21 +90,22 @@ def render_privileged_unit(spec: PrivilegedUnitSpec) -> str:
 def render_bootstrap_unit(spec: UserServerUnitSpec) -> str:
     env_block = _render_environment(spec.environment)
     env_line = f"{env_block}\n" if env_block else ""
-    exec_cmd = " ".join(shlex.quote(arg) for arg in spec.program_arguments)
+    exec_cmd = " ".join(shlex.quote(arg) for arg in _systemd_exec_arguments(spec))
     return (
         "[Unit]\n"
         "Description=LocalManager Platalea bootstrap user server\n"
         "After=network-online.target\n"
         "Wants=network-online.target\n\n"
         "[Service]\n"
-        "Type=oneshot\n"
+        "Type=simple\n"
         f"User={spec.owner.username}\n"
         f"WorkingDirectory={spec.working_directory}\n"
         f"{env_line}"
         f"ExecStart={exec_cmd}\n"
-        "RemainAfterExit=no\n"
-        "Restart=on-failure\n"
-        "RestartSec=10\n\n"
+        f"StandardOutput=append:{spec.stdout_path}\n"
+        f"StandardError=append:{spec.stderr_path}\n"
+        "Restart=always\n"
+        "RestartSec=2\n\n"
         "[Install]\n"
         "WantedBy=multi-user.target\n"
     )

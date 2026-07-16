@@ -615,7 +615,10 @@ fun FamilyNetworkScreen(
                                 showRemoteShutdownDialog = false
                                 Toast.makeText(
                                     context,
-                                    context.getString(R.string.family_board_remote_shutdown_requested, session.service.displayHostName),
+                                    context.getString(
+                                        R.string.family_board_remote_shutdown_requested,
+                                        session.service.displayHostName
+                                    ) + "：" + it,
                                     Toast.LENGTH_SHORT
                                 ).show()
                             }
@@ -663,7 +666,7 @@ fun FamilyNetworkScreen(
                         }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
-                        if (hasRoot || canManageBoard) {
+                        if (hasRoot || canManageBoard || (session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID && session.service.supportsPowerShutdown)) {
                             Box {
                                 IconButton(onClick = { showBoardMenu = true }) {
                                     Icon(
@@ -788,10 +791,7 @@ fun FamilyNetworkScreen(
                                             }
                                         )
                                     }
-                                    if (canManageBoard &&
-                                        session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID &&
-                                        session.service.supportsPowerShutdown
-                                    ) {
+                                    if (session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID && session.service.supportsPowerShutdown) {
                                         DropdownMenuItem(
                                             text = {
                                                 Text(

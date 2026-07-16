@@ -55,8 +55,10 @@ class LinuxSystemdRenderTest(unittest.TestCase):
                 )
             )
             self.assertIn("User=kenny", text)
-            self.assertIn("ExecStart=/usr/bin/python3 -m platalea start", text)
-            self.assertIn("Type=oneshot", text)
+            self.assertIn("ExecStart=/usr/bin/python3 -m platalea _serve-daemon", text)
+            self.assertIn("Type=simple", text)
+            self.assertIn("StandardOutput=append:", text)
+            self.assertIn("StandardError=append:", text)
 
 
 class LinuxSystemdAdapterTest(unittest.TestCase):
