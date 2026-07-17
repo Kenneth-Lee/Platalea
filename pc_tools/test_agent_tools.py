@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from platalea.bulletin_agent import extract_mention_for_models, format_board_context
+from platalea.bulletin_agent_status import AgentRunHandle, AgentStatusReporter
 from platalea.bulletin_agent_tools import (
     AgentToolExecutor,
     AgentToolsConfig,
@@ -209,6 +210,22 @@ class AgentToolsTest(unittest.TestCase):
     def test_extract_mention_for_models(self) -> None:
         got = extract_mention_for_models("@gpt-oss:latest 你好", ("qwen2.5", "gpt-oss:latest"))
         self.assertEqual(got, ("gpt-oss:latest", "你好"))
+
+    def test_agent_status_reporter_multiple_updates(self) -> None:
+        handle = AgentRunHandle(
+            board_id=self.board_id,
+            model_name="qwen2.5",
+            author_label="AI-qwen2.5",
+            author_device="agent:qwen2.5",
+        )
+        reporter = AgentStatusReporter(self.store, handle, heartbeat_seconds=3600.0)
+        reporter.update("第一阶段")
+        reporter.update("第二阶段")
+        reporter.clear()
+
+        snapshot = self.store.snapshot(self.board_id)
+        assert snapshot is not None
+        self.assertEqual(len(snapshot.messages), 0)
 
 
 if __name__ == "__main__":

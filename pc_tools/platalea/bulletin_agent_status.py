@@ -44,7 +44,7 @@ class AgentStatusReporter:
                 updated = self._store.update_message(
                     self._handle.board_id,
                     self._handle.status_message_id,
-                    content,
+                    content=content,
                 )
                 if updated is None:
                     self._handle.status_message_id = None
