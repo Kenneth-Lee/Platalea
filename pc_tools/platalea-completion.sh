@@ -136,7 +136,7 @@ PY
 _platalea_commands() {
     printf '%s\n' \
         start stop status help \
-    gpg file config service discover power \
+    gpg file config service discover \
         list-boards get-agent get-messages \
         post modify delete download-attachment \
         create-board delete-board \
@@ -159,17 +159,13 @@ _platalea_service_subcommands() {
     printf '%s\n' install uninstall status
 }
 
-_platalea_power_subcommands() {
-    printf '%s\n' status shutdown
-}
-
 _platalea_help_topics() {
-    printf '%s\n' serve board gpg file config service discover power
+    printf '%s\n' serve board gpg file config service discover
 }
 
 _platalea_is_group_cmd() {
     case "$1" in
-        gpg|file|config|service|power|help) return 0 ;;
+        gpg|file|config|service|help) return 0 ;;
     esac
     return 1
 }
@@ -180,7 +176,6 @@ _platalea_group_subcommands() {
         file) _platalea_file_subcommands ;;
         config) _platalea_config_subcommands ;;
         service) _platalea_service_subcommands ;;
-        power) _platalea_power_subcommands ;;
         help) _platalea_help_topics ;;
     esac
 }

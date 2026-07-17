@@ -1,6 +1,11 @@
 # LocalManager PC 工具 (platalea)
 
-本目录是 **LocalManager PC 端本地工具**（命令 `platalea`）：家庭网络留言板 HTTPS 服务、API 客户端，以及与 Android 兼容的快速混淆（`.qx`）工具。未来配合手机端使用的 PC 侧能力也会集中在此。
+本目录提供一个配套手机端LocalManager的PC工具，它是一个Python程序，可以被运行在
+Windows，Linux，MacOS三个平台上。
+
+它可以提供适配PC端的家庭网络服务，在PC上实现和手机端配合的工具，比如用手机一侧
+一样的混淆和加解密算法加解密手机一侧需要的文件格式。它还提供服务让手机可以直接
+关闭PC设备。
 
 ## 安装与使用（推荐：`platalea`）
 
@@ -67,22 +72,35 @@ platalea config import mobile.json --categories gpg,git --skip-keys
 
 默认仅导入 PC 侧有直接用途的分类（`gpg,git`）。如需导入其它分类（如 `music/recent/epub/other`）可显式传 `--categories`。
 
-**系统服务控制**（Phase 1：先落地 macOS `launchd` 骨架；其它平台后续补齐）：
+**系统服务控制**
 
 ```bash
-platalea service status
 platalea service install
+platalea service status
 platalea service uninstall
 ```
 
-这组命令的设计目标是为无头主机提供“当前用户 owner + 单机单实例 + 后装覆盖前装 + 可卸载”的系统控制面。当前版本已提供 CLI、状态文件与 macOS `launchctl` 接入（需在 macOS 上以 sudo 执行 install/uninstall）；远程关机的特权 broker 链路后续继续接入。
+`service install` 会把本机服务注册为开机自动拉起，同时允许手机侧远程关闭本PC。
 
-**电源控制（通过本机 broker）**：
+Unix（Linux/macOS）权限与执行方式：
+
+1. `service install/uninstall` 需要系统级权限，请使用 `sudo`。
+2. 若 `platalea` 来自虚拟环境或用户目录安装，`sudo` 下常常找不到该命令，请用绝对路径执行。
+3. 推荐先确认路径：`command -v platalea`。
+
+示例（Linux/macOS）：
 
 ```bash
-platalea power status
-platalea power shutdown --yes
+# 先确认当前用户下的 platalea 路径
+command -v platalea
+
+# 用绝对路径 + sudo，避免 sudo 环境 PATH 不含虚拟环境
+sudo /abs/path/to/platalea service install
+sudo /abs/path/to/platalea service status
+sudo /abs/path/to/platalea service uninstall
 ```
+
+Windows 说明：在“管理员权限”的终端里执行 `platalea service install/uninstall/status`。
 
 发现当前局域网内提供家庭网络服务的设备：
 
@@ -102,7 +120,7 @@ platalea --host 192.168.1.10 list-boards
 
 版本号来自仓库根目录的 **`VERSION`** 文件（Android 与 `platalea` 各自在构建/打包时读取，互不读对方源码）。
 
-其它管理命令：`platalea stop`、`platalea status`、`platalea discover`、`platalea help`（或 `platalea help board|gpg|file|service|discover|power` 查看分组说明）。
+其它管理命令：`platalea stop`、`platalea status`、`platalea discover`、`platalea help`（或 `platalea help board|gpg|file|config|service|discover` 查看分组说明）。
 
 ### Shell 自动补全（bash / zsh）
 
