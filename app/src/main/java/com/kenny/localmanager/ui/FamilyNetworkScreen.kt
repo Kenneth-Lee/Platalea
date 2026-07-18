@@ -113,7 +113,7 @@ import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.delay
 
-private data class PendingBoardAccess(
+private data class BoardListSession(
     val service: FamilyDiscoveredService,
     val accessPassword: String?,
     val canManageBoards: Boolean
@@ -140,13 +140,13 @@ fun FamilyNetworkScreen(
         mutableStateOf(if (timeoutMinutes > 0) timeoutMinutes else null)
     }
     val boardSession = state.openBoardSession
+    var boardListSession by remember { mutableStateOf<BoardListSession?>(null) }
+    val boardListService = boardListSession?.service
     var pendingBoardService by remember { mutableStateOf<FamilyDiscoveredService?>(null) }
     var showBoardPasswordDialog by remember { mutableStateOf(false) }
     var boardPasswordInput by remember { mutableStateOf("") }
     var boardPasswordError by remember { mutableStateOf<String?>(null) }
     var boardPasswordInProgress by remember { mutableStateOf(false) }
-    var pendingBoardAccess by remember { mutableStateOf<PendingBoardAccess?>(null) }
-    var boardPickerLoading by remember { mutableStateOf(false) }
     var showClearPasswordsDialog by remember { mutableStateOf(false) }
     var showBoardMenu by remember { mutableStateOf(false) }
     var showDeleteBoardDialog by remember { mutableStateOf(false) }
@@ -195,8 +195,11 @@ fun FamilyNetworkScreen(
         )
     }
 
-    BackHandler(enabled = boardSession != null) {
-        manager.closeBulletinBoard()
+    BackHandler(enabled = boardSession != null || boardListSession != null) {
+        when {
+            boardSession != null -> manager.closeBulletinBoard()
+            boardListSession != null -> boardListSession = null
+        }
     }
 
     LaunchedEffect(timeoutMinutes, onDismiss) {
@@ -230,18 +233,16 @@ fun FamilyNetworkScreen(
 
     var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
-    fun presentBoardPicker(service: FamilyDiscoveredService, accessPassword: String?) {
+    fun openBoardListPage(service: FamilyDiscoveredService, accessPassword: String?) {
         scope.launch {
-            boardPickerLoading = true
             val canManage = manager.remoteCanManageBoard(service, accessPassword)
             manager.rememberBoardAccessPassword(service.deviceKey, accessPassword)
-            pendingBoardAccess = PendingBoardAccess(service, accessPassword, canManage)
-            boardPickerLoading = false
+            boardListSession = BoardListSession(service, accessPassword, canManage)
         }
     }
 
     fun openBoardWithAccess(service: FamilyDiscoveredService, accessPassword: String?) {
-        presentBoardPicker(service, accessPassword)
+        openBoardListPage(service, accessPassword)
     }
 
     fun boardPasswordProbeErrorMessage(error: Throwable): String {
@@ -416,129 +417,6 @@ fun FamilyNetworkScreen(
         )
     }
 
-    if (boardPickerLoading) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text(stringResource(R.string.family_board_picker_title)) },
-            text = {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                    Spacer(Modifier.width(12.dp))
-                    Text(stringResource(R.string.family_board_picker_loading))
-                }
-            },
-            confirmButton = {}
-        )
-    }
-
-    pendingBoardAccess?.let { access ->
-        BoardPickerDialog(
-            service = access.service,
-            accessPassword = access.accessPassword,
-            canManageBoards = access.canManageBoards,
-            rootUri = rootUri,
-            hideDotFiles = hideDotFiles,
-            manager = manager,
-            onDismiss = { pendingBoardAccess = null },
-            onSelectBoard = { board ->
-                pendingBoardAccess = null
-                manager.openBulletinBoard(
-                    service = access.service,
-                    boardId = board.id,
-                    boardName = board.name,
-                    boardRoleIds = board.roleIds,
-                    accessPassword = access.accessPassword
-                )
-            }
-        )
-    }
-
-    if (showRenameBoardDialog && boardSession != null) {
-        val session = boardSession
-        val trimmedRenameName = renameBoardName.trim()
-        val renameNameTaken = trimmedRenameName.isNotEmpty() &&
-            trimmedRenameName != session.boardName.trim() &&
-            trimmedRenameName in renameExistingNames
-        AlertDialog(
-            onDismissRequest = {
-                if (!renameBoardInProgress) {
-                    showRenameBoardDialog = false
-                    renameBoardError = null
-                }
-            },
-            title = { Text(stringResource(R.string.family_board_rename_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = renameBoardName,
-                        onValueChange = {
-                            renameBoardName = it
-                            renameBoardError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.family_board_create_name_label)) },
-                        singleLine = true,
-                        enabled = !renameBoardInProgress,
-                        isError = renameNameTaken || renameBoardError != null
-                    )
-                    if (renameNameTaken) {
-                        Text(
-                            stringResource(R.string.family_board_name_duplicate, trimmedRenameName),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    renameBoardError?.let { error ->
-                        Text(
-                            error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !renameBoardInProgress &&
-                        trimmedRenameName.isNotEmpty() &&
-                        !renameNameTaken &&
-                        trimmedRenameName != session.boardName.trim(),
-                    onClick = {
-                        renameBoardInProgress = true
-                        manager.renameBoardEntry(
-                            service = session.service,
-                            accessPassword = session.accessPassword,
-                            canManage = session.canManageBoard,
-                            boardId = session.boardId,
-                            newName = trimmedRenameName
-                        ) { result ->
-                            renameBoardInProgress = false
-                            result.onSuccess {
-                                showRenameBoardDialog = false
-                                renameBoardError = null
-                            }.onFailure { error ->
-                                renameBoardError = error.message ?: error.javaClass.simpleName
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.common_save)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !renameBoardInProgress,
-                    onClick = {
-                        showRenameBoardDialog = false
-                        renameBoardError = null
-                    }
-                ) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
     if (showDeleteBoardDialog && boardSession != null) {
         val session = boardSession
         AlertDialog(
@@ -642,14 +520,23 @@ fun FamilyNetworkScreen(
                     Text(
                         if (boardSession != null) {
                             boardSession.boardName
+                        } else if (boardListService != null) {
+                            boardListService.displayHostName.ifBlank {
+                                boardListService.serviceName
+                            }
                         } else {
                             stringResource(R.string.family_network_title)
                         }
                     )
                 },
-                navigationIcon = if (boardSession != null) {
+                navigationIcon = if (boardSession != null || boardListSession != null) {
                     {
-                        IconButton(onClick = { manager.closeBulletinBoard() }) {
+                        IconButton(onClick = {
+                            when {
+                                boardSession != null -> manager.closeBulletinBoard()
+                                boardListSession != null -> boardListSession = null
+                            }
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                         }
                     }
@@ -829,7 +716,7 @@ fun FamilyNetworkScreen(
             )
         }
     ) { padding ->
-        if (boardSession == null) {
+        if (boardSession == null && boardListSession == null) {
             FamilyPeerListPane(
                 modifier = Modifier
                     .fillMaxSize()
@@ -841,6 +728,30 @@ fun FamilyNetworkScreen(
                 localServicePasswordSet = !networkPassword.isNullOrBlank(),
                 onOpenBoard = { service -> requestOpenBoard(service) },
                 onManageUserRoles = { showUserRolesDialog = true }
+            )
+        } else if (boardSession == null) {
+            val session = boardListSession ?: return@Scaffold
+            BoardListPane(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding)
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .navigationBarsPadding(),
+                service = session.service,
+                accessPassword = session.accessPassword,
+                canManageBoards = session.canManageBoards,
+                rootUri = rootUri,
+                hideDotFiles = hideDotFiles,
+                manager = manager,
+                onSelectBoard = { board ->
+                    manager.openBulletinBoard(
+                        service = session.service,
+                        boardId = board.id,
+                        boardName = board.name,
+                        boardRoleIds = board.roleIds,
+                        accessPassword = session.accessPassword
+                    )
+                }
             )
         } else {
             BulletinBoardPage(
@@ -954,14 +865,14 @@ fun FamilyNetworkScreen(
 }
 
 @Composable
-private fun BoardPickerDialog(
+private fun BoardListPane(
+    modifier: Modifier,
     service: FamilyDiscoveredService,
     accessPassword: String?,
     canManageBoards: Boolean,
     rootUri: String?,
     hideDotFiles: Boolean,
     manager: FamilyNetworkManager,
-    onDismiss: () -> Unit,
     onSelectBoard: (BulletinBoardInfo) -> Unit
 ) {
     val context = LocalContext.current
@@ -1003,6 +914,138 @@ private fun BoardPickerDialog(
 
     LaunchedEffect(service.deviceKey, accessPassword) {
         reloadBoards()
+    }
+
+    Box(modifier = modifier) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            stringResource(R.string.family_board_picker_title),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            targetDeviceLabel,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                stringResource(R.string.family_board_picker_title),
+                                style = MaterialTheme.typography.titleSmall
+                            )
+                            IconButton(onClick = { reloadBoards() }, enabled = !loading) {
+                                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                            }
+                        }
+                        when {
+                            loading -> {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(stringResource(R.string.family_board_picker_loading))
+                                }
+                            }
+                            error != null -> {
+                                Text(
+                                    error.orEmpty(),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            boards.isEmpty() -> {
+                                Text(
+                                    stringResource(R.string.family_board_picker_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            else -> {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    boards.forEachIndexed { index, board ->
+                                        Card(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clickable(enabled = !actionInProgress) {
+                                                    onSelectBoard(board)
+                                                }
+                                        ) {
+                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                Text(
+                                                    board.name,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    stringResource(
+                                                        R.string.family_board_picker_item_meta,
+                                                        board.messageCount
+                                                    ),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+                                        if (index < boards.lastIndex) {
+                                            HorizontalDivider()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (canManageBoards) {
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(
+                            enabled = !actionInProgress,
+                            onClick = {
+                                if (rootUri.isNullOrBlank()) {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.family_board_import_pack_no_root),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                } else {
+                                    showBoardpackPickDialog = true
+                                }
+                            }
+                        ) { Text(stringResource(R.string.family_board_import_pack)) }
+                        Button(
+                            enabled = !actionInProgress,
+                            onClick = {
+                                showCreateDialog = true
+                                newBoardName = ""
+                                createSelectedRoleIds = emptySet()
+                            }
+                        ) { Text(stringResource(R.string.family_board_create)) }
+                    }
+                }
+            }
+        }
     }
 
     if (showBoardpackPickDialog && !rootUri.isNullOrBlank()) {
@@ -1251,115 +1294,6 @@ private fun BoardPickerDialog(
             }
         )
     }
-
-    AlertDialog(
-        onDismissRequest = { if (!actionInProgress) onDismiss() },
-        title = { Text(stringResource(R.string.family_board_picker_title)) },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                when {
-                    loading -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(28.dp))
-                        }
-                    }
-                    error != null -> {
-                        Text(
-                            error.orEmpty(),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    boards.isEmpty() -> {
-                        Text(
-                            stringResource(R.string.family_board_picker_empty),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    else -> {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(240.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            itemsIndexed(
-                                items = boards,
-                                key = { index, board -> "${board.id}#$index" }
-                            ) { _index, board ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable(enabled = !actionInProgress) {
-                                            onSelectBoard(board)
-                                        }
-                                        .padding(vertical = 8.dp, horizontal = 4.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            board.name,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        Text(
-                                            stringResource(
-                                                R.string.family_board_picker_item_meta,
-                                                board.messageCount
-                                            ),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (canManageBoards) {
-                    TextButton(
-                        enabled = !actionInProgress,
-                        onClick = {
-                            if (rootUri.isNullOrBlank()) {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.family_board_import_pack_no_root),
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            } else {
-                                showBoardpackPickDialog = true
-                            }
-                        }
-                    ) { Text(stringResource(R.string.family_board_import_pack)) }
-                    Button(
-                        enabled = !actionInProgress,
-                        onClick = {
-                            showCreateDialog = true
-                            newBoardName = ""
-                            createSelectedRoleIds = emptySet()
-                        }
-                    ) { Text(stringResource(R.string.family_board_create)) }
-                }
-            }
-        },
-        dismissButton = {
-            TextButton(
-                enabled = !actionInProgress,
-                onClick = onDismiss
-            ) { Text(stringResource(R.string.common_cancel)) }
-        }
-    )
 }
 
 @Composable
