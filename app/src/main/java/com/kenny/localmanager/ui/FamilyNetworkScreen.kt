@@ -147,12 +147,9 @@ fun FamilyNetworkScreen(
     var boardPasswordInput by remember { mutableStateOf("") }
     var boardPasswordError by remember { mutableStateOf<String?>(null) }
     var boardPasswordInProgress by remember { mutableStateOf(false) }
-    var showClearPasswordsDialog by remember { mutableStateOf(false) }
     var showBoardMenu by remember { mutableStateOf(false) }
     var showDeleteBoardDialog by remember { mutableStateOf(false) }
     var deleteBoardInProgress by remember { mutableStateOf(false) }
-    var showRemoteShutdownDialog by remember { mutableStateOf(false) }
-    var remoteShutdownInProgress by remember { mutableStateOf(false) }
     var showRenameBoardDialog by remember { mutableStateOf(false) }
     var renameBoardName by remember { mutableStateOf("") }
     var renameBoardInProgress by remember { mutableStateOf(false) }
@@ -393,30 +390,6 @@ fun FamilyNetworkScreen(
         )
     }
 
-    if (showClearPasswordsDialog) {
-        AlertDialog(
-            onDismissRequest = { showClearPasswordsDialog = false },
-            title = { Text(stringResource(R.string.family_board_clear_passwords_title)) },
-            text = { Text(stringResource(R.string.family_board_clear_passwords_confirm)) },
-            confirmButton = {
-                Button(onClick = {
-                    val count = manager.clearAllBoardAccessPasswords()
-                    showClearPasswordsDialog = false
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.family_board_clear_passwords_done, count),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }) { Text(stringResource(R.string.common_ok)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showClearPasswordsDialog = false }) {
-                    Text(stringResource(R.string.common_cancel))
-                }
-            }
-        )
-    }
-
     if (showDeleteBoardDialog && boardSession != null) {
         val session = boardSession
         AlertDialog(
@@ -476,43 +449,6 @@ fun FamilyNetworkScreen(
         )
     }
 
-    if (showRemoteShutdownDialog && boardSession != null) {
-        val session = boardSession
-        AlertDialog(
-            onDismissRequest = { if (!remoteShutdownInProgress) showRemoteShutdownDialog = false },
-            title = { Text(context.getString(R.string.family_board_remote_shutdown_title)) },
-            text = { Text(context.getString(R.string.family_board_remote_shutdown_confirm, session.service.displayHostName)) },
-            confirmButton = {
-                Button(
-                    enabled = !remoteShutdownInProgress,
-                    onClick = {
-                        remoteShutdownInProgress = true
-                        manager.requestRemotePowerShutdown(session.service, session.accessPassword) { result ->
-                            remoteShutdownInProgress = false
-                            result.onSuccess {
-                                showRemoteShutdownDialog = false
-                                Toast.makeText(
-                                    context,
-                                    context.getString(
-                                        R.string.family_board_remote_shutdown_requested,
-                                        session.service.displayHostName
-                                    ) + "：" + it,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.common_ok)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !remoteShutdownInProgress,
-                    onClick = { showRemoteShutdownDialog = false }
-                ) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -553,7 +489,7 @@ fun FamilyNetworkScreen(
                         }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
-                        if (hasRoot || canManageBoard || (session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID && session.service.supportsPowerShutdown)) {
+                        if (hasRoot || canManageBoard || session.messages.any { it.isConversationMessage }) {
                             Box {
                                 IconButton(onClick = { showBoardMenu = true }) {
                                     Icon(
@@ -678,32 +614,10 @@ fun FamilyNetworkScreen(
                                             }
                                         )
                                     }
-                                    if (session.boardId == BulletinBoardDefaults.DEFAULT_BOARD_ID && session.service.supportsPowerShutdown) {
-                                        DropdownMenuItem(
-                                            text = {
-                                                Text(
-                                                    stringResource(R.string.family_board_remote_shutdown_title),
-                                                    color = MaterialTheme.colorScheme.error
-                                                )
-                                            },
-                                            onClick = {
-                                                showBoardMenu = false
-                                                showRemoteShutdownDialog = true
-                                            }
-                                        )
-                                    }
                                 }
                             }
                         }
                     } else {
-                        if (state.rememberedBoardAccessCount > 0) {
-                            IconButton(onClick = { showClearPasswordsDialog = true }) {
-                                Icon(
-                                    Icons.Default.Lock,
-                                    contentDescription = stringResource(R.string.family_board_clear_passwords)
-                                )
-                            }
-                        }
                         IconButton(onClick = { manager.refresh() }) {
                             Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
                         }
@@ -743,6 +657,12 @@ fun FamilyNetworkScreen(
                 rootUri = rootUri,
                 hideDotFiles = hideDotFiles,
                 manager = manager,
+                onRequestReenterPassword = {
+                    pendingBoardService = session.service
+                    boardPasswordInput = ""
+                    boardPasswordError = null
+                    showBoardPasswordDialog = true
+                },
                 onSelectBoard = { board ->
                     manager.openBulletinBoard(
                         service = session.service,
@@ -873,6 +793,7 @@ private fun BoardListPane(
     rootUri: String?,
     hideDotFiles: Boolean,
     manager: FamilyNetworkManager,
+    onRequestReenterPassword: () -> Unit,
     onSelectBoard: (BulletinBoardInfo) -> Unit
 ) {
     val context = LocalContext.current
@@ -880,6 +801,7 @@ private fun BoardListPane(
     var boards by remember { mutableStateOf<List<BulletinBoardInfo>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
+    var showActionsMenu by remember { mutableStateOf(false) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var newBoardName by remember { mutableStateOf("") }
     var actionInProgress by remember { mutableStateOf(false) }
@@ -892,8 +814,15 @@ private fun BoardListPane(
     var importPackSourceName by remember { mutableStateOf("") }
     var createNameError by remember { mutableStateOf<String?>(null) }
     var createSelectedRoleIds by remember { mutableStateOf(setOf<String>()) }
+    var showRemoteShutdownDialog by remember { mutableStateOf(false) }
+    var remoteShutdownInProgress by remember { mutableStateOf(false) }
 
     val targetDeviceLabel = service.displayHostName.ifBlank { service.serviceName }
+    val loginIdentityLabel = when {
+        service.isSelf -> context.getString(R.string.family_network_local_service)
+        canManageBoards -> context.getString(R.string.family_board_identity_admin)
+        else -> context.getString(R.string.family_board_identity_user)
+    }
     val existingBoardNames = remember(boards) { boards.map { it.name.trim() }.toSet() }
     val availableRoles = remember(boards, service.isSelf) {
         collectKnownRoleOptions(manager, service.isSelf, boards)
@@ -923,13 +852,18 @@ private fun BoardListPane(
         ) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            stringResource(R.string.family_board_picker_title),
+                            stringResource(R.string.family_board_device_info_title),
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            targetDeviceLabel,
+                            stringResource(R.string.family_board_device_label, targetDeviceLabel),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            stringResource(R.string.family_board_login_identity_label, loginIdentityLabel),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -946,11 +880,74 @@ private fun BoardListPane(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                stringResource(R.string.family_board_picker_title),
+                                stringResource(R.string.family_board_list_title),
                                 style = MaterialTheme.typography.titleSmall
                             )
-                            IconButton(onClick = { reloadBoards() }, enabled = !loading) {
-                                Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                IconButton(onClick = { reloadBoards() }, enabled = !loading) {
+                                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.family_network_refresh))
+                                }
+                                IconButton(onClick = { showActionsMenu = true }) {
+                                    Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.family_board_menu))
+                                }
+                                DropdownMenu(
+                                    expanded = showActionsMenu,
+                                    onDismissRequest = { showActionsMenu = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.family_board_reenter_password)) },
+                                        onClick = {
+                                            showActionsMenu = false
+                                            manager.forgetBoardAccessPassword(service.deviceKey)
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(R.string.family_board_reenter_password_done),
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            onRequestReenterPassword()
+                                        }
+                                    )
+                                    if (canManageBoards) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_import_pack)) },
+                                            onClick = {
+                                                showActionsMenu = false
+                                                if (rootUri.isNullOrBlank()) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.family_board_import_pack_no_root),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                } else {
+                                                    showBoardpackPickDialog = true
+                                                }
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_create)) },
+                                            onClick = {
+                                                showActionsMenu = false
+                                                showCreateDialog = true
+                                                newBoardName = ""
+                                                createSelectedRoleIds = emptySet()
+                                            }
+                                        )
+                                    }
+                                    if (service.supportsPowerShutdown) {
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    stringResource(R.string.family_board_remote_shutdown_title),
+                                                    color = MaterialTheme.colorScheme.error
+                                                )
+                                            },
+                                            onClick = {
+                                                showActionsMenu = false
+                                                showRemoteShutdownDialog = true
+                                            }
+                                        )
+                                    }
+                                }
                             }
                         }
                         when {
@@ -1013,35 +1010,6 @@ private fun BoardListPane(
                                 }
                             }
                         }
-                    }
-                }
-            }
-
-            if (canManageBoards) {
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(
-                            enabled = !actionInProgress,
-                            onClick = {
-                                if (rootUri.isNullOrBlank()) {
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.family_board_import_pack_no_root),
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                } else {
-                                    showBoardpackPickDialog = true
-                                }
-                            }
-                        ) { Text(stringResource(R.string.family_board_import_pack)) }
-                        Button(
-                            enabled = !actionInProgress,
-                            onClick = {
-                                showCreateDialog = true
-                                newBoardName = ""
-                                createSelectedRoleIds = emptySet()
-                            }
-                        ) { Text(stringResource(R.string.family_board_create)) }
                     }
                 }
             }
@@ -1115,6 +1083,60 @@ private fun BoardListPane(
                             targetDeviceLabel
                         )
                     )
+
+                    if (showRemoteShutdownDialog) {
+                        AlertDialog(
+                            onDismissRequest = {
+                                if (!remoteShutdownInProgress) showRemoteShutdownDialog = false
+                            },
+                            title = { Text(stringResource(R.string.family_board_remote_shutdown_title)) },
+                            text = {
+                                Text(
+                                    stringResource(
+                                        R.string.family_board_remote_shutdown_confirm,
+                                        targetDeviceLabel
+                                    )
+                                )
+                            },
+                            confirmButton = {
+                                Button(
+                                    enabled = !remoteShutdownInProgress,
+                                    onClick = {
+                                        remoteShutdownInProgress = true
+                                        manager.requestRemotePowerShutdown(service, accessPassword) { result ->
+                                            remoteShutdownInProgress = false
+                                            result.onSuccess {
+                                                showRemoteShutdownDialog = false
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(
+                                                        R.string.family_board_remote_shutdown_requested,
+                                                        targetDeviceLabel
+                                                    ) + "：" + it,
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            }.onFailure { error ->
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(
+                                                        R.string.family_board_remote_shutdown_failed,
+                                                        error.message ?: error.javaClass.simpleName
+                                                    ),
+                                                    Toast.LENGTH_LONG
+                                                ).show()
+                                            }
+                                        }
+                                    }
+                                ) { Text(stringResource(R.string.common_ok)) }
+                            },
+                            dismissButton = {
+                                TextButton(
+                                    enabled = !remoteShutdownInProgress,
+                                    onClick = { showRemoteShutdownDialog = false }
+                                ) { Text(stringResource(R.string.common_cancel)) }
+                            }
+                        )
+                    }
                     if (importPackNameLoading) {
                         Row(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),

@@ -356,6 +356,16 @@
     <string name="family_board_picker_loading">正在加载留言板列表…</string>
     <string name="family_board_picker_empty">暂无留言板</string>
     <string name="family_board_picker_item_meta">%1$d 条留言</string>
+    <string name="family_board_device_info_title">设备信息</string>
+    <string name="family_board_device_label">设备：%1$s</string>
+    <string name="family_board_login_identity_label">登录身份：%1$s</string>
+    <string name="family_board_identity_admin">管理员</string>
+    <string name="family_board_identity_user">普通用户</string>
+    <string name="family_board_list_title">留言板列表</string>
+    <string name="family_board_reenter_password">重新输入密码</string>
+    <string name="family_board_reenter_password_title">重新输入接入密码</string>
+    <string name="family_board_reenter_password_confirm">将清除当前设备已记住的接入密码，之后重新输入新的身份密码。确定吗？</string>
+    <string name="family_board_reenter_password_done">已清除当前设备的接入密码，请重新输入</string>
     <string name="context_forward_to_bulletin">转发到留言板</string>
     <string name="pending_forward_to_bulletin">转发板</string>
     <string name="pending_list_action_copy">拷贝</string>
