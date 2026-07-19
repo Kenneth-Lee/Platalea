@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -24,12 +25,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Forward
@@ -71,6 +75,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -89,9 +94,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.family.BulletinAttachmentKind
 import com.kenny.localmanager.family.BulletinAttachmentDownloadConflict
 import com.kenny.localmanager.family.BulletinAttachmentDownloader
@@ -109,10 +118,10 @@ import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
 import com.kenny.localmanager.family.FamilyNetworkManager
 import com.kenny.localmanager.family.FamilyNetworkState
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlinx.coroutines.delay
 
 private data class BoardListSession(
     val service: FamilyDiscoveredService,
@@ -179,6 +188,12 @@ fun FamilyNetworkScreen(
     var renameExistingNames by remember { mutableStateOf<Set<String>>(emptySet()) }
     var messageForwardSelectionMode by remember { mutableStateOf(false) }
     var selectedForwardMessageIds by remember { mutableStateOf(setOf<String>()) }
+    val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
+    var attachmentViewerFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var attachmentMarkdownFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
+    var attachmentHtmlLocation by remember { mutableStateOf<HtmlViewerLocation?>(null) }
+    var attachmentPdfFile by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var attachmentImageFile by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     LaunchedEffect(boardSession?.boardId) {
         messageForwardSelectionMode = false
@@ -247,6 +262,7 @@ fun FamilyNetworkScreen(
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            manager.clearTemporaryAttachmentCache()
         }
     }
 
@@ -781,10 +797,52 @@ fun FamilyNetworkScreen(
                 onPost = { manager.postBoardMessage(it) },
                 onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
                 onDelete = { manager.deleteBoardMessage(it) },
+                onOpenAttachmentInternal = { attachment ->
+                    scope.launch {
+                        val result = manager.prepareTemporaryAttachmentFile(boardSession, attachment)
+                        result.onSuccess { prepared ->
+                            openAttachmentByType(
+                                fileUri = prepared.fileUri,
+                                fileName = prepared.fileName,
+                                attachmentViewerFile = { attachmentViewerFile = it },
+                                attachmentMarkdownFile = { attachmentMarkdownFile = it },
+                                attachmentHtmlLocation = { attachmentHtmlLocation = it },
+                                attachmentPdfFile = { attachmentPdfFile = it },
+                                attachmentImageFile = { attachmentImageFile = it }
+                            )
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                context.getString(
+                                    R.string.attachment_preview_open_failed,
+                                    error.message ?: error.javaClass.simpleName
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
                 onForwardMessages = { messages ->
                     bulletinForwardPayload = BulletinForwardPayload.Messages(boardSession, messages)
                 },
                 messageSelectionMode = messageForwardSelectionMode,
+                onOpenAttachmentTextHex = { attachment ->
+                    scope.launch {
+                        val result = manager.prepareTemporaryAttachmentFile(boardSession, attachment)
+                        result.onSuccess { prepared ->
+                            attachmentViewerFile = Triple(prepared.fileUri, prepared.fileName, false)
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                context.getString(
+                                    R.string.attachment_preview_open_failed,
+                                    error.message ?: error.javaClass.simpleName
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
                 onMessageSelectionModeChange = { active ->
                     messageForwardSelectionMode = active
                     if (!active) selectedForwardMessageIds = emptySet()
@@ -793,6 +851,91 @@ fun FamilyNetworkScreen(
                 onSelectedMessageIdsChange = { selectedForwardMessageIds = it }
             )
         }
+    }
+
+    attachmentMarkdownFile?.let { (uri, name, encrypted) ->
+        MarkdownViewerScreen(
+            initialFileUri = uri,
+            initialFileName = name,
+            isEncrypted = encrypted,
+            sessionCache = markdownViewerSessionCache,
+            onBack = {
+                attachmentMarkdownFile = null
+                manager.clearTemporaryAttachmentCache()
+            },
+            onOpenFile = { openUri, openName, openEncrypted ->
+                openAttachmentByType(
+                    fileUri = openUri,
+                    fileName = openName,
+                    isEncrypted = openEncrypted,
+                    attachmentViewerFile = { attachmentViewerFile = it },
+                    attachmentMarkdownFile = { attachmentMarkdownFile = it },
+                    attachmentHtmlLocation = { attachmentHtmlLocation = it },
+                    attachmentPdfFile = { attachmentPdfFile = it },
+                    attachmentImageFile = { attachmentImageFile = it }
+                )
+            }
+        )
+    }
+
+    attachmentHtmlLocation?.let { location ->
+        HtmlViewerScreen(
+            initialLocation = location,
+            onBack = {
+                attachmentHtmlLocation = null
+                manager.clearTemporaryAttachmentCache()
+            }
+        )
+    }
+
+    attachmentPdfFile?.let { (uri, name) ->
+        BackHandler { attachmentPdfFile = null }
+        PdfViewerScreen(
+            uri = uri,
+            fileName = name,
+            prefs = Preferences(context),
+            bookNoteLoadedData = null,
+            bookNoteEntries = emptyList(),
+            bookNoteInProgress = false,
+            onRequestOpenBookNotes = {},
+            onBookNoteEntriesChanged = {},
+            onBack = {
+                attachmentPdfFile = null
+                manager.clearTemporaryAttachmentCache()
+            }
+        )
+    }
+
+    attachmentImageFile?.let { (uri, name) ->
+        BackHandler { attachmentImageFile = null }
+        AttachmentImageViewerScreen(
+            fileUri = uri,
+            fileName = name,
+            onBack = {
+                attachmentImageFile = null
+                manager.clearTemporaryAttachmentCache()
+            }
+        )
+    }
+
+    attachmentViewerFile?.let { (uri, name, encrypted) ->
+        ViewerScreen(
+            fileUri = uri,
+            fileName = name,
+            isEncrypted = encrypted,
+            onBack = {
+                attachmentViewerFile = null
+                manager.clearTemporaryAttachmentCache()
+            },
+            onOpenMarkdownView = if (isMarkdownName(name)) {
+                {
+                    attachmentMarkdownFile = Triple(uri, name, encrypted)
+                    attachmentViewerFile = null
+                }
+            } else {
+                null
+            }
+        )
     }
 
     if (showUserRolesDialog) {
@@ -1577,6 +1720,8 @@ private fun BulletinBoardPage(
     onPost: (String) -> Unit,
     onUpdate: (String, String) -> Unit,
     onDelete: (String) -> Unit,
+    onOpenAttachmentInternal: (BulletinAttachmentRef) -> Unit,
+    onOpenAttachmentTextHex: (BulletinAttachmentRef) -> Unit,
     onForwardMessages: (List<BulletinMessage>) -> Unit,
     messageSelectionMode: Boolean,
     onMessageSelectionModeChange: (Boolean) -> Unit,
@@ -1734,10 +1879,27 @@ private fun BulletinBoardPage(
             meta = previewMeta,
             loading = previewLoading,
             error = previewError,
+            canOpenInternal = attachment.kind == BulletinAttachmentKind.FILE,
             onDismiss = {
                 previewAttachment = null
                 previewMeta = null
                 previewError = null
+            },
+            onOpenInternal = {
+                previewAttachment = null
+                previewMeta = null
+                previewError = null
+                onOpenAttachmentInternal(attachment)
+            },
+            onOpenTextHex = if (attachment.kind == BulletinAttachmentKind.FILE) {
+                {
+                    previewAttachment = null
+                    previewMeta = null
+                    previewError = null
+                    onOpenAttachmentTextHex(attachment)
+                }
+            } else {
+                null
             },
             onDownload = {
                 previewAttachment = null
@@ -2135,7 +2297,10 @@ private fun BulletinAttachmentPreviewDialog(
     meta: org.json.JSONObject?,
     loading: Boolean,
     error: String?,
+    canOpenInternal: Boolean,
     onDismiss: () -> Unit,
+    onOpenInternal: () -> Unit,
+    onOpenTextHex: (() -> Unit)? = null,
     onDownload: () -> Unit
 ) {
     val kindLabel = when (attachment.kind) {
@@ -2245,8 +2410,20 @@ private fun BulletinAttachmentPreviewDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDownload, enabled = !loading) {
-                Text(stringResource(R.string.attachment_preview_download))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (canOpenInternal) {
+                    TextButton(onClick = onOpenInternal, enabled = !loading) {
+                        Text(stringResource(R.string.attachment_preview_open_internal))
+                    }
+                }
+                onOpenTextHex?.let { handler ->
+                    TextButton(onClick = handler, enabled = !loading) {
+                        Text(stringResource(R.string.attachment_preview_open_text_hex))
+                    }
+                }
+                TextButton(onClick = onDownload, enabled = !loading) {
+                    Text(stringResource(R.string.attachment_preview_download))
+                }
             }
         },
         dismissButton = {
@@ -2255,6 +2432,150 @@ private fun BulletinAttachmentPreviewDialog(
             }
         }
     )
+}
+
+private fun isMarkdownName(name: String): Boolean {
+    val lower = name.lowercase()
+    return lower.endsWith(".md") || lower.endsWith(".rst") || lower.endsWith(".txt")
+}
+
+private fun isHtmlName(name: String): Boolean {
+    val lower = name.lowercase()
+    return lower.endsWith(".html") || lower.endsWith(".htm")
+}
+
+private fun isPdfName(name: String): Boolean {
+    return name.endsWith(".pdf", ignoreCase = true)
+}
+
+private fun isImageName(name: String): Boolean {
+    return name.endsWith(".png", ignoreCase = true) ||
+        name.endsWith(".jpg", ignoreCase = true) ||
+        name.endsWith(".jpeg", ignoreCase = true) ||
+        name.endsWith(".gif", ignoreCase = true) ||
+        name.endsWith(".webp", ignoreCase = true) ||
+        name.endsWith(".bmp", ignoreCase = true)
+}
+
+private fun openAttachmentByType(
+    fileUri: String,
+    fileName: String,
+    isEncrypted: Boolean = false,
+    attachmentViewerFile: (Triple<String, String, Boolean>?) -> Unit,
+    attachmentMarkdownFile: (Triple<String, String, Boolean>?) -> Unit,
+    attachmentHtmlLocation: (HtmlViewerLocation?) -> Unit,
+    attachmentPdfFile: (Pair<String, String>?) -> Unit,
+    attachmentImageFile: (Pair<String, String>?) -> Unit
+) {
+    attachmentViewerFile(null)
+    attachmentMarkdownFile(null)
+    attachmentHtmlLocation(null)
+    attachmentPdfFile(null)
+    attachmentImageFile(null)
+    when {
+        isMarkdownName(fileName) -> attachmentMarkdownFile(Triple(fileUri, fileName, isEncrypted))
+        isHtmlName(fileName) -> attachmentHtmlLocation(
+            HtmlViewerLocation(
+                initialUrl = fileUri,
+                title = fileName,
+                localFileUri = fileUri
+            )
+        )
+        isPdfName(fileName) -> attachmentPdfFile(fileUri to fileName)
+        isImageName(fileName) -> attachmentImageFile(fileUri to fileName)
+        else -> attachmentViewerFile(Triple(fileUri, fileName, isEncrypted))
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AttachmentImageViewerScreen(
+    fileUri: String,
+    fileName: String,
+    onBack: () -> Unit
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var bitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var loading by remember { mutableStateOf(true) }
+
+    LaunchedEffect(fileUri) {
+        loading = true
+        loadError = null
+        bitmap = null
+        scope.launch(Dispatchers.IO) {
+            val uri = Uri.parse(fileUri)
+            val loaded = runCatching {
+                if (uri.scheme == "file") {
+                    val path = uri.path ?: error("missing file path")
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    android.graphics.BitmapFactory.decodeFile(path, bounds)
+                    val sampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight, 2048)
+                    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                    android.graphics.BitmapFactory.decodeFile(path, options)
+                } else {
+                    val cr = context.contentResolver
+                    val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    cr.openInputStreamSafe(uri)?.use { stream ->
+                        android.graphics.BitmapFactory.decodeStream(stream, null, bounds)
+                    } ?: error("open failed")
+                    val sampleSize = calculateImageSampleSize(bounds.outWidth, bounds.outHeight, 2048)
+                    val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sampleSize }
+                    cr.openInputStreamSafe(uri)?.use { stream ->
+                        android.graphics.BitmapFactory.decodeStream(stream, null, options)
+                    } ?: error("open failed")
+                }
+            }
+            withContext(Dispatchers.Main.immediate) {
+                bitmap = loaded.getOrNull()
+                loadError = loaded.exceptionOrNull()?.message ?: if (loaded.isSuccess) null else context.getString(R.string.viewer_open_failed)
+                loading = false
+            }
+        }
+    }
+
+    BackHandler { onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center
+        ) {
+            when {
+                loading -> CircularProgressIndicator()
+                loadError != null -> Text(loadError!!, color = MaterialTheme.colorScheme.error)
+                bitmap != null -> Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = fileName,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+        }
+    }
+}
+
+private fun calculateImageSampleSize(width: Int, height: Int, maxPx: Int): Int {
+    var sampleSize = 1
+    while (width / sampleSize > maxPx || height / sampleSize > maxPx) {
+        sampleSize *= 2
+    }
+    return sampleSize.coerceAtLeast(1)
 }
 
 private fun formatByteCount(bytes: Long): String {

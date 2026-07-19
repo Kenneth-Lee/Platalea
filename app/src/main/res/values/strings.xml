@@ -411,6 +411,9 @@
     <string name="attachment_preview_file_count">共 %1$d 个文件</string>
     <string name="attachment_preview_files_header">包含文件</string>
     <string name="attachment_preview_loading">正在读取附件信息…</string>
+    <string name="attachment_preview_open_internal">打开</string>
+    <string name="attachment_preview_open_text_hex">文本/十六进制</string>
+    <string name="attachment_preview_open_failed">打开附件失败：%1$s</string>
     <string name="attachment_preview_download">下载</string>
     <string name="family_board_create">新建留言板</string>
     <string name="family_board_create_title">新建留言板</string>

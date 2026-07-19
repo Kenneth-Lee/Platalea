@@ -12,6 +12,7 @@ import com.kenny.localmanager.util.getLocalIpAddress
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -121,6 +122,13 @@ data class FamilyNetworkState(
     val lastError: String? = null
 )
 
+data class TemporaryAttachmentOpenResult(
+    val attachmentId: String,
+    val fileName: String,
+    val fileUri: String,
+    val cacheFilePath: String
+)
+
 class FamilyNetworkManager(context: Context) {
     private val appContext = context.applicationContext
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
@@ -158,6 +166,7 @@ class FamilyNetworkManager(context: Context) {
     private var familyNetworkUserName: String? = null
     private var familyNetworkHostName: String? = null
     private val boardAccessPasswordCache = mutableMapOf<String, String?>()
+    private val temporaryAttachmentRoot: File = File(appContext.cacheDir, "family_attachment")
 
     fun hasRememberedBoardAccessPassword(deviceKey: String): Boolean =
         deviceKey in boardAccessPasswordCache
@@ -1231,6 +1240,58 @@ class FamilyNetworkManager(context: Context) {
         attachmentDownloadJob?.cancel()
     }
 
+    suspend fun prepareTemporaryAttachmentFile(
+        session: BulletinBoardOpenSession,
+        attachment: BulletinAttachmentRef
+    ): Result<TemporaryAttachmentOpenResult> = withContext(Dispatchers.IO) {
+        if (attachment.kind != BulletinAttachmentKind.FILE) {
+            return@withContext Result.failure(
+                IllegalArgumentException("仅支持单文件附件临时打开，当前类型: ${attachment.kind.wire}")
+            )
+        }
+        runCatching {
+            val transport = buildDownloadTransport(session)
+            val stream = transport.downloadBlobStream(session.boardId, attachment.id, null).getOrElse { throw it }
+            if (stream.statusCode !in listOf(200, 206)) {
+                stream.close()
+                throw IllegalStateException("下载附件失败: HTTP ${stream.statusCode}")
+            }
+            val boardDir = File(temporaryAttachmentRoot, sanitizeCacheSegment(session.boardId))
+            val attachmentDir = File(boardDir, sanitizeCacheSegment(attachment.id))
+            if (!attachmentDir.exists() && !attachmentDir.mkdirs()) {
+                stream.close()
+                throw IllegalStateException("创建附件缓存目录失败: ${attachmentDir.absolutePath}")
+            }
+            val safeName = sanitizeCacheFileName(attachment.name)
+            val tempFile = File(attachmentDir, safeName)
+            stream.use { blob ->
+                FileOutputStream(tempFile).use { output ->
+                    val buffer = ByteArray(DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES.toInt())
+                    while (true) {
+                        val read = blob.inputStream.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                    }
+                    output.flush()
+                }
+            }
+            TemporaryAttachmentOpenResult(
+                attachmentId = attachment.id,
+                fileName = attachment.name,
+                fileUri = android.net.Uri.fromFile(tempFile).toString(),
+                cacheFilePath = tempFile.absolutePath
+            )
+        }
+    }
+
+    fun clearTemporaryAttachmentCache() {
+        runCatching {
+            if (temporaryAttachmentRoot.exists()) {
+                temporaryAttachmentRoot.deleteRecursively()
+            }
+        }
+    }
+
     fun downloadBoardAttachment(
         rootUri: String,
         ref: BulletinAttachmentRef,
@@ -1329,6 +1390,17 @@ class FamilyNetworkManager(context: Context) {
                 }
             )
         }
+    }
+
+    private fun sanitizeCacheSegment(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return "_"
+        return trimmed.replace(Regex("[^A-Za-z0-9._-]"), "_")
+    }
+
+    private fun sanitizeCacheFileName(raw: String): String {
+        val base = raw.trim().ifEmpty { "attachment.bin" }
+        return base.replace(Regex("[\\/:*?\"<>|]"), "_")
     }
 
     fun uploadAttachmentAndPost(
