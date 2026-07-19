@@ -50,6 +50,8 @@ from .family_common import (
 from .paths import service_control_paths
 
 LOGGER = logging.getLogger("local_manager.bulletin_server")
+LEGACY_MAX_IMPORT_BYTES = 524288000
+DEFAULT_MAX_IMPORT_BYTES = 68719476736
 
 # 后台 watcher 检测局域网 IPv4 变化（WiFi 晚到、DHCP 换 IP）的轮询间隔。
 _MDNS_REFRESH_INTERVAL_SECONDS = 15.0
@@ -126,6 +128,11 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
 
     roles = load_roles_config(raw)
 
+    parsed_max_import_bytes = _parse_optional_positive_int(raw.get("max_import_bytes"))
+    # 兼容历史默认值（500MB）：未显式调整时自动迁移到 64GB。
+    if parsed_max_import_bytes == LEGACY_MAX_IMPORT_BYTES:
+        parsed_max_import_bytes = DEFAULT_MAX_IMPORT_BYTES
+
     server_config = ServerConfig(
         listen_host=str(raw.get("listen_host", "0.0.0.0")).strip() or "0.0.0.0",
         port=int(raw.get("port", 8765)),
@@ -141,7 +148,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
             str(raw.get("instance_id_file", "./instance_id")),
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
-        max_import_bytes=_parse_optional_positive_int(raw.get("max_import_bytes")),
+        max_import_bytes=parsed_max_import_bytes,
         supports_power_shutdown=_config_bool(
             raw.get("supports_power_shutdown"),
             default=True if raw.get("supports_power_shutdown") is None else _env_flag("PLATALEA_POWER_SHUTDOWN"),
@@ -1170,6 +1177,14 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
                     LOGGER.warning("mDNS 重新注册失败: %s", exc)
 
     LOGGER.info("留言板数据目录: %s", config.board_root)
+    if config.max_import_bytes is None:
+        LOGGER.info("导入包大小上限: 不限制")
+    else:
+        LOGGER.info(
+            "导入包大小上限: %d bytes (%.2f GiB)",
+            config.max_import_bytes,
+            config.max_import_bytes / (1024 ** 3),
+        )
     LOGGER.info(
         "密码策略: roles=%s auth_required=%s",
         ",".join(sorted(config.roles.roles.keys())),

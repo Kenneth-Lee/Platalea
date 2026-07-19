@@ -174,10 +174,15 @@ def _cmd_serve_daemon(args: argparse.Namespace) -> int:
 
 def _cmd_status(args: argparse.Namespace) -> int:
     cfg_path = _resolved_config(args.config)
+    config, _agent_config = load_config(cfg_path)
     probe_host, port, ca, password = load_server_probe(cfg_path, require_roles=False)
     print(server_status(probe_host, port, ca_cert=ca, password=password))
     print(f"Config: {cfg_path}")
     print(f"Data dir: {app_dir()}")
+    if config.max_import_bytes is None:
+        print("Max import bytes: unlimited")
+    else:
+        print(f"Max import bytes: {config.max_import_bytes}")
     return 0
 
 

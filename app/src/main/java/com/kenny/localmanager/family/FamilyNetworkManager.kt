@@ -53,6 +53,8 @@ private const val INSTANCE_ID_FILE = "family_network_instance_id"
 private const val FAMILY_IPV4_LIST_ATTR = "ipv4_list"
 
 const val DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES = 1024L * 1024L
+const val BOARDPACK_IO_BUFFER_SIZE_BYTES = 1024 * 1024
+const val BOARDPACK_PROGRESS_STEP_BYTES = 1024 * 1024L
 
 data class FamilyDiscoveredService(
     val serviceName: String,
@@ -2674,9 +2676,10 @@ class FamilyNetworkManager(context: Context) {
             try {
                 appContext.contentResolver.openInputStream(file.uri)?.use { input ->
                     connection.outputStream.use { output ->
-                        val buffer = ByteArray(64 * 1024)
+                        val buffer = ByteArray(BOARDPACK_IO_BUFFER_SIZE_BYTES)
                         val total = file.size.coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
                         var uploaded = 0L
+                        var lastProgressBytes = 0L
                         onUploadProgress?.invoke(0, total)
                         while (true) {
                             val read = input.read(buffer)
@@ -2684,8 +2687,11 @@ class FamilyNetworkManager(context: Context) {
                             if (read == 0) continue
                             output.write(buffer, 0, read)
                             uploaded += read.toLong()
-                            val current = uploaded.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                            onUploadProgress?.invoke(current, total)
+                            if (uploaded - lastProgressBytes >= BOARDPACK_PROGRESS_STEP_BYTES || uploaded >= file.size.coerceAtLeast(1L)) {
+                                val current = uploaded.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                                onUploadProgress?.invoke(current, total)
+                                lastProgressBytes = uploaded
+                            }
                         }
                     }
                 } ?: throw IllegalStateException(appContext.getString(R.string.family_msg_94078))

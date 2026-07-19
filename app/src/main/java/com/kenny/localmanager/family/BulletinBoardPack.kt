@@ -26,6 +26,8 @@ object BulletinBoardPack {
     const val VERSION = 1
     private const val MANIFEST_NAME = "manifest.json"
     private const val BOARD_PREFIX = "board/"
+    private const val PACK_IO_BUFFER_BYTES = 1024 * 1024
+    private const val PACK_PROGRESS_STEP_BYTES = 1024 * 1024
     private val fileTimeFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     class PackException(val code: String, override val message: String) : Exception(message)
@@ -138,6 +140,7 @@ object BulletinBoardPack {
             zip.closeEntry()
             var writtenBytes = manifestBytes.size.toLong()
             onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
+            var lastProgressBytes = writtenBytes
             boardDir.walkTopDown()
                 .filter { it.isFile }
                 .forEach { file ->
@@ -145,7 +148,7 @@ object BulletinBoardPack {
                     val relative = file.relativeTo(boardDir).path.replace('\\', '/')
                     zip.putNextEntry(ZipEntry("$BOARD_PREFIX$relative"))
                     file.inputStream().use { input ->
-                        val buffer = ByteArray(64 * 1024)
+                        val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
                         while (true) {
                             ensureNotCancelled(isCancelled)
                             val read = input.read(buffer)
@@ -153,7 +156,10 @@ object BulletinBoardPack {
                             if (read == 0) continue
                             zip.write(buffer, 0, read)
                             writtenBytes += read.toLong()
-                            onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
+                            if (writtenBytes - lastProgressBytes >= PACK_PROGRESS_STEP_BYTES || writtenBytes >= totalBytes) {
+                                onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
+                                lastProgressBytes = writtenBytes
+                            }
                         }
                     }
                     zip.closeEntry()
@@ -234,10 +240,9 @@ object BulletinBoardPack {
             while (entry != null) {
                 ensureNotCancelled(isCancelled)
                 if (!entry.isDirectory) {
-                    val bytes = zip.readBytes()
                     processed += 1
                     if (entry.name == MANIFEST_NAME) {
-                        manifestBytes = bytes
+                        manifestBytes = readZipEntryFully(zip)
                     } else {
                         if (!entry.name.startsWith(BOARD_PREFIX) || entry.name.endsWith("/")) {
                             throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
@@ -248,7 +253,9 @@ object BulletinBoardPack {
                         }
                         val target = File(boardDir, relative)
                         target.parentFile?.mkdirs()
-                        FileOutputStream(target).use { it.write(bytes) }
+                        FileOutputStream(target).use { output ->
+                            copyZipEntry(zip, output, isCancelled)
+                        }
                     }
                     onProgress?.invoke(processed, totalEntries)
                 }
@@ -329,7 +336,7 @@ object BulletinBoardPack {
         val tempFile = File.createTempFile("boardpack_import_", ".zip", context.cacheDir)
         try {
             FileOutputStream(tempFile).use { output ->
-                val buffer = ByteArray(64 * 1024)
+                val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
                 while (true) {
                     ensureNotCancelled(isCancelled)
                     val read = inputStream.read(buffer)
@@ -356,10 +363,9 @@ object BulletinBoardPack {
                     while (entry != null) {
                         ensureNotCancelled(isCancelled)
                         if (!entry.isDirectory) {
-                            val bytes = zip.readBytes()
                             processed += 1
                             if (entry.name == MANIFEST_NAME) {
-                                manifestBytes = bytes
+                                manifestBytes = readZipEntryFully(zip)
                             } else {
                                 if (!entry.name.startsWith(BOARD_PREFIX) || entry.name.endsWith("/")) {
                                     throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
@@ -370,7 +376,9 @@ object BulletinBoardPack {
                                 }
                                 val target = File(boardDir, relative)
                                 target.parentFile?.mkdirs()
-                                FileOutputStream(target).use { it.write(bytes) }
+                                FileOutputStream(target).use { output ->
+                                    copyZipEntry(zip, output, isCancelled)
+                                }
                             }
                             onProgress?.invoke(processed, totalEntries)
                         }
@@ -525,8 +533,9 @@ object BulletinBoardPack {
         val boundedTotal = progressUnits((totalBytes ?: 0L).coerceAtLeast(1L))
         onProgress?.invoke(0, boundedTotal)
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
-            val buffer = ByteArray(64 * 1024)
+            val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
             var copied = 0L
+            var lastProgressBytes = 0L
             while (true) {
                 ensureNotCancelled(isCancelled)
                 val read = inputStream.read(buffer)
@@ -535,7 +544,10 @@ object BulletinBoardPack {
                 output.write(buffer, 0, read)
                 copied += read.toLong()
                 if (totalBytes != null && totalBytes > 0) {
-                    onProgress?.invoke(progressUnits(copied), progressUnits(totalBytes))
+                    if (copied - lastProgressBytes >= PACK_PROGRESS_STEP_BYTES || copied >= totalBytes) {
+                        onProgress?.invoke(progressUnits(copied), progressUnits(totalBytes))
+                        lastProgressBytes = copied
+                    }
                 }
             }
         } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
@@ -543,6 +555,27 @@ object BulletinBoardPack {
             onProgress?.invoke(progressUnits(totalBytes), progressUnits(totalBytes))
         }
         "${BulletinBoardExporter.exportDirName(context)}/$safeName"
+    }
+
+    private fun readZipEntryFully(zip: ZipInputStream): ByteArray {
+        val output = ByteArrayOutputStream()
+        copyZipEntry(zip, output, isCancelled = null)
+        return output.toByteArray()
+    }
+
+    private fun copyZipEntry(
+        zip: ZipInputStream,
+        output: OutputStream,
+        isCancelled: (() -> Boolean)?
+    ) {
+        val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
+        while (true) {
+            ensureNotCancelled(isCancelled)
+            val read = zip.read(buffer)
+            if (read < 0) break
+            if (read == 0) continue
+            output.write(buffer, 0, read)
+        }
     }
 
     fun writeToUri(context: Context, uri: Uri, data: ByteArray): Result<Unit> = runCatching {
