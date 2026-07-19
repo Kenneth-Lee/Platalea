@@ -5,6 +5,7 @@
   "hostname": "",
   "service_type": "_localmanager._tcp.local.",
   "board_root": "./boards",
+  "supports_power_shutdown": true,
   "default_board": "default",
   "max_import_bytes": 68719476736,
   "roles": {

@@ -112,6 +112,23 @@ def _config_bool(value: Any, default: bool = False) -> bool:
     return text in {"1", "true", "yes", "on"}
 
 
+def _resolve_power_shutdown_config(raw: dict[str, Any]) -> bool:
+    """解析远程关机配置。
+
+    优先级：
+    1. 配置文件中的显式配置（如果存在且有效）
+    2. 默认开启（True）
+
+    注意：之前版本会检查环境变量 PLATALEA_POWER_SHUTDOWN，但这会导致配置不一致。
+    现在环境变量仅在安装时用于生成配置，运行时完全依赖配置文件。
+    """
+    config_value = raw.get("supports_power_shutdown")
+    if config_value is not None:
+        return _config_bool(config_value, default=True)
+    # 默认开启，保持向后兼容
+    return True
+
+
 def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
     if not config_path.exists():
         raise FileNotFoundError(
@@ -149,10 +166,7 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
         ),
         log_level=str(raw.get("log_level", "INFO")).strip().upper() or "INFO",
         max_import_bytes=parsed_max_import_bytes,
-        supports_power_shutdown=_config_bool(
-            raw.get("supports_power_shutdown"),
-            default=True if raw.get("supports_power_shutdown") is None else _env_flag("PLATALEA_POWER_SHUTDOWN"),
-        ),
+        supports_power_shutdown=_resolve_power_shutdown_config(raw),
     )
     agent_raw = raw.get("agent")
     agent_config = load_agent_config(agent_raw if isinstance(agent_raw, dict) else None)

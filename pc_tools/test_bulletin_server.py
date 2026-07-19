@@ -53,6 +53,7 @@ class BulletinServerShutdownFlagTest(unittest.TestCase):
             self.assertTrue(config.supports_power_shutdown)
 
     def test_load_config_env_remains_fallback(self) -> None:
+        """当配置项缺失时，默认开启远程关机（不再依赖环境变量）。"""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = root / "config.json"
@@ -68,7 +69,8 @@ class BulletinServerShutdownFlagTest(unittest.TestCase):
                 ) + "\n",
                 encoding="utf-8",
             )
-            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": "1"}, clear=False):
+            # 即使环境变量未设置，也应该默认开启
+            with mock.patch.dict(os.environ, {"PLATALEA_POWER_SHUTDOWN": ""}, clear=False):
                 config, _agent = load_config(cfg)
             self.assertTrue(config.supports_power_shutdown)
 
