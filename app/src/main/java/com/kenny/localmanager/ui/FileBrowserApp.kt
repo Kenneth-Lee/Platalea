@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.media.MediaMetadataRetriever
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
@@ -1222,6 +1223,51 @@ private fun formatTrackMetadata(context: Context, metadata: TrackMetadata): Stri
         metadata.genre?.takeIf { it.isNotBlank() }?.let { add(it) }
     }
     return parts.joinToString(" · ")
+}
+
+private enum class PlayerTrackFilterField {
+    FILE_NAME,
+    TITLE,
+    ALBUM,
+    ARTIST
+}
+
+private data class PlayerTrackEntry(
+    val originalIndex: Int,
+    val uri: String,
+    val name: String,
+    val metadata: TrackMetadata?
+)
+
+private fun readTrackMetadata(context: Context, uriString: String): TrackMetadata {
+    return runCatching {
+        val uri = Uri.parse(uriString)
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(context, uri)
+            TrackMetadata(
+                title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim()?.takeIf { it.isNotEmpty() },
+                artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim()?.takeIf { it.isNotEmpty() },
+                album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim()?.takeIf { it.isNotEmpty() },
+                albumArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)?.trim()?.takeIf { it.isNotEmpty() },
+                genre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)?.trim()?.takeIf { it.isNotEmpty() },
+                year = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR)?.trim()?.takeIf { it.isNotEmpty() }
+            )
+        }
+    }.getOrElse { TrackMetadata() }
+}
+
+private fun trackFilterTarget(
+    field: PlayerTrackFilterField,
+    fileName: String,
+    metadata: TrackMetadata?
+): String {
+    return when (field) {
+        PlayerTrackFilterField.FILE_NAME -> fileName
+        PlayerTrackFilterField.TITLE -> metadata?.title.orEmpty()
+        PlayerTrackFilterField.ALBUM -> metadata?.album.orEmpty()
+        PlayerTrackFilterField.ARTIST -> metadata?.artist?.ifBlank { null }
+            ?: metadata?.albumArtist.orEmpty()
+    }
 }
 
 private data class PlaylistTrackTransfer(
@@ -8212,6 +8258,11 @@ fun PlaybackScreen(
     var previewStartInput by remember { mutableStateOf("") }
     var previewMaxDurationInput by remember { mutableStateOf("") }
     var previewTimeError by remember { mutableStateOf<String?>(null) }
+    var trackFilterText by remember { mutableStateOf("") }
+    var trackFilterField by remember { mutableStateOf(PlayerTrackFilterField.FILE_NAME) }
+    var showTrackFilterFieldMenu by remember { mutableStateOf(false) }
+    var trackMetadataCache by remember(selectedPlaylistId) { mutableStateOf<Map<String, TrackMetadata>>(emptyMap()) }
+    var trackMetadataLoading by remember(selectedPlaylistId) { mutableStateOf(false) }
     LaunchedEffect(prefs) {
         prefs.playlists.collect { playlists = it }
     }
@@ -8227,6 +8278,25 @@ fun PlaybackScreen(
     val playlistById = remember(playlists) { playlists.associateBy { it.id } }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
     if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
+
+    LaunchedEffect(selectedPlaylist?.id, trackFilterField) {
+        val current = selectedPlaylist ?: return@LaunchedEffect
+        if (trackFilterField == PlayerTrackFilterField.FILE_NAME) {
+            trackMetadataLoading = false
+            return@LaunchedEffect
+        }
+        val missing = current.uris.filterNot { trackMetadataCache.containsKey(it) }
+        if (missing.isEmpty()) {
+            trackMetadataLoading = false
+            return@LaunchedEffect
+        }
+        trackMetadataLoading = true
+        val loaded = withContext(Dispatchers.IO) {
+            missing.associateWith { uri -> readTrackMetadata(context, uri) }
+        }
+        trackMetadataCache = trackMetadataCache + loaded
+        trackMetadataLoading = false
+    }
 
     BackHandler(enabled = selectedPlaylistId != null) {
         selectedPlaylistId = null
@@ -8294,6 +8364,26 @@ fun PlaybackScreen(
             putExtra(EXTRA_PLAYLIST_ID, pl.id)
             putExtra(EXTRA_START_INDEX, index)
             putExtra(EXTRA_START_POSITION_MS, startPositionMs.coerceAtLeast(0))
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+    }
+
+    fun startFilteredPlaylistFromIndex(
+        pl: Playlist,
+        tracks: List<PlayerTrackEntry>,
+        startIndex: Int,
+        startPositionMs: Int = 0
+    ) {
+        if (tracks.isEmpty()) return
+        val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
+        recordPlayedPlaylist(pl)
+        val intent = Intent(context, PlaybackService::class.java).apply {
+            action = ACTION_PLAY
+            putStringArrayListExtra(EXTRA_URIS, ArrayList(tracks.map { it.uri }))
+            putStringArrayListExtra(EXTRA_NAMES, ArrayList(tracks.map { it.name }))
+            putExtra(EXTRA_START_INDEX, safeIndex)
+            putExtra(EXTRA_START_POSITION_MS, startPositionMs.coerceAtLeast(0))
+            putExtra(EXTRA_DIR_URI, "")
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     }
@@ -8660,11 +8750,35 @@ fun PlaybackScreen(
             }
             if (selectedPlaylist != null) {
                 val pl = selectedPlaylist
+                val filterText = trackFilterText
+                val trackEntries = remember(pl, trackMetadataCache) {
+                    pl.uris.mapIndexed { idx, uri ->
+                        PlayerTrackEntry(
+                            originalIndex = idx,
+                            uri = uri,
+                            name = pl.names.getOrElse(idx) { uri.substringAfterLast('/') },
+                            metadata = trackMetadataCache[uri]
+                        )
+                    }
+                }
+                val filteredTrackEntries = remember(trackEntries, filterText, trackFilterField) {
+                    if (filterText.isBlank()) {
+                        trackEntries
+                    } else {
+                        runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
+                            trackEntries.filter { entry ->
+                                regex.containsMatchIn(trackFilterTarget(trackFilterField, entry.name, entry.metadata))
+                            }
+                        } ?: trackEntries
+                    }
+                }
                 val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
-                LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex) {
+                LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex, filteredTrackEntries) {
                     val state = playbackState ?: return@LaunchedEffect
                     if (state.playlistId != pl.id) return@LaunchedEffect
-                    val target = state.trackIndex.coerceIn(0, maxOf(0, pl.uris.lastIndex))
+                    val target = filteredTrackEntries.indexOfFirst { it.originalIndex == state.trackIndex }
+                        .takeIf { it >= 0 }
+                        ?: state.trackIndex.coerceIn(0, maxOf(0, filteredTrackEntries.lastIndex))
                     selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
                 }
                 Card(
@@ -8717,6 +8831,81 @@ fun PlaybackScreen(
                     )
                 }
                 }
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    OutlinedTextField(
+                        value = trackFilterText,
+                        onValueChange = { trackFilterText = it },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        placeholder = { Text(context.getString(R.string.player_track_filter_placeholder)) },
+                        trailingIcon = {
+                            if (trackFilterText.isNotEmpty()) {
+                                IconButton(onClick = { trackFilterText = "" }) {
+                                    Icon(Icons.Default.RemoveCircle, contentDescription = context.getString(R.string.directory_filter_clear), Modifier.size(20.dp))
+                                }
+                            }
+                        }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Box {
+                        OutlinedButton(onClick = { showTrackFilterFieldMenu = true }) {
+                            Text(
+                                when (trackFilterField) {
+                                    PlayerTrackFilterField.FILE_NAME -> context.getString(R.string.player_track_filter_field_file_name)
+                                    PlayerTrackFilterField.TITLE -> context.getString(R.string.player_track_filter_field_title)
+                                    PlayerTrackFilterField.ALBUM -> context.getString(R.string.player_track_filter_field_album)
+                                    PlayerTrackFilterField.ARTIST -> context.getString(R.string.player_track_filter_field_artist)
+                                }
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showTrackFilterFieldMenu,
+                            onDismissRequest = { showTrackFilterFieldMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.player_track_filter_field_file_name)) },
+                                onClick = {
+                                    trackFilterField = PlayerTrackFilterField.FILE_NAME
+                                    showTrackFilterFieldMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.player_track_filter_field_title)) },
+                                onClick = {
+                                    trackFilterField = PlayerTrackFilterField.TITLE
+                                    showTrackFilterFieldMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.player_track_filter_field_album)) },
+                                onClick = {
+                                    trackFilterField = PlayerTrackFilterField.ALBUM
+                                    showTrackFilterFieldMenu = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.player_track_filter_field_artist)) },
+                                onClick = {
+                                    trackFilterField = PlayerTrackFilterField.ARTIST
+                                    showTrackFilterFieldMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+                if (trackMetadataLoading && trackFilterField != PlayerTrackFilterField.FILE_NAME) {
+                    Text(
+                        context.getString(R.string.player_track_filter_loading_metadata),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (pl.uris.isEmpty()) {
                     Box(
                         Modifier
@@ -8733,9 +8922,10 @@ fun PlaybackScreen(
                         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
                         verticalArrangement = Arrangement.spacedBy(0.dp)
                     ) {
-                        items(pl.uris.size) { i ->
-                            val name = pl.names.getOrElse(i) { pl.uris[i].substringAfterLast('/') }
-                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState.trackIndex == i
+                        items(filteredTrackEntries.size) { i ->
+                            val entry = filteredTrackEntries[i]
+                            val name = entry.name
+                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState.trackIndex == entry.originalIndex
                             Row(
                                 Modifier
                                     .fillMaxWidth()
@@ -8743,12 +8933,12 @@ fun PlaybackScreen(
                                         if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer
                                         else MaterialTheme.colorScheme.surface
                                     )
-                                    .clickable { startPlaylistFromIndex(pl, i) }
+                                    .clickable { startFilteredPlaylistFromIndex(pl, filteredTrackEntries, i) }
                                     .padding(start = 6.dp, end = 2.dp, top = 3.dp, bottom = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    "${i + 1}.",
+                                    "${entry.originalIndex + 1}.",
                                     style = MaterialTheme.typography.labelSmall,
                                     modifier = Modifier.width(22.dp),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -8781,20 +8971,20 @@ fun PlaybackScreen(
                                             leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
                                             onClick = {
                                                 trackActionMenuIndex = null
-                                                startPlaylistFromIndex(pl, i)
+                                                startFilteredPlaylistFromIndex(pl, filteredTrackEntries, i)
                                             }
                                         )
                                         DropdownMenuItem(
                                             text = { Text(context.getString(R.string.player_move_up)) },
                                             leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
-                                            enabled = i > 0,
+                                            enabled = entry.originalIndex > 0,
                                             onClick = {
                                                 trackActionMenuIndex = null
-                                                if (i > 0) scope.launch {
+                                                if (entry.originalIndex > 0) scope.launch {
                                                     val uris = pl.uris.toMutableList()
                                                     val names = pl.names.toMutableList()
-                                                    uris.add(i - 1, uris.removeAt(i))
-                                                    names.add(i - 1, names.removeAt(i))
+                                                    uris.add(entry.originalIndex - 1, uris.removeAt(entry.originalIndex))
+                                                    names.add(entry.originalIndex - 1, names.removeAt(entry.originalIndex))
                                                     prefs.updatePlaylist(pl.copy(uris = uris, names = names))
                                                 }
                                             }
@@ -8802,14 +8992,14 @@ fun PlaybackScreen(
                                         DropdownMenuItem(
                                             text = { Text(context.getString(R.string.player_move_down)) },
                                             leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
-                                            enabled = i < pl.uris.size - 1,
+                                            enabled = entry.originalIndex < pl.uris.size - 1,
                                             onClick = {
                                                 trackActionMenuIndex = null
-                                                if (i < pl.uris.size - 1) scope.launch {
+                                                if (entry.originalIndex < pl.uris.size - 1) scope.launch {
                                                     val uris = pl.uris.toMutableList()
                                                     val names = pl.names.toMutableList()
-                                                    uris.add(i + 1, uris.removeAt(i))
-                                                    names.add(i + 1, names.removeAt(i))
+                                                    uris.add(entry.originalIndex + 1, uris.removeAt(entry.originalIndex))
+                                                    names.add(entry.originalIndex + 1, names.removeAt(entry.originalIndex))
                                                     prefs.updatePlaylist(pl.copy(uris = uris, names = names))
                                                 }
                                             }
@@ -8818,7 +9008,7 @@ fun PlaybackScreen(
                                             text = { Text(stringResource(R.string.browser_copy_to_list)) },
                                             leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
                                             onClick = {
-                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = false)
+                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, entry.originalIndex, move = false)
                                                 trackActionMenuIndex = null
                                             }
                                         )
@@ -8826,7 +9016,7 @@ fun PlaybackScreen(
                                             text = { Text(stringResource(R.string.browser_move_to_list)) },
                                             leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
                                             onClick = {
-                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, i, move = true)
+                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, entry.originalIndex, move = true)
                                                 trackActionMenuIndex = null
                                             }
                                         )
@@ -8846,7 +9036,7 @@ fun PlaybackScreen(
                                                         context = context,
                                                         prefs = prefs,
                                                         pl = pl,
-                                                        trackIndex = i,
+                                                        trackIndex = entry.originalIndex,
                                                         playbackState = playbackState,
                                                         deleteSourceFile = pl.isDirectorySource,
                                                         onStopPlayback = onStopPlayback
@@ -8968,7 +9158,32 @@ fun PlaybackScreen(
                                             leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
                                             onClick = {
                                                 playlistActionMenuIndex = null
-                                                startPlaylist(pl)
+                                                if (selectedPlaylistId == pl.id) {
+                                                    val entries = pl.uris.mapIndexed { idx, uri ->
+                                                        PlayerTrackEntry(
+                                                            originalIndex = idx,
+                                                            uri = uri,
+                                                            name = pl.names.getOrElse(idx) { uri.substringAfterLast('/') },
+                                                            metadata = trackMetadataCache[uri]
+                                                        )
+                                                    }
+                                                    val filtered = if (trackFilterText.isBlank()) {
+                                                        entries
+                                                    } else {
+                                                        runCatching { Regex(trackFilterText) }.getOrNull()?.let { regex ->
+                                                            entries.filter { entry ->
+                                                                regex.containsMatchIn(trackFilterTarget(trackFilterField, entry.name, entry.metadata))
+                                                            }
+                                                        } ?: entries
+                                                    }
+                                                    if (filtered.isNotEmpty()) {
+                                                        startFilteredPlaylistFromIndex(pl, filtered, 0)
+                                                    } else {
+                                                        Toast.makeText(context, context.getString(R.string.player_track_filter_no_result), Toast.LENGTH_SHORT).show()
+                                                    }
+                                                } else {
+                                                    startPlaylist(pl)
+                                                }
                                             }
                                         )
                                         DropdownMenuItem(

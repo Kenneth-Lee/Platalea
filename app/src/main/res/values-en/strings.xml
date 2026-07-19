@@ -88,6 +88,13 @@
     <string name="player_add_to_playback_prompt">Choose where to add %1$d audio track(s).</string>
     <string name="player_track_count">%1$d track(s)</string>
     <string name="player_new_list">New Playlist</string>
+    <string name="player_track_filter_placeholder">Filter tracks by regex</string>
+    <string name="player_track_filter_field_file_name">File name</string>
+    <string name="player_track_filter_field_title">Title</string>
+    <string name="player_track_filter_field_album">Album</string>
+    <string name="player_track_filter_field_artist">Artist</string>
+    <string name="player_track_filter_loading_metadata">Loading metadata for the selected filter field…</string>
+    <string name="player_track_filter_no_result">No tracks match the current filter</string>
     <string name="player_resort_directory_hint">Directory playlists are refreshed from the source folder first, then reordered.</string>
     <string name="player_resort_playlist">Reorder Tracks</string>
     <string name="player_preview_settings">Preview Settings</string>

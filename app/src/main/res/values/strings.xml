@@ -92,6 +92,13 @@
     <string name="player_add_to_playback_prompt">请选择要把 %1$d 首音频加入到哪里。</string>
     <string name="player_track_count">%1$d 首</string>
     <string name="player_new_list">新建列表</string>
+    <string name="player_track_filter_placeholder">正则过滤曲目</string>
+    <string name="player_track_filter_field_file_name">文件名</string>
+    <string name="player_track_filter_field_title">歌曲名</string>
+    <string name="player_track_filter_field_album">专辑</string>
+    <string name="player_track_filter_field_artist">歌手</string>
+    <string name="player_track_filter_loading_metadata">正在读取元数据以支持当前过滤字段…</string>
+    <string name="player_track_filter_no_result">当前过滤没有匹配曲目</string>
     <string name="player_resort_directory_hint">目录列表会先从源目录刷新曲目，再按所选方式排序。</string>
     <string name="player_resort_playlist">重新排序</string>
     <string name="player_preview_settings">试听设置</string>
