@@ -1431,6 +1431,13 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 result.onSuccess { saved ->
+                    val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
+                    val downloadedBytes = _state.value.attachmentDownload?.downloadedBytes ?: totalBytes
+                    val speed = TransferStreams.bytesPerSecond(downloadedBytes, elapsedMs)
+                    Log.i(
+                        TAG,
+                        "transfer profile=${TransferStreams.Profiles.ATTACHMENT_DOWNLOAD.name} stage=attachment_download bytes=$downloadedBytes elapsed_ms=$elapsedMs speed_Bps=$speed item=${ref.name}"
+                    )
                     appendLog(appContext.getString(R.string.family_msg_69047, saved.savedPath))
                 }.onFailure { error ->
                     if (error is CancellationException) throw error
@@ -1518,6 +1525,7 @@ class FamilyNetworkManager(context: Context) {
             var pendingAttachmentId: String? = null
             val primaryName = if (items.size == 1) items.first().name else appContext.getString(R.string.family_msg_14178, items.size)
             val totalBytes = items.sumOf { estimateUploadBytes(appContext, it) }
+            val startedAtMs = System.currentTimeMillis()
             try {
                 _state.update {
                     it.copy(
@@ -1574,6 +1582,13 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 uploadResult.onSuccess { refs ->
+                    val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
+                    val uploadedBytes = _state.value.attachmentUpload?.uploadedBytes ?: totalBytes
+                    val speed = TransferStreams.bytesPerSecond(uploadedBytes, elapsedMs)
+                    Log.i(
+                        TAG,
+                        "transfer profile=${TransferStreams.Profiles.ATTACHMENT_CHUNK_UPLOAD.name} stage=attachment_upload bytes=$uploadedBytes elapsed_ms=$elapsedMs speed_Bps=$speed item_count=${items.size}"
+                    )
                     val body = textContent.trim().ifBlank { appContext.getString(R.string.family_msg_30844, refs.size) }
                     postBoardMessageInternal(session, body, refs)
                 }.onFailure { error ->
@@ -2676,23 +2691,32 @@ class FamilyNetworkManager(context: Context) {
             try {
                 appContext.contentResolver.openInputStream(file.uri)?.use { input ->
                     connection.outputStream.use { output ->
-                        val buffer = ByteArray(BOARDPACK_IO_BUFFER_SIZE_BYTES)
+                        val profile = TransferStreams.Profiles.BOARDPACK_REMOTE_UPLOAD
                         val total = file.size.coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        val totalLong = file.size.coerceAtLeast(1L)
+                        val startedAtMs = System.currentTimeMillis()
                         var uploaded = 0L
                         var lastProgressBytes = 0L
                         onUploadProgress?.invoke(0, total)
-                        while (true) {
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            if (read == 0) continue
-                            output.write(buffer, 0, read)
-                            uploaded += read.toLong()
-                            if (uploaded - lastProgressBytes >= BOARDPACK_PROGRESS_STEP_BYTES || uploaded >= file.size.coerceAtLeast(1L)) {
-                                val current = uploaded.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                                onUploadProgress?.invoke(current, total)
-                                lastProgressBytes = uploaded
+                        TransferStreams.copyBuffered(
+                            input = input,
+                            output = output,
+                            bufferSize = profile.bufferSizeBytes,
+                            onBytesCopied = { copied ->
+                                uploaded = copied
+                                if (TransferStreams.shouldEmitProgress(uploaded, lastProgressBytes, totalLong, profile.progressStepBytes)) {
+                                    val current = uploaded.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                                    onUploadProgress?.invoke(current, total)
+                                    lastProgressBytes = uploaded
+                                }
                             }
-                        }
+                        )
+                        val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
+                        val speed = TransferStreams.bytesPerSecond(uploaded, elapsedMs)
+                        Log.i(
+                            TAG,
+                            "transfer profile=${profile.name} stage=boardpack_remote_upload host=${service.host}:${service.port} bytes=$uploaded elapsed_ms=$elapsedMs speed_Bps=$speed"
+                        )
                     }
                 } ?: throw IllegalStateException(appContext.getString(R.string.family_msg_94078))
                 readApiResponse(connection)

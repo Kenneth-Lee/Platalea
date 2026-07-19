@@ -26,8 +26,6 @@ object BulletinBoardPack {
     const val VERSION = 1
     private const val MANIFEST_NAME = "manifest.json"
     private const val BOARD_PREFIX = "board/"
-    private const val PACK_IO_BUFFER_BYTES = 1024 * 1024
-    private const val PACK_PROGRESS_STEP_BYTES = 1024 * 1024
     private val fileTimeFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     class PackException(val code: String, override val message: String) : Exception(message)
@@ -147,20 +145,20 @@ object BulletinBoardPack {
                     ensureNotCancelled(isCancelled)
                     val relative = file.relativeTo(boardDir).path.replace('\\', '/')
                     zip.putNextEntry(ZipEntry("$BOARD_PREFIX$relative"))
+                    val beforeFile = writtenBytes
                     file.inputStream().use { input ->
-                        val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
-                        while (true) {
-                            ensureNotCancelled(isCancelled)
-                            val read = input.read(buffer)
-                            if (read < 0) break
-                            if (read == 0) continue
-                            zip.write(buffer, 0, read)
-                            writtenBytes += read.toLong()
-                            if (writtenBytes - lastProgressBytes >= PACK_PROGRESS_STEP_BYTES || writtenBytes >= totalBytes) {
-                                onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
-                                lastProgressBytes = writtenBytes
+                        TransferStreams.copyBuffered(
+                            input = input,
+                            output = zip,
+                            onBeforeRead = { ensureNotCancelled(isCancelled) },
+                            onBytesCopied = { copiedInFile ->
+                                writtenBytes = beforeFile + copiedInFile
+                                if (TransferStreams.shouldEmitProgress(writtenBytes, lastProgressBytes, totalBytes)) {
+                                    onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
+                                    lastProgressBytes = writtenBytes
+                                }
                             }
-                        }
+                        )
                     }
                     zip.closeEntry()
                 }
@@ -336,14 +334,11 @@ object BulletinBoardPack {
         val tempFile = File.createTempFile("boardpack_import_", ".zip", context.cacheDir)
         try {
             FileOutputStream(tempFile).use { output ->
-                val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
-                while (true) {
-                    ensureNotCancelled(isCancelled)
-                    val read = inputStream.read(buffer)
-                    if (read < 0) break
-                    if (read == 0) continue
-                    output.write(buffer, 0, read)
-                }
+                TransferStreams.copyBuffered(
+                    input = inputStream,
+                    output = output,
+                    onBeforeRead = { ensureNotCancelled(isCancelled) }
+                )
             }
             ensureNotCancelled(isCancelled)
             val preview = tempFile.inputStream().use { storedInput ->
@@ -531,26 +526,34 @@ object BulletinBoardPack {
         val created = exportDir.createFile("application/octet-stream", safeName)
             ?: throw IllegalStateException(context.getString(R.string.family_msg_78543))
         val boundedTotal = progressUnits((totalBytes ?: 0L).coerceAtLeast(1L))
+        val profile = TransferStreams.Profiles.BOARDPACK_LOCAL_IO
+        val startedAtMs = System.currentTimeMillis()
         onProgress?.invoke(0, boundedTotal)
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
-            val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
             var copied = 0L
             var lastProgressBytes = 0L
-            while (true) {
-                ensureNotCancelled(isCancelled)
-                val read = inputStream.read(buffer)
-                if (read < 0) break
-                if (read == 0) continue
-                output.write(buffer, 0, read)
-                copied += read.toLong()
-                if (totalBytes != null && totalBytes > 0) {
-                    if (copied - lastProgressBytes >= PACK_PROGRESS_STEP_BYTES || copied >= totalBytes) {
-                        onProgress?.invoke(progressUnits(copied), progressUnits(totalBytes))
-                        lastProgressBytes = copied
+            TransferStreams.copyBuffered(
+                input = inputStream,
+                output = output,
+                bufferSize = profile.bufferSizeBytes,
+                onBeforeRead = { ensureNotCancelled(isCancelled) },
+                onBytesCopied = { current ->
+                    copied = current
+                    if (totalBytes != null && totalBytes > 0) {
+                        if (TransferStreams.shouldEmitProgress(copied, lastProgressBytes, totalBytes, profile.progressStepBytes)) {
+                            onProgress?.invoke(progressUnits(copied), progressUnits(totalBytes))
+                            lastProgressBytes = copied
+                        }
                     }
                 }
-            }
+            )
         } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
+        val elapsedMs = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(1L)
+        val speed = TransferStreams.bytesPerSecond(totalBytes ?: 0L, elapsedMs)
+        android.util.Log.i(
+            "BulletinBoardPack",
+            "transfer profile=${profile.name} stage=save_stream_to_root bytes=${totalBytes ?: 0L} elapsed_ms=$elapsedMs speed_Bps=$speed"
+        )
         if (totalBytes != null && totalBytes > 0) {
             onProgress?.invoke(progressUnits(totalBytes), progressUnits(totalBytes))
         }
@@ -568,14 +571,11 @@ object BulletinBoardPack {
         output: OutputStream,
         isCancelled: (() -> Boolean)?
     ) {
-        val buffer = ByteArray(PACK_IO_BUFFER_BYTES)
-        while (true) {
-            ensureNotCancelled(isCancelled)
-            val read = zip.read(buffer)
-            if (read < 0) break
-            if (read == 0) continue
-            output.write(buffer, 0, read)
-        }
+        TransferStreams.copyBuffered(
+            input = zip,
+            output = output,
+            onBeforeRead = { ensureNotCancelled(isCancelled) }
+        )
     }
 
     fun writeToUri(context: Context, uri: Uri, data: ByteArray): Result<Unit> = runCatching {

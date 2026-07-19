@@ -10,6 +10,7 @@ import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -173,15 +174,20 @@ object BulletinAttachmentUploader {
     ) {
         val input = openStream() ?: throw IllegalStateException(context.getString(R.string.family_msg_22316))
         input.use { stream ->
-            val buffer = ByteArray(chunkSize)
-            var chunkIndex = 0
-            var uploaded = 0L
-            while (uploaded < totalSize) {
-                coroutineContext.ensureActive()
-                val toRead = minOf(chunkSize.toLong(), totalSize - uploaded).toInt()
-                val read = stream.read(buffer, 0, toRead)
-                if (read <= 0) break
-                val chunk = if (read == buffer.size) buffer else buffer.copyOf(read)
+            val ctx = coroutineContext
+            val profile = TransferStreams.Profiles.ATTACHMENT_CHUNK_UPLOAD
+            var lastProgressBytes = 0L
+            var uploadedNow = 0L
+            val uploaded = TransferStreams.readInChunks(
+                input = stream,
+                totalBytes = totalSize,
+                chunkSize = chunkSize,
+                onBeforeRead = {
+                    if (!ctx.isActive) {
+                        throw CancellationException("attachment_upload_cancelled")
+                    }
+                }
+            ) { chunkIndex, chunk ->
                 if (fileId == null) {
                     transport.uploadFileChunk(boardId, attachmentId, chunkIndex, chunk)
                         .getOrElse { throw it }
@@ -189,9 +195,17 @@ object BulletinAttachmentUploader {
                     transport.uploadDirectoryFileChunk(boardId, attachmentId, fileId, chunkIndex, chunk)
                         .getOrElse { throw it }
                 }
-                chunkIndex++
-                uploaded += read
-                onProgress?.invoke(uploaded)
+                uploadedNow += chunk.size.toLong()
+                if (TransferStreams.shouldEmitProgress(
+                        currentBytes = uploadedNow,
+                        lastEmittedBytes = lastProgressBytes,
+                        totalBytes = totalSize,
+                        stepBytes = profile.progressStepBytes
+                    )
+                ) {
+                    onProgress?.invoke(uploadedNow)
+                    lastProgressBytes = uploadedNow
+                }
             }
             if (uploaded < totalSize) {
                 throw IllegalStateException(context.getString(R.string.family_msg_91420, uploaded, totalSize))

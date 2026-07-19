@@ -11,6 +11,7 @@ import java.io.Closeable
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.InputStream
@@ -190,16 +191,22 @@ object BulletinAttachmentDownloader {
                 throw IllegalStateException(context.getString(R.string.family_msg_96683))
             }
             context.contentResolver.openOutputStream(targetUri, "wt")?.use { output ->
-                val buffer = ByteArray(DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES.toInt())
+                val ctx = coroutineContext
                 var totalRead = 0L
-                while (true) {
-                    coroutineContext.ensureActive()
-                    val read = stream.inputStream.read(buffer)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                    totalRead += read
-                    onProgress?.invoke(totalRead, totalSize)
-                }
+                TransferStreams.copyBuffered(
+                    input = stream.inputStream,
+                    output = output,
+                    bufferSize = DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES.toInt(),
+                    onBeforeRead = {
+                        if (!ctx.isActive) {
+                            throw CancellationException("attachment_download_cancelled")
+                        }
+                    },
+                    onBytesCopied = { copied ->
+                        totalRead = copied
+                        onProgress?.invoke(totalRead, totalSize)
+                    }
+                )
                 output.flush()
                 if (totalRead < totalSize) {
                     throw IllegalStateException(context.getString(R.string.family_msg_14374, totalRead, totalSize))
