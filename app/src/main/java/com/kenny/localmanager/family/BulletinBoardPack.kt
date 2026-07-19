@@ -10,10 +10,13 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
@@ -26,6 +29,20 @@ object BulletinBoardPack {
     private val fileTimeFormat = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
 
     class PackException(val code: String, override val message: String) : Exception(message)
+
+    data class PackSummary(
+        val boardName: String,
+        val messageCount: Int,
+        val attachmentCount: Int,
+        val totalBytes: Long,
+        val entryCount: Int,
+        val sourceFileSize: Long? = null
+    )
+
+    data class PackPreview(
+        val summary: PackSummary,
+        val manifestBoardId: String? = null
+    )
 
     fun peekBoardName(context: Context, data: ByteArray): String {
         var name: String? = null
@@ -61,7 +78,33 @@ object BulletinBoardPack {
         }
     }
 
-    fun exportBoardDir(context: Context, boardDir: File, sourceDevice: String = "android"): ByteArray {
+    fun exportBoardDir(
+        context: Context,
+        boardDir: File,
+        sourceDevice: String = "android",
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        exportBoardDirToOutputStream(
+            context = context,
+            boardDir = boardDir,
+            output = buffer,
+            sourceDevice = sourceDevice,
+            onProgress = onProgress,
+            isCancelled = isCancelled
+        )
+        return buffer.toByteArray()
+    }
+
+    fun exportBoardDirToOutputStream(
+        context: Context,
+        boardDir: File,
+        output: OutputStream,
+        sourceDevice: String = "android",
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ) {
         val metaFile = File(boardDir, "meta.json")
         if (!metaFile.exists()) {
             throw PackException("board_not_found", context.getString(R.string.family_msg_02583, boardDir.name))
@@ -86,21 +129,84 @@ object BulletinBoardPack {
                 put("total_bytes", stats.totalBytes)
             })
         }
-        val buffer = ByteArrayOutputStream()
-        ZipOutputStream(buffer).use { zip ->
+        val manifestBytes = manifest.toString(2).toByteArray(Charsets.UTF_8)
+        val totalBytes = (stats.totalBytes + manifestBytes.size.toLong()).coerceAtLeast(1L)
+        ZipOutputStream(output).use { zip ->
+            onProgress?.invoke(0, progressUnits(totalBytes))
             zip.putNextEntry(ZipEntry(MANIFEST_NAME))
-            zip.write(manifest.toString(2).toByteArray(Charsets.UTF_8))
+            zip.write(manifestBytes)
             zip.closeEntry()
+            var writtenBytes = manifestBytes.size.toLong()
+            onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
             boardDir.walkTopDown()
                 .filter { it.isFile }
                 .forEach { file ->
+                    ensureNotCancelled(isCancelled)
                     val relative = file.relativeTo(boardDir).path.replace('\\', '/')
                     zip.putNextEntry(ZipEntry("$BOARD_PREFIX$relative"))
-                    file.inputStream().use { input -> input.copyTo(zip) }
+                    file.inputStream().use { input ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            ensureNotCancelled(isCancelled)
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            if (read == 0) continue
+                            zip.write(buffer, 0, read)
+                            writtenBytes += read.toLong()
+                            onProgress?.invoke(progressUnits(writtenBytes), progressUnits(totalBytes))
+                        }
+                    }
                     zip.closeEntry()
                 }
         }
-        return buffer.toByteArray()
+    }
+
+    fun exportBoardDirToRoot(
+        context: Context,
+        rootUri: String,
+        fileName: String,
+        boardDir: File,
+        sourceDevice: String = "android",
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): Result<String> = runCatching {
+        val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(rootUri))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54649))
+        val exportDir = BulletinBoardExporter.findOrCreateExportDir(context, rootDoc)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54837))
+        val safeName = sanitizePackFileName(fileName)
+        exportDir.findFile(safeName)?.takeIf { !it.isDirectory }?.delete()
+        val created = exportDir.createFile("application/octet-stream", safeName)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_78543))
+        context.contentResolver.openOutputStream(created.uri)?.use { output ->
+            exportBoardDirToOutputStream(
+                context = context,
+                boardDir = boardDir,
+                output = output,
+                sourceDevice = sourceDevice,
+                onProgress = onProgress,
+                isCancelled = isCancelled
+            )
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
+        "${BulletinBoardExporter.exportDirName(context)}/$safeName"
+    }
+
+    fun summarizeBoardDir(context: Context, boardDir: File): PackSummary {
+        val metaFile = File(boardDir, "meta.json")
+        if (!metaFile.exists()) {
+            throw PackException("board_not_found", context.getString(R.string.family_msg_02583, boardDir.name))
+        }
+        val meta = runCatching { JSONObject(metaFile.readText()) }
+            .getOrElse { throw PackException("invalid_board", context.getString(R.string.family_msg_93179)) }
+        val stats = collectStats(boardDir)
+        val entryCount = boardDir.walkTopDown().count { it.isFile }
+        return PackSummary(
+            boardName = meta.optString("name", boardDir.name),
+            messageCount = stats.messageCount,
+            attachmentCount = stats.attachmentCount,
+            totalBytes = stats.totalBytes,
+            entryCount = entryCount + 1
+        )
     }
 
     fun importIntoRoot(
@@ -108,45 +214,57 @@ object BulletinBoardPack {
         rootDir: File,
         data: ByteArray,
         name: String? = null,
-        roleIds: List<String>? = null
+        roleIds: List<String>? = null,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
     ): BulletinBoardInfo {
         rootDir.mkdirs()
-        val extracted = LinkedHashMap<String, ByteArray>()
-        ZipInputStream(ByteArrayInputStream(data)).use { zip ->
-            var entry = zip.nextEntry
-            var manifest: JSONObject? = null
-            while (entry != null) {
-                if (!entry.isDirectory) {
-                    val bytes = zip.readBytes()
-                    if (entry.name == MANIFEST_NAME) {
-                        manifest = runCatching { JSONObject(String(bytes, Charsets.UTF_8)) }
-                            .getOrElse {
-                                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_35962))
-                            }
-                    }
-                    extracted[entry.name] = bytes
-                }
-                zip.closeEntry()
-                entry = zip.nextEntry
-            }
-            validateManifest(context, manifest)
-        }
-        if (!extracted.containsKey("${BOARD_PREFIX}meta.json")) {
-            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_34360))
-        }
+        ensureNotCancelled(isCancelled)
+        val preview = previewImport(context, ByteArrayInputStream(data))
+        val totalEntries = preview.summary.entryCount.coerceAtLeast(1)
+        onProgress?.invoke(0, totalEntries)
 
         val newBoardId = UUID.randomUUID().toString()
         val boardDir = File(rootDir, newBoardId)
         boardDir.mkdirs()
-        extracted.forEach { (entryName, bytes) ->
-            if (!entryName.startsWith(BOARD_PREFIX) || entryName.endsWith("/")) return@forEach
-            val relative = entryName.removePrefix(BOARD_PREFIX)
-            if (relative.isBlank() || relative.contains("..")) {
-                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entryName))
+        var processed = 0
+        var manifestBytes: ByteArray? = null
+        ZipInputStream(ByteArrayInputStream(data)).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                ensureNotCancelled(isCancelled)
+                if (!entry.isDirectory) {
+                    val bytes = zip.readBytes()
+                    processed += 1
+                    if (entry.name == MANIFEST_NAME) {
+                        manifestBytes = bytes
+                    } else {
+                        if (!entry.name.startsWith(BOARD_PREFIX) || entry.name.endsWith("/")) {
+                            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
+                        }
+                        val relative = entry.name.removePrefix(BOARD_PREFIX)
+                        if (relative.isBlank() || relative.contains("..")) {
+                            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
+                        }
+                        val target = File(boardDir, relative)
+                        target.parentFile?.mkdirs()
+                        FileOutputStream(target).use { it.write(bytes) }
+                    }
+                    onProgress?.invoke(processed, totalEntries)
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
             }
-            val target = File(boardDir, relative)
-            target.parentFile?.mkdirs()
-            FileOutputStream(target).use { it.write(bytes) }
+        }
+        val manifest = runCatching { JSONObject(String(manifestBytes ?: throw PackException("invalid_boardpack", context.getString(R.string.family_msg_40120)), Charsets.UTF_8)) }
+            .getOrElse {
+                boardDir.deleteRecursively()
+                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_35962))
+            }
+        validateManifest(context, manifest)
+        if (!File(boardDir, "meta.json").isFile) {
+            boardDir.deleteRecursively()
+            throw PackException("invalid_boardpack", context.getString(R.string.family_msg_34360))
         }
 
         val metaFile = File(boardDir, "meta.json")
@@ -198,6 +316,175 @@ object BulletinBoardPack {
         )
     }
 
+    fun importIntoRoot(
+        context: Context,
+        rootDir: File,
+        inputStream: InputStream,
+        name: String? = null,
+        roleIds: List<String>? = null,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): BulletinBoardInfo {
+        rootDir.mkdirs()
+        val tempFile = File.createTempFile("boardpack_import_", ".zip", context.cacheDir)
+        try {
+            FileOutputStream(tempFile).use { output ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    ensureNotCancelled(isCancelled)
+                    val read = inputStream.read(buffer)
+                    if (read < 0) break
+                    if (read == 0) continue
+                    output.write(buffer, 0, read)
+                }
+            }
+            ensureNotCancelled(isCancelled)
+            val preview = tempFile.inputStream().use { storedInput ->
+                previewImport(context, storedInput)
+            }
+            val totalEntries = preview.summary.entryCount.coerceAtLeast(1)
+            onProgress?.invoke(0, totalEntries)
+
+            val newBoardId = UUID.randomUUID().toString()
+            val boardDir = File(rootDir, newBoardId)
+            boardDir.mkdirs()
+            var processed = 0
+            var manifestBytes: ByteArray? = null
+            tempFile.inputStream().use { storedInput ->
+                ZipInputStream(storedInput).use { zip ->
+                    var entry = zip.nextEntry
+                    while (entry != null) {
+                        ensureNotCancelled(isCancelled)
+                        if (!entry.isDirectory) {
+                            val bytes = zip.readBytes()
+                            processed += 1
+                            if (entry.name == MANIFEST_NAME) {
+                                manifestBytes = bytes
+                            } else {
+                                if (!entry.name.startsWith(BOARD_PREFIX) || entry.name.endsWith("/")) {
+                                    throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
+                                }
+                                val relative = entry.name.removePrefix(BOARD_PREFIX)
+                                if (relative.isBlank() || relative.contains("..")) {
+                                    throw PackException("invalid_boardpack", context.getString(R.string.family_msg_09808, entry.name))
+                                }
+                                val target = File(boardDir, relative)
+                                target.parentFile?.mkdirs()
+                                FileOutputStream(target).use { it.write(bytes) }
+                            }
+                            onProgress?.invoke(processed, totalEntries)
+                        }
+                        zip.closeEntry()
+                        entry = zip.nextEntry
+                    }
+                }
+            }
+
+            val manifest = runCatching {
+                JSONObject(
+                    String(
+                        manifestBytes ?: throw PackException("invalid_boardpack", context.getString(R.string.family_msg_40120)),
+                        Charsets.UTF_8
+                    )
+                )
+            }.getOrElse {
+                boardDir.deleteRecursively()
+                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_35962))
+            }
+            validateManifest(context, manifest)
+            if (!File(boardDir, "meta.json").isFile) {
+                boardDir.deleteRecursively()
+                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_34360))
+            }
+
+            val metaFile = File(boardDir, "meta.json")
+            val meta = runCatching { JSONObject(metaFile.readText()) }
+                .getOrElse {
+                    boardDir.deleteRecursively()
+                    throw PackException("invalid_board", context.getString(R.string.family_msg_04549))
+                }
+            val trimmedName = name?.trim().orEmpty()
+            if (name != null && trimmedName.isEmpty()) {
+                boardDir.deleteRecursively()
+                throw PackException("invalid_board", context.getString(R.string.family_msg_15321))
+            }
+            val finalName = trimmedName.ifEmpty { meta.optString("name", newBoardId).trim() }
+            if (finalName.isEmpty()) {
+                boardDir.deleteRecursively()
+                throw PackException("invalid_board", context.getString(R.string.family_msg_82976))
+            }
+            if (isBoardNameTaken(rootDir, finalName)) {
+                boardDir.deleteRecursively()
+                throw PackException("board_name_duplicate", context.getString(R.string.family_msg_43889, finalName))
+            }
+            meta.put("name", finalName)
+            if (roleIds != null) {
+                meta.put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
+            }
+            meta.put("id", newBoardId)
+            meta.put("revision", 0L)
+            meta.put("imported_at", System.currentTimeMillis())
+            metaFile.writeText(meta.toString())
+
+            val activeCount = countActiveMessages(File(boardDir, "messages.json"))
+            val storedRoleIds = when {
+                !meta.has("role_ids") -> null
+                meta.isNull("role_ids") -> emptyList()
+                else -> buildList {
+                    val arr = meta.optJSONArray("role_ids") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        add(arr.optString(i).trim())
+                    }
+                }.filter { it.isNotEmpty() && it != "admin" }
+            }
+            return BulletinBoardInfo(
+                id = newBoardId,
+                name = meta.optString("name", newBoardId),
+                revision = 0L,
+                messageCount = activeCount,
+                roleIds = storedRoleIds
+            )
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    fun previewImport(context: Context, inputStream: InputStream): PackPreview {
+        var manifest: JSONObject? = null
+        var boardId: String? = null
+        var entryCount = 0
+        ZipInputStream(inputStream).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                if (!entry.isDirectory) {
+                    entryCount += 1
+                    if (entry.name == MANIFEST_NAME) {
+                        manifest = runCatching { JSONObject(String(zip.readBytes(), Charsets.UTF_8)) }
+                            .getOrElse {
+                                throw PackException("invalid_boardpack", context.getString(R.string.family_msg_35962))
+                            }
+                        boardId = manifest?.optJSONObject("source")?.optString("board_id")?.takeIf { it.isNotBlank() }
+                    }
+                }
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        validateManifest(context, manifest)
+        val stats = manifest?.optJSONObject("stats")
+        val summary = PackSummary(
+            boardName = manifest?.optJSONObject("source")?.optString("board_name").orEmpty().ifBlank {
+                context.getString(R.string.family_msg_09744)
+            },
+            messageCount = stats?.optInt("message_count") ?: 0,
+            attachmentCount = stats?.optInt("attachment_count") ?: 0,
+            totalBytes = stats?.optLong("total_bytes") ?: 0L,
+            entryCount = entryCount,
+            sourceFileSize = null
+        )
+        return PackPreview(summary = summary, manifestBoardId = boardId)
+    }
+
     fun saveToRoot(
         context: Context,
         rootUri: String,
@@ -215,6 +502,46 @@ object BulletinBoardPack {
         context.contentResolver.openOutputStream(created.uri)?.use { output ->
             output.write(data)
         } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
+        "${BulletinBoardExporter.exportDirName(context)}/$safeName"
+    }
+
+    fun saveStreamToRoot(
+        context: Context,
+        rootUri: String,
+        fileName: String,
+        inputStream: InputStream,
+        totalBytes: Long? = null,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): Result<String> = runCatching {
+        val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(rootUri))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54649))
+        val exportDir = BulletinBoardExporter.findOrCreateExportDir(context, rootDoc)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_54837))
+        val safeName = sanitizePackFileName(fileName)
+        exportDir.findFile(safeName)?.takeIf { !it.isDirectory }?.delete()
+        val created = exportDir.createFile("application/octet-stream", safeName)
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_78543))
+        val boundedTotal = progressUnits((totalBytes ?: 0L).coerceAtLeast(1L))
+        onProgress?.invoke(0, boundedTotal)
+        context.contentResolver.openOutputStream(created.uri)?.use { output ->
+            val buffer = ByteArray(64 * 1024)
+            var copied = 0L
+            while (true) {
+                ensureNotCancelled(isCancelled)
+                val read = inputStream.read(buffer)
+                if (read < 0) break
+                if (read == 0) continue
+                output.write(buffer, 0, read)
+                copied += read.toLong()
+                if (totalBytes != null && totalBytes > 0) {
+                    onProgress?.invoke(progressUnits(copied), progressUnits(totalBytes))
+                }
+            }
+        } ?: throw IllegalStateException(context.getString(R.string.family_msg_25388))
+        if (totalBytes != null && totalBytes > 0) {
+            onProgress?.invoke(progressUnits(totalBytes), progressUnits(totalBytes))
+        }
         "${BulletinBoardExporter.exportDirName(context)}/$safeName"
     }
 
@@ -273,6 +600,14 @@ object BulletinBoardPack {
     private fun sanitizePackFileName(name: String): String {
         val base = name.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim().ifBlank { "board" }
         return if (base.endsWith(".boardpack", ignoreCase = true)) base else "$base.boardpack"
+    }
+
+    private fun progressUnits(value: Long): Int = value.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
+    private fun ensureNotCancelled(isCancelled: (() -> Boolean)?) {
+        if (isCancelled?.invoke() == true) {
+            throw CancellationException("boardpack_transfer_cancelled")
+        }
     }
 
     private data class PackStats(val messageCount: Int, val attachmentCount: Int, val totalBytes: Long)

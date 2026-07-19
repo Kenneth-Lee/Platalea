@@ -171,7 +171,7 @@ def default_config_dict() -> dict:
         "board_root": BOARDS_DIR_NAME,
         "supports_power_shutdown": True,
         "default_board": "default",
-        "max_import_bytes": 524288000,
+        "max_import_bytes": 68719476736,
         "roles": {
             "admin": {
                 "password": "host",

@@ -13,6 +13,7 @@ import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -32,10 +33,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -153,6 +156,8 @@ class FamilyNetworkManager(context: Context) {
     private var serverJob: Job? = null
     private var attachmentUploadJob: Job? = null
     private var attachmentDownloadJob: Job? = null
+    private var boardpackExportJob: Job? = null
+    private var boardpackImportJob: Job? = null
     private var stopIfIdleJob: Job? = null
     private var currentInstanceId: String? = null
     private var started = false
@@ -380,8 +385,8 @@ class FamilyNetworkManager(context: Context) {
             preferredPort = FAMILY_PREFERRED_PORT,
             sslContext = localIdentity.sslContext,
             log = { appendLog(it) },
-            handleRequest = { method, path, body, remoteAddress, headers ->
-                handleHttpRequest(method, path, body, remoteAddress, headers)
+            handleRequest = { method, path, body, bodyStream, remoteAddress, headers ->
+                handleHttpRequest(method, path, body, bodyStream, remoteAddress, headers)
             }
         )
         server.start()
@@ -886,13 +891,14 @@ class FamilyNetworkManager(context: Context) {
         service: FamilyDiscoveredService,
         board: BulletinBoardInfo,
         accessPassword: String?,
+        onProgress: (processed: Int, total: Int) -> Unit = { _, _ -> },
         onComplete: (Result<ByteArray>) -> Unit = {}
     ) {
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     if (service.isSelf) {
-                        boardStore.exportBoardpack(board.id)
+                        boardStore.exportBoardpack(board.id, onProgress)
                             ?: throw IllegalStateException(appContext.getString(R.string.family_msg_65793, board.id))
                     } else {
                         boardApiBytesRequest(
@@ -908,6 +914,10 @@ class FamilyNetworkManager(context: Context) {
             }
             onComplete(result)
         }
+    }
+
+    fun estimateExportBoardpack(boardId: String): BulletinBoardPack.PackSummary? {
+        return boardStore.estimateBoardpack(boardId)
     }
 
     fun saveBoardpack(
@@ -952,27 +962,87 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    fun exportBoardpackToRoot(
+        service: FamilyDiscoveredService,
+        board: BulletinBoardInfo,
+        accessPassword: String?,
+        rootUri: String,
+        onProgress: (processed: Int, total: Int) -> Unit = { _, _ -> },
+        onComplete: (Result<String>) -> Unit = {}
+    ) {
+        boardpackExportJob?.cancel()
+        boardpackExportJob = scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                val currentJob = currentCoroutineContext()
+                runCatching {
+                    if (service.isSelf) {
+                        boardStore.exportBoardpackToRoot(
+                            boardId = board.id,
+                            rootUri = rootUri,
+                            fileName = BulletinBoardPack.defaultPackFileName(board.name),
+                            onProgress = onProgress,
+                            isCancelled = { !currentJob.isActive }
+                        ).getOrThrow()
+                    } else {
+                        boardApiStreamRequest(
+                            service = service,
+                            path = "/boards/${board.id}/export.boardpack",
+                            accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                        ).getOrThrow().use { result ->
+                            BulletinBoardPack.saveStreamToRoot(
+                                context = appContext,
+                                rootUri = rootUri,
+                                fileName = BulletinBoardPack.defaultPackFileName(board.name),
+                                inputStream = result.inputStream,
+                                totalBytes = result.totalSize,
+                                onProgress = onProgress,
+                                isCancelled = { !currentJob.isActive }
+                            ).getOrThrow()
+                        }
+                    }
+                }
+            }
+            result.onSuccess {
+                appendLog(appContext.getString(R.string.family_msg_60034))
+            }.onFailure { error ->
+                appendError(appContext.getString(R.string.family_msg_60609, error.message ?: error.javaClass.simpleName))
+            }
+            boardpackExportJob = null
+            onComplete(result)
+        }
+    }
+
     fun importBoardpackFromFile(
         file: DocumentFileModel,
         service: FamilyDiscoveredService,
         accessPassword: String?,
         importName: String? = null,
+        onProgress: (processed: Int, total: Int) -> Unit = { _, _ -> },
         onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
     ) {
-        scope.launch {
+        boardpackImportJob?.cancel()
+        boardpackImportJob = scope.launch {
             val result = withContext(Dispatchers.IO) {
+                val currentJob = currentCoroutineContext()
                 runCatching {
-                    val bytes = BulletinBoardPack.readFromDocumentFile(appContext, file).getOrThrow()
                     val trimmedName = importName?.trim()?.takeIf { it.isNotEmpty() }
                     if (service.isSelf) {
-                        boardStore.importBoardpack(bytes, name = trimmedName)
+                        appContext.contentResolver.openInputStream(file.uri)?.use { input ->
+                            boardStore.importBoardpackFromStream(
+                                inputStream = input,
+                                name = trimmedName,
+                                onProgress = onProgress,
+                                isCancelled = { !currentJob.isActive }
+                            )
+                        } ?: throw IllegalStateException(appContext.getString(R.string.family_msg_94078))
                     } else {
                         importBoardpackViaApi(
                             service = service,
-                            data = bytes,
+                            file = file,
                             accessPassword = accessPassword?.trim()?.ifEmpty { null },
                             name = trimmedName,
                             roleIds = null,
+                            onUploadProgress = onProgress,
                         ).getOrThrow()
                     }
                 }
@@ -982,8 +1052,19 @@ class FamilyNetworkManager(context: Context) {
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_99856, error.message ?: error.javaClass.simpleName))
             }
+            boardpackImportJob = null
             onComplete(result)
         }
+    }
+
+    fun cancelBoardpackExport() {
+        boardpackExportJob?.cancel(CancellationException("boardpack_export_cancelled"))
+        boardpackExportJob = null
+    }
+
+    fun cancelBoardpackImport() {
+        boardpackImportJob?.cancel(CancellationException("boardpack_import_cancelled"))
+        boardpackImportJob = null
     }
 
     fun refreshOpenBoard(showLoadingIndicator: Boolean = false) {
@@ -2082,6 +2163,7 @@ class FamilyNetworkManager(context: Context) {
         method: String,
         path: String,
         bodyBytes: ByteArray,
+        bodyStream: InputStream?,
         remoteAddress: String,
         headers: Map<String, String>
     ): FamilyHttpResponse {
@@ -2095,7 +2177,7 @@ class FamilyNetworkManager(context: Context) {
                         put("message", appContext.getString(R.string.family_msg_06885))
                     }.toString()
                 )
-            return boardHttpHandler.handle(method, path, bodyBytes, auth, headers)
+            return boardHttpHandler.handle(method, path, bodyBytes, bodyStream, auth, headers)
         }
         if (method == "GET" && (path == "/" || path.isEmpty())) {
             val boards = boardStore.listBoards()
@@ -2470,12 +2552,69 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    private data class StreamDownloadResult(
+        val inputStream: InputStream,
+        val totalSize: Long?
+    ) : AutoCloseable {
+        override fun close() {
+            inputStream.close()
+        }
+    }
+
+    private fun boardApiStreamRequest(
+        service: FamilyDiscoveredService,
+        path: String,
+        accessPassword: String? = null
+    ): Result<StreamDownloadResult> {
+        return runCatching {
+            val protocol = service.attributes["proto"]?.trim()?.lowercase()
+            if (protocol != FAMILY_TLS_PROTOCOL) {
+                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
+            }
+            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
+            val endpoint = URL("https://${service.host}:${service.port}$path")
+            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+                requestMethod = "GET"
+                connectTimeout = 15000
+                readTimeout = 300000
+                setRequestProperty("Accept", "application/zip, application/octet-stream, */*")
+                accessPassword?.let {
+                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+            }
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                val detail = connection.errorStream?.use { readResponseText(it) }.orEmpty()
+                connection.disconnect()
+                throw IllegalStateException(detail.ifBlank { "HTTP $status" })
+            }
+            val totalSize = connection.getHeaderField("Content-Length")?.toLongOrNull()?.takeIf { it > 0 }
+            val stream = object : InputStream() {
+                private val input = connection.inputStream
+                override fun read(): Int = input.read()
+                override fun read(b: ByteArray, off: Int, len: Int): Int = input.read(b, off, len)
+                override fun close() {
+                    try {
+                        input.close()
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+            }
+            StreamDownloadResult(stream, totalSize)
+        }
+    }
+
     private fun importBoardpackViaApi(
         service: FamilyDiscoveredService,
-        data: ByteArray,
+        file: DocumentFileModel,
         accessPassword: String?,
         name: String?,
-        roleIds: List<String>?
+        roleIds: List<String>?,
+        onUploadProgress: ((processed: Int, total: Int) -> Unit)? = null
     ): Result<BulletinBoardInfo> {
         val query = buildList {
             name?.trim()?.takeIf { it.isNotEmpty() }?.let { add("name=${java.net.URLEncoder.encode(it, "UTF-8")}") }
@@ -2489,11 +2628,12 @@ class FamilyNetworkManager(context: Context) {
         }.joinToString("&")
         val path = if (query.isBlank()) "/boards/import" else "/boards/import?$query"
         return runCatching {
-            val response = boardApiBinaryImportRequest(
+            val response = boardApiStreamImportRequest(
                 service = service,
                 path = path,
-                body = data,
-                accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                file = file,
+                accessPassword = accessPassword?.trim()?.ifEmpty { null },
+                onUploadProgress = onUploadProgress
             ).getOrThrow()
             val json = JSONObject(response)
             if (!json.optBoolean("ok", false)) {
@@ -2503,11 +2643,12 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    private fun boardApiBinaryImportRequest(
+    private fun boardApiStreamImportRequest(
         service: FamilyDiscoveredService,
         path: String,
-        body: ByteArray,
-        accessPassword: String? = null
+        file: DocumentFileModel,
+        accessPassword: String? = null,
+        onUploadProgress: ((processed: Int, total: Int) -> Unit)? = null
     ): Result<String> {
         return runCatching {
             val protocol = service.attributes["proto"]?.trim()?.lowercase()
@@ -2525,12 +2666,29 @@ class FamilyNetworkManager(context: Context) {
                 readTimeout = 300000
                 doOutput = true
                 setRequestProperty("Content-Type", "application/vnd.localmanager.boardpack+zip")
+                file.size.takeIf { it > 0 }?.let { setFixedLengthStreamingMode(it) }
                 accessPassword?.let {
                     setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
                 }
             }
             try {
-                connection.outputStream.use { output -> output.write(body) }
+                appContext.contentResolver.openInputStream(file.uri)?.use { input ->
+                    connection.outputStream.use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        val total = file.size.coerceAtLeast(1L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                        var uploaded = 0L
+                        onUploadProgress?.invoke(0, total)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            if (read == 0) continue
+                            output.write(buffer, 0, read)
+                            uploaded += read.toLong()
+                            val current = uploaded.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+                            onUploadProgress?.invoke(current, total)
+                        }
+                    }
+                } ?: throw IllegalStateException(appContext.getString(R.string.family_msg_94078))
                 readApiResponse(connection)
             } finally {
                 connection.disconnect()
@@ -2817,7 +2975,7 @@ private class EmbeddedHttpServer(
     preferredPort: Int,
     sslContext: SSLContext,
     private val log: (String) -> Unit,
-    private val handleRequest: (String, String, ByteArray, String, Map<String, String>) -> FamilyHttpResponse
+    private val handleRequest: (String, String, ByteArray, InputStream?, String, Map<String, String>) -> FamilyHttpResponse
 ) {
     private val running = AtomicBoolean(false)
     private val serverSocket: SSLServerSocket = (sslContext.serverSocketFactory.createServerSocket() as SSLServerSocket).apply {
@@ -2892,15 +3050,19 @@ private class EmbeddedHttpServer(
             }
             val response = when {
                 method == "POST" || method == "GET" || method == "PUT" || method == "DELETE" -> {
-                    val bodyBytes = if (method == "POST" || method == "PUT") {
+                    val requestHasBody = method == "POST" || method == "PUT"
+                    val shouldStreamBody = requestHasBody && path.substringBefore('?').trimEnd('/').ifEmpty { "/" } == "/boards/import"
+                    val bodyBytes = if (requestHasBody && !shouldStreamBody) {
                         readBodyBytes(input, contentLength.coerceAtLeast(0))
                     } else {
                         ByteArray(0)
                     }
+                    val bodyStream = if (shouldStreamBody) LimitedInputStream(input, contentLength.coerceAtLeast(0).toLong()) else null
                     handleRequest(
                         method,
                         path,
                         bodyBytes,
+                        bodyStream,
                         client.inetAddress?.hostAddress ?: "",
                         headers
                     )
@@ -2918,14 +3080,18 @@ private class EmbeddedHttpServer(
                 append("\r\n")
             }.toByteArray(StandardCharsets.ISO_8859_1)
             output.write(responseHead)
-            response.bodyStream?.use { input ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read <= 0) break
-                    output.write(buffer, 0, read)
-                }
-            } ?: output.write(response.bodyBytes)
+            try {
+                response.bodyStream?.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                    }
+                } ?: output.write(response.bodyBytes)
+            } finally {
+                response.onStreamClosed?.invoke()
+            }
             output.flush()
         }
     }
@@ -2964,6 +3130,26 @@ private class EmbeddedHttpServer(
             totalRead += read
         }
         return if (totalRead == contentLength) body else body.copyOf(totalRead)
+    }
+
+    private class LimitedInputStream(
+        private val upstream: InputStream,
+        private var remaining: Long
+    ) : InputStream() {
+        override fun read(): Int {
+            if (remaining <= 0) return -1
+            val value = upstream.read()
+            if (value >= 0) remaining -= 1
+            return value
+        }
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (remaining <= 0) return -1
+            val toRead = minOf(len.toLong(), remaining).toInt()
+            val read = upstream.read(b, off, toRead)
+            if (read > 0) remaining -= read.toLong()
+            return read
+        }
     }
 
     private fun httpStatusText(statusCode: Int): String {

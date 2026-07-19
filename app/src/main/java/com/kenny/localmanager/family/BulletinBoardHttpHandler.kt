@@ -5,6 +5,8 @@ import com.kenny.localmanager.R
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 
 class BulletinBoardHttpHandler(
@@ -15,6 +17,7 @@ class BulletinBoardHttpHandler(
         method: String,
         path: String,
         bodyBytes: ByteArray,
+        bodyStream: InputStream? = null,
         auth: FamilyNetworkSessionAuth,
         headers: Map<String, String> = emptyMap()
     ): FamilyHttpResponse {
@@ -41,6 +44,14 @@ class BulletinBoardHttpHandler(
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/export.md")
                 if (boardId.isBlank() || boardId.contains('/')) return notFound()
                 exportBoard(boardId, auth)
+            }
+            method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/export.boardpack") -> {
+                val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/export.boardpack")
+                if (boardId.isBlank() || boardId.contains('/')) return notFound()
+                exportBoardpack(boardId, auth)
+            }
+            method == "POST" && normalizedPath == "/boards/import" -> {
+                importBoardpack(path, bodyBytes, bodyStream)
             }
             method == "GET" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages") -> {
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
@@ -406,6 +417,56 @@ class BulletinBoardHttpHandler(
         )
     }
 
+    private fun exportBoardpack(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
+        if (!canAccessBoardForId(boardId, auth)) {
+            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+        }
+        val board = store.getBoardInfo(boardId)
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+        val tempFile = File.createTempFile("boardpack_export_", ".zip", context.cacheDir)
+        return try {
+            FileOutputStream(tempFile).use { output ->
+                store.exportBoardpackToOutputStream(boardId, output).getOrThrow()
+            }
+            val stream = tempFile.inputStream()
+            FamilyHttpResponse(
+                statusCode = 200,
+                bodyBytes = ByteArray(0),
+                contentType = "application/vnd.localmanager.boardpack+zip",
+                extraHeaders = mapOf(
+                    "Content-Disposition" to "attachment; filename=\"${BulletinBoardPack.defaultPackFileName(board.name)}\""
+                ),
+                bodyStream = stream,
+                bodyLength = tempFile.length(),
+                onStreamClosed = { tempFile.delete() }
+            )
+        } catch (error: Throwable) {
+            tempFile.delete()
+            FamilyHttpResponse(500, jsonError("boardpack_export_failed", error.message ?: error.javaClass.simpleName))
+        }
+    }
+
+    private fun importBoardpack(path: String, bodyBytes: ByteArray, bodyStream: InputStream?): FamilyHttpResponse {
+        val query = path.substringAfter('?', "")
+        val params = parseQueryParams(query)
+        val name = params["name"]?.trim()?.ifEmpty { null }
+        val roleIds = params["role_ids"]
+            ?.split(',')
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+        return try {
+            val board = if (bodyStream != null) {
+                store.importBoardpackFromStream(bodyStream, name = name, roleIds = roleIds)
+            } else {
+                store.importBoardpack(bodyBytes, name = name, roleIds = roleIds)
+            }
+            FamilyHttpResponse(200, boardResponseJson(board, includeRoleIds = true))
+        } catch (error: Throwable) {
+            badRequest("boardpack_import_failed", error.message ?: error.javaClass.simpleName)
+        }
+    }
+
     private fun getMessages(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
         if (!canAccessBoardForId(boardId, auth)) {
             return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
@@ -505,6 +566,17 @@ class BulletinBoardHttpHandler(
     private fun parseJson(bodyText: String): JSONObject? =
         runCatching { JSONObject(bodyText) }.getOrNull()
 
+    private fun parseQueryParams(query: String): Map<String, String> {
+        if (query.isBlank()) return emptyMap()
+        return query.split('&').mapNotNull { item ->
+            if (item.isBlank()) return@mapNotNull null
+            val key = item.substringBefore('=', "").trim()
+            if (key.isEmpty()) return@mapNotNull null
+            val value = item.substringAfter('=', "")
+            key to java.net.URLDecoder.decode(value, Charsets.UTF_8.name())
+        }.toMap()
+    }
+
     private fun canAccessBoardForId(boardId: String, auth: FamilyNetworkSessionAuth): Boolean {
         val info = store.getBoardInfo(boardId) ?: return false
         return canAccessBoard(auth, info.roleIds)
@@ -533,7 +605,8 @@ data class FamilyHttpResponse(
     val contentType: String = "application/json; charset=utf-8",
     val extraHeaders: Map<String, String> = emptyMap(),
     val bodyStream: java.io.InputStream? = null,
-    val bodyLength: Long? = null
+    val bodyLength: Long? = null,
+    val onStreamClosed: (() -> Unit)? = null
 ) {
     constructor(statusCode: Int, body: String, contentType: String = "application/json; charset=utf-8") :
         this(statusCode, body.toByteArray(Charsets.UTF_8), contentType)

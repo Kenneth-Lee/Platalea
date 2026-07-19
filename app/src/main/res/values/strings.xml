@@ -441,6 +441,13 @@
     <string name="family_board_import_pack_no_root">请先在设置中选择根目录，才能从本地目录选择归档包。</string>
     <string name="family_board_import_pack_confirm_title">导入归档包</string>
     <string name="family_board_import_pack_confirm_message">将「%1$s」导入到 %2$s？</string>
+    <string name="family_board_pack_summary">规模：%1$s · 留言 %2$d · 附件 %3$d</string>
+    <string name="family_board_pack_bytes">数据量：%1$s</string>
+    <string name="family_board_pack_progress">%1$s %2$d/%3$d</string>
+    <string name="family_board_pack_stage_prepare">正在准备…</string>
+    <string name="family_board_pack_stage_export">正在导出…</string>
+    <string name="family_board_pack_stage_save">正在写入归档文件…</string>
+    <string name="family_board_pack_stage_import">正在导入…</string>
     <string name="family_board_pack_export_success">归档包已导出到 %1$s</string>
     <string name="family_board_pack_import_success">已导入留言板：%1$s</string>
     <string name="family_board_pack_failed">归档包操作失败：%1$s</string>

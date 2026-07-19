@@ -2,6 +2,8 @@ package com.kenny.localmanager.family
 
 import android.content.Context
 import com.kenny.localmanager.R
+import java.io.InputStream
+import java.io.OutputStream
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -151,20 +153,102 @@ class BulletinBoardStore(context: Context) {
         )
     }
 
-    fun exportBoardpack(boardId: String): ByteArray? = lock.read {
+    fun exportBoardpack(
+        boardId: String,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): ByteArray? = lock.read {
         if (readMeta(boardId) == null) return@read null
         runCatching {
-            BulletinBoardPack.exportBoardDir(appContext, boardDir(boardId))
+            BulletinBoardPack.exportBoardDir(appContext, boardDir(boardId), onProgress = onProgress, isCancelled = isCancelled)
         }.getOrElse { throw IllegalStateException(it.message ?: appContext.getString(R.string.family_msg_74262)) }
+    }
+
+    fun estimateBoardpack(boardId: String): BulletinBoardPack.PackSummary? = lock.read {
+        if (readMeta(boardId) == null) return@read null
+        runCatching {
+            BulletinBoardPack.summarizeBoardDir(appContext, boardDir(boardId))
+        }.getOrNull()
+    }
+
+    fun exportBoardpackToRoot(
+        boardId: String,
+        rootUri: String,
+        fileName: String,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): Result<String> = lock.read {
+        if (readMeta(boardId) == null) {
+            return@read Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_65793, boardId)))
+        }
+        runCatching {
+            BulletinBoardPack.exportBoardDirToRoot(
+                context = appContext,
+                rootUri = rootUri,
+                fileName = fileName,
+                boardDir = boardDir(boardId),
+                onProgress = onProgress,
+                isCancelled = isCancelled
+            ).getOrThrow()
+        }.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { error ->
+                val packError = error as? BulletinBoardPack.PackException
+                Result.failure(IllegalStateException(packError?.message ?: error.message ?: appContext.getString(R.string.family_msg_74262)))
+            }
+        )
+    }
+
+    fun exportBoardpackToOutputStream(
+        boardId: String,
+        output: OutputStream,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): Result<Unit> = lock.read {
+        if (readMeta(boardId) == null) {
+            return@read Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_65793, boardId)))
+        }
+        runCatching {
+            BulletinBoardPack.exportBoardDirToOutputStream(
+                context = appContext,
+                boardDir = boardDir(boardId),
+                output = output,
+                onProgress = onProgress,
+                isCancelled = isCancelled
+            )
+        }.fold(
+            onSuccess = { Result.success(Unit) },
+            onFailure = { error ->
+                val packError = error as? BulletinBoardPack.PackException
+                Result.failure(IllegalStateException(packError?.message ?: error.message ?: appContext.getString(R.string.family_msg_74262)))
+            }
+        )
     }
 
     fun importBoardpack(
         data: ByteArray,
         name: String? = null,
-        roleIds: List<String>? = null
+        roleIds: List<String>? = null,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
     ): BulletinBoardInfo = lock.write {
         runCatching {
-            BulletinBoardPack.importIntoRoot(appContext, rootDir, data, name, roleIds)
+            BulletinBoardPack.importIntoRoot(appContext, rootDir, data, name, roleIds, onProgress, isCancelled)
+        }.getOrElse { error ->
+            val packError = error as? BulletinBoardPack.PackException
+            throw IllegalStateException(packError?.message ?: error.message ?: appContext.getString(R.string.family_msg_68600))
+        }
+    }
+
+    fun importBoardpackFromStream(
+        inputStream: InputStream,
+        name: String? = null,
+        roleIds: List<String>? = null,
+        onProgress: ((processed: Int, total: Int) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null
+    ): BulletinBoardInfo = lock.write {
+        runCatching {
+            BulletinBoardPack.importIntoRoot(appContext, rootDir, inputStream, name, roleIds, onProgress, isCancelled)
         }.getOrElse { error ->
             val packError = error as? BulletinBoardPack.PackException
             throw IllegalStateException(packError?.message ?: error.message ?: appContext.getString(R.string.family_msg_68600))

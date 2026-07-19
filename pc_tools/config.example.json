@@ -6,7 +6,7 @@
   "service_type": "_localmanager._tcp.local.",
   "board_root": "./boards",
   "default_board": "default",
-  "max_import_bytes": 524288000,
+  "max_import_bytes": 68719476736,
   "roles": {
     "admin": {
       "password": "host",

@@ -72,6 +72,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -194,6 +195,11 @@ fun FamilyNetworkScreen(
     var attachmentHtmlLocation by remember { mutableStateOf<HtmlViewerLocation?>(null) }
     var attachmentPdfFile by remember { mutableStateOf<Pair<String, String>?>(null) }
     var attachmentImageFile by remember { mutableStateOf<Pair<String, String>?>(null) }
+    var showExportPackConfirmDialog by remember { mutableStateOf(false) }
+    var exportPackSummary by remember { mutableStateOf<BulletinBoardPack.PackSummary?>(null) }
+    var exportPackProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var exportPackStage by remember { mutableStateOf<String?>(null) }
+    var exportPackInProgress by remember { mutableStateOf(false) }
 
     LaunchedEffect(boardSession?.boardId) {
         messageForwardSelectionMode = false
@@ -569,45 +575,22 @@ fun FamilyNetworkScreen(
                                             text = { Text(stringResource(R.string.family_board_export_pack)) },
                                             onClick = {
                                                 showBoardMenu = false
-                                                manager.exportBoardpack(
-                                                    service = session.service,
-                                                    board = BulletinBoardInfo(
-                                                        id = session.boardId,
-                                                        name = session.boardName,
-                                                        revision = session.revision,
-                                                        messageCount = session.messages.count { it.isConversationMessage }
-                                                    ),
-                                                    accessPassword = session.accessPassword
-                                                ) { packResult ->
-                                                    packResult.onSuccess { bytes ->
-                                                        manager.saveBoardpackToRoot(exportRoot, session.boardName, bytes) { saveResult ->
-                                                            saveResult.onSuccess { path ->
-                                                                Toast.makeText(
-                                                                    context,
-                                                                    context.getString(R.string.family_board_pack_export_success, path),
-                                                                    Toast.LENGTH_SHORT
-                                                                ).show()
-                                                            }.onFailure { error ->
-                                                                Toast.makeText(
-                                                                    context,
-                                                                    context.getString(
-                                                                        R.string.family_board_pack_failed,
-                                                                        error.message ?: error.javaClass.simpleName
-                                                                    ),
-                                                                    Toast.LENGTH_LONG
-                                                                ).show()
-                                                            }
-                                                        }
-                                                    }.onFailure { error ->
-                                                        Toast.makeText(
-                                                            context,
-                                                            context.getString(
-                                                                R.string.family_board_pack_failed,
-                                                                error.message ?: error.javaClass.simpleName
-                                                            ),
-                                                            Toast.LENGTH_LONG
-                                                        ).show()
-                                                    }
+                                                scope.launch {
+                                                    val messageCount = session.messages.count { it.isConversationMessage }
+                                                    val attachmentCount = session.messages.sumOf { it.attachments.size }
+                                                    val summary = withContext(Dispatchers.IO) {
+                                                        manager.estimateExportBoardpack(session.boardId)
+                                                    } ?: BulletinBoardPack.PackSummary(
+                                                        boardName = session.boardName,
+                                                        messageCount = messageCount,
+                                                        attachmentCount = attachmentCount,
+                                                        totalBytes = 0L,
+                                                        entryCount = 0
+                                                    )
+                                                    exportPackSummary = summary
+                                                    exportPackProgress = null
+                                                    exportPackStage = context.getString(R.string.family_board_pack_stage_prepare)
+                                                    showExportPackConfirmDialog = true
                                                 }
                                             }
                                         )
@@ -853,6 +836,151 @@ fun FamilyNetworkScreen(
         }
     }
 
+    if (showExportPackConfirmDialog && boardSession != null) {
+        val session = boardSession
+        val exportRoot = rootUri.orEmpty()
+        val summary = exportPackSummary
+        val exportProgress = exportPackProgress
+        AlertDialog(
+            onDismissRequest = {
+                if (!exportPackInProgress) {
+                    showExportPackConfirmDialog = false
+                    exportPackSummary = null
+                    exportPackProgress = null
+                    exportPackStage = null
+                    exportPackInProgress = false
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_export_pack)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.family_board_pack_summary,
+                            summary?.boardName ?: session.boardName,
+                            summary?.messageCount ?: session.messages.count { it.isConversationMessage },
+                            summary?.attachmentCount ?: session.messages.sumOf { it.attachments.size }
+                        )
+                    )
+                    Text(
+                        stringResource(
+                            R.string.family_board_pack_bytes,
+                            summary?.takeIf { it.totalBytes > 0 }?.let { formatByteCount(it.totalBytes) } ?: "-"
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (exportPackInProgress) {
+                        Text(
+                            exportPackStage ?: stringResource(R.string.family_board_pack_stage_prepare),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (exportProgress != null) {
+                            val (current, total) = exportProgress
+                            LinearProgressIndicator(
+                                progress = { (current.toFloat() / total.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            val stageLabel = exportPackStage ?: stringResource(R.string.family_board_pack_stage_export)
+                            Text(
+                                if (stageLabel == stringResource(R.string.family_board_pack_stage_export)) {
+                                    "$stageLabel ${formatByteCount(current.toLong())} / ${formatByteCount(total.coerceAtLeast(1).toLong())}"
+                                } else {
+                                    stringResource(
+                                        R.string.family_board_pack_progress,
+                                        stageLabel,
+                                        current,
+                                        total.coerceAtLeast(1)
+                                    )
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !exportPackInProgress,
+                    onClick = {
+                        exportPackInProgress = true
+                        exportPackStage = context.getString(R.string.family_board_pack_stage_export)
+                        exportPackProgress = null
+                        manager.exportBoardpackToRoot(
+                            service = session.service,
+                            board = BulletinBoardInfo(
+                                id = session.boardId,
+                                name = session.boardName,
+                                revision = session.revision,
+                                messageCount = session.messages.count { it.isConversationMessage }
+                            ),
+                            accessPassword = session.accessPassword,
+                            rootUri = exportRoot,
+                            onProgress = { processed, total ->
+                                exportPackProgress = processed to total
+                            }
+                        ) { exportResult ->
+                            exportResult.onSuccess { path ->
+                                exportPackInProgress = false
+                                showExportPackConfirmDialog = false
+                                exportPackSummary = null
+                                exportPackProgress = null
+                                exportPackStage = null
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_pack_export_success, path),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }.onFailure { error ->
+                                exportPackInProgress = false
+                                exportPackProgress = null
+                                exportPackStage = null
+                                if (error is CancellationException) {
+                                    showExportPackConfirmDialog = false
+                                    exportPackSummary = null
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(
+                                            R.string.family_board_pack_failed,
+                                            error.message ?: error.javaClass.simpleName
+                                        ),
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = true,
+                    onClick = {
+                        if (exportPackInProgress) {
+                            manager.cancelBoardpackExport()
+                        }
+                        showExportPackConfirmDialog = false
+                        exportPackSummary = null
+                        exportPackProgress = null
+                        exportPackStage = null
+                        exportPackInProgress = false
+                    }
+                ) {
+                    Text(
+                        stringResource(
+                            if (exportPackInProgress) R.string.common_cancel else R.string.common_cancel
+                        )
+                    )
+                }
+            }
+        )
+    }
+
     attachmentMarkdownFile?.let { (uri, name, encrypted) ->
         MarkdownViewerScreen(
             initialFileUri = uri,
@@ -1050,6 +1178,9 @@ private fun BoardListPane(
     val availableRoles = remember(boards, service.isSelf) {
         collectKnownRoleOptions(manager, service.isSelf, boards)
     }
+    var importPackPreview by remember { mutableStateOf<BulletinBoardPack.PackPreview?>(null) }
+    var importPackProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var importPackStage by remember { mutableStateOf<String?>(null) }
 
     val reloadBoards: () -> Unit = {
         scope.launch {
@@ -1065,138 +1196,111 @@ private fun BoardListPane(
     }
 
     with(uiState) {
-    LaunchedEffect(service.deviceKey, accessPassword, refreshSignal) {
-        reloadBoards()
-    }
+        LaunchedEffect(service.deviceKey, accessPassword, refreshSignal) {
+            reloadBoards()
+        }
 
-    Box(modifier = modifier) {
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            stringResource(R.string.family_board_device_info_title),
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        Text(
-                            stringResource(R.string.family_board_login_identity_label, loginIdentityLabel),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.family_board_device_service_name_label, service.serviceName.ifBlank { "-" }),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.family_board_device_service_type_label, service.serviceType),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(
-                                R.string.family_board_device_endpoint_label,
-                                if (service.host.isBlank() || service.port <= 0) {
-                                    "-"
-                                } else {
-                                    "${service.host}:${service.port}"
-                                }
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(R.string.family_board_device_key_label, service.deviceKey),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            stringResource(
-                                R.string.family_board_device_power_label,
-                                if (service.supportsPowerShutdown) {
-                                    stringResource(R.string.family_board_device_power_supported)
-                                } else {
-                                    stringResource(R.string.family_board_device_power_unsupported)
-                                }
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            }
-
-            item {
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+        Box(modifier = modifier) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(stringResource(R.string.family_board_device_info_title), style = MaterialTheme.typography.titleMedium)
                             Text(
-                                stringResource(R.string.family_board_list_title),
-                                style = MaterialTheme.typography.titleSmall
+                                stringResource(R.string.family_board_login_identity_label, loginIdentityLabel),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(R.string.family_board_device_service_name_label, service.serviceName.ifBlank { "-" }),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(R.string.family_board_device_service_type_label, service.serviceType),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.family_board_device_endpoint_label,
+                                    if (service.host.isBlank() || service.port <= 0) "-" else "${service.host}:${service.port}"
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(R.string.family_board_device_key_label, service.deviceKey),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.family_board_device_power_label,
+                                    if (service.supportsPowerShutdown) stringResource(R.string.family_board_device_power_supported)
+                                    else stringResource(R.string.family_board_device_power_unsupported)
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                        when {
-                            loading -> {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(12.dp))
-                                    Text(stringResource(R.string.family_board_picker_loading))
+                    }
+                }
+
+                item {
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(stringResource(R.string.family_board_list_title), style = MaterialTheme.typography.titleSmall)
+                                if (canManageBoards) {
+                                    IconButton(onClick = { showActionsMenu = true }) {
+                                        Icon(Icons.Default.MoreVert, contentDescription = stringResource(R.string.family_board_menu))
+                                    }
                                 }
                             }
-                            error != null -> {
-                                Text(
-                                    error.orEmpty(),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            boards.isEmpty() -> {
-                                Text(
+                            when {
+                                loading -> {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.Center,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(stringResource(R.string.family_board_picker_loading))
+                                    }
+                                }
+                                error != null -> Text(error.orEmpty(), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                boards.isEmpty() -> Text(
                                     stringResource(R.string.family_board_picker_empty),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-                            else -> {
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    boards.forEachIndexed { index, board ->
-                                        Card(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .clickable(enabled = !actionInProgress) {
-                                                    onSelectBoard(board)
+                                else -> {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        boards.forEachIndexed { index, board ->
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable(enabled = !actionInProgress) { onSelectBoard(board) }
+                                            ) {
+                                                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                                    Text(board.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                                    Text(
+                                                        stringResource(R.string.family_board_picker_item_meta, board.messageCount),
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
                                                 }
-                                        ) {
-                                            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                                Text(
-                                                    board.name,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    stringResource(
-                                                        R.string.family_board_picker_item_meta,
-                                                        board.messageCount
-                                                    ),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
                                             }
-                                        }
-                                        if (index < boards.lastIndex) {
-                                            HorizontalDivider()
+                                            if (index < boards.lastIndex) HorizontalDivider()
                                         }
                                     }
                                 }
@@ -1205,309 +1309,201 @@ private fun BoardListPane(
                     }
                 }
             }
-        }
-    }
 
-    if (showBoardpackPickDialog && !rootUri.isNullOrBlank()) {
-        DirectoryPickDialog(
-            rootUri = rootUri,
-            hideDotFiles = hideDotFiles,
-            policy = DirectoryPickPurpose.BULLETIN_BOARDPACK.defaultPolicy(),
-            titleRes = R.string.family_board_import_pick_title,
-            hintRes = R.string.family_board_import_pick_hint,
-            invalidPickHintRes = R.string.family_board_import_pick_invalid,
-            noMatchingFilesHintRes = R.string.family_board_import_pick_empty_dir,
-            onDismiss = { showBoardpackPickDialog = false },
-            onPicked = { file ->
-                showBoardpackPickDialog = false
-                pendingImportFile = file
-                pendingImportName = ""
-                importNameConflict = false
-                importPackNameError = null
-                importPackSourceName = ""
-            }
-        )
-    }
-
-    LaunchedEffect(pendingImportFile?.uri) {
-        val file = pendingImportFile ?: return@LaunchedEffect
-        importPackNameLoading = true
-        importPackNameError = null
-        val result = withContext(Dispatchers.IO) {
-            runCatching {
-                val bytes = BulletinBoardPack.readFromDocumentFile(context, file).getOrThrow()
-                BulletinBoardPack.peekBoardName(context, bytes)
-            }
-        }
-        importPackNameLoading = false
-        result.onSuccess { packName ->
-            importPackSourceName = packName
-            importNameConflict = packName in existingBoardNames
-            pendingImportName = if (importNameConflict) {
-                BulletinBoardPack.suggestUniqueBoardName(context, packName, existingBoardNames)
-            } else {
-                packName
-            }
-        }.onFailure { error ->
-            importPackNameError = error.message ?: error.javaClass.simpleName
-        }
-    }
-
-    pendingImportFile?.let { file ->
-        val trimmedImportName = pendingImportName.trim()
-        val importNameTaken = trimmedImportName.isNotEmpty() && trimmedImportName in existingBoardNames
-        val canConfirmImport = !actionInProgress &&
-            !importPackNameLoading &&
-            trimmedImportName.isNotEmpty() &&
-            !importNameTaken &&
-            importPackNameError == null
-        AlertDialog(
-            onDismissRequest = {
-                if (!actionInProgress) pendingImportFile = null
-            },
-            title = { Text(stringResource(R.string.family_board_import_pack_confirm_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        stringResource(
-                            R.string.family_board_import_pack_confirm_message,
-                            file.name,
-                            targetDeviceLabel
-                        )
-                    )
-                    if (importPackNameLoading) {
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            Text(
-                                stringResource(R.string.family_board_picker_loading),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        OutlinedTextField(
-                            value = pendingImportName,
-                            onValueChange = { pendingImportName = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.family_board_import_name_label)) },
-                            singleLine = true,
-                            enabled = !actionInProgress,
-                            isError = importNameTaken || importPackNameError != null
-                        )
-                        if (importNameConflict && importPackSourceName.isNotEmpty()) {
-                            Text(
-                                stringResource(
-                                    R.string.family_board_import_name_conflict,
-                                    importPackSourceName
-                                ),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        if (importNameTaken) {
-                            Text(
-                                stringResource(R.string.family_board_name_duplicate, trimmedImportName),
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                        importPackNameError?.let { error ->
-                            Text(
-                                error,
-                                color = MaterialTheme.colorScheme.error,
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
+            if (showBoardpackPickDialog && !rootUri.isNullOrBlank()) {
+                DirectoryPickDialog(
+                    rootUri = rootUri,
+                    hideDotFiles = hideDotFiles,
+                    policy = DirectoryPickPurpose.BULLETIN_BOARDPACK.defaultPolicy(),
+                    titleRes = R.string.family_board_import_pick_title,
+                    hintRes = R.string.family_board_import_pick_hint,
+                    invalidPickHintRes = R.string.family_board_import_pick_invalid,
+                    noMatchingFilesHintRes = R.string.family_board_import_pick_empty_dir,
+                    onDismiss = { showBoardpackPickDialog = false },
+                    onPicked = { file ->
+                        showBoardpackPickDialog = false
+                        pendingImportFile = file
+                        pendingImportName = file.name.removeSuffix(".boardpack").trim().ifEmpty { "board" }
+                        importNameConflict = false
+                        importPackNameError = null
+                        importPackSourceName = ""
+                        importPackPreview = null
+                        importPackProgress = null
+                        importPackStage = null
                     }
-                }
-            },
-            confirmButton = {
-                Button(
-                    enabled = canConfirmImport,
-                    onClick = {
-                        actionInProgress = true
-                        manager.importBoardpackFromFile(
-                            file = file,
-                            service = service,
-                            accessPassword = accessPassword,
-                            importName = trimmedImportName
-                        ) { result ->
-                            actionInProgress = false
-                            pendingImportFile = null
-                            result.onSuccess { board ->
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.family_board_pack_import_success, board.name),
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                reloadBoards()
-                            }.onFailure { err ->
-                                Toast.makeText(
-                                    context,
-                                    context.getString(
-                                        R.string.family_board_pack_failed,
-                                        err.message ?: err.javaClass.simpleName
-                                    ),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.common_ok)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !actionInProgress,
-                    onClick = { pendingImportFile = null }
-                ) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    if (showRemoteShutdownDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                if (!remoteShutdownInProgress) showRemoteShutdownDialog = false
-            },
-            title = { Text(stringResource(R.string.family_board_remote_shutdown_title)) },
-            text = {
-                Text(
-                    stringResource(
-                        R.string.family_board_remote_shutdown_confirm,
-                        targetDeviceLabel
-                    )
                 )
-            },
-            confirmButton = {
-                Button(
-                    enabled = !remoteShutdownInProgress,
-                    onClick = {
-                        remoteShutdownInProgress = true
-                        manager.requestRemotePowerShutdown(service, accessPassword) { result ->
-                            remoteShutdownInProgress = false
-                            result.onSuccess {
-                                showRemoteShutdownDialog = false
-                                Toast.makeText(
-                                    context,
-                                    context.getString(
-                                        R.string.family_board_remote_shutdown_requested,
-                                        targetDeviceLabel
-                                    ) + "：" + it,
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                            }.onFailure { error ->
-                                Toast.makeText(
-                                    context,
-                                    context.getString(
-                                        R.string.family_board_remote_shutdown_failed,
-                                        error.message ?: error.javaClass.simpleName
-                                    ),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                        }
-                    }
-                ) { Text(stringResource(R.string.common_ok)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !remoteShutdownInProgress,
-                    onClick = { showRemoteShutdownDialog = false }
-                ) { Text(stringResource(R.string.common_cancel)) }
             }
-        )
-    }
 
-    if (showCreateDialog) {
-        val trimmedCreateName = newBoardName.trim()
-        val createNameTaken = trimmedCreateName.isNotEmpty() && trimmedCreateName in existingBoardNames
-        AlertDialog(
-            onDismissRequest = {
-                if (!actionInProgress) {
-                    showCreateDialog = false
-                    newBoardName = ""
-                    createNameError = null
+            LaunchedEffect(pendingImportFile?.uri) {
+                val file = pendingImportFile ?: return@LaunchedEffect
+                importPackNameLoading = true
+                importPackNameError = null
+                importPackPreview = null
+                val previewThresholdBytes = 32L * 1024L * 1024L
+                if (file.size > previewThresholdBytes) {
+                    importPackNameLoading = false
+                    importPackSourceName = ""
+                    importNameConflict = pendingImportName.trim() in existingBoardNames
+                    return@LaunchedEffect
                 }
-            },
-            title = { Text(stringResource(R.string.family_board_create_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = newBoardName,
-                        onValueChange = {
-                            newBoardName = it
-                            createNameError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.family_board_create_name_label)) },
-                        singleLine = true,
-                        enabled = !actionInProgress,
-                        isError = createNameTaken || createNameError != null
-                    )
-                    if (createNameTaken) {
-                        Text(
-                            stringResource(R.string.family_board_name_duplicate, trimmedCreateName),
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    createNameError?.let { error ->
-                        Text(
-                            error,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                    if (canManageBoards) {
-                        BoardRoleAccessSelector(
-                            availableRoles = availableRoles,
-                            selectedRoleIds = createSelectedRoleIds,
-                            onSelectionChange = { createSelectedRoleIds = it }
-                        )
+                val result = withContext(Dispatchers.IO) {
+                    runCatching {
+                        context.contentResolver.openInputStream(file.uri)?.use { input ->
+                            BulletinBoardPack.previewImport(context, input)
+                        } ?: throw IllegalStateException(context.getString(R.string.family_msg_94078))
                     }
                 }
-            },
-            confirmButton = {
-                Button(
-                    enabled = !actionInProgress && trimmedCreateName.isNotEmpty() && !createNameTaken,
-                    onClick = {
-                        actionInProgress = true
-                        manager.createBoardEntry(
-                            service = service,
-                            accessPassword = accessPassword,
-                            canManage = canManageBoards,
-                            name = newBoardName,
-                            roleIds = createSelectedRoleIds.toList()
-                        ) { result ->
-                            actionInProgress = false
-                            result.onSuccess {
-                                showCreateDialog = false
-                                newBoardName = ""
-                                createSelectedRoleIds = emptySet()
-                                createNameError = null
-                                reloadBoards()
-                            }.onFailure { error ->
-                                createNameError = error.message ?: error.javaClass.simpleName
+                importPackNameLoading = false
+                result.onSuccess { preview ->
+                    importPackPreview = preview
+                    importPackSourceName = preview.summary.boardName
+                    importNameConflict = preview.summary.boardName in existingBoardNames
+                    pendingImportName = if (importNameConflict) {
+                        BulletinBoardPack.suggestUniqueBoardName(context, preview.summary.boardName, existingBoardNames)
+                    } else {
+                        preview.summary.boardName
+                    }
+                }.onFailure { error ->
+                    importPackNameError = error.message ?: error.javaClass.simpleName
+                }
+            }
+
+            pendingImportFile?.let { file ->
+                val trimmedImportName = pendingImportName.trim()
+                val importNameTaken = trimmedImportName.isNotEmpty() && trimmedImportName in existingBoardNames
+                val canConfirmImport = !actionInProgress &&
+                    !importPackNameLoading &&
+                    trimmedImportName.isNotEmpty() &&
+                    !importNameTaken &&
+                    importPackNameError == null
+                AlertDialog(
+                    onDismissRequest = { if (!actionInProgress) pendingImportFile = null },
+                    title = { Text(stringResource(R.string.family_board_import_pack_confirm_title)) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(R.string.family_board_import_pack_confirm_message, file.name, targetDeviceLabel))
+                            Text(
+                                stringResource(R.string.family_board_pack_bytes, file.displaySize.ifBlank { "0 B" }),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            importPackPreview?.summary?.let { summary ->
+                                Text(
+                                    stringResource(R.string.family_board_pack_summary, summary.boardName, summary.messageCount, summary.attachmentCount),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (summary.totalBytes > 0) {
+                                    Text(
+                                        stringResource(R.string.family_board_pack_bytes, formatByteCount(summary.totalBytes)),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            when {
+                                importPackNameLoading -> {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                                        Text(
+                                            stringResource(R.string.family_board_picker_loading),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                importPackProgress != null && importPackStage != null -> {
+                                    val (current, total) = importPackProgress!!
+                                    val stageLabel = importPackStage!!
+                                    Text(
+                                        "$stageLabel ${formatByteCount(current.toLong())} / ${formatByteCount(total.coerceAtLeast(1).toLong())}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    LinearProgressIndicator(
+                                        progress = { (current.toFloat() / total.coerceAtLeast(1).toFloat()).coerceIn(0f, 1f) },
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
+                                else -> {
+                                    OutlinedTextField(
+                                        value = pendingImportName,
+                                        onValueChange = { pendingImportName = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        label = { Text(stringResource(R.string.family_board_import_name_label)) },
+                                        singleLine = true,
+                                        enabled = !actionInProgress,
+                                        isError = importNameTaken || importPackNameError != null
+                                    )
+                                    if (importNameConflict && importPackSourceName.isNotEmpty()) {
+                                        Text(
+                                            stringResource(R.string.family_board_import_name_conflict, importPackSourceName),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (importNameTaken) {
+                                        Text(
+                                            stringResource(R.string.family_board_name_duplicate, trimmedImportName),
+                                            color = MaterialTheme.colorScheme.error,
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    }
+                                    importPackNameError?.let { err ->
+                                        Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                                    }
+                                }
                             }
                         }
+                    },
+                    confirmButton = {
+                        Button(
+                            enabled = canConfirmImport,
+                            onClick = {
+                                actionInProgress = true
+                                importPackProgress = null
+                                importPackStage = context.getString(R.string.family_board_pack_stage_import)
+                                manager.importBoardpackFromFile(
+                                    file = file,
+                                    service = service,
+                                    accessPassword = accessPassword,
+                                    importName = trimmedImportName,
+                                    onProgress = { processed, total ->
+                                        importPackProgress = processed to total
+                                    }
+                                ) { result ->
+                                    actionInProgress = false
+                                    importPackProgress = null
+                                    importPackStage = null
+                                    pendingImportFile = null
+                                    result.onSuccess {
+                                        Toast.makeText(context, context.getString(R.string.family_board_pack_import_success, it.name), Toast.LENGTH_SHORT).show()
+                                        reloadBoards()
+                                    }.onFailure { err ->
+                                        if (err !is CancellationException) {
+                                            Toast.makeText(context, context.getString(R.string.family_board_pack_failed, err.message ?: err.javaClass.simpleName), Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                }
+                            }
+                        ) { Text(stringResource(R.string.common_ok)) }
+                    },
+                    dismissButton = {
+                        TextButton(enabled = true, onClick = {
+                            if (actionInProgress) {
+                                manager.cancelBoardpackImport()
+                            }
+                            actionInProgress = false
+                            importPackProgress = null
+                            importPackStage = null
+                            pendingImportFile = null
+                        }) {
+                            Text(stringResource(R.string.common_cancel))
+                        }
                     }
-                ) { Text(stringResource(R.string.common_ok)) }
-            },
-            dismissButton = {
-                TextButton(
-                    enabled = !actionInProgress,
-                    onClick = {
-                        showCreateDialog = false
-                        newBoardName = ""
-                        createNameError = null
-                    }
-                ) { Text(stringResource(R.string.common_cancel)) }
+                )
             }
-        )
-    }
+        }
     }
 }
 
