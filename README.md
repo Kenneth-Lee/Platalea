@@ -23,7 +23,7 @@
 
 本项目也上传到华为市场了，但只有国际版本，没有国内版本。
 
-最新一个发布版本在这里：[LocalManager-V0.23](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.23/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.24](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.24/app-release.apk)
 
 ## 设计思路
 
@@ -499,7 +499,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.21 初步完成家庭分享功能，全面完成多语言支持改造。
 * V0.22 家庭分享功能支持身份设置，而且这个功能和其他配合手机使用的功能全部统一为pc_tools命令。pc_tools在mac上支持远程关机，以便可以用手机控制无头工作站的关机。播放器支持试听。
 * V0.23 家庭共享功能优化，修正很多功能不稳定的问题，支持mac/linux/windows的启动拉起和远程关机服务。
-* V0.24 开发中
+* V0.24 家庭共享界面和性能优化，支持在留言板内部直接预览，支持音乐列表过滤
+* V0.25 开发中：修复前一版本改错的远程关机功能没有发到服务器上的问题
 
 ### 已知问题
 

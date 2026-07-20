@@ -493,6 +493,58 @@ fun FamilyNetworkScreen(
         )
     }
 
+    if (boardListUiState.showRemoteShutdownDialog && boardListSession != null) {
+        val session = requireNotNull(boardListSession)
+        AlertDialog(
+            onDismissRequest = {
+                if (!boardListUiState.remoteShutdownInProgress) {
+                    boardListUiState.showRemoteShutdownDialog = false
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_remote_shutdown_title)) },
+            text = {
+                Text(stringResource(R.string.family_board_remote_shutdown_confirm, session.service.displayHostName))
+            },
+            confirmButton = {
+                Button(
+                    enabled = !boardListUiState.remoteShutdownInProgress,
+                    onClick = {
+                        boardListUiState.remoteShutdownInProgress = true
+                        manager.requestRemotePowerShutdown(session.service, session.accessPassword) { result ->
+                            boardListUiState.remoteShutdownInProgress = false
+                            result.onSuccess { message ->
+                                boardListUiState.showRemoteShutdownDialog = false
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.family_board_remote_shutdown_requested,
+                                        session.service.displayHostName
+                                    ) + "\n" + message,
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }.onFailure { error ->
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.family_board_remote_shutdown_failed,
+                                        error.message ?: error.javaClass.simpleName
+                                    ),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_ok)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !boardListUiState.remoteShutdownInProgress,
+                    onClick = { boardListUiState.showRemoteShutdownDialog = false }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(

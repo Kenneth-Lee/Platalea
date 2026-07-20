@@ -564,6 +564,9 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String?,
         onComplete: (Result<String>) -> Unit = {}
     ) {
+        appendLog(
+            "远程关机准备发送: device=${service.displayHostName} endpoint=${service.host}:${service.port} auth=${if (accessPassword.isNullOrBlank()) "none" else "provided"}"
+        )
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 if (service.isSelf) {
@@ -583,13 +586,39 @@ class FamilyNetworkManager(context: Context) {
                     }
                 }
             }
-            result.onSuccess {
-                appendLog(appContext.getString(R.string.family_board_remote_shutdown_requested, service.displayHostName) + "：" + it)
+            result.onSuccess { message ->
+                appendLog(
+                    "远程关机已受理: device=${service.displayHostName} endpoint=${service.host}:${service.port} message=$message"
+                )
+                appendLog(appContext.getString(R.string.family_board_remote_shutdown_requested, service.displayHostName) + "：" + message)
             }.onFailure { error ->
-                appendError(appContext.getString(R.string.family_board_remote_shutdown_failed, error.message ?: error.javaClass.simpleName))
+                appendError(
+                    appContext.getString(
+                        R.string.family_board_remote_shutdown_failed,
+                        buildRemoteShutdownFailureDetail(service, error)
+                    )
+                )
             }
             onComplete(result)
         }
+    }
+
+    private fun buildRemoteShutdownFailureDetail(
+        service: FamilyDiscoveredService,
+        error: Throwable
+    ): String {
+        val root = rootCause(error)
+        val baseDetail = error.message?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: root.message?.trim().takeUnless { it.isNullOrEmpty() }
+            ?: root.javaClass.simpleName
+        val category = when {
+            error is FamilyApiException -> "HTTP ${error.statusCode}"
+            isLikelyAuthFailure(error) -> "认证或权限"
+            root is SocketTimeoutException -> "网络超时"
+            root is java.net.ConnectException || root is java.net.UnknownHostException -> "网络连接"
+            else -> root.javaClass.simpleName
+        }
+        return "device=${service.displayHostName} endpoint=${service.host}:${service.port} category=$category detail=$baseDetail"
     }
 
     /** 判断失败是否更可能是密码/权限问题，而非网络或 TLS 问题。 */
