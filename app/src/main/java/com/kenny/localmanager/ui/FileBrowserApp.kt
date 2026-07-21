@@ -267,14 +267,11 @@ import com.kenny.localmanager.player.ACTION_REMOVE_PLAYLIST_TRACK
 import com.kenny.localmanager.player.ACTION_RELOAD_PLAYLIST
 import com.kenny.localmanager.player.ACTION_RESUME
 import com.kenny.localmanager.player.ACTION_STOP
-import com.kenny.localmanager.player.EXTRA_DIR_URI
-import com.kenny.localmanager.player.EXTRA_NAMES
 import com.kenny.localmanager.player.ACTION_SEEK
 import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
 import com.kenny.localmanager.player.EXTRA_POSITION_MS
 import com.kenny.localmanager.player.EXTRA_START_INDEX
 import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
-import com.kenny.localmanager.player.EXTRA_URIS
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
 import com.kenny.localmanager.gpg.findPublicKeyRing
@@ -8368,26 +8365,6 @@ fun PlaybackScreen(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
     }
 
-    fun startFilteredPlaylistFromIndex(
-        pl: Playlist,
-        tracks: List<PlayerTrackEntry>,
-        startIndex: Int,
-        startPositionMs: Int = 0
-    ) {
-        if (tracks.isEmpty()) return
-        val safeIndex = startIndex.coerceIn(0, tracks.lastIndex)
-        recordPlayedPlaylist(pl)
-        val intent = Intent(context, PlaybackService::class.java).apply {
-            action = ACTION_PLAY
-            putStringArrayListExtra(EXTRA_URIS, ArrayList(tracks.map { it.uri }))
-            putStringArrayListExtra(EXTRA_NAMES, ArrayList(tracks.map { it.name }))
-            putExtra(EXTRA_START_INDEX, safeIndex)
-            putExtra(EXTRA_START_POSITION_MS, startPositionMs.coerceAtLeast(0))
-            putExtra(EXTRA_DIR_URI, "")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    }
-
     fun resumeLastPlayback(playlist: Playlist?) {
         if (playlist != null) {
             startPlaylist(playlist)
@@ -8933,7 +8910,7 @@ fun PlaybackScreen(
                                         if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer
                                         else MaterialTheme.colorScheme.surface
                                     )
-                                    .clickable { startFilteredPlaylistFromIndex(pl, filteredTrackEntries, i) }
+                                    .clickable { startPlaylistFromIndex(pl, entry.originalIndex) }
                                     .padding(start = 6.dp, end = 2.dp, top = 3.dp, bottom = 3.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
@@ -8971,7 +8948,7 @@ fun PlaybackScreen(
                                             leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
                                             onClick = {
                                                 trackActionMenuIndex = null
-                                                startFilteredPlaylistFromIndex(pl, filteredTrackEntries, i)
+                                                startPlaylistFromIndex(pl, entry.originalIndex)
                                             }
                                         )
                                         DropdownMenuItem(
@@ -9177,7 +9154,7 @@ fun PlaybackScreen(
                                                         } ?: entries
                                                     }
                                                     if (filtered.isNotEmpty()) {
-                                                        startFilteredPlaylistFromIndex(pl, filtered, 0)
+                                                        startPlaylistFromIndex(pl, filtered.first().originalIndex)
                                                     } else {
                                                         Toast.makeText(context, context.getString(R.string.player_track_filter_no_result), Toast.LENGTH_SHORT).show()
                                                     }
