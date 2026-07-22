@@ -4903,6 +4903,7 @@ fun EpubViewerScreen(
     var showGoToPositionDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
+    var showTransientTopMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     var regexQuery by remember { mutableStateOf("") }
@@ -4938,6 +4939,27 @@ fun EpubViewerScreen(
     val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
     val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
     val ttsSession = remember { EpubTtsSession(context) }
+
+    fun revealTransientTopMenu() {
+        if (!isFullscreen) return
+        showTransientTopMenu = !showTransientTopMenu
+        if (!showTransientTopMenu) {
+            showMoreMenu = false
+        }
+    }
+
+    fun closeMoreMenuForAction() {
+        showMoreMenu = false
+        if (isFullscreen) {
+            showTransientTopMenu = false
+        }
+    }
+
+    fun hideTransientTopMenuForPaging() {
+        if (!isFullscreen) return
+        showMoreMenu = false
+        showTransientTopMenu = false
+    }
 
     // 词典查询状态
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
@@ -5502,6 +5524,13 @@ fun EpubViewerScreen(
         }
     }
 
+    LaunchedEffect(isFullscreen) {
+        if (!isFullscreen) {
+            showMoreMenu = false
+            showTransientTopMenu = false
+        }
+    }
+
     LaunchedEffect(Unit) {
         requestRefreshTtsEngines()
     }
@@ -5697,6 +5726,7 @@ fun EpubViewerScreen(
 
     fun goToPreviousChapterLastPage() {
         if (currentChapterIndex > 0) {
+            hideTransientTopMenuForPaging()
             switchToChapter(currentChapterIndex - 1, 1f)
         }
     }
@@ -5709,6 +5739,7 @@ fun EpubViewerScreen(
 
     fun goToNextChapterFirstPage() {
         if (currentChapterIndex < chapters.size - 1) {
+            hideTransientTopMenuForPaging()
             switchToChapter(currentChapterIndex + 1, 0f)
         }
     }
@@ -6390,7 +6421,7 @@ fun EpubViewerScreen(
 
     Scaffold(
         topBar = {
-            if (!isFullscreen) {
+            if (!isFullscreen || showTransientTopMenu || showMoreMenu) {
                 TopAppBar(
                 title = {
                     Column {
@@ -6445,7 +6476,7 @@ fun EpubViewerScreen(
                                     )
                                 },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     if (ttsIsSpeaking) {
                                         ttsRequestJob?.cancel()
                                         ttsRequestJob = null
@@ -6475,7 +6506,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_tts_voice)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     showTtsVoiceDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
@@ -6483,7 +6514,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_find)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     showFindDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) }
@@ -6491,7 +6522,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.md_viewer_fulltext_find_title)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     if (fullTextQuery.isBlank() && regexQuery.isNotBlank()) {
                                         fullTextQuery = regexQuery
                                     }
@@ -6502,7 +6533,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_add_bookmark)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     requestAddBookmark()
                                 },
                                 leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
@@ -6510,7 +6541,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_view_bookmarks)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     if (bookNoteLoadedData == null && !bookNoteInProgress) {
                                         onRequestOpenBookNotes()
                                     }
@@ -6521,7 +6552,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_zoom_in)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     scalePercent = minOf(200, scalePercent + 25)
                                     val appliedScalePercent = scalePercent
                                     webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
@@ -6534,7 +6565,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_zoom_out)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     scalePercent = maxOf(50, scalePercent - 25)
                                     val appliedScalePercent = scalePercent
                                     webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
@@ -6547,7 +6578,7 @@ fun EpubViewerScreen(
                             DropdownMenuItem(
                                 text = { Text(context.getString(R.string.epub_action_fullscreen)) },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     isFullscreen = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
@@ -6563,7 +6594,7 @@ fun EpubViewerScreen(
                                     )
                                 },
                                 onClick = {
-                                    showMoreMenu = false
+                                    closeMoreMenuForAction()
                                     scope.launch {
                                         prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
                                     }
@@ -6864,7 +6895,8 @@ fun EpubViewerScreen(
                                 onScrollRatioChange = onScrollRatioChanged,
                                 onEdgeNavigatePreviousChapter = { goToPreviousChapterLastPage() },
                                 onEdgeNavigateNextChapter = { goToNextChapterFirstPage() },
-                                onDoubleTapReader = { isFullscreen = !isFullscreen }
+                                onDoubleTapReader = { isFullscreen = !isFullscreen },
+                                onCenterTapReader = { revealTransientTopMenu() }
                             ).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
@@ -7023,7 +7055,10 @@ fun EpubViewerScreen(
                         DraggableNextReadButton(
                             contentDescription = stringResource(R.string.epub_next_page_desc),
                             enabled = true,
-                            onClick = { (webViewRef.value as? GestureWebView)?.scrollNextPage() },
+                            onClick = {
+                                hideTransientTopMenuForPaging()
+                                (webViewRef.value as? GestureWebView)?.scrollNextPage()
+                            },
                             onDoubleClick = { isFullscreen = !isFullscreen },
                             initialXPercent = floatingButtonXPercent,
                             initialYPercent = floatingButtonYPercent,
@@ -8464,7 +8499,8 @@ private class GestureWebView(
     private val onScrollRatioChange: ((Float) -> Unit)? = null,
     private val onEdgeNavigatePreviousChapter: (() -> Unit)? = null,
     private val onEdgeNavigateNextChapter: (() -> Unit)? = null,
-    private val onDoubleTapReader: (() -> Unit)? = null
+    private val onDoubleTapReader: (() -> Unit)? = null,
+    private val onCenterTapReader: (() -> Unit)? = null
 ) : WebView(context) {
     private var pendingScrollRatio: Float? = null
     private var isRestoringScroll = false
@@ -8680,7 +8716,12 @@ private class GestureWebView(
 
     private val tapDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
         override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-            return navigateBySingleTap(e.x)
+            val handled = navigateBySingleTap(e.x)
+            if (!handled && onCenterTapReader != null) {
+                onCenterTapReader.invoke()
+                return true
+            }
+            return handled
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
@@ -8829,6 +8870,7 @@ fun PdfViewerScreen(
     var showGoToPage by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
+    var showTransientTopMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
     var deleteBookNoteConfirm by remember { mutableStateOf<BookNoteEntry?>(null) }
     // 缓存最近渲染的页面
@@ -8841,6 +8883,27 @@ fun PdfViewerScreen(
     }
 
     fun currentPageLocationLabel(): String = context.getString(R.string.pdf_page_location, currentPage + 1, pageCount)
+
+    fun revealTransientTopMenu() {
+        if (!isFullscreen) return
+        showTransientTopMenu = !showTransientTopMenu
+        if (!showTransientTopMenu) {
+            showMoreMenu = false
+        }
+    }
+
+    fun closeMoreMenuForAction() {
+        showMoreMenu = false
+        if (isFullscreen) {
+            showTransientTopMenu = false
+        }
+    }
+
+    fun hideTransientTopMenuForPaging() {
+        if (!isFullscreen) return
+        showMoreMenu = false
+        showTransientTopMenu = false
+    }
 
     fun upsertBookNoteEntry(updatedEntry: BookNoteEntry) {
         onBookNoteEntriesChanged(
@@ -8870,6 +8933,13 @@ fun PdfViewerScreen(
     }
 
     ImmersiveReaderFullscreenEffect(enabled = isFullscreen)
+
+    LaunchedEffect(isFullscreen) {
+        if (!isFullscreen) {
+            showMoreMenu = false
+            showTransientTopMenu = false
+        }
+    }
 
     // 初始加载：获取页数和第一页尺寸
     LaunchedEffect(uri) {
@@ -8979,17 +9049,22 @@ fun PdfViewerScreen(
     }
 
     // 处理点击翻页
-    fun handleTap(x: Float, screenWidth: Float) {
+    fun handleTap(x: Float, screenWidth: Float): Boolean {
         val edgeZone = screenWidth * 0.3f
-        when {
+        return when {
             x < edgeZone -> {
                 // 左侧点击 -> 上一页
+                hideTransientTopMenuForPaging()
                 if (currentPage > 0) currentPage--
+                true
             }
             x > screenWidth - edgeZone -> {
                 // 右侧点击 -> 下一页
+                hideTransientTopMenuForPaging()
                 if (currentPage < pageCount - 1) currentPage++
+                true
             }
+            else -> false
         }
     }
 
@@ -9310,7 +9385,7 @@ fun PdfViewerScreen(
 
     Scaffold(
         topBar = {
-            if (!isFullscreen) {
+            if (!isFullscreen || showTransientTopMenu || showMoreMenu) {
                 TopAppBar(
                     title = { Text(fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                     navigationIcon = {
@@ -9330,7 +9405,7 @@ fun PdfViewerScreen(
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.epub_action_add_bookmark)) },
                                     onClick = {
-                                        showMoreMenu = false
+                                        closeMoreMenuForAction()
                                         requestAddBookmark()
                                     },
                                     leadingIcon = { Icon(Icons.Default.BookmarkAdd, contentDescription = null) }
@@ -9338,7 +9413,7 @@ fun PdfViewerScreen(
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.epub_action_view_bookmarks)) },
                                     onClick = {
-                                        showMoreMenu = false
+                                        closeMoreMenuForAction()
                                         if (bookNoteLoadedData == null && !bookNoteInProgress) {
                                             onRequestOpenBookNotes()
                                         }
@@ -9349,7 +9424,7 @@ fun PdfViewerScreen(
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.epub_action_fullscreen)) },
                                     onClick = {
-                                        showMoreMenu = false
+                                        closeMoreMenuForAction()
                                         isFullscreen = true
                                     },
                                     leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
@@ -9365,7 +9440,7 @@ fun PdfViewerScreen(
                                         )
                                     },
                                     onClick = {
-                                        showMoreMenu = false
+                                        closeMoreMenuForAction()
                                         scope.launch {
                                             prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
                                         }
@@ -9473,7 +9548,10 @@ fun PdfViewerScreen(
                             .pointerInput(Unit) {
                                 detectTapGestures(
                                     onTap = { offset ->
-                                        handleTap(offset.x, boxSizePx.width)
+                                        val handled = handleTap(offset.x, boxSizePx.width)
+                                        if (!handled) {
+                                            revealTransientTopMenu()
+                                        }
                                     },
                                     onDoubleTap = {
                                         isFullscreen = !isFullscreen
@@ -9514,6 +9592,7 @@ fun PdfViewerScreen(
                                 contentDescription = stringResource(R.string.epub_next_page_desc),
                                 enabled = true,
                                 onClick = {
+                                    hideTransientTopMenuForPaging()
                                     if (currentPage < pageCount - 1) {
                                         currentPage++
                                     }
