@@ -8576,11 +8576,11 @@ private class GestureWebView(
                 var edgeTolerance = 2;
                 if (targetY < 0) {
                     targetY = 0;
-                    reachedStart = currentY <= edgeTolerance;
+                    reachedStart = currentY <= edgeTolerance || targetY <= edgeTolerance;
                 }
                 if (targetY > maxScroll) {
                     targetY = maxScroll;
-                    reachedEnd = currentY >= maxScroll - edgeTolerance;
+                    reachedEnd = currentY >= maxScroll - edgeTolerance || targetY >= maxScroll - edgeTolerance;
                 }
                 window.scrollTo(0, targetY);
 
