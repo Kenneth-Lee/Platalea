@@ -8547,9 +8547,114 @@ private class GestureWebView(
                     reachedEnd = currentY >= maxScroll - edgeTolerance;
                 }
                 window.scrollTo(0, targetY);
+
+                // 仅在“向后翻页”时尝试文本行吸附，尽量避免顶部出现半行文本。
+                // 对扫描图、纯图片或无法定位文本行的内容会自动跳过。
+                var snapped = false;
+                try {
+                    if ($signedDirection > 0 && targetY > edgeTolerance && targetY < maxScroll - edgeTolerance) {
+                        var delta = 0;
+                        var centerX = Math.floor((window.innerWidth || document.documentElement.clientWidth || 1) / 2);
+
+                        function clamp(value, min, max) {
+                            return Math.max(min, Math.min(max, value));
+                        }
+
+                        function isFiniteNumber(value) {
+                            return typeof value === 'number' && isFinite(value);
+                        }
+
+                        function charRectTopFromRange(node, offset) {
+                            var textLength = (node && node.textContent) ? node.textContent.length : 0;
+                            if (!node || textLength <= 0) return null;
+                            var safeOffset = clamp(offset, 0, textLength - 1);
+                            var probe = document.createRange();
+                            probe.setStart(node, safeOffset);
+                            probe.setEnd(node, safeOffset + 1);
+                            var rect = probe.getBoundingClientRect();
+                            return isFiniteNumber(rect.top) ? rect.top : null;
+                        }
+
+                        var caretRange = null;
+                        if (document.caretRangeFromPoint) {
+                            caretRange = document.caretRangeFromPoint(centerX, 1);
+                        } else if (document.caretPositionFromPoint) {
+                            var caretPos = document.caretPositionFromPoint(centerX, 1);
+                            if (caretPos && caretPos.offsetNode) {
+                                caretRange = document.createRange();
+                                var safeOffsetForRange = clamp(
+                                    caretPos.offset,
+                                    0,
+                                    (caretPos.offsetNode.textContent || '').length
+                                );
+                                caretRange.setStart(caretPos.offsetNode, safeOffsetForRange);
+                                caretRange.setEnd(caretPos.offsetNode, safeOffsetForRange);
+                            }
+                        }
+
+                        if (caretRange && caretRange.startContainer && caretRange.startContainer.nodeType === 3) {
+                            var textNode = caretRange.startContainer;
+                            var textLength = (textNode.textContent || '').length;
+                            if (textLength > 0) {
+                                var currentOffset = clamp(caretRange.startOffset, 0, textLength - 1);
+                                var currentTop = charRectTopFromRange(textNode, currentOffset);
+                                if (isFiniteNumber(currentTop) && currentTop < -0.5) {
+                                    var firstOffsetOnLine = currentOffset;
+                                    for (var i = currentOffset - 1; i >= 0; i--) {
+                                        var prevTop = charRectTopFromRange(textNode, i);
+                                        if (!isFiniteNumber(prevTop)) break;
+                                        if (Math.abs(prevTop - currentTop) <= 1.2) {
+                                            firstOffsetOnLine = i;
+                                        } else {
+                                            break;
+                                        }
+                                    }
+                                    var lineTop = charRectTopFromRange(textNode, firstOffsetOnLine);
+                                    if (isFiniteNumber(lineTop) && lineTop < -0.5) {
+                                        delta = lineTop;
+                                    } else {
+                                        delta = currentTop;
+                                    }
+                                }
+                            }
+                        }
+
+                        if (!(delta < -0.5)) {
+                            var probeYs = [1, 3, 6, 10, 14, 18, 24];
+                            var anchorEl = null;
+                            for (var p = 0; p < probeYs.length; p++) {
+                                var candidate = document.elementFromPoint(centerX, probeYs[p]);
+                                if (candidate) {
+                                    anchorEl = candidate;
+                                    break;
+                                }
+                            }
+                            if (anchorEl) {
+                                var elRect = anchorEl.getBoundingClientRect();
+                                if (isFiniteNumber(elRect.top) && isFiniteNumber(elRect.bottom) && elRect.top < -0.5 && elRect.bottom > 0.5) {
+                                    delta = elRect.top;
+                                }
+                            }
+                        }
+
+                        // 限制吸附幅度，避免跨段落大跳动；一般行高在这个范围内。
+                        if (delta < -0.5 && delta > -120) {
+                            var snappedY = clamp((window.scrollY || 0) + delta, 0, maxScroll);
+                            if (Math.abs(snappedY - (window.scrollY || 0)) >= 1) {
+                                window.scrollTo(0, snappedY);
+                                targetY = snappedY;
+                                snapped = true;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // 忽略吸附失败，保持基础翻页行为。
+                }
+
                 return JSON.stringify({
                     reachedStart: reachedStart,
                     reachedEnd: reachedEnd,
+                    snapped: snapped,
                     maxScroll: maxScroll,
                     currentY: currentY,
                     targetY: targetY
