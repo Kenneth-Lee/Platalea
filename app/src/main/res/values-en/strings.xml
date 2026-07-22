@@ -995,6 +995,8 @@ OPF directory files: %2$s</string>
     <string name="epub_action_book_notes">Book notes</string>
     <string name="epub_action_find">Find in text</string>
     <string name="epub_action_fullscreen">Fullscreen</string>
+    <string name="reader_action_hide_floating_next_button">Hide floating page-turn button</string>
+    <string name="reader_action_show_floating_next_button">Show floating page-turn button</string>
     <string name="epub_action_view_bookmarks">View bookmarks</string>
     <string name="epub_action_zoom_in">Zoom in</string>
     <string name="epub_action_zoom_out">Zoom out</string>

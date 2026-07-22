@@ -2,7 +2,6 @@ package com.kenny.localmanager.ui
 
 import android.annotation.SuppressLint
 import android.app.Activity
-import android.app.Application
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -11,7 +10,6 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
-import android.os.Bundle
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.speech.tts.TextToSpeech
@@ -63,6 +61,8 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Bookmarks
@@ -2935,12 +2935,10 @@ private fun KeepScreenOnEffect(enabled: Boolean = true) {
 
 @Composable
 private fun ImmersiveReaderFullscreenEffect(
-    enabled: Boolean,
-    onExitFullscreen: () -> Unit
+    enabled: Boolean
 ) {
     val view = LocalView.current
     val activity = view.context as? Activity
-    val latestOnExitFullscreen by rememberUpdatedState(onExitFullscreen)
 
     DisposableEffect(activity, view, enabled) {
         if (activity == null || !enabled) {
@@ -2953,24 +2951,7 @@ private fun ImmersiveReaderFullscreenEffect(
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         controller.hide(WindowInsetsCompat.Type.systemBars())
 
-        val callbacks = object : Application.ActivityLifecycleCallbacks {
-            override fun onActivityStopped(stoppedActivity: Activity) {
-                if (stoppedActivity == activity) {
-                    latestOnExitFullscreen()
-                }
-            }
-
-            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-            override fun onActivityStarted(activity: Activity) = Unit
-            override fun onActivityResumed(activity: Activity) = Unit
-            override fun onActivityPaused(activity: Activity) = Unit
-            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-            override fun onActivityDestroyed(activity: Activity) = Unit
-        }
-        activity.application.registerActivityLifecycleCallbacks(callbacks)
-
         onDispose {
-            activity.application.unregisterActivityLifecycleCallbacks(callbacks)
             controller.show(WindowInsetsCompat.Type.systemBars())
             WindowCompat.setDecorFitsSystemWindows(window, true)
         }
@@ -4968,9 +4949,7 @@ fun EpubViewerScreen(
     var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
     var dictLookupHistoryRestored by remember { mutableStateOf(false) }
 
-    ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
-        isFullscreen = false
-    }
+    ImmersiveReaderFullscreenEffect(enabled = isFullscreen)
 
     // 加载词典（只加载一次）
     LaunchedEffect(Unit) {
@@ -6573,6 +6552,29 @@ fun EpubViewerScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
                             )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (hideReaderFloatingNextButton) {
+                                            context.getString(R.string.reader_action_show_floating_next_button)
+                                        } else {
+                                            context.getString(R.string.reader_action_hide_floating_next_button)
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    showMoreMenu = false
+                                    scope.launch {
+                                        prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (hideReaderFloatingNextButton) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
                         }
                     }
                 },
@@ -6861,7 +6863,8 @@ fun EpubViewerScreen(
                                 ctx,
                                 onScrollRatioChange = onScrollRatioChanged,
                                 onEdgeNavigatePreviousChapter = { goToPreviousChapterLastPage() },
-                                onEdgeNavigateNextChapter = { goToNextChapterFirstPage() }
+                                onEdgeNavigateNextChapter = { goToNextChapterFirstPage() },
+                                onDoubleTapReader = { isFullscreen = !isFullscreen }
                             ).apply {
                                 setBackgroundColor(Color.TRANSPARENT)
                                 @SuppressLint("SetJavaScriptEnabled")
@@ -8460,7 +8463,8 @@ private class GestureWebView(
     context: Context,
     private val onScrollRatioChange: ((Float) -> Unit)? = null,
     private val onEdgeNavigatePreviousChapter: (() -> Unit)? = null,
-    private val onEdgeNavigateNextChapter: (() -> Unit)? = null
+    private val onEdgeNavigateNextChapter: (() -> Unit)? = null,
+    private val onDoubleTapReader: (() -> Unit)? = null
 ) : WebView(context) {
     private var pendingScrollRatio: Float? = null
     private var isRestoringScroll = false
@@ -8575,7 +8579,12 @@ private class GestureWebView(
         }
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
-            return selectParagraphAt(e.x, e.y)
+            return if (onDoubleTapReader != null) {
+                onDoubleTapReader.invoke()
+                true
+            } else {
+                selectParagraphAt(e.x, e.y)
+            }
         }
     })
 
@@ -8755,9 +8764,7 @@ fun PdfViewerScreen(
         showAddBookmark = true
     }
 
-    ImmersiveReaderFullscreenEffect(enabled = isFullscreen) {
-        isFullscreen = false
-    }
+    ImmersiveReaderFullscreenEffect(enabled = isFullscreen)
 
     // 初始加载：获取页数和第一页尺寸
     LaunchedEffect(uri) {
@@ -9242,6 +9249,29 @@ fun PdfViewerScreen(
                                     },
                                     leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
                                 )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (hideReaderFloatingNextButton) {
+                                                stringResource(R.string.reader_action_show_floating_next_button)
+                                            } else {
+                                                stringResource(R.string.reader_action_hide_floating_next_button)
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        scope.launch {
+                                            prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (hideReaderFloatingNextButton) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
                             }
                         }
                         // 缩放按钮
@@ -9339,6 +9369,9 @@ fun PdfViewerScreen(
                                 detectTapGestures(
                                     onTap = { offset ->
                                         handleTap(offset.x, boxSizePx.width)
+                                    },
+                                    onDoubleTap = {
+                                        isFullscreen = !isFullscreen
                                     },
                                     onLongPress = {
                                         Toast.makeText(

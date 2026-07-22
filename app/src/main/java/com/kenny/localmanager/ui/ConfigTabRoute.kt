@@ -164,7 +164,6 @@ private fun ConfigPanel(
     val selectedEpubTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
     val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
     val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
-    val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
     val preferredTtsLocale = remember { preferredEpubTtsLocale(null) }
     val effectiveEpubTtsEngine = remember(epubTtsEngines, selectedEpubTtsEnginePackage) {
         epubTtsEngines.firstOrNull { it.packageName == selectedEpubTtsEnginePackage }
@@ -693,22 +692,6 @@ private fun ConfigPanel(
                 Text(context.getString(R.string.config_startup_decrypt_desc), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Switch(checked = startupDecryptKey, onCheckedChange = onStartupDecryptKeyChange)
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(context.getString(R.string.config_reader_hide_floating_next_button), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text(context.getString(R.string.config_reader_hide_floating_next_button_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(
-                checked = hideReaderFloatingNextButton,
-                onCheckedChange = { enabled ->
-                    scope.launch { prefs.setHideReaderFloatingNextButton(enabled) }
-                }
-            )
         }
         Spacer(Modifier.height(12.dp))
         Row(
