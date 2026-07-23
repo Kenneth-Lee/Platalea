@@ -2008,11 +2008,33 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onServiceLost(serviceInfo: NsdServiceInfo) {
+                val lostName = serviceInfo.serviceName?.trim().orEmpty()
                 appendLog(appContext.getString(R.string.family_msg_24100, serviceInfo.serviceName))
+                if (lostName.isNotEmpty()) {
+                    _state.update { current ->
+                        current.copy(
+                            discoveredServices = current.discoveredServices.filterNot { it.serviceName == lostName }
+                        )
+                    }
+                }
             }
         }
         discoveryListener = listener
-        manager.discoverServices(FAMILY_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        try {
+            manager.discoverServices(FAMILY_SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, listener)
+        } catch (e: IllegalArgumentException) {
+            discoveryListener = null
+            _state.update { it.copy(isDiscovering = false) }
+            appendError(
+                "发现服务启动失败(参数异常): type=$FAMILY_SERVICE_TYPE protocol=${NsdManager.PROTOCOL_DNS_SD} detail=${e.message ?: e.javaClass.simpleName}"
+            )
+        } catch (e: Throwable) {
+            discoveryListener = null
+            _state.update { it.copy(isDiscovering = false) }
+            appendError(
+                "发现服务启动失败: type=$FAMILY_SERVICE_TYPE protocol=${NsdManager.PROTOCOL_DNS_SD} error=${e.message ?: e.javaClass.simpleName}"
+            )
+        }
     }
 
     private fun serviceTypeMatches(reportedType: String?): Boolean {
@@ -2039,7 +2061,8 @@ class FamilyNetworkManager(context: Context) {
             resolveInProgress = true
             pendingResolveQueue.removeFirst()
         }
-        manager.resolveService(next, object : NsdManager.ResolveListener {
+        try {
+            manager.resolveService(next, object : NsdManager.ResolveListener {
             override fun onResolveFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
                 val name = serviceInfo.serviceName?.trim().orEmpty()
                 synchronized(resolveQueueLock) {
@@ -2091,6 +2114,27 @@ class FamilyNetworkManager(context: Context) {
                 drainResolveQueue()
             }
         })
+        } catch (e: IllegalArgumentException) {
+            val name = next.serviceName?.trim().orEmpty()
+            synchronized(resolveQueueLock) {
+                pendingResolveNames.remove(name)
+                resolveInProgress = false
+            }
+            appendError(
+                "解析服务失败(参数异常): name=${name.ifEmpty { "<unknown>" }} detail=${e.message ?: e.javaClass.simpleName}"
+            )
+            drainResolveQueue()
+        } catch (e: Throwable) {
+            val name = next.serviceName?.trim().orEmpty()
+            synchronized(resolveQueueLock) {
+                pendingResolveNames.remove(name)
+                resolveInProgress = false
+            }
+            appendError(
+                "解析服务失败: name=${name.ifEmpty { "<unknown>" }} error=${e.message ?: e.javaClass.simpleName}"
+            )
+            drainResolveQueue()
+        }
     }
 
     private fun clearResolveQueue() {
