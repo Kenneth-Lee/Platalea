@@ -82,6 +82,7 @@
     <string name="player_resume_hint">Resume the last playlist: %1$s</string>
     <string name="player_select_playlist_hint">Select a playlist to start playback.</string>
     <string name="player_resume_last">Resume Last Playback</string>
+    <string name="player_resume_current_playlist">Resume current playlist</string>
     <string name="player_playlist_section">Playlists</string>
     <string name="player_no_playlists_hint">No playlists yet. Select MP3/OGG items in the pending list and tap Add to Playback.</string>
     <string name="player_add_to_playback_title">Add to Playback</string>
@@ -783,6 +784,7 @@ OPF directory files: %2$s</string>
     <string name="zip_spine_not_found">(spine not found)</string>
     <string name="about_author">Author: Kenneth Lee &lt;Kenneth-Lee-2012@qq.com&gt;</string>
     <string name="about_version">Version: %1$s</string>
+    <string name="about_build_time">Build time: %1$s</string>
     <string name="about_disclaimer">This app has not been rigorously tested. Use it at your own risk. The author is not responsible for any data loss.</string>
     <string name="about_try_luck">Try your luck</string>
     <string name="about_no_tips">No tips available</string>
@@ -1332,8 +1334,8 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_no_audio_in_list">No playable audio files in current list</string>
     <string name="browser_generate_dir_playlist">Generate music list for current directory</string>
     <string name="browser_player_config_title">Player settings</string>
-    <string name="browser_playback_diagnostics">Playback diagnostics</string>
-    <string name="browser_hide_diagnostics">Hide diagnostics</string>
+    <string name="browser_playback_diagnostics">Diagnostics</string>
+    <string name="browser_hide_diagnostics">Hide</string>
     <string name="browser_player_engine">Playback engine</string>
     <string name="browser_system_media_player">System MediaPlayer</string>
     <string name="browser_audio_effects">In-app audio effects</string>
@@ -1375,9 +1377,9 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_regex_example">e.g. .*\.pdf$ or ^IMG_</string>
     <string name="browser_archive_operation">Operation: %1$s</string>
     <string name="browser_file_count">%1$d files total</string>
-    <string name="browser_bit_depth">Bit depth: %1$d bit</string>
-    <string name="browser_sample_rate">Sample rate: %1$d Hz</string>
-    <string name="browser_bitrate">Bitrate: %1$d bps</string>
+    <string name="browser_bit_depth">Bit depth: %1$s bit</string>
+    <string name="browser_sample_rate">Sample rate: %1$s Hz</string>
+    <string name="browser_bitrate">Bitrate: %1$s bps</string>
     <string name="browser_type_value">Type: %1$s</string>
     <string name="browser_output_based_on">Output based on: %1$s</string>
     <string name="browser_source_nature">Source type: %1$s</string>
@@ -1588,6 +1590,7 @@ It will sync, copy, and push automatically.</string>
     <string name="epub_jump_position_hint">Jump within the current chapter only, using in-chapter progress % as an approximate position.</string>
     <string name="epub_jump_current_chapter">Current chapter: %1$d</string>
     <string name="epub_jump_target_progress">Target progress: %1$d%%</string>
+    <string name="epub_last_page_reached">Reached the last page of this chapter</string>
     <string name="epub_no_jump_target">This reading note has no jump target</string>
     <string name="epub_prev_chapter">Previous chapter</string>
     <string name="epub_next_chapter">Next chapter</string>

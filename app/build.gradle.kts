@@ -1,4 +1,6 @@
 import java.util.Properties
+import java.time.ZonedDateTime
+import java.time.ZoneOffset
 import org.gradle.api.tasks.Copy
 
 plugins {
@@ -12,6 +14,7 @@ val syncAboutReadme by tasks.registering(Copy::class) {
 }
 
 val appVersionName = rootProject.file("VERSION").readText().trim()
+val appBuildTime = ZonedDateTime.now(ZoneOffset.UTC).toString()
 
 android {
     namespace = "com.kenny.localmanager"
@@ -22,6 +25,7 @@ android {
         targetSdk = 34
         versionCode = 21
         versionName = appVersionName
+        buildConfigField("String", "BUILD_TIME", "\"$appBuildTime\"")
     }
     signingConfigs {
         create("release") {
@@ -60,6 +64,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
     sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/aboutAssets"))
     composeOptions {

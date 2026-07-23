@@ -319,14 +319,14 @@ private fun DraggableNextReadButton(
     var offsetY by remember { mutableStateOf<Float?>(null) }
     var hasUserDragged by remember { mutableStateOf(false) }
     val backgroundColor = if (enabled) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.46f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.56f)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.34f)
     }
     val contentColor = if (enabled) {
-        MaterialTheme.colorScheme.onPrimaryContainer
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.62f)
     } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.52f)
     }
 
     fun maxOffsetX(): Float = (containerSize.width - buttonSizePx - marginPx).coerceAtLeast(marginPx)
@@ -5066,6 +5066,7 @@ fun EpubViewerScreen(
     var pendingTtsStartChapterIndex by remember { mutableStateOf<Int?>(null) }
     var ttsPendingRefreshAttempted by remember { mutableStateOf(false) }
     var autoAdvanceTtsChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var lastReachedChapterEndToastAtMillis by remember { mutableStateOf(0L) }
     val preferredTtsLocale = remember(extractResult.bookInfo.language) {
         preferredEpubTtsLocale(extractResult.bookInfo.language)
     }
@@ -5501,10 +5502,18 @@ fun EpubViewerScreen(
         return chapterScrollRatios[index] ?: fallback
     }
 
-    fun switchToChapter(index: Int, fallbackScrollRatio: Float = 0f) {
+    fun switchToChapter(
+        index: Int,
+        fallbackScrollRatio: Float = 0f,
+        useRememberedScrollRatio: Boolean = true
+    ) {
         if (index !in chapters.indices) return
         chapterScrollRatios[currentChapterIndex] = currentScrollRatio.coerceIn(0f, 1f)
-        val restoredRatio = rememberedChapterScrollRatio(index, fallbackScrollRatio).coerceIn(0f, 1f)
+        val restoredRatio = if (useRememberedScrollRatio) {
+            rememberedChapterScrollRatio(index, fallbackScrollRatio).coerceIn(0f, 1f)
+        } else {
+            fallbackScrollRatio.coerceIn(0f, 1f)
+        }
         currentChapterIndex = index
         currentScrollRatio = restoredRatio
         pendingProgrammaticScrollRatio = restoredRatio
@@ -5866,7 +5875,7 @@ fun EpubViewerScreen(
     fun goToPreviousChapterLastPage() {
         if (currentChapterIndex > 0) {
             hideTransientTopMenuForPaging()
-            switchToChapter(currentChapterIndex - 1, 1f)
+            switchToChapter(currentChapterIndex - 1, 1f, useRememberedScrollRatio = false)
         }
     }
 
@@ -5879,7 +5888,15 @@ fun EpubViewerScreen(
     fun goToNextChapterFirstPage() {
         if (currentChapterIndex < chapters.size - 1) {
             hideTransientTopMenuForPaging()
-            switchToChapter(currentChapterIndex + 1, 0f)
+            switchToChapter(currentChapterIndex + 1, 0f, useRememberedScrollRatio = false)
+        }
+    }
+
+    fun notifyReachedCurrentChapterLastPage() {
+        val now = System.currentTimeMillis()
+        if (now - lastReachedChapterEndToastAtMillis >= 1200L) {
+            Toast.makeText(context, context.getString(R.string.epub_last_page_reached), Toast.LENGTH_SHORT).show()
+            lastReachedChapterEndToastAtMillis = now
         }
     }
 
@@ -7056,6 +7073,7 @@ fun EpubViewerScreen(
                                 onScrollRatioChange = onScrollRatioChanged,
                                 onEdgeNavigatePreviousChapter = { goToPreviousChapterLastPage() },
                                 onEdgeNavigateNextChapter = { goToNextChapterFirstPage() },
+                                onReachChapterLastPage = { notifyReachedCurrentChapterLastPage() },
                                 onDoubleTapReader = { isFullscreen = !isFullscreen },
                                 onCenterTapReader = { revealTransientTopMenu() }
                             ).apply {
@@ -7142,33 +7160,33 @@ fun EpubViewerScreen(
                                                 height: 22px;
                                                 padding: 0 6px;
                                                 border-radius: 999px;
-                                                background: rgba(255, 179, 0, 0.92);
-                                                color: #1f1f1f;
+                                                background: rgba(255, 179, 0, 0.46);
+                                                color: rgba(31, 31, 31, 0.64);
                                                 font-size: 11px;
                                                 line-height: 22px;
                                                 text-align: center;
-                                                box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+                                                box-shadow: 0 1px 4px rgba(0,0,0,0.12);
                                                 transform: translateY(-50%);
                                                 z-index: 9999;
-                                                opacity: 0.72;
+                                                opacity: 0.52;
                                                 pointer-events: none;
                                             }
                                             .lm-epub-bookmark-marker.active {
-                                                opacity: 1;
-                                                background: rgba(255, 111, 0, 0.96);
-                                                color: #ffffff;
-                                                box-shadow: 0 4px 12px rgba(255, 111, 0, 0.35);
+                                                opacity: 0.76;
+                                                background: rgba(255, 111, 0, 0.58);
+                                                color: rgba(255, 255, 255, 0.78);
+                                                box-shadow: 0 2px 8px rgba(255, 111, 0, 0.22);
                                             }
                                             .lm-epub-last-read-marker {
-                                                background: rgba(33, 150, 243, 0.95);
-                                                color: #ffffff;
-                                                opacity: 0.92;
-                                                box-shadow: 0 4px 12px rgba(33, 150, 243, 0.28);
+                                                background: rgba(33, 150, 243, 0.46);
+                                                color: rgba(255, 255, 255, 0.70);
+                                                opacity: 0.56;
+                                                box-shadow: 0 2px 8px rgba(33, 150, 243, 0.16);
                                             }
                                             .lm-epub-last-read-marker.active {
-                                                background: rgba(13, 110, 253, 0.98);
-                                                color: #ffffff;
-                                                box-shadow: 0 6px 16px rgba(13, 110, 253, 0.34);
+                                                background: rgba(13, 110, 253, 0.62);
+                                                color: rgba(255, 255, 255, 0.82);
+                                                box-shadow: 0 3px 10px rgba(13, 110, 253, 0.22);
                                             }
                                             [data-lm-tts-id] {
                                                 transition: background-color 0.22s ease, box-shadow 0.22s ease;
@@ -8660,6 +8678,7 @@ private class GestureWebView(
     private val onScrollRatioChange: ((Float) -> Unit)? = null,
     private val onEdgeNavigatePreviousChapter: (() -> Unit)? = null,
     private val onEdgeNavigateNextChapter: (() -> Unit)? = null,
+    private val onReachChapterLastPage: (() -> Unit)? = null,
     private val onDoubleTapReader: (() -> Unit)? = null,
     private val onCenterTapReader: (() -> Unit)? = null
 ) : WebView(context) {
@@ -8682,6 +8701,12 @@ private class GestureWebView(
             }
             else -> false
         }
+    }
+
+    private fun isCenterTapZone(x: Float): Boolean {
+        val viewWidth = width.toFloat().coerceAtLeast(1f)
+        val edgeWidth = viewWidth * 0.3f
+        return x >= edgeWidth && x <= viewWidth - edgeWidth
     }
 
     private fun selectParagraphAt(x: Float, y: Float): Boolean {
@@ -8732,8 +8757,10 @@ private class GestureWebView(
                 var maxScroll = Math.max(0, docHeight - viewHeight);
                 var currentY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
                 var targetY = currentY + ($signedDirection * viewHeight);
+                var wasAtEnd = currentY >= maxScroll - 2;
                 var reachedStart = false;
                 var reachedEnd = false;
+                var justReachedEnd = false;
                 var edgeTolerance = 2;
                 if (targetY < 0) {
                     targetY = 0;
@@ -8744,6 +8771,13 @@ private class GestureWebView(
                     reachedEnd = currentY >= maxScroll - edgeTolerance || targetY >= maxScroll - edgeTolerance;
                 }
                 window.scrollTo(0, targetY);
+                if ($signedDirection > 0 && targetY >= maxScroll - edgeTolerance && currentY < maxScroll - edgeTolerance) {
+                    justReachedEnd = true;
+                }
+
+                if ($signedDirection > 0 && !wasAtEnd && targetY >= maxScroll - edgeTolerance) {
+                    justReachedEnd = true;
+                }
 
                 // 仅在“向后翻页”时尝试文本行吸附，尽量避免顶部出现半行文本。
                 // 对扫描图、纯图片或无法定位文本行的内容会自动跳过。
@@ -8851,6 +8885,7 @@ private class GestureWebView(
                 return JSON.stringify({
                     reachedStart: reachedStart,
                     reachedEnd: reachedEnd,
+                    justReachedEnd: justReachedEnd,
                     snapped: snapped,
                     maxScroll: maxScroll,
                     currentY: currentY,
@@ -8867,9 +8902,13 @@ private class GestureWebView(
                     ?: return@evaluateJavascript
                 val reachedStart = normalized.contains("\"reachedStart\":true")
                 val reachedEnd = normalized.contains("\"reachedEnd\":true")
+                val justReachedEnd = normalized.contains("\"justReachedEnd\":true")
+                if (signedDirection > 0 && justReachedEnd) {
+                    onReachChapterLastPage?.invoke()
+                }
                 when {
                     signedDirection < 0 && reachedStart -> onEdgeNavigatePreviousChapter?.invoke()
-                    signedDirection > 0 && reachedEnd -> onEdgeNavigateNextChapter?.invoke()
+                    signedDirection > 0 && reachedEnd && !justReachedEnd -> onEdgeNavigateNextChapter?.invoke()
                 }
             }
         }
@@ -8887,7 +8926,12 @@ private class GestureWebView(
 
         override fun onDoubleTap(e: MotionEvent): Boolean {
             return if (onDoubleTapReader != null) {
-                onDoubleTapReader.invoke()
+                if (isCenterTapZone(e.x)) {
+                    onDoubleTapReader.invoke()
+                } else {
+                    // 边缘区域保留给翻页，避免快速连击误触全屏。
+                    navigateBySingleTap(e.x)
+                }
                 true
             } else {
                 selectParagraphAt(e.x, e.y)
@@ -9227,6 +9271,11 @@ fun PdfViewerScreen(
             }
             else -> false
         }
+    }
+
+    fun isCenterTapZone(x: Float, screenWidth: Float): Boolean {
+        val edgeZone = screenWidth * 0.3f
+        return x >= edgeZone && x <= screenWidth - edgeZone
     }
 
     BackHandler {
@@ -9719,7 +9768,9 @@ fun PdfViewerScreen(
                                         }
                                     },
                                     onDoubleTap = {
-                                        isFullscreen = !isFullscreen
+                                        if (isCenterTapZone(it.x, boxSizePx.width)) {
+                                            isFullscreen = !isFullscreen
+                                        }
                                     },
                                     onLongPress = {
                                         Toast.makeText(

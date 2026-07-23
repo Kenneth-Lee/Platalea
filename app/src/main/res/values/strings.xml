@@ -86,6 +86,7 @@
     <string name="player_resume_hint">可从上次播放列表继续：%1$s</string>
     <string name="player_select_playlist_hint">请先选择一个播放列表开始播放</string>
     <string name="player_resume_last">继续上次播放</string>
+    <string name="player_resume_current_playlist">恢复当前列表播放</string>
     <string name="player_playlist_section">播放列表</string>
     <string name="player_no_playlists_hint">暂无播放列表。在待处理列表中勾选 MP3/OGG 后点击「加入播放」。</string>
     <string name="player_add_to_playback_title">加入播放</string>
@@ -955,6 +956,7 @@ OPF目录文件: %2$s</string>
     <string name="zip_spine_not_found">(未找到spine)</string>
     <string name="about_author">作者：柱子哥 &lt;Kenneth-Lee-2012@qq.com&gt;</string>
     <string name="about_version">版本：%1$s</string>
+    <string name="about_build_time">Build time：%1$s</string>
     <string name="about_disclaimer">本软件没有经过严肃的测试，请自担使用风险，作者不对任何数据破坏负责。</string>
     <string name="about_try_luck">试试运气</string>
     <string name="about_no_tips">暂无提示</string>
@@ -1373,8 +1375,8 @@ OPF目录文件: %2$s</string>
     <string name="browser_no_audio_in_list">当前列表没有可播放的音频文件</string>
     <string name="browser_generate_dir_playlist">生成当前目录音乐列表</string>
     <string name="browser_player_config_title">播放器配置</string>
-    <string name="browser_playback_diagnostics">播放诊断</string>
-    <string name="browser_hide_diagnostics">隐藏诊断</string>
+    <string name="browser_playback_diagnostics">诊断</string>
+    <string name="browser_hide_diagnostics">隐藏</string>
     <string name="browser_player_engine">播放内核</string>
     <string name="browser_system_media_player">系统 MediaPlayer</string>
     <string name="browser_audio_effects">本 App 音效</string>
@@ -1416,9 +1418,9 @@ OPF目录文件: %2$s</string>
     <string name="browser_regex_example">例如 .*\.pdf$ 或 ^IMG_</string>
     <string name="browser_archive_operation">操作: %1$s</string>
     <string name="browser_file_count">共 %1$d 个文件</string>
-    <string name="browser_bit_depth">位深：%1$d bit</string>
-    <string name="browser_sample_rate">采样率：%1$d Hz</string>
-    <string name="browser_bitrate">码率：%1$d bps</string>
+    <string name="browser_bit_depth">位深：%1$s bit</string>
+    <string name="browser_sample_rate">采样率：%1$s Hz</string>
+    <string name="browser_bitrate">码率：%1$s bps</string>
     <string name="browser_type_value">类型：%1$s</string>
     <string name="browser_output_based_on">输出依据：%1$s</string>
     <string name="browser_source_nature">音源性质：%1$s</string>
@@ -1629,6 +1631,7 @@ OPF目录文件: %2$s</string>
     <string name="epub_jump_position_hint">仅在当前章节跳转，使用章节内进度%近似定位。</string>
     <string name="epub_jump_current_chapter">当前章节：第 %1$d 章</string>
     <string name="epub_jump_target_progress">目标进度：%1$d%%</string>
+    <string name="epub_last_page_reached">已到本章最后一页</string>
     <string name="epub_no_jump_target">这条读书笔记没有可跳转的位置</string>
     <string name="epub_prev_chapter">上一章</string>
     <string name="epub_next_chapter">下一章</string>

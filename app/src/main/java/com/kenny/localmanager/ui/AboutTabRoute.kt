@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.kenny.localmanager.BuildConfig
 import com.kenny.localmanager.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -59,6 +60,7 @@ fun AboutTabRoute() {
     val versionWarn = remember(versionName) {
         versionName.replace(Regex("[^0-9.]"), "").takeIf { it.isNotBlank() }?.toFloatOrNull()?.let { it <= 1.0f } == true
     }
+    val buildTime = remember { BuildConfig.BUILD_TIME }
 
     var readmeMarkdown by remember { mutableStateOf<String?>(null) }
     var readmeError by remember { mutableStateOf<String?>(null) }
@@ -155,6 +157,11 @@ fun AboutTabRoute() {
                     Text(
                         stringResource(R.string.about_version, versionName),
                         style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.about_build_time, buildTime),
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     if (versionWarn) {

@@ -8540,6 +8540,8 @@ fun PlaybackScreen(
         )
     }
 
+    val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -8550,6 +8552,14 @@ fun PlaybackScreen(
                     )
                 },
                 actions = {
+                    if (selectedPlaylist != null) {
+                        IconButton(onClick = { startPlaylist(selectedPlaylist) }) {
+                            Icon(
+                                Icons.Default.PlayArrow,
+                                contentDescription = context.getString(R.string.player_resume_current_playlist)
+                            )
+                        }
+                    }
                     if (playbackState?.playlistId != null) {
                         TextButton(onClick = { promptSaveCurrentBookmark() }) {
                             Text(context.getString(R.string.player_mark_action))
@@ -8581,7 +8591,6 @@ fun PlaybackScreen(
             )
         }
     ) { padding ->
-        val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
         Column(Modifier.fillMaxSize().padding(padding)) {
             if (playbackState != null) {
                 val state = playbackState
@@ -8666,8 +8675,27 @@ fun PlaybackScreen(
                         }
                         Spacer(Modifier.height(8.dp))
                         val diagnostics = state.diagnostics
-                        TextButton(onClick = { showPlaybackDiagnostics = !showPlaybackDiagnostics }) {
-                            Text(if (showPlaybackDiagnostics) stringResource(R.string.browser_hide_diagnostics) else stringResource(R.string.browser_playback_diagnostics))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(
+                                onClick = { onPlayPause() }
+                            ) {
+                                Text(
+                                    if (state.isPlaying) {
+                                        stringResource(R.string.player_pause_desc)
+                                    } else {
+                                        stringResource(R.string.player_play_desc)
+                                    }
+                                )
+                            }
+                            TextButton(onClick = { showPlaybackDiagnostics = !showPlaybackDiagnostics }) {
+                                Text(
+                                    if (showPlaybackDiagnostics) {
+                                        stringResource(R.string.browser_hide_diagnostics)
+                                    } else {
+                                        stringResource(R.string.browser_playback_diagnostics)
+                                    }
+                                )
+                            }
                         }
                         if (showPlaybackDiagnostics) {
                             val diagLines = listOfNotNull(
@@ -8716,12 +8744,6 @@ fun PlaybackScreen(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (restorePlaylist != null) {
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedButton(onClick = { resumeLastPlayback(restorePlaylist) }) {
-                                Text(context.getString(R.string.player_resume_last))
-                            }
-                        }
                     }
                 }
             }
@@ -10537,52 +10559,6 @@ fun GpgPublicKeyPickerDialog(
         }
     }
 }
-
-
-
-@Composable
-fun AboutDialog(onDismiss: () -> Unit) {
-    val context = LocalContext.current
-    val versionName = remember {
-        runCatching {
-            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
-        }.getOrElse { "" }
-    }
-    val versionWarn = remember(versionName) {
-        versionName.replace(Regex("[^0-9.]"), "").takeIf { s -> s.isNotEmpty() }?.toFloatOrNull()?.let { v -> v <= 1.0f } == true
-    }
-    val tips = remember { context.resources.getStringArray(R.array.about_usage_tips) }
-    val tip = remember { tips.random() }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text("Local Manager", style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(8.dp))
-                Text(stringResource(R.string.about_author), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(stringResource(R.string.about_version, versionName), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                if (versionWarn) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        stringResource(R.string.about_disclaimer),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                }
-                Spacer(Modifier.height(16.dp))
-                Text(stringResource(R.string.about_random_tips_title), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.height(4.dp))
-                Text(tip, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(24.dp))
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-            }
-        }
-    }
-}
-
 @Composable
 fun CacheManagementDialog(
     context: Context,
