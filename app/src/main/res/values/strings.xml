@@ -565,8 +565,15 @@
     <string name="epub_action_zoom_in">放大</string>
     <string name="epub_action_zoom_out">缩小</string>
     <string name="epub_action_fullscreen">全屏</string>
+    <string name="reader_action_background_color">背景颜色</string>
     <string name="reader_action_hide_floating_next_button">隐藏悬浮翻页按钮</string>
     <string name="reader_action_show_floating_next_button">显示悬浮翻页按钮</string>
+    <string name="reader_background_color_title">阅读背景颜色</string>
+    <string name="reader_background_color_original">保留原色</string>
+    <string name="reader_background_color_cream">奶油纸</string>
+    <string name="reader_background_color_green">浅绿</string>
+    <string name="reader_background_color_gray">浅灰</string>
+    <string name="reader_background_color_sepia">米褐</string>
     <string name="book_note_title">读书笔记</string>
     <string name="book_note_file_encrypted">%1$s · 已加密</string>
     <string name="book_note_missing_default_secret_key">未找到默认私钥，请先生成密钥对</string>

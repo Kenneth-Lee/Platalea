@@ -186,6 +186,117 @@ private const val MAX_RST_BYTES = 512 * 1024
 private const val STANDALONE_MD_CACHE_LIMIT = 6
 private const val EPUB_BOOKMARK_QUOTE_MAX_LENGTH = 220
 private const val EPUB_BOOKMARK_TARGET_SELECTOR = "p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, td, th, figcaption, div"
+private const val READER_BG_COLOR_ORIGINAL = "original"
+private const val READER_BG_COLOR_CREAM = "cream"
+private const val READER_BG_COLOR_GREEN = "green"
+private const val READER_BG_COLOR_GRAY = "gray"
+private const val READER_BG_COLOR_SEPIA = "sepia"
+
+private fun normalizeReaderBackgroundColorKey(raw: String?): String {
+    return when (raw?.trim()) {
+        READER_BG_COLOR_CREAM,
+        READER_BG_COLOR_GREEN,
+        READER_BG_COLOR_GRAY,
+        READER_BG_COLOR_SEPIA,
+        READER_BG_COLOR_ORIGINAL -> raw.trim()
+        else -> READER_BG_COLOR_ORIGINAL
+    }
+}
+
+private fun readerBackgroundHexOrNull(colorKey: String): String? {
+    return when (normalizeReaderBackgroundColorKey(colorKey)) {
+        READER_BG_COLOR_CREAM -> "#f7f2e8"
+        READER_BG_COLOR_GREEN -> "#eaf4e6"
+        READER_BG_COLOR_GRAY -> "#f1f3f4"
+        READER_BG_COLOR_SEPIA -> "#efe4cf"
+        else -> null
+    }
+}
+
+private fun resolvedReaderBackgroundHex(colorKey: String, fallbackHex: String): String {
+    return readerBackgroundHexOrNull(colorKey) ?: fallbackHex
+}
+
+private fun resolvedReaderBackgroundComposeColor(
+    colorKey: String,
+    fallback: androidx.compose.ui.graphics.Color
+): androidx.compose.ui.graphics.Color {
+    return when (normalizeReaderBackgroundColorKey(colorKey)) {
+        READER_BG_COLOR_CREAM -> androidx.compose.ui.graphics.Color(0xFFF7F2E8)
+        READER_BG_COLOR_GREEN -> androidx.compose.ui.graphics.Color(0xFFEAF4E6)
+        READER_BG_COLOR_GRAY -> androidx.compose.ui.graphics.Color(0xFFF1F3F4)
+        READER_BG_COLOR_SEPIA -> androidx.compose.ui.graphics.Color(0xFFEFE4CF)
+        else -> fallback
+    }
+}
+
+@Composable
+private fun ReaderBackgroundColorDialog(
+    selectedKey: String,
+    onDismiss: () -> Unit,
+    onSelect: (String) -> Unit
+) {
+    val options = listOf(
+        READER_BG_COLOR_ORIGINAL to stringResource(R.string.reader_background_color_original),
+        READER_BG_COLOR_CREAM to stringResource(R.string.reader_background_color_cream),
+        READER_BG_COLOR_GREEN to stringResource(R.string.reader_background_color_green),
+        READER_BG_COLOR_GRAY to stringResource(R.string.reader_background_color_gray),
+        READER_BG_COLOR_SEPIA to stringResource(R.string.reader_background_color_sepia)
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.reader_background_color_title)) },
+        text = {
+            LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                items(options) { (key, label) ->
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        onClick = { onSelect(key) }
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Surface(
+                                    modifier = Modifier
+                                        .width(34.dp)
+                                        .height(22.dp),
+                                    color = resolvedReaderBackgroundComposeColor(
+                                        key,
+                                        MaterialTheme.colorScheme.surface
+                                    )
+                                ) {}
+                                Text(label)
+                            }
+                            if (normalizeReaderBackgroundColorKey(selectedKey) == key) {
+                                Text(
+                                    text = stringResource(R.string.common_current),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_close))
+            }
+        }
+    )
+}
 
 @Composable
 private fun DraggableNextReadButton(
@@ -3334,6 +3445,8 @@ fun MdZipViewerScreen(
     }
 
     val context = LocalContext.current
+    val prefs = remember { Preferences(context) }
+    val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
@@ -3352,6 +3465,8 @@ fun MdZipViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showReaderBackgroundColorDialog by remember { mutableStateOf(false) }
+    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
     val ttsController = rememberStandaloneWebViewTtsController(
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "mdzip:${currentFile.absolutePath}",
@@ -3668,6 +3783,19 @@ fun MdZipViewerScreen(
         onSelectVoice = { ttsController.selectVoice(it) }
     )
 
+    if (showReaderBackgroundColorDialog) {
+        ReaderBackgroundColorDialog(
+            selectedKey = readerBackgroundColor,
+            onDismiss = { showReaderBackgroundColorDialog = false },
+            onSelect = { key ->
+                scope.launch {
+                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(key))
+                }
+                showReaderBackgroundColorDialog = false
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -3744,6 +3872,14 @@ fun MdZipViewerScreen(
                                     },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                                 )
+                                DropdownMenuItem(
+                                    text = { Text(context.getString(R.string.reader_action_background_color)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showReaderBackgroundColorDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
                             }
                         }
                     }
@@ -3769,6 +3905,7 @@ fun MdZipViewerScreen(
                     val fgHex = "#%02x%02x%02x".format(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
+                    val readerBgHex = resolvedReaderBackgroundHex(readerBackgroundColor, bgHex)
                     val baseUrl = "file://${currentFile.parentFile?.absolutePath}/"
                     val fullHtml = buildMdViewerFullHtml(
                         htmlContent!!,
@@ -3779,7 +3916,7 @@ fun MdZipViewerScreen(
                         mermaidJs,
                         syntaxHighlightCss,
                         syntaxHighlightJs,
-                        bgHex,
+                        readerBgHex,
                         fgHex
                     )
                     androidx.compose.runtime.key(currentFile.absolutePath) {
@@ -4902,6 +5039,7 @@ fun EpubViewerScreen(
     var showFullTextSearchDialog by remember { mutableStateOf(false) }
     var showGoToPositionDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showReaderBackgroundColorDialog by remember { mutableStateOf(false) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showTransientTopMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
@@ -4938,6 +5076,7 @@ fun EpubViewerScreen(
     val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
     val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
     val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
+    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
     val ttsSession = remember { EpubTtsSession(context) }
 
     fun revealTransientTopMenu() {
@@ -6419,6 +6558,19 @@ fun EpubViewerScreen(
         )
     }
 
+    if (showReaderBackgroundColorDialog) {
+        ReaderBackgroundColorDialog(
+            selectedKey = readerBackgroundColor,
+            onDismiss = { showReaderBackgroundColorDialog = false },
+            onSelect = { key ->
+                scope.launch {
+                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(key))
+                }
+                showReaderBackgroundColorDialog = false
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             if (!isFullscreen || showTransientTopMenu || showMoreMenu) {
@@ -6582,6 +6734,14 @@ fun EpubViewerScreen(
                                     isFullscreen = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.reader_action_background_color)) },
+                                onClick = {
+                                    closeMoreMenuForAction()
+                                    showReaderBackgroundColorDialog = true
+                                },
+                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
                             DropdownMenuItem(
                                 text = {
@@ -6878,6 +7038,7 @@ fun EpubViewerScreen(
                     val fgHex = "#%02x%02x%02x".format(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
+                    val readerBgHex = resolvedReaderBackgroundHex(readerBackgroundColor, bgHex)
 
                     // 检测源文件类型，注入对应样式（支持混合章节：按章节标记优先）
                     val cacheIsLlmContent = File(extractResult.cacheDir, ".llm_source").exists()
@@ -6965,7 +7126,7 @@ fun EpubViewerScreen(
                                         <meta name="viewport" content="width=device-width, initial-scale=1">
                                         <style>
                                             body {
-                                                background: $bgHex;
+                                                background: $readerBgHex;
                                                 color: $fgHex;
                                                 font-size: 16px;
                                                 padding: 16px;
@@ -9513,13 +9674,17 @@ fun PdfViewerScreen(
             }
         }
     ) { padding ->
-        Box(
-            Modifier
+        Surface(
+            modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentAlignment = Alignment.Center
+            color = MaterialTheme.colorScheme.surface
         ) {
-            when {
+            Box(
+                Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                when {
                 isLoading -> {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         androidx.compose.material3.CircularProgressIndicator()
@@ -9613,6 +9778,7 @@ fun PdfViewerScreen(
                     Text(stringResource(R.string.pdf_empty_short), style = MaterialTheme.typography.bodyLarge)
                 }
             }
+        }
         }
     }
 }
