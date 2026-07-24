@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.icu.text.Transliterator
 import android.media.MediaMetadataRetriever
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
@@ -314,6 +315,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.io.File
+import java.text.Normalizer
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -1235,6 +1237,198 @@ private data class PlayerTrackEntry(
     val name: String,
     val metadata: TrackMetadata?
 )
+
+private data class DuplicateSongGroup(
+    val key: String,
+    val displayTitle: String,
+    val entries: List<PlayerTrackEntry>
+)
+
+private data class PlaylistBulkRemoveResult(
+    val removedCount: Int,
+    val failedNames: List<String>,
+    val removedIndices: Set<Int>,
+    val updatedPlaylist: Playlist
+)
+
+private fun shiftIndexAfterRemovals(index: Int, removedAsc: List<Int>): Int? {
+    var removedBefore = 0
+    for (removed in removedAsc) {
+        if (removed == index) return null
+        if (removed < index) removedBefore++
+    }
+    return index - removedBefore
+}
+
+private fun updateDuplicateGroupsAfterRemoval(
+    groups: List<DuplicateSongGroup>,
+    keepIndexByGroupKey: Map<String, Int>,
+    removedIndices: Set<Int>
+): Pair<List<DuplicateSongGroup>, Map<String, Int>> {
+    if (removedIndices.isEmpty()) return groups to keepIndexByGroupKey
+    val removedAsc = removedIndices.sorted()
+    val updatedGroups = groups.mapNotNull { group ->
+        val updatedEntries = group.entries.mapNotNull { entry ->
+            val newIndex = shiftIndexAfterRemovals(entry.originalIndex, removedAsc)
+            if (newIndex == null) null else entry.copy(originalIndex = newIndex)
+        }
+        if (updatedEntries.size < 2) {
+            null
+        } else {
+            group.copy(entries = updatedEntries.sortedBy { it.originalIndex })
+        }
+    }
+    val updatedKeep = updatedGroups.associate { group ->
+        val previousKeep = keepIndexByGroupKey[group.key]
+        val shiftedKeep = previousKeep?.let { shiftIndexAfterRemovals(it, removedAsc) }
+        val keepIndex = shiftedKeep?.takeIf { keep -> group.entries.any { it.originalIndex == keep } }
+            ?: group.entries.first().originalIndex
+        group.key to keepIndex
+    }
+    return updatedGroups to updatedKeep
+}
+
+private val duplicateTraditionalToSimplified: Transliterator? = runCatching {
+    Transliterator.getInstance("Traditional-Simplified")
+}.getOrNull()
+
+private val duplicateLeadingNumberPattern = Regex("""^\s*(?:第\s*)?(?:\d+|[一二三四五六七八九十百千零〇两]+)[\s._-]*""")
+private val duplicateBracketPattern = Regex("""[\[(（【][^\]）】]*?[\])）】]""")
+private val duplicateWhitespacePattern = Regex("""\s+""")
+
+private fun normalizeDuplicateSongTitle(raw: String, splitOnDash: Boolean): String {
+    var text = raw.trim()
+    if (text.isEmpty()) return ""
+    if (splitOnDash) {
+        val parts = text.split(Regex("""\s*[-—–_]+\s*""")).filter { it.isNotBlank() }
+        if (parts.size >= 2) {
+            text = parts.last()
+        }
+    }
+    text = duplicateLeadingNumberPattern.replace(text, "")
+    text = duplicateBracketPattern.replace(text, " ")
+    text = duplicateTraditionalToSimplified?.transliterate(text) ?: text
+    text = Normalizer.normalize(text, Normalizer.Form.NFKC)
+    text = text.replace(Regex("""[\u200B-\u200D\uFEFF]"""), "")
+    text = text.lowercase(Locale.ROOT)
+    return duplicateWhitespacePattern.replace(text, " ").trim()
+}
+
+private fun duplicateSongKeyFromTitle(title: String?): String {
+    return title?.takeIf { it.isNotBlank() }?.let { normalizeDuplicateSongTitle(it, splitOnDash = false) }.orEmpty()
+}
+
+private fun duplicateSongKeyFromFileName(name: String): String {
+    val baseName = name.substringBeforeLast('.')
+    return normalizeDuplicateSongTitle(baseName, splitOnDash = true)
+}
+
+private suspend fun findDuplicateSongGroups(
+    context: Context,
+    playlist: Playlist,
+    metadataCache: Map<String, TrackMetadata>
+): List<DuplicateSongGroup> = withContext(Dispatchers.IO) {
+    val cache = metadataCache.toMutableMap()
+    val grouped = linkedMapOf<String, MutableList<PlayerTrackEntry>>()
+    playlist.uris.forEachIndexed { index, uri ->
+        val name = playlist.names.getOrElse(index) { uri.substringAfterLast('/') }
+        val metadata = cache[uri] ?: readTrackMetadata(context, uri).also { cache[uri] = it }
+        val titleKey = duplicateSongKeyFromTitle(metadata.title)
+        val key = if (titleKey.isNotBlank()) titleKey else duplicateSongKeyFromFileName(name)
+        if (key.isNotBlank()) {
+            grouped.getOrPut(key) { mutableListOf() }.add(
+                PlayerTrackEntry(
+                    originalIndex = index,
+                    uri = uri,
+                    name = name,
+                    metadata = metadata
+                )
+            )
+        }
+    }
+    grouped.mapNotNull { (key, entries) ->
+        if (entries.size < 2) return@mapNotNull null
+        val sorted = entries.sortedBy { it.originalIndex }
+        DuplicateSongGroup(
+            key = key,
+            displayTitle = sorted.first().metadata?.title?.takeIf { it.isNotBlank() }
+                ?: sorted.first().name.substringBeforeLast('.').ifBlank { sorted.first().name },
+            entries = sorted
+        )
+    }.sortedWith(
+        compareByDescending<DuplicateSongGroup> { it.entries.size }
+            .thenBy { it.displayTitle.lowercase(Locale.ROOT) }
+    )
+}
+
+private suspend fun removeTracksFromPlaylistByIndices(
+    context: Context,
+    prefs: Preferences,
+    playlist: Playlist,
+    removeIndices: Set<Int>,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit
+): PlaylistBulkRemoveResult = withContext(Dispatchers.IO) {
+    val validIndices = removeIndices
+        .filter { it in playlist.uris.indices }
+        .sortedDescending()
+    if (validIndices.isEmpty()) {
+        return@withContext PlaylistBulkRemoveResult(
+            removedCount = 0,
+            failedNames = emptyList(),
+            removedIndices = emptySet(),
+            updatedPlaylist = playlist
+        )
+    }
+
+    val previousUris = playlist.uris
+    val previousTrackIndex = playbackState?.takeIf { it.playlistId == playlist.id }?.trackIndex ?: 0
+    val previousPositionMs = playbackState?.takeIf { it.playlistId == playlist.id }?.positionMs ?: 0
+
+    val uris = playlist.uris.toMutableList()
+    val names = playlist.names.toMutableList()
+    val failedNames = mutableListOf<String>()
+    val removedIndices = mutableSetOf<Int>()
+    var removedCount = 0
+
+    validIndices.forEach { index ->
+        if (playlist.isDirectorySource) {
+            val deleted = context.contentResolver.deleteDocument(Uri.parse(uris[index]))
+            if (!deleted) {
+                failedNames += names.getOrNull(index) ?: uris[index].substringAfterLast('/')
+                return@forEach
+            }
+        }
+        if (index in uris.indices) {
+            uris.removeAt(index)
+            names.removeAt(index)
+            removedIndices += index
+            removedCount++
+        }
+    }
+
+    val updated = playlist.copy(uris = uris, names = names)
+    if (removedCount > 0) {
+        prefs.updatePlaylist(updated)
+        syncPlaybackAfterPlaylistUpdate(
+            context = context,
+            playlistId = playlist.id,
+            previousUris = previousUris,
+            previousTrackIndex = previousTrackIndex,
+            previousPositionMs = previousPositionMs,
+            updated = updated,
+            playbackState = playbackState,
+            onStopPlayback = onStopPlayback
+        )
+    }
+
+    PlaylistBulkRemoveResult(
+        removedCount = removedCount,
+        failedNames = failedNames,
+        removedIndices = removedIndices,
+        updatedPlaylist = updated
+    )
+}
 
 private fun readTrackMetadata(context: Context, uriString: String): TrackMetadata {
     return runCatching {
@@ -8231,6 +8425,12 @@ fun PlaybackScreen(
     var playlistSortField by remember { mutableStateOf(PlaylistTrackSortField.ARTIST) }
     var playlistSortOrder by remember { mutableStateOf(PlaylistSortOrder.ASCENDING) }
     var playlistSortInProgress by remember { mutableStateOf(false) }
+    var showDuplicateSongsDialog by remember { mutableStateOf(false) }
+    var duplicateSongsLoading by remember { mutableStateOf(false) }
+    var duplicateSongsMutating by remember { mutableStateOf(false) }
+    var duplicateSongGroups by remember { mutableStateOf<List<DuplicateSongGroup>>(emptyList()) }
+    var duplicateSongsTargetPlaylist by remember { mutableStateOf<Playlist?>(null) }
+    var duplicateKeepIndexByGroupKey by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var showBookmarkManagerDialog by remember { mutableStateOf(false) }
     var bookmarkNoteInput by remember { mutableStateOf("") }
@@ -8310,6 +8510,35 @@ fun PlaybackScreen(
         playlistSortField = PlaylistTrackSortField.ARTIST
         playlistSortOrder = PlaylistSortOrder.ASCENDING
         showSortPlaylistDialog = true
+    }
+
+    fun openDuplicateSongsDialog(pl: Playlist) {
+        duplicateSongsTargetPlaylist = pl
+        duplicateSongGroups = emptyList()
+        duplicateKeepIndexByGroupKey = emptyMap()
+        duplicateSongsMutating = false
+        duplicateSongsLoading = true
+        showDuplicateSongsDialog = true
+        scope.launch {
+            val groups = runCatching {
+                findDuplicateSongGroups(context, pl, trackMetadataCache)
+            }.getOrElse { error ->
+                Log.e("FileBrowserApp", "Failed to scan duplicate songs for playlist=${pl.id}", error)
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.player_duplicate_tracks_scan_failed, error.message ?: error.javaClass.simpleName),
+                    Toast.LENGTH_SHORT
+                ).show()
+                emptyList()
+            }
+            if (duplicateSongsTargetPlaylist?.id == pl.id) {
+                duplicateSongGroups = groups
+                duplicateKeepIndexByGroupKey = groups.associate { group ->
+                    group.key to (group.entries.firstOrNull()?.originalIndex ?: -1)
+                }
+                duplicateSongsLoading = false
+            }
+        }
     }
 
     fun openPreviewSettingsDialog(pl: Playlist) {
@@ -9231,6 +9460,15 @@ fun PlaybackScreen(
                                             }
                                         )
                                         DropdownMenuItem(
+                                            text = { Text(context.getString(R.string.player_find_duplicate_tracks)) },
+                                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                                            enabled = pl.uris.size >= 2,
+                                            onClick = {
+                                                playlistActionMenuIndex = null
+                                                openDuplicateSongsDialog(pl)
+                                            }
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text(context.getString(R.string.player_preview_settings)) },
                                             leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null) },
                                             onClick = {
@@ -9629,6 +9867,314 @@ fun PlaybackScreen(
                     ) { Text(context.getString(R.string.common_cancel)) }
                 }
             )
+        }
+        if (showDuplicateSongsDialog) {
+            val targetPlaylist = duplicateSongsTargetPlaylist
+            val duplicateGroupListState = remember(targetPlaylist?.id) { LazyListState() }
+            Dialog(
+                onDismissRequest = {
+                    showDuplicateSongsDialog = false
+                    duplicateSongsLoading = false
+                    duplicateSongsMutating = false
+                    duplicateSongGroups = emptyList()
+                    duplicateKeepIndexByGroupKey = emptyMap()
+                    duplicateSongsTargetPlaylist = null
+                },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    shape = MaterialTheme.shapes.large,
+                    tonalElevation = 6.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 620.dp)
+                            .padding(16.dp)
+                    ) {
+                        Text(context.getString(R.string.player_duplicate_tracks_title), style = MaterialTheme.typography.titleLarge)
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            context.getString(R.string.player_duplicate_tracks_rule_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (targetPlaylist?.isDirectorySource == true) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                context.getString(R.string.player_duplicate_tracks_directory_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        if (duplicateSongsLoading) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(12.dp))
+                                Text(context.getString(R.string.player_duplicate_tracks_scanning))
+                            }
+                        } else if (duplicateSongGroups.isEmpty()) {
+                            Text(
+                                context.getString(R.string.player_duplicate_tracks_none),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            fun collectUnselectedIndices(groups: List<DuplicateSongGroup>): Set<Int> {
+                                return groups.flatMap { group ->
+                                    val keepIndex = duplicateKeepIndexByGroupKey[group.key]
+                                        ?: group.entries.firstOrNull()?.originalIndex
+                                        ?: -1
+                                    group.entries.map { it.originalIndex }.filter { it != keepIndex }
+                                }.toSet()
+                            }
+
+                            Text(
+                                context.getString(
+                                    R.string.player_duplicate_tracks_found_summary,
+                                    duplicateSongGroups.size,
+                                    duplicateSongGroups.sumOf { it.entries.size }
+                                ),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (duplicateSongsMutating) {
+                                Spacer(Modifier.height(6.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        context.getString(R.string.player_duplicate_tracks_mutating),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    enabled = !duplicateSongsLoading && !duplicateSongsMutating,
+                                    onClick = {
+                                        val currentPlaylist = targetPlaylist ?: return@TextButton
+                                        val batchIndices = collectUnselectedIndices(duplicateSongGroups)
+                                        if (batchIndices.isEmpty()) return@TextButton
+                                        scope.launch {
+                                            duplicateSongsMutating = true
+                                            try {
+                                                val result = removeTracksFromPlaylistByIndices(
+                                                    context = context,
+                                                    prefs = prefs,
+                                                    playlist = currentPlaylist,
+                                                    removeIndices = batchIndices,
+                                                    playbackState = playbackState,
+                                                    onStopPlayback = onStopPlayback
+                                                )
+                                                if (result.removedCount > 0) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }
+                                                if (result.failedNames.isNotEmpty()) {
+                                                    val firstFailed = result.failedNames.first()
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(
+                                                            R.string.player_duplicate_tracks_delete_partial_failed,
+                                                            result.failedNames.size,
+                                                            firstFailed
+                                                        ),
+                                                        Toast.LENGTH_LONG
+                                                    ).show()
+                                                }
+                                                duplicateSongsTargetPlaylist = result.updatedPlaylist
+                                                val (updatedGroups, updatedKeep) = updateDuplicateGroupsAfterRemoval(
+                                                    duplicateSongGroups,
+                                                    duplicateKeepIndexByGroupKey,
+                                                    result.removedIndices
+                                                )
+                                                duplicateSongGroups = updatedGroups
+                                                duplicateKeepIndexByGroupKey = updatedKeep
+                                            } finally {
+                                                duplicateSongsMutating = false
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Text(context.getString(R.string.player_duplicate_tracks_remove_all_unselected))
+                                }
+                            }
+                            LazyColumn(
+                                modifier = Modifier.weight(1f),
+                                state = duplicateGroupListState,
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(items = duplicateSongGroups, key = { it.key }) { group ->
+                                    val keepOriginalIndex = duplicateKeepIndexByGroupKey[group.key]
+                                        ?: group.entries.firstOrNull()?.originalIndex
+                                        ?: -1
+                                    Card(
+                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(Modifier.padding(12.dp)) {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    group.displayTitle,
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    modifier = Modifier.weight(1f),
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    context.getString(R.string.player_duplicate_tracks_group_count, group.entries.size),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            Spacer(Modifier.height(8.dp))
+                                            group.entries.forEachIndexed { entryIndex, entry ->
+                                                Column(Modifier.fillMaxWidth()) {
+                                                    Row(
+                                                        modifier = Modifier.fillMaxWidth(),
+                                                        verticalAlignment = Alignment.CenterVertically
+                                                    ) {
+                                                        androidx.compose.material3.RadioButton(
+                                                            selected = keepOriginalIndex == entry.originalIndex,
+                                                            onClick = {
+                                                                duplicateKeepIndexByGroupKey = duplicateKeepIndexByGroupKey +
+                                                                    (group.key to entry.originalIndex)
+                                                            }
+                                                        )
+                                                        Text(
+                                                            context.getString(
+                                                                R.string.player_duplicate_tracks_keep_this,
+                                                                entry.originalIndex + 1
+                                                            ),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    Text(
+                                                        context.getString(R.string.player_duplicate_tracks_entry_label, entry.originalIndex + 1),
+                                                        style = MaterialTheme.typography.labelSmall,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        entry.metadata?.title?.takeIf { it.isNotBlank() } ?: entry.name,
+                                                        style = MaterialTheme.typography.bodySmall,
+                                                        maxLines = 2,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    val metaText = entry.metadata?.let { formatTrackMetadata(context, it) }.orEmpty()
+                                                    if (metaText.isNotBlank()) {
+                                                        Text(
+                                                            metaText,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                    if (entryIndex < group.entries.lastIndex) {
+                                                        Spacer(Modifier.height(6.dp))
+                                                    }
+                                                }
+                                            }
+                                            Spacer(Modifier.height(10.dp))
+                                            TextButton(
+                                                enabled = !duplicateSongsLoading && !duplicateSongsMutating,
+                                                onClick = {
+                                                    val currentPlaylist = targetPlaylist ?: return@TextButton
+                                                    if (group.entries.size <= 1) return@TextButton
+                                                    val keepIndex = duplicateKeepIndexByGroupKey[group.key]
+                                                        ?: group.entries.firstOrNull()?.originalIndex
+                                                        ?: return@TextButton
+                                                    val removeIndices = group.entries
+                                                        .map { it.originalIndex }
+                                                        .filter { it != keepIndex }
+                                                        .toSet()
+                                                    if (removeIndices.isEmpty()) return@TextButton
+                                                    scope.launch {
+                                                        duplicateSongsMutating = true
+                                                        try {
+                                                            val result = removeTracksFromPlaylistByIndices(
+                                                                context = context,
+                                                                prefs = prefs,
+                                                                playlist = currentPlaylist,
+                                                                removeIndices = removeIndices,
+                                                                playbackState = playbackState,
+                                                                onStopPlayback = onStopPlayback
+                                                            )
+                                                            if (result.removedCount > 0) {
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
+                                                                    Toast.LENGTH_SHORT
+                                                                ).show()
+                                                            }
+                                                            if (result.failedNames.isNotEmpty()) {
+                                                                val firstFailed = result.failedNames.first()
+                                                                Toast.makeText(
+                                                                    context,
+                                                                    context.getString(
+                                                                        R.string.player_duplicate_tracks_delete_partial_failed,
+                                                                        result.failedNames.size,
+                                                                        firstFailed
+                                                                    ),
+                                                                    Toast.LENGTH_LONG
+                                                                ).show()
+                                                            }
+                                                            duplicateSongsTargetPlaylist = result.updatedPlaylist
+                                                            val (updatedGroups, updatedKeep) = updateDuplicateGroupsAfterRemoval(
+                                                                duplicateSongGroups,
+                                                                duplicateKeepIndexByGroupKey,
+                                                                result.removedIndices
+                                                            )
+                                                            duplicateSongGroups = updatedGroups
+                                                            duplicateKeepIndexByGroupKey = updatedKeep
+                                                        } finally {
+                                                            duplicateSongsMutating = false
+                                                        }
+                                                    }
+                                                },
+                                                modifier = Modifier.align(Alignment.End)
+                                            ) {
+                                                Text(context.getString(R.string.player_duplicate_tracks_remove_group))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(12.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(onClick = {
+                                showDuplicateSongsDialog = false
+                                duplicateSongsLoading = false
+                                duplicateSongsMutating = false
+                                duplicateSongGroups = emptyList()
+                                duplicateKeepIndexByGroupKey = emptyMap()
+                                duplicateSongsTargetPlaylist = null
+                            }) {
+                                Text(context.getString(R.string.common_close))
+                            }
+                        }
+                    }
+                }
+            }
         }
         if (showAddBookmarkDialog) {
             AlertDialog(
