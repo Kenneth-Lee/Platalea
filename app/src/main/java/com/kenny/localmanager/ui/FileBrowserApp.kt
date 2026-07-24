@@ -8462,6 +8462,7 @@ fun PlaybackScreen(
     var bulkDeleteTrackIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var bulkDeleteTrackCount by remember { mutableIntStateOf(0) }
     var bulkDeleteWasFiltered by remember { mutableStateOf(false) }
+    var bulkDeleteHiddenMode by remember { mutableStateOf(false) }
     var bulkDeleteTracksInProgress by remember { mutableStateOf(false) }
     var trackMetadataCache by remember(selectedPlaylistId) { mutableStateOf<Map<String, TrackMetadata>>(emptyMap()) }
     var trackMetadataLoading by remember(selectedPlaylistId) { mutableStateOf(false) }
@@ -9005,6 +9006,10 @@ fun PlaybackScreen(
                         } ?: trackEntries
                     }
                 }
+                val hiddenTrackEntries = remember(trackEntries, filteredTrackEntries) {
+                    val visibleIndices = filteredTrackEntries.asSequence().map { it.originalIndex }.toHashSet()
+                    trackEntries.filterNot { it.originalIndex in visibleIndices }
+                }
                 val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
                 LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex, filteredTrackEntries) {
                     val state = playbackState ?: return@LaunchedEffect
@@ -9143,7 +9148,7 @@ fun PlaybackScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     if (bulkDeleteTracksInProgress) {
@@ -9162,6 +9167,7 @@ fun PlaybackScreen(
                     TextButton(
                         enabled = !bulkDeleteTracksInProgress && filteredTrackEntries.isNotEmpty(),
                         onClick = {
+                            bulkDeleteHiddenMode = false
                             bulkDeleteTrackIndices = filteredTrackEntries.map { it.originalIndex }.toSet()
                             bulkDeleteTrackCount = bulkDeleteTrackIndices.size
                             bulkDeleteWasFiltered = trackFilterText.isNotBlank()
@@ -9175,6 +9181,25 @@ fun PlaybackScreen(
                         }
                         Text(
                             actionText,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    TextButton(
+                        enabled = !bulkDeleteTracksInProgress && hiddenTrackEntries.isNotEmpty(),
+                        onClick = {
+                            bulkDeleteHiddenMode = true
+                            bulkDeleteTrackIndices = hiddenTrackEntries.map { it.originalIndex }.toSet()
+                            bulkDeleteTrackCount = bulkDeleteTrackIndices.size
+                            bulkDeleteWasFiltered = trackFilterText.isNotBlank()
+                            showBulkDeleteTracksDialog = true
+                        }
+                    ) {
+                        Text(
+                            if (hiddenTrackEntries.isNotEmpty()) {
+                                context.getString(R.string.player_bulk_delete_hidden_tracks_action_count, hiddenTrackEntries.size)
+                            } else {
+                                context.getString(R.string.player_bulk_delete_hidden_tracks_action)
+                            },
                             color = MaterialTheme.colorScheme.error
                         )
                     }
@@ -10233,7 +10258,19 @@ fun PlaybackScreen(
                 text = {
                     Column {
                         Text(
-                            if (targetPlaylist.isDirectorySource) {
+                            if (bulkDeleteHiddenMode) {
+                                if (targetPlaylist.isDirectorySource) {
+                                    context.getString(
+                                        R.string.player_bulk_delete_hidden_tracks_confirm_directory,
+                                        bulkDeleteTrackCount
+                                    )
+                                } else {
+                                    context.getString(
+                                        R.string.player_bulk_delete_hidden_tracks_confirm_regular,
+                                        bulkDeleteTrackCount
+                                    )
+                                }
+                            } else if (targetPlaylist.isDirectorySource) {
                                 context.getString(
                                     R.string.player_bulk_delete_tracks_confirm_directory,
                                     bulkDeleteTrackCount
@@ -10249,7 +10286,9 @@ fun PlaybackScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            if (bulkDeleteWasFiltered) {
+                            if (bulkDeleteHiddenMode) {
+                                context.getString(R.string.player_bulk_delete_hidden_tracks_scope_filtered)
+                            } else if (bulkDeleteWasFiltered) {
                                 context.getString(R.string.player_bulk_delete_tracks_scope_filtered)
                             } else {
                                 context.getString(R.string.player_bulk_delete_tracks_scope_all)
@@ -10286,11 +10325,19 @@ fun PlaybackScreen(
                                     if (result.failedNames.isNotEmpty()) {
                                         Toast.makeText(
                                             context,
-                                            context.getString(
-                                                R.string.player_bulk_delete_tracks_partial_failed,
-                                                result.failedNames.size,
-                                                result.failedNames.first()
-                                            ),
+                                            if (bulkDeleteHiddenMode) {
+                                                context.getString(
+                                                    R.string.player_bulk_delete_hidden_tracks_partial_failed,
+                                                    result.failedNames.size,
+                                                    result.failedNames.first()
+                                                )
+                                            } else {
+                                                context.getString(
+                                                    R.string.player_bulk_delete_tracks_partial_failed,
+                                                    result.failedNames.size,
+                                                    result.failedNames.first()
+                                                )
+                                            },
                                             Toast.LENGTH_LONG
                                         ).show()
                                     }
@@ -10300,6 +10347,7 @@ fun PlaybackScreen(
                                     bulkDeleteTrackIndices = emptySet()
                                     bulkDeleteTrackCount = 0
                                     bulkDeleteWasFiltered = false
+                                    bulkDeleteHiddenMode = false
                                 }
                             }
                         }
@@ -10312,6 +10360,7 @@ fun PlaybackScreen(
                         enabled = !bulkDeleteTracksInProgress,
                         onClick = {
                             showBulkDeleteTracksDialog = false
+                            bulkDeleteHiddenMode = false
                         }
                     ) {
                         Text(context.getString(R.string.common_cancel))

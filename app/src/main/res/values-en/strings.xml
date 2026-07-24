@@ -1363,6 +1363,12 @@ It will sync, copy, and push automatically.</string>
     <string name="player_bulk_delete_tracks_in_progress">Deleting selected tracks…</string>
     <string name="player_bulk_delete_tracks_done">Deleted %1$d track(s)</string>
     <string name="player_bulk_delete_tracks_partial_failed">Failed to delete %1$d track(s) (for example: %2$s)</string>
+    <string name="player_bulk_delete_hidden_tracks_action">Delete hidden tracks</string>
+    <string name="player_bulk_delete_hidden_tracks_action_count">Delete hidden tracks (%1$d)</string>
+    <string name="player_bulk_delete_hidden_tracks_confirm_regular">This will remove %1$d hidden track(s) from the current list only (source files are kept).</string>
+    <string name="player_bulk_delete_hidden_tracks_confirm_directory">This will remove %1$d hidden track(s) and delete source files. This action cannot be undone.</string>
+    <string name="player_bulk_delete_hidden_tracks_scope_filtered">A filter is active: only tracks hidden by the filter will be deleted.</string>
+    <string name="player_bulk_delete_hidden_tracks_partial_failed">Failed to delete %1$d hidden track(s) (for example: %2$s)</string>
     <string name="browser_no_audio_in_list">No playable audio files in current list</string>
     <string name="browser_generate_dir_playlist">Generate music list for current directory</string>
     <string name="browser_player_config_title">Player settings</string>
