@@ -8458,6 +8458,11 @@ fun PlaybackScreen(
     var trackFilterText by remember { mutableStateOf("") }
     var trackFilterField by remember { mutableStateOf(PlayerTrackFilterField.FILE_NAME) }
     var showTrackFilterFieldMenu by remember { mutableStateOf(false) }
+    var showBulkDeleteTracksDialog by remember { mutableStateOf(false) }
+    var bulkDeleteTrackIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var bulkDeleteTrackCount by remember { mutableIntStateOf(0) }
+    var bulkDeleteWasFiltered by remember { mutableStateOf(false) }
+    var bulkDeleteTracksInProgress by remember { mutableStateOf(false) }
     var trackMetadataCache by remember(selectedPlaylistId) { mutableStateOf<Map<String, TrackMetadata>>(emptyMap()) }
     var trackMetadataLoading by remember(selectedPlaylistId) { mutableStateOf(false) }
     LaunchedEffect(prefs) {
@@ -9133,6 +9138,46 @@ fun PlaybackScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (bulkDeleteTracksInProgress) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            context.getString(R.string.player_bulk_delete_tracks_in_progress),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    TextButton(
+                        enabled = !bulkDeleteTracksInProgress && filteredTrackEntries.isNotEmpty(),
+                        onClick = {
+                            bulkDeleteTrackIndices = filteredTrackEntries.map { it.originalIndex }.toSet()
+                            bulkDeleteTrackCount = bulkDeleteTrackIndices.size
+                            bulkDeleteWasFiltered = trackFilterText.isNotBlank()
+                            showBulkDeleteTracksDialog = true
+                        }
+                    ) {
+                        val actionText = if (filteredTrackEntries.isNotEmpty()) {
+                            context.getString(R.string.player_bulk_delete_tracks_action_count, filteredTrackEntries.size)
+                        } else {
+                            context.getString(R.string.player_bulk_delete_tracks_action)
+                        }
+                        Text(
+                            actionText,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
                 if (pl.uris.isEmpty()) {
                     Box(
@@ -10175,6 +10220,104 @@ fun PlaybackScreen(
                     }
                 }
             }
+        }
+        if (showBulkDeleteTracksDialog && selectedPlaylist != null) {
+            val targetPlaylist = selectedPlaylist
+            AlertDialog(
+                onDismissRequest = {
+                    if (!bulkDeleteTracksInProgress) {
+                        showBulkDeleteTracksDialog = false
+                    }
+                },
+                title = { Text(context.getString(R.string.player_bulk_delete_tracks_confirm_title)) },
+                text = {
+                    Column {
+                        Text(
+                            if (targetPlaylist.isDirectorySource) {
+                                context.getString(
+                                    R.string.player_bulk_delete_tracks_confirm_directory,
+                                    bulkDeleteTrackCount
+                                )
+                            } else {
+                                context.getString(
+                                    R.string.player_bulk_delete_tracks_confirm_regular,
+                                    bulkDeleteTrackCount
+                                )
+                            },
+                            color = if (targetPlaylist.isDirectorySource) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            if (bulkDeleteWasFiltered) {
+                                context.getString(R.string.player_bulk_delete_tracks_scope_filtered)
+                            } else {
+                                context.getString(R.string.player_bulk_delete_tracks_scope_all)
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = !bulkDeleteTracksInProgress && bulkDeleteTrackIndices.isNotEmpty(),
+                        onClick = {
+                            val removeSet = bulkDeleteTrackIndices
+                            if (removeSet.isEmpty()) return@Button
+                            scope.launch {
+                                bulkDeleteTracksInProgress = true
+                                try {
+                                    val result = removeTracksFromPlaylistByIndices(
+                                        context = context,
+                                        prefs = prefs,
+                                        playlist = targetPlaylist,
+                                        removeIndices = removeSet,
+                                        playbackState = playbackState,
+                                        onStopPlayback = onStopPlayback
+                                    )
+                                    if (result.removedCount > 0) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.player_bulk_delete_tracks_done, result.removedCount),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                    if (result.failedNames.isNotEmpty()) {
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(
+                                                R.string.player_bulk_delete_tracks_partial_failed,
+                                                result.failedNames.size,
+                                                result.failedNames.first()
+                                            ),
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                } finally {
+                                    bulkDeleteTracksInProgress = false
+                                    showBulkDeleteTracksDialog = false
+                                    bulkDeleteTrackIndices = emptySet()
+                                    bulkDeleteTrackCount = 0
+                                    bulkDeleteWasFiltered = false
+                                }
+                            }
+                        }
+                    ) {
+                        Text(context.getString(R.string.common_delete))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !bulkDeleteTracksInProgress,
+                        onClick = {
+                            showBulkDeleteTracksDialog = false
+                        }
+                    ) {
+                        Text(context.getString(R.string.common_cancel))
+                    }
+                }
+            )
         }
         if (showAddBookmarkDialog) {
             AlertDialog(
