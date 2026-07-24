@@ -348,6 +348,12 @@
     <string name="family_board_import_name_conflict">The pack name \"%1$s\" conflicts with an existing board. Choose a new name.</string>
     <string name="family_board_delete_board_title">Delete Bulletin Board</string>
     <string name="family_board_menu">Board actions</string>
+    <string name="family_board_clear_password_memory">Clear remembered password</string>
+    <string name="family_board_reenter_password">Re-enter Password</string>
+    <string name="family_board_reenter_password_title">Re-enter Access Password</string>
+    <string name="family_board_reenter_password_confirm">This will clear the remembered access password for the current device, then you can enter a new one. Continue?</string>
+    <string name="family_board_reenter_password_done">Cleared the access password for the current device. Please enter it again.</string>
+    <string name="family_board_clear_password_memory_done">Cleared the remembered password for the current device</string>
     <string name="family_board_delete_board_confirm">Delete board \"%1$s\"? All messages and attachments will be removed.</string>
     <string name="family_board_delete_last_board">At least one board must remain.</string>
     <string name="family_board_export">Export Markdown</string>

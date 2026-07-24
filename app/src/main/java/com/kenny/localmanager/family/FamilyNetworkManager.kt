@@ -8,6 +8,7 @@ import android.os.Build
 import android.util.Log
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.util.getLocalIpAddress
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -64,6 +65,9 @@ data class FamilyDiscoveredService(
     val attributes: Map<String, String>,
     val isSelf: Boolean
 ) {
+    val deviceUuid: String?
+        get() = attributes["instance_id"]?.trim()?.takeIf { it.isNotBlank() }
+
     val deviceKey: String
         get() = attributes["instance_id"]?.takeIf { it.isNotBlank() }
             ?: "$serviceName@$host:$port"
@@ -136,6 +140,7 @@ data class TemporaryAttachmentOpenResult(
 
 class FamilyNetworkManager(context: Context) {
     private val appContext = context.applicationContext
+    private val preferences = Preferences(appContext)
     private val nsdManager = appContext.getSystemService(Context.NSD_SERVICE) as? NsdManager
     private val wifiManager = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val tlsManager = FamilyTlsManager(appContext)
@@ -172,23 +177,31 @@ class FamilyNetworkManager(context: Context) {
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
     private var familyNetworkHostName: String? = null
-    private val boardAccessPasswordCache = mutableMapOf<String, String?>()
+    private val boardAccessPasswordCache = mutableMapOf<String, String>()
     private val temporaryAttachmentRoot: File = File(appContext.cacheDir, "family_attachment")
 
-    fun hasRememberedBoardAccessPassword(deviceKey: String): Boolean =
-        deviceKey in boardAccessPasswordCache
+    fun hasRememberedBoardAccessPassword(deviceUuid: String?): Boolean =
+        deviceUuid?.trim()?.takeIf { it.isNotEmpty() }?.let { it in boardAccessPasswordCache } == true
 
-    fun getRememberedBoardAccessPassword(deviceKey: String): String? =
-        boardAccessPasswordCache[deviceKey]
+    fun getRememberedBoardAccessPassword(deviceUuid: String?): String? =
+        deviceUuid?.trim()?.takeIf { it.isNotEmpty() }?.let { boardAccessPasswordCache[it]?.takeIf { value -> value.isNotEmpty() } }
 
-    fun rememberBoardAccessPassword(deviceKey: String, password: String?) {
-        boardAccessPasswordCache[deviceKey] = password?.trim()?.ifEmpty { null }
+    fun rememberBoardAccessPassword(deviceUuid: String?, password: String?) {
+        val normalizedUuid = deviceUuid?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        boardAccessPasswordCache[normalizedUuid] = password?.trim()?.ifEmpty { null } ?: ""
         syncRememberedPasswordCount()
+        scope.launch {
+            preferences.setFamilyNetworkBoardAccessPassword(normalizedUuid, password)
+        }
     }
 
-    fun forgetBoardAccessPassword(deviceKey: String) {
-        if (boardAccessPasswordCache.remove(deviceKey) != null) {
+    fun forgetBoardAccessPassword(deviceUuid: String?) {
+        val normalizedUuid = deviceUuid?.trim()?.takeIf { it.isNotEmpty() } ?: return
+        if (boardAccessPasswordCache.remove(normalizedUuid) != null) {
             syncRememberedPasswordCount()
+        }
+        scope.launch {
+            preferences.removeFamilyNetworkBoardAccessPassword(normalizedUuid)
         }
     }
 
@@ -196,6 +209,9 @@ class FamilyNetworkManager(context: Context) {
         val count = boardAccessPasswordCache.size
         boardAccessPasswordCache.clear()
         syncRememberedPasswordCount()
+        scope.launch {
+            preferences.clearFamilyNetworkBoardAccessPasswords()
+        }
         return count
     }
 
@@ -204,6 +220,13 @@ class FamilyNetworkManager(context: Context) {
     }
 
     init {
+        scope.launch {
+            preferences.familyNetworkBoardAccessPasswords.collect { remembered ->
+                boardAccessPasswordCache.clear()
+                boardAccessPasswordCache.putAll(remembered)
+                syncRememberedPasswordCount()
+            }
+        }
         reloadUserRoles()
     }
 

@@ -277,7 +277,7 @@ fun FamilyNetworkScreen(
     fun openBoardListPage(service: FamilyDiscoveredService, accessPassword: String?) {
         scope.launch {
             val canManage = manager.remoteCanManageBoard(service, accessPassword)
-            manager.rememberBoardAccessPassword(service.deviceKey, accessPassword)
+            manager.rememberBoardAccessPassword(service.deviceUuid, accessPassword)
             boardListSession = BoardListSession(service, accessPassword, canManage)
         }
     }
@@ -322,15 +322,15 @@ fun FamilyNetworkScreen(
             openBoardWithAccess(service, accessPassword = null)
             return
         }
-        if (manager.hasRememberedBoardAccessPassword(service.deviceKey)) {
-            val cached = manager.getRememberedBoardAccessPassword(service.deviceKey)
+        if (manager.hasRememberedBoardAccessPassword(service.deviceUuid)) {
+            val cached = manager.getRememberedBoardAccessPassword(service.deviceUuid)
             scope.launch {
                 boardPasswordInProgress = true
                 val result = manager.probeBoardAccess(service, accessPassword = cached)
                 boardPasswordInProgress = false
                 result.onSuccess { openBoardWithAccess(service, cached) }
                     .onFailure { error ->
-                        manager.forgetBoardAccessPassword(service.deviceKey)
+                        manager.forgetBoardAccessPassword(service.deviceUuid)
                         showPasswordDialog(
                             service,
                             wrongPassword = manager.isLikelyAuthFailure(error),
@@ -349,7 +349,7 @@ fun FamilyNetworkScreen(
             val probe = manager.probeBoardAccess(service, accessPassword = null)
             boardPasswordInProgress = false
             if (probe.isSuccess) {
-                manager.rememberBoardAccessPassword(service.deviceKey, null)
+                manager.rememberBoardAccessPassword(service.deviceUuid, null)
                 openBoardWithAccess(service, null)
             } else {
                 showPasswordDialog(service, wrongPassword = false)
@@ -409,7 +409,7 @@ fun FamilyNetworkScreen(
                                 pendingBoardService = null
                                 boardPasswordInput = ""
                                 boardPasswordError = null
-                                manager.rememberBoardAccessPassword(service.deviceKey, password)
+                                manager.rememberBoardAccessPassword(service.deviceUuid, password)
                                 openBoardWithAccess(service, password)
                             } else {
                                 boardPasswordError = boardPasswordProbeErrorMessage(
@@ -706,7 +706,7 @@ fun FamilyNetworkScreen(
                                 text = { Text(stringResource(R.string.family_board_reenter_password)) },
                                 onClick = {
                                     boardListUiState.showActionsMenu = false
-                                    manager.forgetBoardAccessPassword(session.service.deviceKey)
+                                    manager.forgetBoardAccessPassword(session.service.deviceUuid)
                                     Toast.makeText(
                                         context,
                                         context.getString(R.string.family_board_reenter_password_done),
@@ -718,6 +718,20 @@ fun FamilyNetworkScreen(
                                     showBoardPasswordDialog = true
                                 }
                             )
+                            if (session.service.deviceUuid != null && manager.hasRememberedBoardAccessPassword(session.service.deviceUuid)) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.family_board_clear_password_memory)) },
+                                    onClick = {
+                                        boardListUiState.showActionsMenu = false
+                                        manager.forgetBoardAccessPassword(session.service.deviceUuid)
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.family_board_clear_password_memory_done),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }
+                                )
+                            }
                             if (session.canManageBoards) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.family_board_import_pack)) },

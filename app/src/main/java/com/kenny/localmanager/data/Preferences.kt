@@ -24,6 +24,7 @@ private val LOCAL_NETWORK_SERVICE_ENABLED = booleanPreferencesKey("local_network
 private val FAMILY_NETWORK_USER_NAME = stringPreferencesKey("family_network_user_name")
 private val FAMILY_NETWORK_HOST_NAME = stringPreferencesKey("family_network_host_name")
 private val FAMILY_NETWORK_HOST_PASSWORD = stringPreferencesKey("family_network_host_password")
+private val FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON = stringPreferencesKey("family_network_board_access_passwords_json")
 private val FAMILY_NETWORK_EXTRA_ROLES = stringPreferencesKey("family_network_extra_roles")
 private val FTP_TIMEOUT_MINUTES = intPreferencesKey("ftp_timeout_minutes")
 private val FILTER_VISIBLE = booleanPreferencesKey("filter_visible")
@@ -217,6 +218,10 @@ class Preferences(private val context: Context) {
 
     val familyNetworkHostPassword: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[FAMILY_NETWORK_HOST_PASSWORD]
+    }
+
+    val familyNetworkBoardAccessPasswords: Flow<Map<String, String>> = context.dataStore.data.map { prefs ->
+        parseStringMapJson(prefs[FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON])
     }
 
     val familyNetworkExtraRoles: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -639,6 +644,41 @@ class Preferences(private val context: Context) {
             } else {
                 prefs[FAMILY_NETWORK_HOST_PASSWORD] = trimmed
             }
+        }
+    }
+
+    suspend fun setFamilyNetworkBoardAccessPassword(deviceUuid: String, password: String?) {
+        val normalizedUuid = deviceUuid.trim()
+        if (normalizedUuid.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val current = parseStringMapJson(prefs[FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON]).toMutableMap()
+            current[normalizedUuid] = password?.trim()?.ifEmpty { null } ?: ""
+            if (current.isEmpty()) {
+                prefs.remove(FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON)
+            } else {
+                prefs[FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON] = stringMapToJson(current)
+            }
+        }
+    }
+
+    suspend fun removeFamilyNetworkBoardAccessPassword(deviceUuid: String) {
+        val normalizedUuid = deviceUuid.trim()
+        if (normalizedUuid.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val current = parseStringMapJson(prefs[FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON]).toMutableMap()
+            if (current.remove(normalizedUuid) != null) {
+                if (current.isEmpty()) {
+                    prefs.remove(FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON)
+                } else {
+                    prefs[FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON] = stringMapToJson(current)
+                }
+            }
+        }
+    }
+
+    suspend fun clearFamilyNetworkBoardAccessPasswords() {
+        context.dataStore.edit { prefs ->
+            prefs.remove(FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON)
         }
     }
 
@@ -1342,6 +1382,34 @@ class Preferences(private val context: Context) {
         val arr = org.json.JSONArray()
         list.forEach { arr.put(it) }
         return arr.toString()
+    }
+
+    private fun parseStringMapJson(json: String?): Map<String, String> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(json)
+            buildMap {
+                obj.keys().forEach { key ->
+                    val normalizedKey = key.trim()
+                    if (normalizedKey.isNotEmpty()) {
+                        put(normalizedKey, obj.optString(key, ""))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun stringMapToJson(map: Map<String, String>): String {
+        val obj = org.json.JSONObject()
+        map.forEach { (key, value) ->
+            val normalizedKey = key.trim()
+            if (normalizedKey.isNotEmpty()) {
+                obj.put(normalizedKey, value)
+            }
+        }
+        return obj.toString()
     }
 
     /** 启动时解密密钥：开启后启动需输入私钥密码解锁，解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。默认关闭。 */

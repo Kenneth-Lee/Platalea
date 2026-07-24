@@ -214,8 +214,8 @@ fun BulletinForwardTargetFlow(
                                                     accessPassword = null
                                                     phase = ForwardPhase.BOARD
                                                     loadBoards(service, null)
-                                                } else if (manager.hasRememberedBoardAccessPassword(service.deviceKey)) {
-                                                    accessPassword = manager.getRememberedBoardAccessPassword(service.deviceKey)
+                                                } else if (manager.hasRememberedBoardAccessPassword(service.deviceUuid)) {
+                                                    accessPassword = manager.getRememberedBoardAccessPassword(service.deviceUuid)
                                                     phase = ForwardPhase.BOARD
                                                     loadBoards(service, accessPassword)
                                                 } else if (service.requiresPasswordAuth) {
@@ -227,7 +227,7 @@ fun BulletinForwardTargetFlow(
                                                         passwordInProgress = false
                                                         if (probe.isSuccess) {
                                                             accessPassword = null
-                                                            manager.rememberBoardAccessPassword(service.deviceKey, null)
+                                                            manager.rememberBoardAccessPassword(service.deviceUuid, null)
                                                             phase = ForwardPhase.BOARD
                                                             loadBoards(service, null)
                                                         } else {
@@ -314,7 +314,7 @@ fun BulletinForwardTargetFlow(
                                 passwordInProgress = false
                                 if (result.isSuccess) {
                                     accessPassword = password
-                                    manager.rememberBoardAccessPassword(service.deviceKey, password)
+                                    manager.rememberBoardAccessPassword(service.deviceUuid, password)
                                     passwordInput = ""
                                     passwordError = null
                                     phase = ForwardPhase.BOARD

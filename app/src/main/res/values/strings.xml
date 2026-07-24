@@ -389,6 +389,8 @@
     <string name="family_board_reenter_password_title">重新输入接入密码</string>
     <string name="family_board_reenter_password_confirm">将清除当前设备已记住的接入密码，之后重新输入新的身份密码。确定吗？</string>
     <string name="family_board_reenter_password_done">已清除当前设备的接入密码，请重新输入</string>
+    <string name="family_board_clear_password_memory">清除已记住密码</string>
+    <string name="family_board_clear_password_memory_done">已清除当前设备记住的密码</string>
     <string name="context_forward_to_bulletin">转发到留言板</string>
     <string name="pending_forward_to_bulletin">转发板</string>
     <string name="pending_list_action_copy">拷贝</string>
