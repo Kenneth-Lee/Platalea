@@ -1262,12 +1262,11 @@ private fun shiftIndexAfterRemovals(index: Int, removedAsc: List<Int>): Int? {
 
 private fun updateDuplicateGroupsAfterRemoval(
     groups: List<DuplicateSongGroup>,
-    keepIndexByGroupKey: Map<String, Int>,
     removedIndices: Set<Int>
-): Pair<List<DuplicateSongGroup>, Map<String, Int>> {
-    if (removedIndices.isEmpty()) return groups to keepIndexByGroupKey
+): List<DuplicateSongGroup> {
+    if (removedIndices.isEmpty()) return groups
     val removedAsc = removedIndices.sorted()
-    val updatedGroups = groups.mapNotNull { group ->
+    return groups.mapNotNull { group ->
         val updatedEntries = group.entries.mapNotNull { entry ->
             val newIndex = shiftIndexAfterRemovals(entry.originalIndex, removedAsc)
             if (newIndex == null) null else entry.copy(originalIndex = newIndex)
@@ -1278,14 +1277,6 @@ private fun updateDuplicateGroupsAfterRemoval(
             group.copy(entries = updatedEntries.sortedBy { it.originalIndex })
         }
     }
-    val updatedKeep = updatedGroups.associate { group ->
-        val previousKeep = keepIndexByGroupKey[group.key]
-        val shiftedKeep = previousKeep?.let { shiftIndexAfterRemovals(it, removedAsc) }
-        val keepIndex = shiftedKeep?.takeIf { keep -> group.entries.any { it.originalIndex == keep } }
-            ?: group.entries.first().originalIndex
-        group.key to keepIndex
-    }
-    return updatedGroups to updatedKeep
 }
 
 private val duplicateTraditionalToSimplified: Transliterator? = runCatching {
@@ -8430,7 +8421,6 @@ fun PlaybackScreen(
     var duplicateSongsMutating by remember { mutableStateOf(false) }
     var duplicateSongGroups by remember { mutableStateOf<List<DuplicateSongGroup>>(emptyList()) }
     var duplicateSongsTargetPlaylist by remember { mutableStateOf<Playlist?>(null) }
-    var duplicateKeepIndexByGroupKey by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
     var showAddBookmarkDialog by remember { mutableStateOf(false) }
     var showBookmarkManagerDialog by remember { mutableStateOf(false) }
     var bookmarkNoteInput by remember { mutableStateOf("") }
@@ -8521,7 +8511,6 @@ fun PlaybackScreen(
     fun openDuplicateSongsDialog(pl: Playlist) {
         duplicateSongsTargetPlaylist = pl
         duplicateSongGroups = emptyList()
-        duplicateKeepIndexByGroupKey = emptyMap()
         duplicateSongsMutating = false
         duplicateSongsLoading = true
         showDuplicateSongsDialog = true
@@ -8539,9 +8528,6 @@ fun PlaybackScreen(
             }
             if (duplicateSongsTargetPlaylist?.id == pl.id) {
                 duplicateSongGroups = groups
-                duplicateKeepIndexByGroupKey = groups.associate { group ->
-                    group.key to (group.entries.firstOrNull()?.originalIndex ?: -1)
-                }
                 duplicateSongsLoading = false
             }
         }
@@ -9941,15 +9927,15 @@ fun PlaybackScreen(
         if (showDuplicateSongsDialog) {
             val targetPlaylist = duplicateSongsTargetPlaylist
             val duplicateGroupListState = remember(targetPlaylist?.id) { LazyListState() }
+            fun closeDuplicateSongsDialog() {
+                showDuplicateSongsDialog = false
+                duplicateSongsLoading = false
+                duplicateSongsMutating = false
+                duplicateSongGroups = emptyList()
+                duplicateSongsTargetPlaylist = null
+            }
             Dialog(
-                onDismissRequest = {
-                    showDuplicateSongsDialog = false
-                    duplicateSongsLoading = false
-                    duplicateSongsMutating = false
-                    duplicateSongGroups = emptyList()
-                    duplicateKeepIndexByGroupKey = emptyMap()
-                    duplicateSongsTargetPlaylist = null
-                },
+                onDismissRequest = { closeDuplicateSongsDialog() },
                 properties = DialogProperties(usePlatformDefaultWidth = false)
             ) {
                 Surface(
@@ -9994,15 +9980,6 @@ fun PlaybackScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         } else {
-                            fun collectUnselectedIndices(groups: List<DuplicateSongGroup>): Set<Int> {
-                                return groups.flatMap { group ->
-                                    val keepIndex = duplicateKeepIndexByGroupKey[group.key]
-                                        ?: group.entries.firstOrNull()?.originalIndex
-                                        ?: -1
-                                    group.entries.map { it.originalIndex }.filter { it != keepIndex }
-                                }.toSet()
-                            }
-
                             Text(
                                 context.getString(
                                     R.string.player_duplicate_tracks_found_summary,
@@ -10025,72 +10002,12 @@ fun PlaybackScreen(
                                 }
                             }
                             Spacer(Modifier.height(8.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.End
-                            ) {
-                                TextButton(
-                                    enabled = !duplicateSongsLoading && !duplicateSongsMutating,
-                                    onClick = {
-                                        val currentPlaylist = targetPlaylist ?: return@TextButton
-                                        val batchIndices = collectUnselectedIndices(duplicateSongGroups)
-                                        if (batchIndices.isEmpty()) return@TextButton
-                                        scope.launch {
-                                            duplicateSongsMutating = true
-                                            try {
-                                                val result = removeTracksFromPlaylistByIndices(
-                                                    context = context,
-                                                    prefs = prefs,
-                                                    playlist = currentPlaylist,
-                                                    removeIndices = batchIndices,
-                                                    playbackState = playbackState,
-                                                    onStopPlayback = onStopPlayback
-                                                )
-                                                if (result.removedCount > 0) {
-                                                    Toast.makeText(
-                                                        context,
-                                                        context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
-                                                        Toast.LENGTH_SHORT
-                                                    ).show()
-                                                }
-                                                if (result.failedNames.isNotEmpty()) {
-                                                    val firstFailed = result.failedNames.first()
-                                                    Toast.makeText(
-                                                        context,
-                                                        context.getString(
-                                                            R.string.player_duplicate_tracks_delete_partial_failed,
-                                                            result.failedNames.size,
-                                                            firstFailed
-                                                        ),
-                                                        Toast.LENGTH_LONG
-                                                    ).show()
-                                                }
-                                                duplicateSongsTargetPlaylist = result.updatedPlaylist
-                                                val (updatedGroups, updatedKeep) = updateDuplicateGroupsAfterRemoval(
-                                                    duplicateSongGroups,
-                                                    duplicateKeepIndexByGroupKey,
-                                                    result.removedIndices
-                                                )
-                                                duplicateSongGroups = updatedGroups
-                                                duplicateKeepIndexByGroupKey = updatedKeep
-                                            } finally {
-                                                duplicateSongsMutating = false
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Text(context.getString(R.string.player_duplicate_tracks_remove_all_unselected))
-                                }
-                            }
                             LazyColumn(
                                 modifier = Modifier.weight(1f),
                                 state = duplicateGroupListState,
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 items(items = duplicateSongGroups, key = { it.key }) { group ->
-                                    val keepOriginalIndex = duplicateKeepIndexByGroupKey[group.key]
-                                        ?: group.entries.firstOrNull()?.originalIndex
-                                        ?: -1
                                     Card(
                                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                                         modifier = Modifier.fillMaxWidth()
@@ -10115,111 +10032,90 @@ fun PlaybackScreen(
                                                 Column(Modifier.fillMaxWidth()) {
                                                     Row(
                                                         modifier = Modifier.fillMaxWidth(),
-                                                        verticalAlignment = Alignment.CenterVertically
+                                                        verticalAlignment = Alignment.Top,
+                                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                                                     ) {
-                                                        androidx.compose.material3.RadioButton(
-                                                            selected = keepOriginalIndex == entry.originalIndex,
-                                                            onClick = {
-                                                                duplicateKeepIndexByGroupKey = duplicateKeepIndexByGroupKey +
-                                                                    (group.key to entry.originalIndex)
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                context.getString(R.string.player_duplicate_tracks_entry_label, entry.originalIndex + 1),
+                                                                style = MaterialTheme.typography.labelSmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                            Text(
+                                                                entry.metadata?.title?.takeIf { it.isNotBlank() } ?: entry.name,
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                maxLines = 2,
+                                                                overflow = TextOverflow.Ellipsis,
+                                                                color = MaterialTheme.colorScheme.onSurface
+                                                            )
+                                                            val metaText = entry.metadata?.let { formatTrackMetadata(context, it) }.orEmpty()
+                                                            if (metaText.isNotBlank()) {
+                                                                Text(
+                                                                    metaText,
+                                                                    style = MaterialTheme.typography.labelSmall,
+                                                                    maxLines = 2,
+                                                                    overflow = TextOverflow.Ellipsis,
+                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                                )
                                                             }
-                                                        )
-                                                        Text(
-                                                            context.getString(
-                                                                R.string.player_duplicate_tracks_keep_this,
-                                                                entry.originalIndex + 1
-                                                            ),
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                    Text(
-                                                        context.getString(R.string.player_duplicate_tracks_entry_label, entry.originalIndex + 1),
-                                                        style = MaterialTheme.typography.labelSmall,
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                    )
-                                                    Text(
-                                                        entry.metadata?.title?.takeIf { it.isNotBlank() } ?: entry.name,
-                                                        style = MaterialTheme.typography.bodySmall,
-                                                        maxLines = 2,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                        color = MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                    val metaText = entry.metadata?.let { formatTrackMetadata(context, it) }.orEmpty()
-                                                    if (metaText.isNotBlank()) {
-                                                        Text(
-                                                            metaText,
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            maxLines = 2,
-                                                            overflow = TextOverflow.Ellipsis,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
+                                                        }
+                                                        TextButton(
+                                                            enabled = !duplicateSongsLoading && !duplicateSongsMutating,
+                                                            onClick = {
+                                                                val currentPlaylist = targetPlaylist ?: return@TextButton
+                                                                scope.launch {
+                                                                    duplicateSongsMutating = true
+                                                                    try {
+                                                                        val result = removeTracksFromPlaylistByIndices(
+                                                                            context = context,
+                                                                            prefs = prefs,
+                                                                            playlist = currentPlaylist,
+                                                                            removeIndices = setOf(entry.originalIndex),
+                                                                            playbackState = playbackState,
+                                                                            onStopPlayback = onStopPlayback
+                                                                        )
+                                                                        if (result.removedCount > 0) {
+                                                                            Toast.makeText(
+                                                                                context,
+                                                                                context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
+                                                                                Toast.LENGTH_SHORT
+                                                                            ).show()
+                                                                        }
+                                                                        if (result.failedNames.isNotEmpty()) {
+                                                                            val firstFailed = result.failedNames.first()
+                                                                            Toast.makeText(
+                                                                                context,
+                                                                                context.getString(
+                                                                                    R.string.player_duplicate_tracks_delete_partial_failed,
+                                                                                    result.failedNames.size,
+                                                                                    firstFailed
+                                                                                ),
+                                                                                Toast.LENGTH_LONG
+                                                                            ).show()
+                                                                        }
+                                                                        duplicateSongsTargetPlaylist = result.updatedPlaylist
+                                                                        duplicateSongGroups = updateDuplicateGroupsAfterRemoval(
+                                                                            duplicateSongGroups,
+                                                                            result.removedIndices
+                                                                        )
+                                                                    } finally {
+                                                                        duplicateSongsMutating = false
+                                                                    }
+                                                                }
+                                                            }
+                                                        ) {
+                                                            Icon(
+                                                                Icons.Default.Delete,
+                                                                contentDescription = context.getString(R.string.common_delete)
+                                                            )
+                                                            Spacer(Modifier.width(4.dp))
+                                                            Text(context.getString(R.string.common_delete))
+                                                        }
                                                     }
                                                     if (entryIndex < group.entries.lastIndex) {
                                                         Spacer(Modifier.height(6.dp))
                                                     }
                                                 }
-                                            }
-                                            Spacer(Modifier.height(10.dp))
-                                            TextButton(
-                                                enabled = !duplicateSongsLoading && !duplicateSongsMutating,
-                                                onClick = {
-                                                    val currentPlaylist = targetPlaylist ?: return@TextButton
-                                                    if (group.entries.size <= 1) return@TextButton
-                                                    val keepIndex = duplicateKeepIndexByGroupKey[group.key]
-                                                        ?: group.entries.firstOrNull()?.originalIndex
-                                                        ?: return@TextButton
-                                                    val removeIndices = group.entries
-                                                        .map { it.originalIndex }
-                                                        .filter { it != keepIndex }
-                                                        .toSet()
-                                                    if (removeIndices.isEmpty()) return@TextButton
-                                                    scope.launch {
-                                                        duplicateSongsMutating = true
-                                                        try {
-                                                            val result = removeTracksFromPlaylistByIndices(
-                                                                context = context,
-                                                                prefs = prefs,
-                                                                playlist = currentPlaylist,
-                                                                removeIndices = removeIndices,
-                                                                playbackState = playbackState,
-                                                                onStopPlayback = onStopPlayback
-                                                            )
-                                                            if (result.removedCount > 0) {
-                                                                Toast.makeText(
-                                                                    context,
-                                                                    context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
-                                                                    Toast.LENGTH_SHORT
-                                                                ).show()
-                                                            }
-                                                            if (result.failedNames.isNotEmpty()) {
-                                                                val firstFailed = result.failedNames.first()
-                                                                Toast.makeText(
-                                                                    context,
-                                                                    context.getString(
-                                                                        R.string.player_duplicate_tracks_delete_partial_failed,
-                                                                        result.failedNames.size,
-                                                                        firstFailed
-                                                                    ),
-                                                                    Toast.LENGTH_LONG
-                                                                ).show()
-                                                            }
-                                                            duplicateSongsTargetPlaylist = result.updatedPlaylist
-                                                            val (updatedGroups, updatedKeep) = updateDuplicateGroupsAfterRemoval(
-                                                                duplicateSongGroups,
-                                                                duplicateKeepIndexByGroupKey,
-                                                                result.removedIndices
-                                                            )
-                                                            duplicateSongGroups = updatedGroups
-                                                            duplicateKeepIndexByGroupKey = updatedKeep
-                                                        } finally {
-                                                            duplicateSongsMutating = false
-                                                        }
-                                                    }
-                                                },
-                                                modifier = Modifier.align(Alignment.End)
-                                            ) {
-                                                Text(context.getString(R.string.player_duplicate_tracks_remove_group))
                                             }
                                         }
                                     }
@@ -10231,14 +10127,7 @@ fun PlaybackScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.End
                         ) {
-                            TextButton(onClick = {
-                                showDuplicateSongsDialog = false
-                                duplicateSongsLoading = false
-                                duplicateSongsMutating = false
-                                duplicateSongGroups = emptyList()
-                                duplicateKeepIndexByGroupKey = emptyMap()
-                                duplicateSongsTargetPlaylist = null
-                            }) {
+                            TextButton(onClick = { closeDuplicateSongsDialog() }) {
                                 Text(context.getString(R.string.common_close))
                             }
                         }
@@ -10303,9 +10192,8 @@ fun PlaybackScreen(
                         enabled = !bulkDeleteTracksInProgress && bulkDeleteTrackIndices.isNotEmpty(),
                         onClick = {
                             val removeSet = bulkDeleteTrackIndices
-                            if (removeSet.isEmpty()) return@Button
+                            bulkDeleteTracksInProgress = true
                             scope.launch {
-                                bulkDeleteTracksInProgress = true
                                 try {
                                     val result = removeTracksFromPlaylistByIndices(
                                         context = context,

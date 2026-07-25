@@ -1346,9 +1346,6 @@ It will sync, copy, and push automatically.</string>
     <string name="player_duplicate_tracks_found_summary">Found %1$d duplicate group(s), %2$d track(s) total</string>
     <string name="player_duplicate_tracks_group_count">%1$d duplicate(s)</string>
     <string name="player_duplicate_tracks_entry_label">Track %1$d</string>
-    <string name="player_duplicate_tracks_keep_this">Keep this track (Track %1$d)</string>
-    <string name="player_duplicate_tracks_remove_group">Remove unselected tracks in this group</string>
-    <string name="player_duplicate_tracks_remove_all_unselected">Remove all unselected tracks</string>
     <string name="player_duplicate_tracks_mutating">Applying deletions without resetting your current review position…</string>
     <string name="player_duplicate_tracks_delete_done">Removed %1$d duplicate track(s)</string>
     <string name="player_duplicate_tracks_delete_partial_failed">Failed to remove %1$d track(s) (for example: %2$s)</string>
