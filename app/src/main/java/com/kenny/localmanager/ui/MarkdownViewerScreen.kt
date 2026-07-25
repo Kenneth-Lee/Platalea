@@ -5060,6 +5060,8 @@ fun EpubViewerScreen(
     var ttsIsSpeaking by remember { mutableStateOf(false) }
     var ttsRequestJob by remember { mutableStateOf<Job?>(null) }
     var currentChapterTtsSegments by remember { mutableStateOf<List<EpubTtsSegment>>(emptyList()) }
+    var currentChapterTtsSegmentsChapterIndex by remember { mutableStateOf<Int?>(null) }
+    var ttsSegmentLoadGeneration by remember { mutableStateOf(0L) }
     var ttsSegmentsLoading by remember { mutableStateOf(false) }
     var ttsActiveSegmentId by remember { mutableStateOf<String?>(null) }
     var ttsSpeakingChapterIndex by remember { mutableStateOf<Int?>(null) }
@@ -5691,6 +5693,8 @@ fun EpubViewerScreen(
 
     LaunchedEffect(chapterFile?.absolutePath) {
         currentChapterTtsSegments = emptyList()
+        currentChapterTtsSegmentsChapterIndex = null
+        ttsSegmentLoadGeneration += 1L
         ttsSegmentsLoading = chapterFile != null
         ttsActiveSegmentId = null
         setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
@@ -5740,6 +5744,10 @@ fun EpubViewerScreen(
     ) {
         val targetChapterIndex = pendingTtsStartChapterIndex ?: return@LaunchedEffect
         if (targetChapterIndex != currentChapterIndex) return@LaunchedEffect
+        if (currentChapterTtsSegmentsChapterIndex != targetChapterIndex) {
+            publishTtsStatus(context.getString(R.string.epub_tts_preparing))
+            return@LaunchedEffect
+        }
         if (ttsSegmentsLoading) {
             publishTtsStatus(context.getString(R.string.epub_tts_preparing))
             return@LaunchedEffect
@@ -7096,9 +7104,15 @@ fun EpubViewerScreen(
                                     (view as? GestureWebView)?.restoreScrollPosition()
                                     // 页面完成后再应用最新缩放，避免旧闭包值覆盖。
                                     view.evaluateJavascript("document.body.style.zoom = ${latestScalePercent / 100.0}", null)
+                                    val loadChapterIndex = currentChapterIndex
+                                    val loadGeneration = ttsSegmentLoadGeneration
                                     scope.launch {
                                         ttsSegmentsLoading = true
-                                        currentChapterTtsSegments = collectEpubTtsSegments(view)
+                                        val segments = collectEpubTtsSegments(view)
+                                        if (loadGeneration == ttsSegmentLoadGeneration && loadChapterIndex == currentChapterIndex) {
+                                            currentChapterTtsSegments = segments
+                                            currentChapterTtsSegmentsChapterIndex = loadChapterIndex
+                                        }
                                         ttsSegmentsLoading = false
                                         if (ttsActiveSegmentId != null) {
                                             setEpubTtsHighlight(view, ttsActiveSegmentId, scrollToSegment = false)
