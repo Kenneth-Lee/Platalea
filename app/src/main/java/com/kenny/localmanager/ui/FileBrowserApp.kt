@@ -189,6 +189,7 @@ import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.quickObfuscate
 import com.kenny.localmanager.file.quickDeobfuscate
+import com.kenny.localmanager.file.quickToggleObfuscation
 import com.kenny.localmanager.file.isQuickObfuscatedFileName
 import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.listChildrenFast
@@ -1948,11 +1949,11 @@ private fun FileBrowserAppScreen(
         var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
         var showChangeRootConfirm by remember { mutableStateOf(false) }
         var showRootSwitchDialog by remember { mutableStateOf(false) }
-        var quickObfuscateOp by remember { mutableStateOf<Pair<DocumentFileModel, Boolean>?>(null) }
+        var quickMaskOp by remember { mutableStateOf<DocumentFileModel?>(null) }
         var quickObfuscatePassword by remember { mutableStateOf("") }
         var quickObfuscatePasswordConfirm by remember { mutableStateOf("") }
         var quickObfuscateInProgress by remember { mutableStateOf(false) }
-        var batchObfuscateOp by remember { mutableStateOf<Pair<List<DocumentFileModel>, Boolean>?>(null) }
+        var batchMaskOp by remember { mutableStateOf<List<DocumentFileModel>?>(null) }
         var batchObfuscatePassword by remember { mutableStateOf("") }
         var batchObfuscatePasswordConfirm by remember { mutableStateOf("") }
         var batchObfuscateInProgress by remember { mutableStateOf(false) }
@@ -2536,8 +2537,8 @@ private fun FileBrowserAppScreen(
         BackHandler {
             when {
                 progressOp != null -> { } // 不响应返回，防止误触
-                batchObfuscateOp != null -> { batchObfuscateOp = null; batchObfuscatePassword = ""; batchObfuscatePasswordConfirm = "" }
-                quickObfuscateOp != null -> { quickObfuscateOp = null; quickObfuscatePassword = ""; quickObfuscatePasswordConfirm = "" }
+                batchMaskOp != null -> { batchMaskOp = null; batchObfuscatePassword = ""; batchObfuscatePasswordConfirm = "" }
+                quickMaskOp != null -> { quickMaskOp = null; quickObfuscatePassword = ""; quickObfuscatePasswordConfirm = "" }
                 passProtectTarget != null -> { passProtectTarget = null }
                 passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
                 passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
@@ -3016,13 +3017,10 @@ private fun FileBrowserAppScreen(
                                     gpgEncryptSelectedKeyId = null
                                     gpgState = GpgOpState.Encrypt(fileModel, dirUri)
                                 },
-                                onRequestQuickObfuscate = { model ->
-                                    quickObfuscateOp = model to true
+                                onRequestQuickMask = { model ->
+                                    quickMaskOp = model
                                     quickObfuscatePassword = ""
-                                },
-                                onRequestQuickDeobfuscate = { model ->
-                                    quickObfuscateOp = model to false
-                                    quickObfuscatePassword = ""
+                                    quickObfuscatePasswordConfirm = ""
                                 },
                                 onConfirmDelete = { model, deletePermanently ->
                                     scope.launch {
@@ -3323,15 +3321,10 @@ private fun FileBrowserAppScreen(
                         bulletinForwardPayload = BulletinForwardPayload.Files(pendingList.toList())
                     }
                 },
-                onRequestBatchObfuscate = {
-                    val list = pendingList.filter { !it.isDirectory && !isQuickObfuscatedFileName(it.name) }
-                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_obfuscate_candidates), Toast.LENGTH_SHORT).show()
-                    else batchObfuscateOp = list to true
-                },
-                onRequestBatchDeobfuscate = {
-                    val list = pendingList.filter { !it.isDirectory && isQuickObfuscatedFileName(it.name) }
-                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_deobfuscate_candidates), Toast.LENGTH_SHORT).show()
-                    else batchObfuscateOp = list to false
+                onRequestBatchMask = {
+                    val list = pendingList.filter { !it.isDirectory }
+                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_mask_candidates), Toast.LENGTH_SHORT).show()
+                    else batchMaskOp = list
                 },
                 onRequestBatchGpgEncrypt = {
                     if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
@@ -4008,9 +4001,9 @@ private fun FileBrowserAppScreen(
                 }
             )
         }
-        quickObfuscateOp?.let { (model, isObfuscate) ->
+        quickMaskOp?.let { model ->
             QuickObfuscatePasswordDialog(
-                isObfuscate = isObfuscate,
+                isMasked = isQuickObfuscatedFileName(model.name),
                 fileName = model.name,
                 password = quickObfuscatePassword,
                 confirmPassword = quickObfuscatePasswordConfirm,
@@ -4021,31 +4014,30 @@ private fun FileBrowserAppScreen(
                     quickObfuscateInProgress = true
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) {
-                            if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
-                            else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                            quickToggleObfuscation(context, model.uri, pwd.toCharArray())
                         }
                         quickObfuscateInProgress = false
-                        quickObfuscateOp = null
+                        quickMaskOp = null
                         quickObfuscatePassword = ""
                         quickObfuscatePasswordConfirm = ""
                         if (ok) {
-                            Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscated_badge) else context.getString(R.string.pending_list_action_deobfuscate), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.browser_mask_done, model.name), Toast.LENGTH_SHORT).show()
                             refreshTrigger++
                         } else {
-                            Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscate_failed) else context.getString(R.string.browser_deobfuscate_failed), Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, context.getString(R.string.browser_mask_failed, model.name), Toast.LENGTH_SHORT).show()
                         }
                     }
                 },
                 onDismiss = {
-                    quickObfuscateOp = null
+                    quickMaskOp = null
                     quickObfuscatePassword = ""
                     quickObfuscatePasswordConfirm = ""
                 }
             )
         }
-        batchObfuscateOp?.let { (list, isObfuscate) ->
+        batchMaskOp?.let { list ->
             QuickObfuscatePasswordDialog(
-                isObfuscate = isObfuscate,
+                isMasked = list.all { isQuickObfuscatedFileName(it.name) },
                 fileName = context.getString(R.string.browser_file_count, list.size),
                 password = batchObfuscatePassword,
                 confirmPassword = batchObfuscatePasswordConfirm,
@@ -4055,26 +4047,25 @@ private fun FileBrowserAppScreen(
                 onConfirm = { pwd ->
                     batchObfuscateInProgress = true
                     scope.launch {
-                        runWithProgress(if (isObfuscate) context.getString(R.string.pending_list_action_obfuscate) else context.getString(R.string.pending_list_action_deobfuscate), list.size) { setProgress ->
+                        runWithProgress(context.getString(R.string.pending_list_action_mask), list.size) { setProgress ->
                             withContext(Dispatchers.IO) {
                                 list.forEachIndexed { index, model ->
-                                    if (isObfuscate) quickObfuscate(context, model.uri, pwd.toCharArray())
-                                    else quickDeobfuscate(context, model.uri, pwd.toCharArray())
+                                    quickToggleObfuscation(context, model.uri, pwd.toCharArray())
                                     withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
                                 }
                             }
                         }
                         batchObfuscateInProgress = false
-                        batchObfuscateOp = null
+                        batchMaskOp = null
                         batchObfuscatePassword = ""
                         batchObfuscatePasswordConfirm = ""
-                        Toast.makeText(context, if (isObfuscate) context.getString(R.string.browser_obfuscated_count, list.size) else context.getString(R.string.browser_deobfuscated_count, list.size), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.browser_masked_count, list.size), Toast.LENGTH_SHORT).show()
                         finishPendingListAndReturn()
                         refreshTrigger++
                     }
                 },
                 onDismiss = {
-                    batchObfuscateOp = null
+                    batchMaskOp = null
                     batchObfuscatePassword = ""
                     batchObfuscatePasswordConfirm = ""
                 }
@@ -6575,8 +6566,7 @@ internal fun FileBrowserScreen(
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
-    onRequestQuickObfuscate: ((DocumentFileModel) -> Unit)? = null,
-    onRequestQuickDeobfuscate: ((DocumentFileModel) -> Unit)? = null,
+    onRequestQuickMask: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
     onRequestMdZipView: (DocumentFileModel) -> Unit = {},
@@ -7365,26 +7355,14 @@ internal fun FileBrowserScreen(
                         ) { Text(context.getString(R.string.context_restore), color = MaterialTheme.colorScheme.primary) }
                     }
                     if (!menuTarget.isDirectory) {
-                        if (isQuickObfuscatedFileName(menuTarget.name)) {
-                            onRequestQuickDeobfuscate?.let { fn ->
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        fn(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_quick_deobfuscate), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                        } else {
-                            onRequestQuickObfuscate?.let { fn ->
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        fn(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_quick_obfuscate), color = MaterialTheme.colorScheme.onSurface) }
-                            }
+                        onRequestQuickMask?.let { fn ->
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    fn(menuTarget)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text(context.getString(R.string.context_quick_mask), color = MaterialTheme.colorScheme.onSurface) }
                         }
                     }
                     TextButton(
@@ -8174,8 +8152,7 @@ fun PendingListScreen(
     onCopyHere: () -> Unit = {},
     onMoveHere: () -> Unit = {},
     onRequestDelete: () -> Unit = {},
-    onRequestBatchObfuscate: () -> Unit = {},
-    onRequestBatchDeobfuscate: () -> Unit = {},
+    onRequestBatchMask: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
     onRequestCompressToZip: () -> Unit = {},
@@ -8271,8 +8248,7 @@ fun PendingListScreen(
                             onAddToPlayback(audioFromFiltered)
                         }
                     },
-                    context.getString(R.string.pending_list_action_obfuscate) to onRequestBatchObfuscate,
-                    context.getString(R.string.pending_list_action_deobfuscate) to onRequestBatchDeobfuscate,
+                    context.getString(R.string.pending_list_action_mask) to onRequestBatchMask,
                     context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
                     context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
                     context.getString(R.string.pending_list_action_zip) to onRequestCompressToZip,
@@ -10472,7 +10448,7 @@ fun PlaybackScreen(
 
 @Composable
 fun QuickObfuscatePasswordDialog(
-    isObfuscate: Boolean,
+    isMasked: Boolean,
     fileName: String,
     password: String,
     confirmPassword: String,
@@ -10484,7 +10460,7 @@ fun QuickObfuscatePasswordDialog(
 ) {
     val context = LocalContext.current
     val passwordLabelText = stringResource(R.string.browser_enter_password)
-    val passwordConfirmed = !isObfuscate || isRequiredPasswordConfirmed(password, confirmPassword)
+    val passwordConfirmed = isRequiredPasswordConfirmed(password, confirmPassword)
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -10493,43 +10469,42 @@ fun QuickObfuscatePasswordDialog(
         ) {
             Column(Modifier.padding(24.dp)) {
                 Text(
-                    if (isObfuscate) context.getString(R.string.context_quick_obfuscate) else context.getString(R.string.context_quick_deobfuscate),
+                    context.getString(R.string.context_quick_mask),
                     style = MaterialTheme.typography.titleLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    if (isMasked) {
+                        context.getString(R.string.browser_mask_remove_hint)
+                    } else {
+                        context.getString(R.string.browser_mask_add_hint)
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
                 Spacer(Modifier.height(16.dp))
-                if (isObfuscate) {
-                    Spacer(Modifier.height(12.dp))
-                    PasswordConfirmationFields(
-                        password = password,
-                        confirmPassword = confirmPassword,
-                        onPasswordChange = onPasswordChange,
-                        onConfirmPasswordChange = onConfirmPasswordChange,
-                        passwordLabel = passwordLabelText,
-                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                        enabled = !inProgress,
-                        allowBlank = false
-                    )
-                } else {
-                    ReliablePasswordInputField(
-                        value = password,
-                        onValueChange = onPasswordChange,
-                        label = { Text(stringResource(R.string.browser_enter_password)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !inProgress
-                    )
-                }
+                PasswordConfirmationFields(
+                    password = password,
+                    confirmPassword = confirmPassword,
+                    onPasswordChange = onPasswordChange,
+                    onConfirmPasswordChange = onConfirmPasswordChange,
+                    passwordLabel = passwordLabelText,
+                    confirmLabel = context.getString(R.string.browser_password_confirm_label),
+                    enabled = !inProgress,
+                    allowBlank = false
+                )
                 if (inProgress) {
                     Spacer(Modifier.height(16.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.height(8.dp))
-                    Text(if (isObfuscate) stringResource(R.string.browser_obfuscating) else stringResource(R.string.browser_deobfuscating), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(R.string.browser_masking), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Spacer(Modifier.height(24.dp))
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
-                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed && (!isObfuscate || password.isNotBlank())) { Text(stringResource(R.string.common_ok)) }
+                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed) { Text(stringResource(R.string.common_ok)) }
                 }
             }
         }

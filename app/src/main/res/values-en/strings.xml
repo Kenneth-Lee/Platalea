@@ -183,8 +183,7 @@
     <string name="context_import_config">Import configuration</string>
     <string name="context_import_stardict">Import StarDict</string>
     <string name="context_restore">Restore</string>
-    <string name="context_quick_deobfuscate">Quick deobfuscate</string>
-    <string name="context_quick_obfuscate">Quick obfuscate</string>
+    <string name="context_quick_mask">Mask</string>
     <string name="context_compress_zip">Compress to ZIP</string>
     <string name="context_compress_7z">Compress to 7Z</string>
     <string name="context_share_to_git">Share to Git</string>
@@ -314,8 +313,7 @@
     <string name="pending_list_action_delete">Delete</string>
     <string name="pending_list_action_clear_filter">Clear filter</string>
     <string name="pending_list_action_playback">Add to playback</string>
-    <string name="pending_list_action_obfuscate">Obfuscate</string>
-    <string name="pending_list_action_deobfuscate">Deobfuscate</string>
+    <string name="pending_list_action_mask">Mask</string>
     <string name="pending_list_action_gpg_encrypt">GPG encrypt</string>
     <string name="pending_list_action_gpg_decrypt">GPG decrypt</string>
     <string name="pending_list_action_zip">Compress ZIP</string>
@@ -1141,8 +1139,7 @@ Exception: %1$s: %2$s
     <string name="browser_dict_imported_evicted">Dictionary imported: %1$s (%2$d entries); removed oldest dictionary: %3$s</string>
     <string name="browser_dict_import_failed">Import failed: %1$s</string>
     <string name="browser_list_empty">List is empty</string>
-    <string name="browser_no_obfuscate_candidates">No files to obfuscate (do not select .qx files or folders)</string>
-    <string name="browser_no_deobfuscate_candidates">No files to deobfuscate (select .qx files only)</string>
+    <string name="browser_no_mask_candidates">No files to mask (select at least one non-folder item)</string>
     <string name="browser_batch_encrypt_has_gpg">List contains .gpg files; batch encryption is not supported</string>
     <string name="browser_no_encrypt_candidates">No files to encrypt</string>
     <string name="browser_batch_decrypt_has_non_gpg">List contains non-.gpg files; batch decryption is not supported</string>
@@ -1259,8 +1256,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_share_git_error_push">Error: push failed - %1$s</string>
     <string name="browser_share_git_commit_message">Share file: %1$s</string>
     <string name="browser_git_committing_pushing">Committing and pushing...</string>
-    <string name="browser_obfuscated_count">Obfuscated %1$d files</string>
-    <string name="browser_deobfuscated_count">Deobfuscated %1$d files</string>
+    <string name="browser_masked_count">Toggled mask state for %1$d files</string>
     <string name="browser_encrypted_count">Encrypted %1$d files</string>
     <string name="browser_decrypted_count">Decrypted %1$d files</string>
     <string name="browser_public_key_encrypted_count">Public-key encrypted %1$d files</string>
@@ -1275,10 +1271,11 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_encrypt_failed">Encryption failed</string>
     <string name="browser_encrypt_complete">Encryption complete</string>
     <string name="browser_decrypt_complete">Decryption complete</string>
-    <string name="browser_obfuscate_failed">Obfuscation failed</string>
-    <string name="browser_deobfuscate_failed">Deobfuscation failed</string>
-    <string name="browser_obfuscating">Obfuscating…</string>
-    <string name="browser_deobfuscating">Deobfuscating…</string>
+    <string name="browser_mask_failed">Mask failed: %1$s</string>
+    <string name="browser_mask_done">Mask state toggled: %1$s</string>
+    <string name="browser_mask_add_hint">This will XOR the file header and add the .qx extension.</string>
+    <string name="browser_mask_remove_hint">This will XOR the file header again and remove the .qx extension.</string>
+    <string name="browser_masking">Masking…</string>
     <string name="browser_encrypting">Encrypting…</string>
     <string name="browser_processing">Processing…</string>
     <string name="browser_extract_complete">Extraction complete</string>

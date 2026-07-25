@@ -25,7 +25,7 @@ from .daemon import (
     stop_server,
     wait_until_ready,
 )
-from .obfuscate import run_deobfuscate, run_obfuscate
+from .obfuscate import run_mask
 from .config_import import run_import_config
 from .discover_cmd import run_discover
 from .gpg_cmd import (
@@ -64,8 +64,7 @@ GPG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
 }
 
 FILE_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
-    "obfuscate": run_obfuscate,
-    "deobfuscate": run_deobfuscate,
+    "mask": run_mask,
 }
 
 CONFIG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {}
@@ -274,11 +273,9 @@ def _gpg_help() -> str:
 
 
 def _file_help() -> str:
-    return f"""本地文件工具（与 Android 快速混淆 .qx 格式兼容，原地修改）:
-  file obfuscate INPUT -p PASSWORD [-q]
-                        混淆文件或目录（原文件变为 .qx）
-  file deobfuscate INPUT -p PASSWORD [-q]
-                        反混淆 .qx 文件或目录（恢复原名）"""
+        return f"""本地文件工具（与 Android「遮罩」.qx 格式兼容，原地修改）:
+    file mask INPUT -p PASSWORD [-q]
+                                                按文件名是否带 .qx 自动切换遮罩状态；目录可混合处理"""
 
 
 def _config_help() -> str:
@@ -322,7 +319,7 @@ def _examples_help() -> str:
     {CLI_NAME} download-attachment <attachment_id> -o ./downloads/
     {CLI_NAME} export-boardpack ./kitchen.boardpack --board kitchen
     {CLI_NAME} import-boardpack ./kitchen.boardpack --name "厨房留言(导入)"
-  {CLI_NAME} file obfuscate secret.txt -p mypass
+    {CLI_NAME} file mask secret.txt -p mypass
   {CLI_NAME} gpg pass-encrypt notes.md -r 0xABCD1234
   {CLI_NAME} gpg quick-decrypt "$CIPHER" -p keypass
   {CLI_NAME} config import ~/Downloads/local_manager_config.json

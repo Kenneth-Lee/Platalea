@@ -1,4 +1,4 @@
-"""Quick obfuscation compatible with Local Manager Android (.qx files)."""
+"""Quick mask compatible with Local Manager Android (.qx files)."""
 from __future__ import annotations
 
 import argparse
@@ -28,6 +28,10 @@ def xor_in_place(data: bytearray, key: bytes) -> None:
         data[i] ^= key[i]
 
 
+def toggle_extension_name(name: str) -> str:
+    return name[: -len(EXTENSION)] if name.endswith(EXTENSION) else f"{name}{EXTENSION}"
+
+
 def transform_header_inplace(path: Path, password: bytes) -> bool:
     """仅读写文件头 min(size, 4096) 字节，不复制文件体。"""
     with path.open("r+b") as handle:
@@ -48,46 +52,38 @@ def transform_header_inplace(path: Path, password: bytes) -> bool:
     return True
 
 
+def mask_file_inplace(path: Path, password: bytes) -> bool:
+    if not path.is_file():
+        return False
+    target = path.with_name(toggle_extension_name(path.name))
+    if target.exists():
+        return False
+    if not transform_header_inplace(path, password):
+        return False
+    path.rename(target)
+    return True
+
+
 def obfuscate_file_inplace(path: Path, password: bytes) -> bool:
     if not path.is_file() or path.name.endswith(EXTENSION):
         return False
-    target = path.with_name(path.name + EXTENSION)
-    if target.exists():
-        return False
-    if not transform_header_inplace(path, password):
-        return False
-    path.rename(target)
-    return True
+    return mask_file_inplace(path, password)
 
 
 def deobfuscate_file_inplace(path: Path, password: bytes) -> bool:
-    if not path.is_file():
+    if not path.is_file() or not path.name.endswith(EXTENSION):
         return False
-    if path.name.endswith(EXTENSION):
-        out_name = path.name[: -len(EXTENSION)]
-    else:
-        out_name = path.name + ".deob"
-    target = path.with_name(out_name)
-    if target.exists():
-        return False
-    if not transform_header_inplace(path, password):
-        return False
-    path.rename(target)
-    return True
+    return mask_file_inplace(path, password)
 
 
-def run_obfuscate(argv: list[str] | None = None) -> int:
-    return _run_mode("obfuscate", argv)
-
-
-def run_deobfuscate(argv: list[str] | None = None) -> int:
-    return _run_mode("deobfuscate", argv)
+def run_mask(argv: list[str] | None = None) -> int:
+    return _run_mode("mask", argv)
 
 
 def _run_mode(mode: str, argv: list[str] | None) -> int:
     ap = argparse.ArgumentParser(
         prog=f"platalea file {mode}",
-        description="与 Local Manager 兼容的快速混淆/反混淆（.qx 格式，原地修改文件头）",
+        description="与 Local Manager 兼容的快速遮罩（.qx 格式，原地修改文件头并自动切换扩展名）",
     )
     ap.add_argument("input", type=Path, help="输入文件或目录")
     ap.add_argument("-p", "--password", required=True, help="密码")
@@ -103,56 +99,32 @@ def _run_mode(mode: str, argv: list[str] | None) -> int:
         print(f"错误：不存在 {inp}", file=sys.stderr)
         return 1
 
-    is_obfuscate = mode == "obfuscate"
-    handler = obfuscate_file_inplace if is_obfuscate else deobfuscate_file_inplace
-
     if inp.is_file():
-        if is_obfuscate and inp.name.endswith(EXTENSION):
-            print(f"错误：已是 {EXTENSION} 文件，无需混淆: {inp}", file=sys.stderr)
-            return 1
-        if not is_obfuscate and not inp.name.endswith(EXTENSION):
-            print(
-                f"警告：文件名未以 {EXTENSION} 结尾，仍将对前 {HEADER_SIZE} 字节做 XOR 反混淆。",
-                file=sys.stderr,
-            )
-        if not handler(inp, password):
+        out_name = toggle_extension_name(inp.name)
+        if not mask_file_inplace(inp, password):
             print(f"处理失败: {inp}", file=sys.stderr)
             return 1
         if not args.quiet:
-            if is_obfuscate:
-                print(f"已混淆: {inp.name} -> {inp.name}{EXTENSION}")
-            else:
-                out_name = inp.name[: -len(EXTENSION)] if inp.name.endswith(EXTENSION) else inp.name + ".deob"
-                print(f"已反混淆: {inp.name} -> {out_name}")
+            print(f"已切换遮罩: {inp.name} -> {out_name}")
         return 0
 
     if not inp.is_dir():
         print(f"错误：不是文件或目录: {inp}", file=sys.stderr)
         return 1
 
-    ok, fail, skipped = 0, 0, 0
+    ok, fail = 0, 0
     for f in sorted(inp.rglob("*")):
         if not f.is_file():
             continue
-        if is_obfuscate:
-            if f.name.endswith(EXTENSION):
-                skipped += 1
-                continue
-        elif not f.name.endswith(EXTENSION):
-            skipped += 1
-            continue
-        if handler(f, password):
+        out_name = toggle_extension_name(f.name)
+        if mask_file_inplace(f, password):
             ok += 1
             if not args.quiet:
-                if is_obfuscate:
-                    print(f"{f.name} -> {f.name}{EXTENSION}")
-                else:
-                    out_name = f.name[: -len(EXTENSION)] if f.name.endswith(EXTENSION) else f.name + ".deob"
-                    print(f"{f.name} -> {out_name}")
+                print(f"{f.name} -> {out_name}")
         else:
             fail += 1
             print(f"失败: {f}", file=sys.stderr)
 
     if not args.quiet:
-        print(f"完成: {ok} 个成功, {fail} 个失败, {skipped} 个跳过")
+        print(f"完成: {ok} 个成功, {fail} 个失败")
     return 0 if fail == 0 else 1

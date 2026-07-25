@@ -26,6 +26,10 @@ fun stripQuickObfuscateExtension(name: String): String =
 fun addQuickObfuscateExtension(name: String): String =
     if (name.endsWith(EXTENSION)) name else "$name$EXTENSION"
 
+/** 在已遮罩 / 未遮罩之间切换文件名扩展名 */
+fun toggleQuickObfuscateExtension(name: String): String =
+    if (name.endsWith(EXTENSION)) stripQuickObfuscateExtension(name) else addQuickObfuscateExtension(name)
+
 private fun deriveKey(password: CharArray, outputBytes: Int = HEADER_SIZE): ByteArray {
     val keySpec: KeySpec = PBEKeySpec(
         password,
@@ -89,4 +93,19 @@ fun quickDeobfuscate(context: Context, uri: Uri, password: CharArray): Boolean {
     val newName = stripQuickObfuscateExtension(name)
     if (newName == name) return true // 无 .qx 扩展名，仅完成头部 XOR
     return context.contentResolver.renameDocument(uri, newName) != null
+}
+
+/**
+ * 快速遮罩：按当前文件名是否带 .qx 自动切换状态。
+ * - 非 .qx 文件：原地 XOR 头部并添加 .qx
+ * - .qx 文件：原地 XOR 头部并去掉 .qx
+ */
+fun quickToggleObfuscation(context: Context, uri: Uri, password: CharArray): Boolean {
+    val doc = DocumentFile.fromSingleUri(context, uri) ?: return false
+    val name = doc.name ?: return false
+    return if (isQuickObfuscatedFileName(name)) {
+        quickDeobfuscate(context, uri, password)
+    } else {
+        quickObfuscate(context, uri, password)
+    }
 }

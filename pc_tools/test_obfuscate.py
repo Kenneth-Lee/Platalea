@@ -5,10 +5,34 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from platalea.obfuscate import EXTENSION, HEADER_SIZE, deobfuscate_file_inplace, obfuscate_file_inplace, transform_header_inplace
+from platalea.obfuscate import (
+    EXTENSION,
+    HEADER_SIZE,
+    deobfuscate_file_inplace,
+    mask_file_inplace,
+    obfuscate_file_inplace,
+    transform_header_inplace,
+)
 
 
 class ObfuscateTest(unittest.TestCase):
+    def test_mask_round_trip_single_file_inplace(self) -> None:
+        password = b"test-pass"
+        original = b"hello world" + b"x" * 5000
+        with tempfile.TemporaryDirectory() as tmp:
+            inp = Path(tmp) / "sample.bin"
+            inp.write_bytes(original)
+
+            self.assertTrue(mask_file_inplace(inp, password))
+            masked = Path(tmp) / f"sample.bin{EXTENSION}"
+            self.assertTrue(masked.is_file())
+            self.assertFalse(inp.exists())
+
+            self.assertTrue(mask_file_inplace(masked, password))
+            restored = Path(tmp) / "sample.bin"
+            self.assertTrue(restored.is_file())
+            self.assertEqual(restored.read_bytes(), original)
+
     def test_round_trip_single_file_inplace(self) -> None:
         password = b"test-pass"
         original = b"hello world" + b"x" * 5000

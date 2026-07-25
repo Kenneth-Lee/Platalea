@@ -148,7 +148,7 @@ _platalea_gpg_subcommands() {
 }
 
 _platalea_file_subcommands() {
-    printf '%s\n' obfuscate deobfuscate
+    printf '%s\n' mask
 }
 
 _platalea_config_subcommands() {
@@ -324,7 +324,7 @@ _platalea_completion_bash() {
         fi
         if [[ -z "$_PLATALEA_SUB" ]]; then
             COMPREPLY=( $(compgen -W "$( _platalea_group_subcommands "$_PLATALEA_CMD" )" -- "$cur") )
-        elif [[ "$_PLATALEA_CMD" == "file" && "$_PLATALEA_SUB" == "obfuscate" || "$_PLATALEA_CMD" == "file" && "$_PLATALEA_SUB" == "deobfuscate" ]]; then
+        elif [[ "$_PLATALEA_CMD" == "file" && "$_PLATALEA_SUB" == "mask" ]]; then
             if (( ${#_PLATALEA_POS[@]} == 0 )); then
                 COMPREPLY=( $(compgen -f -- "$cur") )
             fi

@@ -4,7 +4,7 @@
 Windows，Linux，MacOS三个平台上。
 
 它可以提供适配PC端的家庭网络服务，在PC上实现和手机端配合的工具，比如用手机一侧
-一样的混淆和加解密算法加解密手机一侧需要的文件格式。它还提供服务让手机可以直接
+一样的遮罩和加解密算法加解密手机一侧需要的文件格式。它还提供服务让手机可以直接
 关闭PC设备。
 
 ## 安装与使用（推荐：`platalea`）
@@ -45,11 +45,11 @@ platalea export-boardpack ./kitchen.boardpack --board kitchen
 platalea import-boardpack ./kitchen.boardpack --name "厨房留言(导入)"
 ```
 
-**本地文件工具**（与 Android「快速混淆」`.qx` 格式兼容，原地修改文件头）：
+**本地文件工具**（与 Android「遮罩」`.qx` 格式兼容，原地修改文件头）：
 
 ```bash
-platalea file obfuscate secret.txt -p mypass
-platalea file deobfuscate secret.txt.qx -p mypass
+platalea file mask secret.txt -p mypass
+platalea file mask secret.txt.qx -p mypass
 ```
 
 **GPG**（需本机安装 `gpg`；密钥默认放在 `~/.localmanager/gnupg/pubring.gpg` 与 `secring.gpg`，可从手机导出）：
