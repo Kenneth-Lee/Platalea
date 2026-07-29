@@ -130,6 +130,23 @@ private data class BoardListSession(
     val canManageBoards: Boolean
 )
 
+internal data class BoardCreationValidationResult(
+    val isValid: Boolean,
+    val trimmedName: String,
+    val error: String? = null
+)
+
+internal fun validateBoardCreationInput(name: String, existingNames: Set<String>): BoardCreationValidationResult {
+    val trimmedName = name.trim()
+    if (trimmedName.isEmpty()) {
+        return BoardCreationValidationResult(isValid = false, trimmedName = "")
+    }
+    if (trimmedName in existingNames) {
+        return BoardCreationValidationResult(isValid = false, trimmedName = trimmedName, error = "duplicate")
+    }
+    return BoardCreationValidationResult(isValid = true, trimmedName = trimmedName)
+}
+
 @Stable
 private class BoardListUiState {
     var showActionsMenu by mutableStateOf(false)
@@ -1396,6 +1413,101 @@ private fun BoardListPane(
                         importPackPreview = null
                         importPackProgress = null
                         importPackStage = null
+                    }
+                )
+            }
+
+            if (showCreateDialog) {
+                val createValidation = validateBoardCreationInput(newBoardName, existingBoardNames)
+                AlertDialog(
+                    onDismissRequest = {
+                        if (!actionInProgress) {
+                            showCreateDialog = false
+                            newBoardName = ""
+                            createSelectedRoleIds = emptySet()
+                            createNameError = null
+                        }
+                    },
+                    title = { Text(stringResource(R.string.family_board_create_title)) },
+                    text = {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = newBoardName,
+                                onValueChange = {
+                                    newBoardName = it
+                                    createNameError = null
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text(stringResource(R.string.family_board_create_name_label)) },
+                                singleLine = true,
+                                enabled = !actionInProgress,
+                                isError = createValidation.error == "duplicate"
+                            )
+                            if (createValidation.error == "duplicate") {
+                                Text(
+                                    stringResource(R.string.family_board_name_duplicate, createValidation.trimmedName),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                            BoardRoleAccessSelector(
+                                availableRoles = availableRoles,
+                                selectedRoleIds = createSelectedRoleIds,
+                                onSelectionChange = { createSelectedRoleIds = it }
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            enabled = !actionInProgress && createValidation.isValid,
+                            onClick = {
+                                actionInProgress = true
+                                createNameError = null
+                                manager.createBoardEntry(
+                                    service = service,
+                                    accessPassword = accessPassword,
+                                    canManage = canManageBoards,
+                                    name = createValidation.trimmedName,
+                                    roleIds = createSelectedRoleIds.toList()
+                                ) { result ->
+                                    actionInProgress = false
+                                    result.onSuccess {
+                                        showCreateDialog = false
+                                        newBoardName = ""
+                                        createSelectedRoleIds = emptySet()
+                                        createNameError = null
+                                        reloadBoards()
+                                        Toast.makeText(
+                                            context,
+                                            context.getString(R.string.family_board_create_title),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    }.onFailure { error ->
+                                        createNameError = error.message ?: error.javaClass.simpleName
+                                        Toast.makeText(
+                                            context,
+                                            error.message ?: error.javaClass.simpleName,
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(stringResource(R.string.common_ok))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            enabled = !actionInProgress,
+                            onClick = {
+                                showCreateDialog = false
+                                newBoardName = ""
+                                createSelectedRoleIds = emptySet()
+                                createNameError = null
+                            }
+                        ) {
+                            Text(stringResource(R.string.common_cancel))
+                        }
                     }
                 )
             }
