@@ -136,7 +136,7 @@ PY
 _platalea_commands() {
     printf '%s\n' \
         start stop status help \
-    gpg file config service discover \
+        gpg file config service discover \
         list-boards get-agent get-messages \
         post modify delete download-attachment \
         create-board delete-board \
@@ -161,6 +161,26 @@ _platalea_service_subcommands() {
 
 _platalea_help_topics() {
     printf '%s\n' serve board gpg file config service discover
+}
+
+_platalea_gpg_flags() {
+    printf '%s\n' --public-only --secret-only -r -p -o --pubring --secret-keyring --json --help -h
+}
+
+_platalea_file_mask_flags() {
+    printf '%s\n' -p -q --help -h
+}
+
+_platalea_config_import_flags() {
+    printf '%s\n' --categories --skip-keys --list --config --help -h
+}
+
+_platalea_service_flags() {
+    printf '%s\n' --config --keep-state --help -h
+}
+
+_platalea_discover_flags() {
+    printf '%s\n' --service-type --timeout --json --help -h
 }
 
 _platalea_is_group_cmd() {
@@ -191,7 +211,7 @@ _platalea_api_flags() {
 
 _platalea_flag_expects_value() {
     case "$1" in
-        --host|--port|--board|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p)
+        --host|--port|--board|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p|--service-type|--timeout|--categories|-r|--pubring|--secret-keyring)
             return 0
             ;;
     esac
@@ -214,6 +234,13 @@ _platalea_is_board_cmd() {
     return 1
 }
 
+_platalea_is_discover_cmd() {
+    case "$1" in
+        discover) return 0 ;;
+    esac
+    return 1
+}
+
 # Words after "platalea" and before the word being completed.
 _platalea_split_argv() {
     _PLATALEA_CMD=""
@@ -230,11 +257,11 @@ _platalea_split_argv() {
                     shift
                 fi
                 ;;
-            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p)
+            --host|--port|--password|--host-password|--config|--ca-cert|--tls-fingerprint|--attach|--author|--name|--role-ids|--file|-o|--output|-p|--service-type|--timeout|--categories|-r|--pubring|--secret-keyring)
                 shift
                 (( $# > 0 )) && shift
                 ;;
-            --json|-h|--help|-V|--version|--force)
+            --json|-h|--help|-V|--version|--force|--public-only|--secret-only|--skip-keys|--list|--keep-state)
                 shift
                 ;;
             *)
@@ -318,8 +345,21 @@ _platalea_completion_bash() {
         return 0
     fi
 
+    if _platalea_is_discover_cmd "$_PLATALEA_CMD"; then
+        if [[ "$cur" == -* ]]; then
+            COMPREPLY=( $(compgen -W "$( _platalea_discover_flags )" -- "$cur") )
+        fi
+        return 0
+    fi
+
     if _platalea_is_group_cmd "$_PLATALEA_CMD"; then
         if [[ "$cur" == -* ]]; then
+            case "$_PLATALEA_CMD" in
+                gpg) COMPREPLY=( $(compgen -W "$( _platalea_gpg_flags )" -- "$cur") ) ;;
+                file) COMPREPLY=( $(compgen -W "$( _platalea_file_mask_flags )" -- "$cur") ) ;;
+                config) COMPREPLY=( $(compgen -W "$( _platalea_config_import_flags )" -- "$cur") ) ;;
+                service) COMPREPLY=( $(compgen -W "$( _platalea_service_flags )" -- "$cur") ) ;;
+            esac
             return 0
         fi
         if [[ -z "$_PLATALEA_SUB" ]]; then
@@ -332,11 +372,21 @@ _platalea_completion_bash() {
             if (( ${#_PLATALEA_POS[@]} == 0 )); then
                 COMPREPLY=( $(compgen -f -- "$cur") )
             fi
-        elif [[ "$_PLATALEA_CMD" == "config" && "$_PLATALEA_SUB" == "init" || "$_PLATALEA_CMD" == "config" && "$_PLATALEA_SUB" == "init-tls" ]]; then
+        elif [[ "$_PLATALEA_CMD" == "config" && ( "$_PLATALEA_SUB" == "init" || "$_PLATALEA_SUB" == "init-tls" ) ]]; then
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=( $(compgen -W '--config --force --help -h' -- "$cur") )
             elif [[ "$prev" == "--config" ]]; then
                 COMPREPLY=( $(compgen -f -- "$cur") )
+            fi
+        elif [[ "$_PLATALEA_CMD" == "gpg" ]]; then
+            if [[ -n "$_PLATALEA_SUB" ]]; then
+                case "$_PLATALEA_SUB" in
+                    pass-encrypt|pass-decrypt|quick-encrypt|quick-decrypt)
+                        if (( ${#_PLATALEA_POS[@]} == 0 )); then
+                            COMPREPLY=( $(compgen -f -- "$cur") )
+                        fi
+                        ;;
+                esac
             fi
         fi
         return 0
@@ -468,6 +518,13 @@ _platalea_zsh() {
         return 0
     fi
 
+    if _platalea_is_discover_cmd "$cmd"; then
+        if [[ "${words[CURRENT]}" == -* ]]; then
+            compadd -S ' ' -- ${(f)"$( _platalea_discover_flags )"}
+        fi
+        return 0
+    fi
+
     if _platalea_is_group_cmd "$cmd"; then
         if [[ "${words[CURRENT]}" == -* ]]; then
             return 0
@@ -475,11 +532,15 @@ _platalea_zsh() {
         if [[ -z "$sub" ]]; then
             compadd -S ' ' -- ${(f)"$( _platalea_group_subcommands "$cmd" )"}
         elif [[ "$cmd" == "file" ]]; then
-            if (( pos_count == 0 )); then
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -S ' ' -- ${(f)"$( _platalea_file_mask_flags )"}
+            elif (( pos_count == 0 )); then
                 _files
             fi
         elif [[ "$cmd" == "config" && "$sub" == "import" ]]; then
-            if (( pos_count == 0 )); then
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -S ' ' -- ${(f)"$( _platalea_config_import_flags )"}
+            elif (( pos_count == 0 )); then
                 _files
             fi
         elif [[ "$cmd" == "config" && ( "$sub" == "init" || "$sub" == "init-tls" ) ]]; then
@@ -487,6 +548,22 @@ _platalea_zsh() {
                 compadd -S ' ' -- --config --force --help -h
             elif [[ "${words[CURRENT - 1]}" == "--config" ]]; then
                 _files
+            fi
+        elif [[ "$cmd" == "gpg" ]]; then
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -S ' ' -- ${(f)"$( _platalea_gpg_flags )"}
+            elif [[ -n "$sub" ]]; then
+                case "$sub" in
+                    pass-encrypt|pass-decrypt|quick-encrypt|quick-decrypt)
+                        if (( pos_count == 0 )); then
+                            _files
+                        fi
+                        ;;
+                esac
+            fi
+        elif [[ "$cmd" == "service" ]]; then
+            if [[ "${words[CURRENT]}" == -* ]]; then
+                compadd -S ' ' -- ${(f)"$( _platalea_service_flags )"}
             fi
         fi
         return 0
