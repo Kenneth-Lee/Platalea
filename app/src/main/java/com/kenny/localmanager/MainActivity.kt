@@ -12,6 +12,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.ui.FileBrowserApp
 import com.kenny.localmanager.ui.theme.LocalManagerTheme
 
@@ -26,6 +27,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        CrashReportStore.install(this)
         syncPinnedTabShortcuts(this)
         enableEdgeToEdge()
         intent?.data?.let { _ ->

@@ -249,6 +249,10 @@
     <string name="config_gpg_keys">GPG Key Management</string>
     <string name="config_cache">Cache Management</string>
     <string name="config_export">Export Configuration</string>
+    <string name="config_crash_log_file_name">crash-log.txt</string>
+    <string name="config_crash_log_exported_to_root">Detected a previous crash. Report written to root directory: %1$s</string>
+    <string name="config_crash_log_export_failed">Detected a previous crash, but failed to write report to root directory. Please check root permissions.</string>
+    <string name="debug_trigger_crash">Trigger Crash Test</string>
     <string name="config_create_player_shortcut">Create Player Shortcut</string>
     <string name="config_create_quick_note_shortcut">Create Notes Shortcut</string>
     <string name="config_change_root">Change Root Directory</string>

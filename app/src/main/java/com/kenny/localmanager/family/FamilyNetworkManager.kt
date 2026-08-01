@@ -314,7 +314,11 @@ class FamilyNetworkManager(context: Context) {
         val displayHostName = resolveLocalDisplayHostName(instanceId)
         val serviceName = _state.value.serviceName.ifBlank { sanitizeMdnsServiceName(displayHostName) }
         val resolvedHost = _state.value.localIp?.trim()?.takeIf { it.isNotEmpty() } ?: "127.0.0.1"
-        val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
+        val tlsFingerprint = runCatching { tlsManager.localIdentity().fingerprintSha256 }
+            .getOrElse { error ->
+                appendError("解析本机 TLS 标识失败: ${error.message ?: error.javaClass.simpleName}")
+                return null
+            }
         return FamilyDiscoveredService(
             serviceName = serviceName,
             serviceType = FAMILY_SERVICE_TYPE,
@@ -474,7 +478,10 @@ class FamilyNetworkManager(context: Context) {
             current.copy(discoveredServices = current.discoveredServices.filter { it.isSelf }.take(1))
         }
         startDiscovery(clearDiscovered = false)
-        republishLocalSelfServiceIfRunning()
+        runCatching { republishLocalSelfServiceIfRunning() }
+            .onFailure { error ->
+                appendError("刷新本机服务失败: ${error.message ?: error.javaClass.simpleName}")
+            }
     }
 
     fun openBulletinBoard(
@@ -2253,7 +2260,11 @@ class FamilyNetworkManager(context: Context) {
         }
         unregisterServiceInternal()
         val manager = nsdManager ?: return
-        val tlsFingerprint = tlsManager.localIdentity().fingerprintSha256
+        val tlsFingerprint = runCatching { tlsManager.localIdentity().fingerprintSha256 }
+            .getOrElse { error ->
+                appendError("重注册 mDNS 失败: TLS 标识不可用: ${error.message ?: error.javaClass.simpleName}")
+                return
+            }
         registerService(
             manager = manager,
             requestedServiceName = requestedServiceName,

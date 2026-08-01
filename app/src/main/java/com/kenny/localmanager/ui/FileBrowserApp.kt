@@ -88,6 +88,7 @@ import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -176,13 +177,14 @@ import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.RecentOpenItem
+import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.DirectoryAccessException
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
+import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
-import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.getTrashUriIfExists
 import com.kenny.localmanager.file.isInsideDirectory
@@ -1676,6 +1678,41 @@ private fun FileBrowserAppScreen(
     }
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+    }
+    LaunchedEffect(rootUri) {
+        val normalizedRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@LaunchedEffect
+        if (!CrashReportStore.hasUnseenCrash(context)) return@LaunchedEffect
+        val snapshot = CrashReportStore.latestSnapshot(context) ?: return@LaunchedEffect
+        val targetParent = Uri.parse(normalizedRoot)
+        val fileName = context.getString(R.string.config_crash_log_file_name)
+        withContext(Dispatchers.IO) {
+            findChildByName(context, targetParent, fileName)?.let { existing ->
+                runCatching { context.contentResolver.deleteDocument(existing) }
+            }
+            createFileWithBytes(
+                context = context,
+                targetParentUri = targetParent,
+                treeUri = targetParent,
+                fileName = fileName,
+                mimeType = "text/plain",
+                bytes = snapshot.content.toByteArray(Charsets.UTF_8)
+            )
+        }.also { exported ->
+            if (exported) {
+                CrashReportStore.markLatestSeen(context)
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.config_crash_log_exported_to_root, fileName),
+                    Toast.LENGTH_LONG
+                ).show()
+            } else {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.config_crash_log_export_failed),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
     }
     LaunchedEffect(prefs) {
         prefs.recentRootUris.collect { recentRootUris = it }
@@ -6909,6 +6946,14 @@ internal fun FileBrowserScreen(
                                     }
                                 )
                             }
+                            DropdownMenuItem(
+                                text = { Text(context.getString(R.string.debug_trigger_crash)) },
+                                leadingIcon = { Icon(Icons.Default.Warning, contentDescription = null) },
+                                onClick = {
+                                    showOverflowMenu = false
+                                    throw IllegalStateException("debug crash trigger from FileBrowserApp")
+                                }
+                            )
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
