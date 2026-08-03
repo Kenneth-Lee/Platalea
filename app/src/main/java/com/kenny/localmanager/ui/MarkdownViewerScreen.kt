@@ -2530,7 +2530,6 @@ fun MarkdownViewerScreen(
     onBack: () -> Unit,
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
-    KeepScreenOnEffect()
     val context = LocalContext.current
     var backStack by remember { mutableStateOf(listOf<Triple<String, String, Boolean>>()) }
     var currentUri by remember { mutableStateOf(initialFileUri) }
@@ -4425,7 +4424,6 @@ fun HtmlViewerScreen(
     initialLocation: HtmlViewerLocation,
     onBack: () -> Unit
 ) {
-    KeepScreenOnEffect()
     val context = LocalContext.current
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var currentLocation by remember(initialLocation) { mutableStateOf(initialLocation) }
@@ -5019,7 +5017,6 @@ fun EpubViewerScreen(
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {
-    KeepScreenOnEffect()
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
@@ -5069,6 +5066,7 @@ fun EpubViewerScreen(
     var ttsPendingRefreshAttempted by remember { mutableStateOf(false) }
     var autoAdvanceTtsChapterIndex by remember { mutableStateOf<Int?>(null) }
     var lastReachedChapterEndToastAtMillis by remember { mutableStateOf(0L) }
+    KeepScreenOnEffect(enabled = isFullscreen)
     val preferredTtsLocale = remember(extractResult.bookInfo.language) {
         preferredEpubTtsLocale(extractResult.bookInfo.language)
     }
