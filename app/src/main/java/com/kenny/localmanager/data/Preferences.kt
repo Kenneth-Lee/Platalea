@@ -63,6 +63,7 @@ private val HIDE_READER_FLOATING_NEXT_BUTTON = booleanPreferencesKey("hide_reade
 private val READER_FLOATING_NEXT_BUTTON_X_PERCENT = intPreferencesKey("reader_floating_next_button_x_percent")
 private val READER_FLOATING_NEXT_BUTTON_Y_PERCENT = intPreferencesKey("reader_floating_next_button_y_percent")
 private val READER_BACKGROUND_COLOR = stringPreferencesKey("reader_background_color")
+private val READER_AUTO_SCROLL_COUNTDOWN_SECONDS = intPreferencesKey("reader_auto_scroll_countdown_seconds")
 private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
@@ -176,6 +177,10 @@ class Preferences(private val context: Context) {
 
     val readerBackgroundColor: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[READER_BACKGROUND_COLOR]?.trim()?.takeIf { it.isNotEmpty() } ?: "original"
+    }
+
+    val readerAutoScrollCountdownSeconds: Flow<Int> = context.dataStore.data.map { prefs ->
+        (prefs[READER_AUTO_SCROLL_COUNTDOWN_SECONDS] ?: 5).coerceIn(2, 20)
     }
 
     val dictQueryHistory: Flow<List<String>> = context.dataStore.data.map { prefs ->
@@ -420,6 +425,12 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             val normalized = colorKey?.trim()?.takeIf { it.isNotEmpty() } ?: "original"
             prefs[READER_BACKGROUND_COLOR] = normalized
+        }
+    }
+
+    suspend fun setReaderAutoScrollCountdownSeconds(seconds: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[READER_AUTO_SCROLL_COUNTDOWN_SECONDS] = seconds.coerceIn(2, 20)
         }
     }
 

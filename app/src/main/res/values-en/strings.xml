@@ -1008,6 +1008,9 @@ OPF directory files: %2$s</string>
     <string name="reader_action_background_color">Background color</string>
     <string name="reader_action_hide_floating_next_button">Hide floating page-turn button</string>
     <string name="reader_action_show_floating_next_button">Show floating page-turn button</string>
+    <string name="reader_settings_title">Settings</string>
+    <string name="reader_settings_background_title">Reading background</string>
+    <string name="reader_settings_auto_scroll_title">Auto-page settings</string>
     <string name="reader_background_color_title">Reader background color</string>
     <string name="reader_background_color_original">Keep original</string>
     <string name="reader_background_color_cream">Cream paper</string>

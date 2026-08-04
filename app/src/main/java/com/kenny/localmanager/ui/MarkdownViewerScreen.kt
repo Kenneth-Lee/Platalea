@@ -30,6 +30,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -98,6 +99,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -105,6 +107,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.viewinterop.AndroidView
@@ -114,6 +117,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import android.widget.Toast
 import androidx.documentfile.provider.DocumentFile
 import androidx.core.text.HtmlCompat
+import org.json.JSONObject
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.findChildByName
@@ -191,6 +195,242 @@ private const val READER_BG_COLOR_CREAM = "cream"
 private const val READER_BG_COLOR_GREEN = "green"
 private const val READER_BG_COLOR_GRAY = "gray"
 private const val READER_BG_COLOR_SEPIA = "sepia"
+private const val READER_AUTO_SCROLL_PAGE_OVERLAP_RATIO = 0.06
+private const val READER_AUTO_SCROLL_FADE_DURATION_MS = 600L
+private const val READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS = 5
+private const val READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS = 2
+private const val READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS = 60
+
+private data class ReaderAutoScrollStepResult(
+    val ready: Boolean,
+    val reachedEnd: Boolean,
+    val atEndBeforeTurn: Boolean,
+    val turnedPage: Boolean,
+    val remainingPx: Int,
+    val viewportHeight: Int
+)
+
+private fun normalizeReaderAutoScrollCountdownSeconds(seconds: Int): Int {
+    return seconds.coerceIn(
+        READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS,
+        READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS
+    )
+}
+
+private fun formatReaderAutoScrollCountdown(secondsLeft: Int): Int {
+    return secondsLeft.coerceAtLeast(1)
+}
+
+@Composable
+private fun ReaderAutoScrollCountdownDialog(
+    selectedSeconds: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    var sliderValue by remember { mutableStateOf(normalizeReaderAutoScrollCountdownSeconds(selectedSeconds).toFloat()) }
+    val normalized = sliderValue.roundToInt().coerceIn(
+        READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS,
+        READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.reader_auto_scroll_countdown_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.reader_auto_scroll_countdown_option, normalized),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(12.dp))
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { sliderValue = it },
+                    valueRange = READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS.toFloat()..READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS.toFloat(),
+                    steps = READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS - READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS - 1
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onSelect(normalized) }) {
+                Text(stringResource(R.string.common_apply))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        }
+    )
+}
+
+@Composable
+private fun ReaderAutoScrollCountdownBadge(secondsLeft: Int) {
+    if (secondsLeft <= 0) return
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(end = 12.dp, bottom = 12.dp)
+            .zIndex(1f),
+        contentAlignment = Alignment.BottomEnd
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+            tonalElevation = 2.dp,
+            shadowElevation = 2.dp
+        ) {
+            Text(
+                text = stringResource(R.string.reader_auto_scroll_countdown_badge, secondsLeft),
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+private fun decodeEvaluateJavascriptResult(raw: String?): String {
+    if (raw == null) return ""
+    val trimmed = raw.trim()
+    if (trimmed.length >= 2 && trimmed.first() == '"' && trimmed.last() == '"') {
+        return trimmed
+            .substring(1, trimmed.length - 1)
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n")
+            .replace("\\r", "\r")
+            .replace("\\t", "\t")
+    }
+    return trimmed
+}
+
+private suspend fun performReaderAutoScrollStep(
+    view: WebView?,
+    pageOverlapRatio: Double,
+    fadeDurationMs: Long
+): ReaderAutoScrollStepResult {
+    val target = view ?: return ReaderAutoScrollStepResult(
+        ready = false,
+        reachedEnd = false,
+        atEndBeforeTurn = false,
+        turnedPage = false,
+        remainingPx = -1,
+        viewportHeight = 0
+    )
+    val safeFadeMs = fadeDurationMs.coerceIn(180L, 1400L)
+    val safeOverlapRatio = pageOverlapRatio.coerceIn(0.0, 0.35)
+    val js = """
+        (function() {
+            try {
+                var viewH = window.innerHeight || document.documentElement.clientHeight || 0;
+                var docH = Math.max(document.documentElement.scrollHeight || 0, document.body.scrollHeight || 0, viewH);
+                var maxScroll = Math.max(0, docH - viewH);
+                var currentY = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+                if (maxScroll <= 1) {
+                    return JSON.stringify({ ready: true, reachedEnd: true, atEndBeforeTurn: true, turnedPage: false, remainingPx: 0, viewportHeight: viewH });
+                }
+                if (currentY >= maxScroll - 2) {
+                    return JSON.stringify({ ready: true, reachedEnd: true, atEndBeforeTurn: true, turnedPage: false, remainingPx: 0, viewportHeight: viewH });
+                }
+                var overlap = Math.round(viewH * ${safeOverlapRatio});
+                var pageStep = Math.max(1, viewH - overlap);
+                var targetY = Math.min(maxScroll, currentY + pageStep);
+                var fadeMs = Math.max(120, ${safeFadeMs});
+                var root = document.documentElement;
+                var body = document.body;
+                root.style.transition = 'opacity ' + fadeMs + 'ms ease';
+                body.style.transition = 'opacity ' + fadeMs + 'ms ease';
+                root.style.opacity = '0';
+                body.style.opacity = '0';
+                window.setTimeout(function() {
+                    window.scrollTo(0, targetY);
+                    root.style.opacity = '1';
+                    body.style.opacity = '1';
+                }, fadeMs);
+                return JSON.stringify({
+                    ready: true,
+                    reachedEnd: targetY >= maxScroll - 2,
+                    atEndBeforeTurn: false,
+                    turnedPage: true,
+                    remainingPx: Math.max(0, maxScroll - targetY),
+                    viewportHeight: viewH
+                });
+            } catch (e) {
+                return JSON.stringify({ ready: false, reachedEnd: false, atEndBeforeTurn: false, turnedPage: false, remainingPx: -1, viewportHeight: 0, error: String(e) });
+            }
+        })();
+    """.trimIndent()
+
+    val response = suspendCancellableCoroutine<String?> { continuation ->
+        target.post {
+            target.evaluateJavascript(js) { result ->
+                if (continuation.isActive) {
+                    continuation.resume(result)
+                }
+            }
+        }
+    }
+    val normalized = decodeEvaluateJavascriptResult(response)
+    val json = runCatching { JSONObject(normalized) }.getOrNull()
+    val ready = json?.optBoolean("ready") == true
+    val reachedEnd = json?.optBoolean("reachedEnd") == true
+    val atEndBeforeTurn = json?.optBoolean("atEndBeforeTurn") == true
+    val turnedPage = json?.optBoolean("turnedPage") == true
+    val remainingPx = json?.optInt("remainingPx") ?: -1
+    val viewportHeight = json?.optInt("viewportHeight") ?: 0
+    return ReaderAutoScrollStepResult(
+        ready = ready,
+        reachedEnd = reachedEnd,
+        atEndBeforeTurn = atEndBeforeTurn,
+        turnedPage = turnedPage,
+        remainingPx = remainingPx,
+        viewportHeight = viewportHeight
+    )
+}
+
+private fun collectMdZipReaderOrder(contentDir: File): List<File> {
+    if (!contentDir.exists()) return emptyList()
+    return contentDir.walkTopDown()
+        .filter { file ->
+            file.isFile && (
+                file.name.endsWith(".md", ignoreCase = true) ||
+                    file.name.endsWith(".rst", ignoreCase = true)
+                )
+        }
+        .toList()
+        .sortedBy { file -> file.relativeTo(contentDir).invariantSeparatorsPath.lowercase(Locale.getDefault()) }
+}
+
+private fun collectHtmlZipReaderOrder(contentDir: File): List<File> {
+    if (!contentDir.exists()) return emptyList()
+    return contentDir.walkTopDown()
+        .filter { file ->
+            file.isFile && (
+                file.name.endsWith(".html", ignoreCase = true) ||
+                    file.name.endsWith(".htm", ignoreCase = true)
+                )
+        }
+        .toList()
+        .sortedBy { file -> file.relativeTo(contentDir).invariantSeparatorsPath.lowercase(Locale.getDefault()) }
+}
+
+private fun resolveNextFileInReaderOrder(order: List<File>, currentFile: File?): File? {
+    if (order.isEmpty() || currentFile == null) return null
+    val currentCanonical = runCatching { currentFile.canonicalPath }.getOrElse { currentFile.absolutePath }
+    val currentIndex = order.indexOfFirst { file ->
+        runCatching { file.canonicalPath }.getOrElse { file.absolutePath } == currentCanonical
+    }
+    if (currentIndex < 0) return null
+    return order.getOrNull(currentIndex + 1)
+}
+
+private fun localFileFromWebUrl(url: String?): File? {
+    if (url.isNullOrBlank()) return null
+    val parsed = runCatching { Uri.parse(url) }.getOrNull() ?: return null
+    if (!parsed.scheme.equals("file", ignoreCase = true)) return null
+    val path = parsed.path ?: return null
+    return File(path)
+}
 
 private fun normalizeReaderBackgroundColorKey(raw: String?): String {
     return when (raw?.trim()) {
@@ -231,30 +471,92 @@ private fun resolvedReaderBackgroundComposeColor(
 }
 
 @Composable
-private fun ReaderBackgroundColorDialog(
-    selectedKey: String,
+private fun ReaderSettingsDialog(
+    selectedBackgroundKey: String,
+    selectedCountdownSeconds: Int,
+    showFloatingNextButtonControl: Boolean = false,
+    floatingNextButtonVisible: Boolean = true,
     onDismiss: () -> Unit,
-    onSelect: (String) -> Unit
+    onApply: (String, Int, Boolean) -> Unit,
+    onOpenTtsVoiceSettings: () -> Unit = {}
 ) {
-    val options = listOf(
+    val backgroundOptions = listOf(
         READER_BG_COLOR_ORIGINAL to stringResource(R.string.reader_background_color_original),
         READER_BG_COLOR_CREAM to stringResource(R.string.reader_background_color_cream),
         READER_BG_COLOR_GREEN to stringResource(R.string.reader_background_color_green),
         READER_BG_COLOR_GRAY to stringResource(R.string.reader_background_color_gray),
         READER_BG_COLOR_SEPIA to stringResource(R.string.reader_background_color_sepia)
     )
+    var selectedBackground by remember(normalizeReaderBackgroundColorKey(selectedBackgroundKey)) {
+        mutableStateOf(normalizeReaderBackgroundColorKey(selectedBackgroundKey))
+    }
+    var countdownSliderValue by remember(selectedCountdownSeconds) {
+        mutableStateOf(normalizeReaderAutoScrollCountdownSeconds(selectedCountdownSeconds).toFloat())
+    }
+    var showFloatingButton by remember(floatingNextButtonVisible) {
+        mutableStateOf(floatingNextButtonVisible)
+    }
+    val normalizedCountdown = countdownSliderValue.roundToInt().coerceIn(
+        READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS,
+        READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS
+    )
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.reader_background_color_title)) },
+        title = { Text(stringResource(R.string.reader_settings_title)) },
         text = {
-            LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                items(options) { (key, label) ->
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.reader_settings_background_title),
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(8.dp))
+                LazyColumn(modifier = Modifier.fillMaxWidth().heightIn(max = 220.dp)) {
+                    items(backgroundOptions) { (key, label) ->
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            onClick = { selectedBackground = key }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Surface(
+                                        modifier = Modifier
+                                            .width(34.dp)
+                                            .height(22.dp),
+                                        color = resolvedReaderBackgroundComposeColor(
+                                            key,
+                                            MaterialTheme.colorScheme.surface
+                                        )
+                                    ) {}
+                                    Text(label)
+                                }
+                                if (selectedBackground == key) {
+                                    Text(
+                                        text = stringResource(R.string.common_current),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                if (showFloatingNextButtonControl) {
+                    Spacer(Modifier.height(12.dp))
                     Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp),
-                        onClick = { onSelect(key) }
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { showFloatingButton = !showFloatingButton }
                     ) {
                         Row(
                             modifier = Modifier
@@ -263,36 +565,73 @@ private fun ReaderBackgroundColorDialog(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Surface(
-                                    modifier = Modifier
-                                        .width(34.dp)
-                                        .height(22.dp),
-                                    color = resolvedReaderBackgroundComposeColor(
-                                        key,
-                                        MaterialTheme.colorScheme.surface
-                                    )
-                                ) {}
-                                Text(label)
-                            }
-                            if (normalizeReaderBackgroundColorKey(selectedKey) == key) {
-                                Text(
-                                    text = stringResource(R.string.common_current),
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                            Text(
+                                text = if (showFloatingButton) {
+                                    stringResource(R.string.reader_action_hide_floating_next_button)
+                                } else {
+                                    stringResource(R.string.reader_action_show_floating_next_button)
+                                }
+                            )
+                            Icon(
+                                if (showFloatingButton) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                                contentDescription = null
+                            )
                         }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = stringResource(R.string.reader_settings_auto_scroll_title),
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.reader_auto_scroll_countdown_title),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Spacer(Modifier.height(8.dp))
+                Slider(
+                    value = countdownSliderValue,
+                    onValueChange = { countdownSliderValue = it },
+                    valueRange = READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS.toFloat()..READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS.toFloat(),
+                    steps = READER_AUTO_SCROLL_COUNTDOWN_MAX_SECONDS - READER_AUTO_SCROLL_COUNTDOWN_MIN_SECONDS - 1
+                )
+                Text(
+                    text = stringResource(R.string.reader_auto_scroll_countdown_option, normalizedCountdown),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        onOpenTtsVoiceSettings()
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = stringResource(R.string.epub_tts_voice))
+                        Icon(Icons.Default.Settings, contentDescription = null)
                     }
                 }
             }
         },
         confirmButton = {
+            TextButton(onClick = {
+                onApply(selectedBackground, normalizedCountdown, showFloatingButton)
+                onDismiss()
+            }) {
+                Text(stringResource(R.string.common_apply))
+            }
+        },
+        dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.common_close))
+                Text(stringResource(R.string.common_cancel))
             }
         }
     )
@@ -2531,6 +2870,8 @@ fun MarkdownViewerScreen(
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
     val context = LocalContext.current
+    val prefs = remember { Preferences(context) }
+    val scope = rememberCoroutineScope()
     var backStack by remember { mutableStateOf(listOf<Triple<String, String, Boolean>>()) }
     var currentUri by remember { mutableStateOf(initialFileUri) }
     var currentName by remember { mutableStateOf(initialFileName) }
@@ -2550,6 +2891,11 @@ fun MarkdownViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showReaderSettingsDialog by remember { mutableStateOf(false) }
+    var autoScrolling by remember { mutableStateOf(false) }
+    var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
+    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "$currentUri:$currentEncrypted",
@@ -2728,6 +3074,8 @@ fun MarkdownViewerScreen(
     }
 
     BackHandler {
+        autoScrolling = false
+        autoScrollCountdownSecondsLeft = 0
         if (backStack.isNotEmpty()) {
             val last = backStack.last()
             backStack = backStack.dropLast(1)
@@ -2737,6 +3085,65 @@ fun MarkdownViewerScreen(
         } else {
             onBack()
         }
+    }
+
+    KeepScreenOnEffect(enabled = autoScrolling)
+
+    LaunchedEffect(autoScrolling, currentUri, currentEncrypted, htmlContent, loading, pageLoading) {
+        if (!autoScrolling) return@LaunchedEffect
+        val configuredSeconds = normalizeReaderAutoScrollCountdownSeconds(autoScrollCountdownSeconds)
+        while (autoScrolling) {
+            if (loading || pageLoading || htmlContent == null) {
+                kotlinx.coroutines.delay(140L)
+                continue
+            }
+            var remainMs = configuredSeconds * 1000L
+            while (autoScrolling && remainMs > 0L) {
+                autoScrollCountdownSecondsLeft = formatReaderAutoScrollCountdown(((remainMs + 999L) / 1000L).toInt())
+                val tick = minOf(1000L, remainMs)
+                kotlinx.coroutines.delay(tick)
+                remainMs -= tick
+            }
+            if (!autoScrolling) break
+            autoScrollCountdownSecondsLeft = 0
+            val stepResult = performReaderAutoScrollStep(
+                webViewRef.value,
+                pageOverlapRatio = READER_AUTO_SCROLL_PAGE_OVERLAP_RATIO,
+                fadeDurationMs = READER_AUTO_SCROLL_FADE_DURATION_MS
+            )
+            if (!autoScrolling) break
+            if (!stepResult.ready) {
+                kotlinx.coroutines.delay(220L)
+                continue
+            }
+            if (stepResult.atEndBeforeTurn || (stepResult.reachedEnd && !stepResult.turnedPage)) {
+                autoScrolling = false
+                Toast.makeText(context, context.getString(R.string.reader_auto_scroll_finished), Toast.LENGTH_SHORT).show()
+                autoScrollCountdownSecondsLeft = 0
+                break
+            }
+        }
+        autoScrollCountdownSecondsLeft = 0
+    }
+
+    if (showReaderSettingsDialog) {
+        ReaderSettingsDialog(
+            selectedBackgroundKey = readerBackgroundColor,
+            selectedCountdownSeconds = autoScrollCountdownSeconds,
+            showFloatingNextButtonControl = false,
+            onDismiss = { showReaderSettingsDialog = false },
+            onApply = { backgroundKey, countdownSeconds, _ ->
+                scope.launch {
+                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                }
+                showReaderSettingsDialog = false
+            },
+            onOpenTtsVoiceSettings = {
+                showReaderSettingsDialog = false
+                ttsController.showTtsVoiceDialog = true
+            }
+        )
     }
 
     if (pendingExternalUrl != null) {
@@ -2887,18 +3294,39 @@ fun MarkdownViewerScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                    text = {
+                                        Text(
+                                            if (autoScrolling) context.getString(R.string.reader_auto_scroll_stop)
+                                            else context.getString(R.string.reader_auto_scroll_start)
+                                        )
+                                    },
                                     onClick = {
                                         showMoreMenu = false
-                                        ttsController.showTtsEngineDialog = true
+                                        autoScrolling = !autoScrolling
+                                        if (!autoScrolling) {
+                                            autoScrollCountdownSecondsLeft = 0
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (autoScrolling) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.reader_settings_title)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showReaderSettingsDialog = true
                                     },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                                 )
                                 DropdownMenuItem(
-                                    text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                    text = { Text(context.getString(R.string.epub_tts_engine)) },
                                     onClick = {
                                         showMoreMenu = false
-                                        ttsController.showTtsVoiceDialog = true
+                                        ttsController.showTtsEngineDialog = true
                                     },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                                 )
@@ -3023,6 +3451,9 @@ fun MarkdownViewerScreen(
                         }
                     }
                 }
+            }
+            if (autoScrolling && autoScrollCountdownSecondsLeft > 0) {
+                ReaderAutoScrollCountdownBadge(autoScrollCountdownSecondsLeft)
             }
         }
     }
@@ -3268,14 +3699,6 @@ fun PassContentViewerScreen(
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_voice)) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    ttsController.showTtsVoiceDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
-                            )
                         }
                     }
                 },
@@ -3444,6 +3867,10 @@ fun MdZipViewerScreen(
     }
 
     val context = LocalContext.current
+    var autoScrolling by remember { mutableStateOf(false) }
+    var autoScrollPendingNextFile by remember { mutableStateOf<File?>(null) }
+    var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
+    KeepScreenOnEffect(enabled = autoScrolling)
     val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
@@ -3464,8 +3891,9 @@ fun MdZipViewerScreen(
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showReaderBackgroundColorDialog by remember { mutableStateOf(false) }
+    var showReaderSettingsDialog by remember { mutableStateOf(false) }
     val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "mdzip:${currentFile.absolutePath}",
@@ -3557,6 +3985,10 @@ fun MdZipViewerScreen(
 
     LaunchedEffect(currentFile) {
         regexFindUiState = RegexFindUiState()
+        if (autoScrollPendingNextFile != null) {
+            autoScrollPendingNextFile = null
+            autoScrolling = true
+        }
         val cacheKey = "mdzip:${currentFile.absolutePath}"
         val cacheSignature = computeMarkdownCacheSignature(currentFile)
         sessionCache.getHtml(cacheKey, cacheSignature)?.let { cached ->
@@ -3629,6 +4061,8 @@ fun MdZipViewerScreen(
             Log.d(MDZIP_DEBUG, "  name=$name isRenderable=$isRenderable")
             logDebug?.invoke("[MDZIP]   name=$name isRenderable=$isRenderable")
             if (isRenderable) {
+                autoScrolling = false
+                autoScrollPendingNextFile = null
                 resetCurrentPageState()
                 backStack = backStack + currentFile
                 currentFile = target
@@ -3697,6 +4131,9 @@ fun MdZipViewerScreen(
     }
 
     val doBack: () -> Unit = {
+        autoScrolling = false
+        autoScrollPendingNextFile = null
+        autoScrollCountdownSecondsLeft = 0
         if (backStack.isNotEmpty()) {
             val target = backStack.last()
             resetCurrentPageState()
@@ -3708,6 +4145,53 @@ fun MdZipViewerScreen(
     }
 
     BackHandler { doBack() }
+
+    LaunchedEffect(autoScrolling, currentFile.absolutePath, htmlContent, loading, pageLoading) {
+        if (!autoScrolling) return@LaunchedEffect
+        val configuredSeconds = normalizeReaderAutoScrollCountdownSeconds(autoScrollCountdownSeconds)
+        while (autoScrolling) {
+            if (loading || pageLoading || htmlContent == null) {
+                kotlinx.coroutines.delay(140L)
+                continue
+            }
+            var remainMs = configuredSeconds * 1000L
+            while (autoScrolling && remainMs > 0L) {
+                autoScrollCountdownSecondsLeft = formatReaderAutoScrollCountdown(((remainMs + 999L) / 1000L).toInt())
+                val tick = minOf(1000L, remainMs)
+                kotlinx.coroutines.delay(tick)
+                remainMs -= tick
+            }
+            if (!autoScrolling) break
+            autoScrollCountdownSecondsLeft = 0
+            val stepResult = performReaderAutoScrollStep(
+                webViewRef.value,
+                pageOverlapRatio = READER_AUTO_SCROLL_PAGE_OVERLAP_RATIO,
+                fadeDurationMs = READER_AUTO_SCROLL_FADE_DURATION_MS
+            )
+            if (!autoScrolling) break
+            if (!stepResult.ready) {
+                kotlinx.coroutines.delay(220L)
+                continue
+            }
+            if (stepResult.atEndBeforeTurn || (stepResult.reachedEnd && !stepResult.turnedPage)) {
+                val order = collectMdZipReaderOrder(contentDir)
+                val nextFile = resolveNextFileInReaderOrder(order, currentFile)
+                if (nextFile != null) {
+                    autoScrolling = false
+                    autoScrollPendingNextFile = nextFile
+                    resetCurrentPageState(context.getString(R.string.md_viewer_preparing_document_ellipsis))
+                    backStack = backStack + currentFile
+                    currentFile = nextFile
+                } else {
+                    autoScrolling = false
+                    Toast.makeText(context, context.getString(R.string.reader_auto_scroll_finished), Toast.LENGTH_SHORT).show()
+                }
+                autoScrollCountdownSecondsLeft = 0
+                break
+            }
+        }
+        autoScrollCountdownSecondsLeft = 0
+    }
 
     if (pendingExternalUrl != null) {
         val urlToShow = pendingExternalUrl!!
@@ -3782,19 +4266,6 @@ fun MdZipViewerScreen(
         onSelectVoice = { ttsController.selectVoice(it) }
     )
 
-    if (showReaderBackgroundColorDialog) {
-        ReaderBackgroundColorDialog(
-            selectedKey = readerBackgroundColor,
-            onDismiss = { showReaderBackgroundColorDialog = false },
-            onSelect = { key ->
-                scope.launch {
-                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(key))
-                }
-                showReaderBackgroundColorDialog = false
-            }
-        )
-    }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -3856,26 +4327,40 @@ fun MdZipViewerScreen(
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (autoScrolling) context.getString(R.string.reader_auto_scroll_stop)
+                                            else context.getString(R.string.reader_auto_scroll_start)
+                                        )
+                                    },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        autoScrolling = !autoScrolling
+                                        if (!autoScrolling) {
+                                            autoScrollPendingNextFile = null
+                                            autoScrollCountdownSecondsLeft = 0
+                                        }
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (autoScrolling) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                            contentDescription = null
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.reader_settings_title)) },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        showReaderSettingsDialog = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
+                                )
+                                DropdownMenuItem(
                                     text = { Text(context.getString(R.string.epub_tts_engine)) },
                                     onClick = {
                                         showMoreMenu = false
                                         ttsController.showTtsEngineDialog = true
-                                    },
-                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(context.getString(R.string.epub_tts_voice)) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        ttsController.showTtsVoiceDialog = true
-                                    },
-                                    leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(context.getString(R.string.reader_action_background_color)) },
-                                    onClick = {
-                                        showMoreMenu = false
-                                        showReaderBackgroundColorDialog = true
                                     },
                                     leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                                 )
@@ -3990,6 +4475,9 @@ fun MdZipViewerScreen(
                         }
                     }
                 }
+            }
+            if (autoScrolling && autoScrollCountdownSecondsLeft > 0) {
+                ReaderAutoScrollCountdownBadge(autoScrollCountdownSecondsLeft)
             }
         }
     }
@@ -4161,13 +4649,22 @@ fun HtmlZipViewerScreen(
     }
 
     val context = LocalContext.current
+    var autoScrolling by remember { mutableStateOf(false) }
+    var autoScrollPendingNextFile by remember { mutableStateOf<File?>(null) }
+    var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
+    KeepScreenOnEffect(enabled = autoScrolling)
+    val prefs = remember { Preferences(context) }
+    val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
     var showFindDialog by remember { mutableStateOf(false) }
     var regexQuery by remember { mutableStateOf("") }
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var showReaderSettingsDialog by remember { mutableStateOf(false) }
     var currentPageToken by remember { mutableStateOf(initialIndexFile.absolutePath) }
+    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "htmlzip:${currentPageToken.substringBefore('#')}",
@@ -4208,8 +4705,84 @@ fun HtmlZipViewerScreen(
     logDebug?.invoke("[HTMLZIP] 打开 zipFileName=$zipFileName indexFile=${initialIndexFile.absolutePath}")
 
     BackHandler {
+        autoScrolling = false
+        autoScrollPendingNextFile = null
+        autoScrollCountdownSecondsLeft = 0
         val w = webViewRef.value
         if (w != null && w.canGoBack()) w.goBack() else onBack()
+    }
+
+    LaunchedEffect(autoScrolling, currentPageToken, webViewRef.value) {
+        if (!autoScrolling) return@LaunchedEffect
+        val configuredSeconds = normalizeReaderAutoScrollCountdownSeconds(autoScrollCountdownSeconds)
+        while (autoScrolling) {
+            var remainMs = configuredSeconds * 1000L
+            while (autoScrolling && remainMs > 0L) {
+                autoScrollCountdownSecondsLeft = formatReaderAutoScrollCountdown(((remainMs + 999L) / 1000L).toInt())
+                val tick = minOf(1000L, remainMs)
+                kotlinx.coroutines.delay(tick)
+                remainMs -= tick
+            }
+            if (!autoScrolling) break
+            autoScrollCountdownSecondsLeft = 0
+            val stepResult = performReaderAutoScrollStep(
+                webViewRef.value,
+                pageOverlapRatio = READER_AUTO_SCROLL_PAGE_OVERLAP_RATIO,
+                fadeDurationMs = READER_AUTO_SCROLL_FADE_DURATION_MS
+            )
+            if (!autoScrolling) break
+            if (!stepResult.ready) {
+                kotlinx.coroutines.delay(220L)
+                continue
+            }
+            if (stepResult.atEndBeforeTurn || (stepResult.reachedEnd && !stepResult.turnedPage)) {
+                val currentFile = localFileFromWebUrl(webViewRef.value?.url)
+                    ?: localFileFromWebUrl(currentPageToken)
+                val order = collectHtmlZipReaderOrder(contentDir)
+                val nextFile = resolveNextFileInReaderOrder(order, currentFile)
+                if (nextFile != null) {
+                    autoScrolling = false
+                    autoScrollPendingNextFile = nextFile
+                    webViewRef.value?.loadUrl("file://${nextFile.absolutePath}")
+                } else {
+                    autoScrolling = false
+                    Toast.makeText(context, context.getString(R.string.reader_auto_scroll_finished), Toast.LENGTH_SHORT).show()
+                }
+                autoScrollCountdownSecondsLeft = 0
+                break
+            }
+        }
+        autoScrollCountdownSecondsLeft = 0
+    }
+
+    if (showReaderSettingsDialog) {
+        ReaderSettingsDialog(
+            selectedBackgroundKey = readerBackgroundColor,
+            selectedCountdownSeconds = autoScrollCountdownSeconds,
+            showFloatingNextButtonControl = false,
+            onDismiss = { showReaderSettingsDialog = false },
+            onApply = { backgroundKey, countdownSeconds, _ ->
+                scope.launch {
+                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                }
+                showReaderSettingsDialog = false
+            },
+            onOpenTtsVoiceSettings = {
+                showReaderSettingsDialog = false
+                ttsController.showTtsVoiceDialog = true
+            }
+        )
+    }
+
+    LaunchedEffect(currentPageToken) {
+        if (autoScrollPendingNextFile == null) return@LaunchedEffect
+        val pending = autoScrollPendingNextFile ?: return@LaunchedEffect
+        val currentFile = localFileFromWebUrl(currentPageToken)
+        if (currentFile != null && runCatching { currentFile.canonicalPath }.getOrElse { currentFile.absolutePath } == runCatching { pending.canonicalPath }.getOrElse { pending.absolutePath }) {
+            autoScrollPendingNextFile = null
+            autoScrolling = true
+        }
     }
 
     if (pendingExternalUrl != null) {
@@ -4332,18 +4905,40 @@ fun HtmlZipViewerScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_engine)) },
+                                text = {
+                                    Text(
+                                        if (autoScrolling) context.getString(R.string.reader_auto_scroll_stop)
+                                        else context.getString(R.string.reader_auto_scroll_start)
+                                    )
+                                },
                                 onClick = {
                                     showMoreMenu = false
-                                    ttsController.showTtsEngineDialog = true
+                                    autoScrolling = !autoScrolling
+                                    if (!autoScrolling) {
+                                        autoScrollPendingNextFile = null
+                                        autoScrollCountdownSecondsLeft = 0
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (autoScrolling) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.reader_settings_title)) },
+                                onClick = {
+                                    showMoreMenu = false
+                                    showReaderSettingsDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
                             DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                text = { Text(context.getString(R.string.epub_tts_engine)) },
                                 onClick = {
                                     showMoreMenu = false
-                                    ttsController.showTtsVoiceDialog = true
+                                    ttsController.showTtsEngineDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
@@ -4383,6 +4978,9 @@ fun HtmlZipViewerScreen(
                     webViewRef.value = webView
                 }
             )
+            if (autoScrolling && autoScrollCountdownSecondsLeft > 0) {
+                ReaderAutoScrollCountdownBadge(autoScrollCountdownSecondsLeft)
+            }
         }
     }
 }
@@ -4701,14 +5299,6 @@ fun HtmlViewerScreen(
                                 onClick = {
                                     showMoreMenu = false
                                     ttsController.showTtsEngineDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_voice)) },
-                                onClick = {
-                                    showMoreMenu = false
-                                    ttsController.showTtsVoiceDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
@@ -5036,7 +5626,8 @@ fun EpubViewerScreen(
     var showFullTextSearchDialog by remember { mutableStateOf(false) }
     var showGoToPositionDialog by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
-    var showReaderBackgroundColorDialog by remember { mutableStateOf(false) }
+    var showReaderSettingsDialog by remember { mutableStateOf(false) }
+    var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
     var isFullscreen by remember { mutableStateOf(false) }
     var showTransientTopMenu by remember { mutableStateOf(false) }
     var editingBookNote by remember { mutableStateOf<BookNoteEditorState?>(null) }
@@ -5047,6 +5638,8 @@ fun EpubViewerScreen(
     var fullTextSearchResults by remember { mutableStateOf<List<EpubFullTextSearchResult>>(emptyList()) }
     var fullTextSearchError by remember { mutableStateOf<String?>(null) }
     var fullTextSearching by remember { mutableStateOf(false) }
+    var autoScrolling by remember { mutableStateOf(false) }
+    var autoScrollPauseForChapterSwitch by remember { mutableStateOf(false) }
     var pendingFullTextHighlightQuery by remember { mutableStateOf<String?>(null) }
     var showTtsEngineDialog by remember { mutableStateOf(false) }
     var showTtsVoiceDialog by remember { mutableStateOf(false) }
@@ -5078,6 +5671,7 @@ fun EpubViewerScreen(
     val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
     val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
     val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsSession = remember { EpubTtsSession(context) }
 
     fun revealTransientTopMenu() {
@@ -5672,7 +6266,12 @@ fun EpubViewerScreen(
         }
     }
 
-    LaunchedEffect(isFullscreen) {
+    LaunchedEffect(isFullscreen, autoScrolling) {
+        if (!isFullscreen && autoScrolling) {
+            autoScrolling = false
+            autoScrollPauseForChapterSwitch = false
+            autoScrollCountdownSecondsLeft = 0
+        }
         if (!isFullscreen) {
             showMoreMenu = false
             showTransientTopMenu = false
@@ -5702,6 +6301,10 @@ fun EpubViewerScreen(
         regexFindUiState = RegexFindUiState()
         ttsActiveSegmentId = null
         setEpubTtsHighlight(webViewRef.value, null, scrollToSegment = false)
+        if (autoScrollPauseForChapterSwitch) {
+            autoScrollPauseForChapterSwitch = false
+            autoScrolling = true
+        }
         if ((ttsIsSpeaking || pendingTtsStartChapterIndex != null || ttsIsStarting) && currentChapterIndex != (ttsSpeakingChapterIndex ?: pendingTtsStartChapterIndex ?: currentChapterIndex)) {
             ttsRequestJob?.cancel()
             ttsRequestJob = null
@@ -5904,6 +6507,46 @@ fun EpubViewerScreen(
             Toast.makeText(context, context.getString(R.string.epub_last_page_reached), Toast.LENGTH_SHORT).show()
             lastReachedChapterEndToastAtMillis = now
         }
+    }
+
+    LaunchedEffect(autoScrolling, currentChapterIndex, chapters.size) {
+        if (!autoScrolling) return@LaunchedEffect
+        val configuredSeconds = normalizeReaderAutoScrollCountdownSeconds(autoScrollCountdownSeconds)
+        while (autoScrolling) {
+            var remainMs = configuredSeconds * 1000L
+            while (autoScrolling && remainMs > 0L) {
+                autoScrollCountdownSecondsLeft = formatReaderAutoScrollCountdown(((remainMs + 999L) / 1000L).toInt())
+                val tick = minOf(1000L, remainMs)
+                kotlinx.coroutines.delay(tick)
+                remainMs -= tick
+            }
+            if (!autoScrolling) break
+            autoScrollCountdownSecondsLeft = 0
+            val stepResult = performReaderAutoScrollStep(
+                webViewRef.value,
+                pageOverlapRatio = READER_AUTO_SCROLL_PAGE_OVERLAP_RATIO,
+                fadeDurationMs = READER_AUTO_SCROLL_FADE_DURATION_MS
+            )
+            if (!autoScrolling) break
+            if (!stepResult.ready) {
+                kotlinx.coroutines.delay(220L)
+                continue
+            }
+            if (stepResult.atEndBeforeTurn || (stepResult.reachedEnd && !stepResult.turnedPage)) {
+                if (currentChapterIndex < chapters.lastIndex) {
+                    autoScrolling = false
+                    autoScrollPauseForChapterSwitch = true
+                    autoScrollCountdownSecondsLeft = 0
+                    goToNextChapterFirstPage()
+                } else {
+                    autoScrolling = false
+                    autoScrollCountdownSecondsLeft = 0
+                    Toast.makeText(context, context.getString(R.string.reader_auto_scroll_finished), Toast.LENGTH_SHORT).show()
+                }
+                break
+            }
+        }
+        autoScrollCountdownSecondsLeft = 0
     }
 
 
@@ -6581,15 +7224,24 @@ fun EpubViewerScreen(
         )
     }
 
-    if (showReaderBackgroundColorDialog) {
-        ReaderBackgroundColorDialog(
-            selectedKey = readerBackgroundColor,
-            onDismiss = { showReaderBackgroundColorDialog = false },
-            onSelect = { key ->
+    if (showReaderSettingsDialog) {
+        ReaderSettingsDialog(
+            selectedBackgroundKey = readerBackgroundColor,
+            selectedCountdownSeconds = autoScrollCountdownSeconds,
+            showFloatingNextButtonControl = true,
+            floatingNextButtonVisible = !hideReaderFloatingNextButton,
+            onDismiss = { showReaderSettingsDialog = false },
+            onApply = { backgroundKey, countdownSeconds, floatingNextButtonVisible ->
                 scope.launch {
-                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(key))
+                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                    prefs.setHideReaderFloatingNextButton(!floatingNextButtonVisible)
                 }
-                showReaderBackgroundColorDialog = false
+                showReaderSettingsDialog = false
+            },
+            onOpenTtsVoiceSettings = {
+                showReaderSettingsDialog = false
+                showTtsVoiceDialog = true
             }
         )
     }
@@ -6679,10 +7331,35 @@ fun EpubViewerScreen(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text(context.getString(R.string.epub_tts_voice)) },
+                                text = {
+                                    Text(
+                                        if (autoScrolling) context.getString(R.string.reader_auto_scroll_stop)
+                                        else context.getString(R.string.reader_auto_scroll_start)
+                                    )
+                                },
                                 onClick = {
                                     closeMoreMenuForAction()
-                                    showTtsVoiceDialog = true
+                                    autoScrolling = !autoScrolling
+                                    if (autoScrolling) {
+                                        isFullscreen = true
+                                    }
+                                    if (!autoScrolling) {
+                                        autoScrollPauseForChapterSwitch = false
+                                        autoScrollCountdownSecondsLeft = 0
+                                    }
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        if (autoScrolling) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                        contentDescription = null
+                                    )
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.reader_settings_title)) },
+                                onClick = {
+                                    closeMoreMenuForAction()
+                                    showReaderSettingsDialog = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
                             )
@@ -6757,37 +7434,6 @@ fun EpubViewerScreen(
                                     isFullscreen = true
                                 },
                                 leadingIcon = { Icon(Icons.Default.Fullscreen, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.reader_action_background_color)) },
-                                onClick = {
-                                    closeMoreMenuForAction()
-                                    showReaderBackgroundColorDialog = true
-                                },
-                                leadingIcon = { Icon(Icons.Default.Settings, contentDescription = null) }
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        if (hideReaderFloatingNextButton) {
-                                            context.getString(R.string.reader_action_show_floating_next_button)
-                                        } else {
-                                            context.getString(R.string.reader_action_hide_floating_next_button)
-                                        }
-                                    )
-                                },
-                                onClick = {
-                                    closeMoreMenuForAction()
-                                    scope.launch {
-                                        prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
-                                    }
-                                },
-                                leadingIcon = {
-                                    Icon(
-                                        if (hideReaderFloatingNextButton) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                                        contentDescription = null
-                                    )
-                                }
                             )
                         }
                     }
@@ -7259,6 +7905,9 @@ fun EpubViewerScreen(
                                 }
                             }
                         )
+                    }
+                    if (autoScrolling && autoScrollCountdownSecondsLeft > 0) {
+                        ReaderAutoScrollCountdownBadge(autoScrollCountdownSecondsLeft)
                     }
                 }
             }
