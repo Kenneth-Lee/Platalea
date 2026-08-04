@@ -14,7 +14,9 @@ import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
+import net.lingala.zip4j.model.enums.AesKeyStrength
 import net.lingala.zip4j.model.enums.CompressionLevel
+import net.lingala.zip4j.model.enums.EncryptionMethod
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.charset.Charset
@@ -443,6 +445,17 @@ private fun resolveParentForZip(context: Context, targetParentUri: Uri, treeUri:
     }
 }
 
+fun buildZipParametersForCompression(password: CharArray?): ZipParameters {
+    return ZipParameters().apply {
+        compressionLevel = CompressionLevel.NORMAL
+        if (password != null && password.isNotEmpty()) {
+            isEncryptFiles = true
+            encryptionMethod = EncryptionMethod.AES
+            aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
+        }
+    }
+}
+
 /**
  * 将若干文件/目录压缩为一个 zip，保存到指定目录。
  * @param sourceUris 要压缩的项（文件或目录）的 content URI
@@ -469,7 +482,7 @@ fun compressToZip(
         val zip = ZipFile(zipPath).apply {
             if (password != null && password.isNotEmpty()) setPassword(password)
         }
-        val params = ZipParameters().apply { compressionLevel = CompressionLevel.NORMAL }
+        val params = buildZipParametersForCompression(password)
         sourceUris.forEachIndexed { index, uri ->
             setProgress(index, total)
             val resolvedUri = resolveDocUriWithTree(uri, treeUri)

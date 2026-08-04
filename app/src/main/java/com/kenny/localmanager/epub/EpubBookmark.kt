@@ -136,11 +136,12 @@ class EpubBookmarkManager(
                 put("scrollRatio", progress.scrollRatio)
                 put("lastReadTime", progress.lastReadTime)
             }
-            // 使用URI hash作为文件名，支持多本书
-            val progressFile = getProgressFileForUri(progress.epubUri)
-            progressFile.parentFile?.mkdirs()
-            progressFile.writeText(json.toString())
-            Log.d(TAG, context.getString(R.string.epub_log_save_progress, progress.epubFileName, progress.chapterIndex, progress.scrollRatio.toString(), progress.epubUri.hashCode().toUInt().toString(16), progressFile.absolutePath))
+            val progressFiles = getProgressFilesForUri(progress.epubUri)
+            progressFiles.forEach { file ->
+                file.parentFile?.mkdirs()
+                file.writeText(json.toString())
+            }
+            Log.d(TAG, context.getString(R.string.epub_log_save_progress, progress.epubFileName, progress.chapterIndex, progress.scrollRatio.toString(), progress.epubUri.hashCode().toUInt().toString(16), progressFiles.first().absolutePath))
         } catch (e: Exception) {
             Log.e(TAG, context.getString(R.string.epub_log_save_progress_failed), e)
         }
@@ -149,21 +150,28 @@ class EpubBookmarkManager(
     /** 加载阅读进度 */
     fun loadProgress(epubUri: String): EpubReadingProgress? {
         return try {
-            val file = getProgressFileForUri(epubUri)
-            Log.d(TAG, context.getString(R.string.epub_log_load_progress, epubUri.hashCode().toUInt().toString(16), file.absolutePath, file.exists().toString()))
-            if (!file.exists()) return null
-            val json = JSONObject(file.readText())
-            val progress = EpubReadingProgress(
-                epubUri = json.getString("epubUri"),
-                epubFileName = json.optString("epubFileName", ""),
-                chapterIndex = json.getInt("chapterIndex"),
-                chapterTitle = json.optString("chapterTitle", ""),
-                scrollPosition = json.optInt("scrollPosition", 0),
-                scrollRatio = json.optDouble("scrollRatio", 0.0).toFloat(),
-                lastReadTime = json.optLong("lastReadTime", System.currentTimeMillis())
-            )
-            Log.d(TAG, context.getString(R.string.epub_log_load_progress_success, progress.epubFileName, progress.chapterIndex, progress.scrollRatio.toString()))
-            progress
+            val progressFiles = getProgressFilesForUri(epubUri)
+            val matched = progressFiles.firstNotNullOfOrNull { file ->
+                if (!file.exists()) null else runCatching {
+                    val json = JSONObject(file.readText())
+                    EpubReadingProgress(
+                        epubUri = json.getString("epubUri"),
+                        epubFileName = json.optString("epubFileName", ""),
+                        chapterIndex = json.getInt("chapterIndex"),
+                        chapterTitle = json.optString("chapterTitle", ""),
+                        scrollPosition = json.optInt("scrollPosition", 0),
+                        scrollRatio = json.optDouble("scrollRatio", 0.0).toFloat(),
+                        lastReadTime = json.optLong("lastReadTime", System.currentTimeMillis())
+                    )
+                }.getOrNull()
+            }
+            if (matched != null) {
+                Log.d(TAG, context.getString(R.string.epub_log_load_progress_success, matched.epubFileName, matched.chapterIndex, matched.scrollRatio.toString()))
+                matched
+            } else {
+                Log.d(TAG, context.getString(R.string.epub_log_load_progress, epubUri.hashCode().toUInt().toString(16), progressFiles.first().absolutePath, false.toString()))
+                null
+            }
         } catch (e: Exception) {
             Log.e(TAG, context.getString(R.string.epub_log_load_progress_failed), e)
             null
@@ -173,8 +181,9 @@ class EpubBookmarkManager(
     /** 清除阅读进度 */
     fun clearProgress(epubUri: String) {
         try {
-            val file = getProgressFileForUri(epubUri)
-            if (file.exists()) file.delete()
+            getProgressFilesForUri(epubUri).forEach { file ->
+                if (file.exists()) file.delete()
+            }
         } catch (e: Exception) {
             Log.e(TAG, context.getString(R.string.epub_log_clear_progress_failed), e)
         }
@@ -182,12 +191,16 @@ class EpubBookmarkManager(
 
     // ---- 私有方法 ----
 
-    private fun getProgressFileForUri(uri: String): File {
-        if (cacheDir != null) {
-            return File(cacheDir, ".epub_progress.json")
+    private fun getProgressFilesForUri(uri: String): List<File> {
+        val cacheProgressFile = cacheDir?.let { File(it, ".epub_progress.json") }
+        val legacyProgressFile = if (cacheDir != null) {
+            val key = uri.hashCode().toUInt().toString(16)
+            File(context.filesDir, "epub_progress_$key.json")
+        } else {
+            val key = uri.hashCode().toUInt().toString(16)
+            File(context.filesDir, "epub_progress_$key.json")
         }
-        val key = uri.hashCode().toUInt().toString(16)
-        return File(context.filesDir, "epub_progress_$key.json")
+        return listOfNotNull(cacheProgressFile, legacyProgressFile)
     }
 
     private fun clearPersistentDataForUri(uri: String) {

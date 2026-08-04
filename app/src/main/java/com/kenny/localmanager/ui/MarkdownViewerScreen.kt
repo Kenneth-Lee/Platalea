@@ -5885,10 +5885,10 @@ fun EpubViewerScreen(
     }
 
     // 旧收藏夹管理器仅用于把历史数据迁移到全局读书笔记
-    val bookmarkManager = remember(epubUri, extractResult.cacheDir.absolutePath, extractResult.isEncrypted) {
+    val bookmarkManager = remember(epubUri, extractResult.cacheDir.absolutePath) {
         EpubBookmarkManager(
             context = context,
-            cacheDir = extractResult.cacheDir.takeIf { extractResult.isEncrypted },
+            cacheDir = extractResult.cacheDir,
             scopedUri = epubUri.toString()
         )
     }
