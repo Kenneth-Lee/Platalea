@@ -57,9 +57,6 @@ class EpubBookmarkManager(
     val bookmarks: StateFlow<List<EpubBookmark>> = _bookmarks.asStateFlow()
 
     init {
-        if (cacheDir != null && !scopedUri.isNullOrBlank()) {
-            clearPersistentDataForUri(scopedUri)
-        }
         loadBookmarks()
     }
 
@@ -222,14 +219,6 @@ class EpubBookmarkManager(
                     persistentBookmarksFile.writeText(filtered.toString())
                     Log.w(TAG, context.getString(R.string.epub_log_cleared_legacy_bookmarks, uri, removed))
                 }
-            }
-            val persistentProgressFile = File(
-                context.filesDir,
-                "epub_progress_${uri.hashCode().toUInt().toString(16)}.json"
-            )
-            if (persistentProgressFile.exists()) {
-                persistentProgressFile.delete()
-                Log.w(TAG, context.getString(R.string.epub_log_cleared_legacy_progress, uri))
             }
         } catch (e: Exception) {
             Log.e(TAG, context.getString(R.string.epub_log_clear_legacy_failed), e)

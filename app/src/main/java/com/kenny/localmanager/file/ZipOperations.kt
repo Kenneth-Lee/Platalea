@@ -1491,16 +1491,62 @@ fun tryArchivePassword(
 ): Boolean {
     if (password == null || password.isEmpty()) return false
     val archive = cachedArchive?.takeIf { it.exists() }
-    if (archive != null) return tryZipPassword(archive, password)
+    if (archive != null) return tryArchivePasswordFile(archive, password)
 
-    val fallback = File(context.cacheDir, "zip_verify_${System.currentTimeMillis()}.zip")
+    val fallback = File(context.cacheDir, "archive_verify_${System.currentTimeMillis()}")
     return try {
         context.contentResolver.openInputStream(zipUri)?.use { input ->
             fallback.outputStream().use { output -> input.copyTo(output) }
         } ?: false
-        tryZipPassword(fallback, password)
+        tryArchivePasswordFile(fallback, password)
     } finally {
         fallback.delete()
+    }
+}
+
+internal fun tryArchivePasswordFile(archiveFile: File, password: CharArray): Boolean {
+    return when {
+        isRarName(archiveFile.name) || hasRarSignature(archiveFile) -> tryRarPassword(archiveFile, password)
+        is7zName(archiveFile.name) || has7zSignature(archiveFile) -> trySevenZPassword(archiveFile, password)
+        else -> tryZipPassword(archiveFile, password)
+    }
+}
+
+private fun trySevenZPassword(archiveFile: File, password: CharArray): Boolean {
+    return try {
+        openSevenZFile(archiveFile, password).use { sevenZ ->
+            sevenZ.nextEntry ?: return true
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (sevenZ.read(buffer) > 0) {
+            }
+            true
+        }
+    } catch (e: PasswordRequiredException) {
+        false
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private fun tryRarPassword(archiveFile: File, password: CharArray): Boolean {
+    var archive: Archive? = null
+    return try {
+        archive = openRarArchive(archiveFile, password)
+        if (archive == null) return false
+        if (isRarArchivePasswordProtected(archive) && (password.isEmpty())) return false
+        val headers = archive.fileHeaders.orEmpty()
+        if (headers.isEmpty()) return true
+        val firstHeader = headers.firstOrNull() ?: return true
+        val output = java.io.ByteArrayOutputStream()
+        archive.extractFile(firstHeader, output)
+        true
+    } catch (e: Exception) {
+        false
+    } finally {
+        try {
+            archive?.close()
+        } catch (_: Exception) {
+        }
     }
 }
 
