@@ -23,7 +23,7 @@
 
 本项目也上传到华为市场了，但只有国际版本，没有国内版本。
 
-最新一个发布版本在这里：[LocalManager-V0.25](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.25/app-release.apk)
+最新一个发布版本在这里：[LocalManager-V0.26](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.26/app-release.apk)
 
 ## 设计思路
 
