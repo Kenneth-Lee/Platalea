@@ -326,6 +326,7 @@ class BulletinBoardHttpHandler(
                             put("name", board.name)
                             put("revision", board.revision)
                             put("message_count", board.messageCount)
+                            put("ai_manager_model", board.aiManagerModel ?: JSONObject.NULL)
                             if (auth.canManageBoard) {
                                 put("role_ids", board.roleIds?.let { JSONArray(it) } ?: JSONObject.NULL)
                             }
@@ -354,13 +355,14 @@ class BulletinBoardHttpHandler(
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val name = payload.optString("name").trim().ifEmpty { null }
         val roleIds = if (payload.has("role_ids")) parseRoleIdsFromPayload(payload) else null
-        if (name == null && roleIds == null) {
+        val aiManagerModel = if (payload.has("ai_manager_model")) parseAiManagerModel(payload) else null
+        if (name == null && roleIds == null && aiManagerModel == null) {
             return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
         }
         if (name != null && store.isBoardNameTaken(name, excludeBoardId = boardId)) {
             return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614, name))
         }
-        val board = store.updateBoard(boardId, name = name, roleIds = roleIds)
+        val board = store.updateBoard(boardId, name = name, roleIds = roleIds, aiManagerModel = aiManagerModel)
             ?: return badRequest("board_rename_failed", context.getString(R.string.family_msg_90260))
         return FamilyHttpResponse(200, boardResponseJson(board, includeRoleIds = true))
     }
@@ -373,11 +375,17 @@ class BulletinBoardHttpHandler(
                 put("name", board.name)
                 put("revision", board.revision)
                 put("message_count", board.messageCount)
+                put("ai_manager_model", board.aiManagerModel ?: JSONObject.NULL)
                 if (includeRoleIds) {
                     put("role_ids", board.roleIds?.let { JSONArray(it) } ?: JSONObject.NULL)
                 }
             })
         }.toString()
+
+    private fun parseAiManagerModel(payload: JSONObject): String? {
+        if (!payload.has("ai_manager_model") || payload.isNull("ai_manager_model")) return ""
+        return payload.optString("ai_manager_model", "").trim()
+    }
 
     private fun parseRoleIdsFromPayload(payload: JSONObject): List<String>? {
         if (!payload.has("role_ids") || payload.isNull("role_ids")) return emptyList()
@@ -480,7 +488,8 @@ class BulletinBoardHttpHandler(
             roleLabel = auth.roleLabel,
             agents = emptyList(),
             participants = participants,
-            commands = emptyList()
+            commands = emptyList(),
+            aiManagerModel = snapshot.aiManagerModel
         ).toJson().apply {
             put("role_class", auth.sessionRoleClass)
         }.toString()

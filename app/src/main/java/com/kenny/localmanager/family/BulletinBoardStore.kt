@@ -69,7 +69,8 @@ class BulletinBoardStore(context: Context) {
             name = meta.optString("name", boardId),
             revision = meta.optLong("revision"),
             messageCount = activeCount,
-            roleIds = BulletinBoardInfo.roleIdsFromMeta(meta)
+            roleIds = BulletinBoardInfo.roleIdsFromMeta(meta),
+            aiManagerModel = BulletinBoardInfo.aiManagerModelFromMeta(meta)
         )
     }
 
@@ -80,7 +81,8 @@ class BulletinBoardStore(context: Context) {
             boardId = boardId,
             boardName = meta.optString("name", boardId),
             revision = meta.optLong("revision"),
-            messages = messages
+            messages = messages,
+            aiManagerModel = BulletinBoardInfo.aiManagerModelFromMeta(meta)
         )
     }
 
@@ -108,7 +110,8 @@ class BulletinBoardStore(context: Context) {
     fun updateBoard(
         boardId: String,
         name: String? = null,
-        roleIds: List<String>? = null
+        roleIds: List<String>? = null,
+        aiManagerModel: String? = null
     ): BulletinBoardInfo? = lock.write {
         val meta = readMeta(boardId) ?: return@write null
         if (name != null) {
@@ -119,6 +122,14 @@ class BulletinBoardStore(context: Context) {
         }
         if (roleIds != null) {
             meta.put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
+        }
+        if (aiManagerModel != null) {
+            val normalized = aiManagerModel.trim()
+            if (normalized.isEmpty()) {
+                meta.put("ai_manager_model", JSONObject.NULL)
+            } else {
+                meta.put("ai_manager_model", normalized)
+            }
         }
         writeMeta(boardId, meta)
         boardInfoFromMeta(boardId)
@@ -141,6 +152,7 @@ class BulletinBoardStore(context: Context) {
                 put("revision", 0L)
                 put("created_at", System.currentTimeMillis())
                 put("role_ids", JSONArray(normalizeRoleIds(roleIds)))
+                put("ai_manager_model", JSONObject.NULL)
             }
         )
         writeMessages(boardId, emptyList())

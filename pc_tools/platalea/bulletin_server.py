@@ -435,6 +435,7 @@ def _board_to_json(board, auth: AuthContext) -> dict[str, Any]:
         "name": board.name,
         "revision": board.revision,
         "message_count": board.message_count,
+        "ai_manager_model": board.ai_manager_model,
     }
     if auth.can_manage:
         item["role_ids"] = list(board.role_ids) if board.role_ids is not None else None
@@ -450,6 +451,15 @@ def _parse_role_ids_payload(payload: dict[str, Any]) -> tuple[str, ...] | None:
     if not isinstance(raw, list):
         raise ValueError("role_ids 必须是数组")
     return normalize_stored_role_ids(raw)
+
+
+def _parse_ai_manager_model_payload(payload: dict[str, Any]) -> str | None:
+    if "ai_manager_model" not in payload:
+        return None
+    raw = payload.get("ai_manager_model")
+    if raw is None:
+        return ""
+    return str(raw).strip()
 
 
 def _require_board_access(
@@ -498,6 +508,7 @@ def handle_board_request(
             return _bad_request("invalid_board", "留言板名称不能为空")
         try:
             role_ids = _parse_role_ids_payload(payload)
+            ai_manager_model = _parse_ai_manager_model_payload(payload)
         except ValueError as exc:
             return _bad_request("invalid_board", str(exc))
         if role_ids is None:
@@ -556,8 +567,11 @@ def handle_board_request(
         name = payload.get("name")
         try:
             role_ids = _parse_role_ids_payload(payload)
+            ai_manager_model = _parse_ai_manager_model_payload(payload)
         except ValueError as exc:
             return _bad_request("invalid_board", str(exc))
+        if name is None and role_ids is None and ai_manager_model is None:
+            return _bad_request("invalid_board", "更新留言板失败")
         if name is not None:
             trimmed_name = str(name).strip()
             if not trimmed_name:
@@ -568,6 +582,7 @@ def handle_board_request(
             board_id,
             name=str(name).strip() if name is not None else None,
             role_ids=role_ids,
+            ai_manager_model=ai_manager_model,
         )
         if updated is None:
             return _bad_request("invalid_board", "更新留言板失败")
@@ -658,6 +673,7 @@ def handle_board_request(
                 revision=snapshot.revision,
                 messages=snapshot.messages,
                 can_manage=auth.can_manage,
+                ai_manager_model=snapshot.ai_manager_model,
             ).to_json(),
             agents=agents,
             participants=participants,
@@ -678,6 +694,20 @@ def handle_board_request(
         content = str(payload.get("content", ""))
         author_label = str(payload.get("author_label", "访客"))
         author_device = str(payload.get("author_device", "")).strip() or None
+        ai_manager_model = board_info.ai_manager_model
+        if ai_manager_model:
+            agent_models = list(agent._config.models_for_board(board_id)) if agent is not None else []
+            conflict_models = agent_models or [ai_manager_model]
+            lower_content = content.strip()
+            for model_name in conflict_models:
+                if re.search(rf"(?:^|\s)@{re.escape(model_name)}(?:\s|$)", lower_content, flags=re.IGNORECASE):
+                    return _bad_request(
+                        "ai_manager_conflict",
+                        f"当前留言板已设置 AI 管理者：{ai_manager_model}，不能再 @ 任何 AI 模型",
+                    )
+            if lower_content:
+                if not re.search(rf"(?:^|\s)@{re.escape(ai_manager_model)}(?:\s|$)", lower_content, flags=re.IGNORECASE):
+                    content = f"@{ai_manager_model} {lower_content}"
         if agent is not None:
             from .bulletin_ai_internal import parse_ai_control_command
 

@@ -489,6 +489,7 @@ class FamilyNetworkManager(context: Context) {
         boardId: String = BulletinBoardDefaults.DEFAULT_BOARD_ID,
         boardName: String = BulletinBoardDefaults.DEFAULT_BOARD_NAME,
         boardRoleIds: List<String>? = null,
+        aiManagerModel: String? = null,
         accessPassword: String? = null
     ) {
         if (service.isSelf && !localServiceEnabled) {
@@ -503,6 +504,7 @@ class FamilyNetworkManager(context: Context) {
                     boardId = boardId,
                     boardName = boardName,
                     boardRoleIds = boardRoleIds,
+                    aiManagerModel = aiManagerModel?.trim()?.ifEmpty { null },
                     isHost = isHost,
                     canManageBoard = isHost,
                     accessPassword = accessPassword?.trim()?.ifEmpty { null },
@@ -863,6 +865,62 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    fun updateBoardAiManagerEntry(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        canManage: Boolean,
+        boardId: String,
+        aiManagerModel: String?,
+        onComplete: (Result<BulletinBoardInfo>) -> Unit = {}
+    ) {
+        if (!canManage) {
+            appendError(appContext.getString(R.string.family_msg_34578))
+            onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_02158))))
+            return
+        }
+        val normalized = aiManagerModel?.trim()?.ifEmpty { null }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching {
+                        boardStore.updateBoard(boardId, aiManagerModel = normalized ?: "")
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+                    }
+                } else {
+                    boardApiRequest(
+                        service = service,
+                        method = "PATCH",
+                        path = "/boards/$boardId",
+                        body = JSONObject().apply {
+                            put("ai_manager_model", normalized ?: JSONObject.NULL)
+                        }.toString(),
+                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
+                    ).mapCatching { text ->
+                        val json = JSONObject(text)
+                        if (!json.optBoolean("ok", false)) {
+                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
+                        }
+                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                    }
+                }
+            }
+            result.onSuccess { board ->
+                appendLog(appContext.getString(R.string.family_msg_15134, board.name))
+                val open = _state.value.openBoardSession
+                if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
+                    _state.update { current ->
+                        current.copy(
+                            openBoardSession = open.copy(aiManagerModel = board.aiManagerModel)
+                        )
+                    }
+                }
+            }.onFailure { error ->
+                appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
+            }
+            onComplete(result)
+        }
+    }
+
     fun deleteBoardEntry(
         service: FamilyDiscoveredService,
         accessPassword: String?,
@@ -1173,6 +1231,7 @@ class FamilyNetworkManager(context: Context) {
                                 agents = snapshot.agents,
                                 participants = snapshot.participants,
                                 commands = snapshot.commands,
+                                aiManagerModel = snapshot.aiManagerModel,
                                 canManageBoard = open.isHost || snapshot.canManage,
                                 remoteRoleId = snapshot.roleId ?: open.remoteRoleId,
                                 remoteRoleLabel = snapshot.roleLabel ?: open.remoteRoleLabel,
@@ -1781,6 +1840,16 @@ class FamilyNetworkManager(context: Context) {
         content: String,
         attachments: List<BulletinAttachmentRef>
     ) {
+        val normalizedContent = normalizeContentForAiManager(session, content)
+        if (normalizedContent == null) {
+            appendError(
+                appContext.getString(
+                    R.string.family_board_ai_manager_mention_conflict,
+                    session.aiManagerModel ?: "AI"
+                )
+            )
+            return
+        }
         val (authorLabel, authorDevice) = buildAuthorIdentity()
         val result = withContext(Dispatchers.IO) {
             if (session.isHost) {
@@ -1788,7 +1857,7 @@ class FamilyNetworkManager(context: Context) {
                     boardStore.appendMessage(
                         session.boardId,
                         authorLabel,
-                        content,
+                        normalizedContent,
                         authorDevice,
                         attachments
                     ) ?: throw IllegalStateException(
@@ -1801,7 +1870,7 @@ class FamilyNetworkManager(context: Context) {
                     method = "POST",
                     path = "/boards/${session.boardId}/messages",
                     body = JSONObject().apply {
-                        put("content", content)
+                        put("content", normalizedContent)
                         put("author_label", authorLabel)
                         put("author_device", authorDevice)
                         if (attachments.isNotEmpty()) {
@@ -1818,6 +1887,30 @@ class FamilyNetworkManager(context: Context) {
         }.onFailure { error ->
             appendError(appContext.getString(R.string.family_msg_34685, error.message ?: error.javaClass.simpleName))
         }
+    }
+
+    private fun normalizeContentForAiManager(
+        session: BulletinBoardOpenSession,
+        rawContent: String
+    ): String? {
+        val trimmed = rawContent.trim()
+        val managerModel = session.aiManagerModel?.trim()?.takeIf { it.isNotEmpty() } ?: return trimmed
+        val aiModels = session.agents.map { it.trim() }.filter { it.isNotEmpty() }
+        val hasMentionedAi = aiModels.any { model ->
+            Regex("(?:^|\\s)@${Regex.escape(model)}(?:\\s|$)", RegexOption.IGNORE_CASE)
+                .containsMatchIn(trimmed)
+        }
+        if (hasMentionedAi) {
+            return null
+        }
+        if (trimmed.isEmpty()) {
+            return trimmed
+        }
+        val managerMentionRegex = Regex("(?:^|\\s)@${Regex.escape(managerModel)}(?:\\s|$)", RegexOption.IGNORE_CASE)
+        if (managerMentionRegex.containsMatchIn(trimmed)) {
+            return trimmed
+        }
+        return "@$managerModel $trimmed"
     }
 
     fun updateBoardMessage(messageId: String, content: String) {
@@ -2361,7 +2454,8 @@ class FamilyNetworkManager(context: Context) {
                 roleClass = "admin",
                 agents = emptyList(),
                 participants = BulletinBoardMention.collectParticipants(snapshot.messages),
-                commands = emptyList()
+                commands = emptyList(),
+                aiManagerModel = snapshot.aiManagerModel
             )
         }
     }
@@ -2401,7 +2495,8 @@ class FamilyNetworkManager(context: Context) {
                 participants = BulletinBoardSnapshot.parseParticipants(json).ifEmpty {
                     BulletinBoardMention.collectParticipants(messages)
                 },
-                commands = BulletinBoardSnapshot.parseCommands(json)
+                commands = BulletinBoardSnapshot.parseCommands(json),
+                aiManagerModel = BulletinBoardInfo.aiManagerModelFromMeta(json)
             )
         }
     }

@@ -36,6 +36,7 @@ class BulletinBoardInfo:
     revision: int
     message_count: int
     role_ids: tuple[str, ...] | None = None
+    ai_manager_model: str | None = None
 
 
 @dataclass
@@ -97,6 +98,7 @@ class BulletinBoardSnapshot:
     revision: int
     messages: list[BulletinMessage]
     can_manage: bool = False
+    ai_manager_model: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -105,6 +107,7 @@ class BulletinBoardSnapshot:
             "board_name": self.board_name,
             "revision": self.revision,
             "can_manage": self.can_manage,
+            "ai_manager_model": self.ai_manager_model,
             "messages": [message.to_json() for message in self.messages],
         }
 
@@ -165,6 +168,7 @@ class BulletinBoardStore:
                         revision=int(meta.get("revision", 0)),
                         message_count=active_count,
                         role_ids=board_role_ids_from_meta(meta),
+                        ai_manager_model=_ai_manager_model_from_meta(meta),
                     )
                 )
             return sorted(boards, key=lambda item: item.id)
@@ -215,6 +219,7 @@ class BulletinBoardStore:
                 "revision": 0,
                 "created_at": now,
                 "role_ids": list(stored_role_ids),
+                "ai_manager_model": None,
             }
             self._write_meta(board_id, meta)
             self._write_messages(board_id, [])
@@ -224,6 +229,7 @@ class BulletinBoardStore:
                 revision=0,
                 message_count=0,
                 role_ids=stored_role_ids,
+                ai_manager_model=None,
             )
 
     def update_board(
@@ -232,6 +238,7 @@ class BulletinBoardStore:
         *,
         name: str | None = None,
         role_ids: tuple[str, ...] | None = None,
+        ai_manager_model: str | None = None,
     ) -> BulletinBoardInfo | None:
         with self._lock:
             meta = self._read_meta(board_id)
@@ -248,6 +255,9 @@ class BulletinBoardStore:
                 meta["name"] = trimmed_name
             if role_ids is not None:
                 meta["role_ids"] = list(normalize_stored_role_ids(list(role_ids)))
+            if ai_manager_model is not None:
+                trimmed_model = ai_manager_model.strip()
+                meta["ai_manager_model"] = trimmed_model or None
             self._write_meta(board_id, meta)
             active_count = sum(
                 1
@@ -260,6 +270,7 @@ class BulletinBoardStore:
                 revision=int(meta.get("revision", 0)),
                 message_count=active_count,
                 role_ids=board_role_ids_from_meta(meta),
+                ai_manager_model=_ai_manager_model_from_meta(meta),
             )
 
     def get_board_info(self, board_id: str) -> BulletinBoardInfo | None:
@@ -278,6 +289,7 @@ class BulletinBoardStore:
                 revision=int(meta.get("revision", 0)),
                 message_count=active_count,
                 role_ids=board_role_ids_from_meta(meta),
+                ai_manager_model=_ai_manager_model_from_meta(meta),
             )
 
     def export_boardpack(self, board_id: str, *, source_device: str = "python") -> bytes | None:
@@ -321,6 +333,7 @@ class BulletinBoardStore:
                 revision=int(imported.get("revision", 0)),
                 message_count=int(imported.get("message_count", 0)),
                 role_ids=parsed_role_ids,
+                ai_manager_model=_ai_manager_model_from_meta(imported),
             )
 
     def delete_board(self, board_id: str) -> bool:
@@ -359,6 +372,7 @@ class BulletinBoardStore:
                 board_name=str(meta.get("name", board_id)),
                 revision=int(meta.get("revision", 0)),
                 messages=messages,
+                ai_manager_model=_ai_manager_model_from_meta(meta),
             )
 
     def append_message(
@@ -606,6 +620,11 @@ def _format_byte_count(bytes_value: int) -> str:
     if bytes_value < 1024 * 1024 * 1024:
         return f"{bytes_value / (1024 * 1024):.1f} MB"
     return f"{bytes_value / (1024 * 1024 * 1024):.2f} GB"
+
+
+def _ai_manager_model_from_meta(meta: dict[str, Any]) -> str | None:
+    value = str(meta.get("ai_manager_model", "")).strip()
+    return value or None
 
 
 def _format_attachment_line(attachment: dict[str, Any]) -> str:

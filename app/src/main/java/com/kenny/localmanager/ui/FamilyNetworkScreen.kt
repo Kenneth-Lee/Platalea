@@ -204,6 +204,9 @@ fun FamilyNetworkScreen(
     var renameBoardInProgress by remember { mutableStateOf(false) }
     var renameBoardError by remember { mutableStateOf<String?>(null) }
     var renameExistingNames by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showAiManagerDialog by remember { mutableStateOf(false) }
+    var aiManagerUpdating by remember { mutableStateOf(false) }
+    var aiManagerError by remember { mutableStateOf<String?>(null) }
     var messageForwardSelectionMode by remember { mutableStateOf(false) }
     var selectedForwardMessageIds by remember { mutableStateOf(setOf<String>()) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
@@ -666,6 +669,14 @@ fun FamilyNetworkScreen(
                                     }
                                     if (canManageBoard) {
                                         DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_ai_manager_title)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                aiManagerError = null
+                                                showAiManagerDialog = true
+                                            }
+                                        )
+                                        DropdownMenuItem(
                                             text = { Text(stringResource(R.string.family_board_access_edit)) },
                                             onClick = {
                                                 showBoardMenu = false
@@ -844,6 +855,7 @@ fun FamilyNetworkScreen(
                         boardId = board.id,
                         boardName = board.name,
                         boardRoleIds = board.roleIds,
+                        aiManagerModel = board.aiManagerModel,
                         accessPassword = session.accessPassword
                     )
                 }
@@ -1215,6 +1227,106 @@ fun FamilyNetworkScreen(
                     enabled = !boardAccessInProgress,
                     onClick = { showBoardAccessDialog = false }
                 ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
+    if (showAiManagerDialog && boardSession != null) {
+        val session = boardSession
+        val aiModels = remember(session.agents) {
+            session.agents.map { it.trim() }.filter { it.isNotEmpty() }.distinctBy { it.lowercase() }
+        }
+        AlertDialog(
+            onDismissRequest = {
+                if (!aiManagerUpdating) {
+                    showAiManagerDialog = false
+                    aiManagerError = null
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_ai_manager_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = stringResource(R.string.family_board_ai_manager_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    aiManagerError?.takeIf { it.isNotBlank() }?.let { err ->
+                        Text(
+                            text = err,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                    TextButton(
+                        enabled = !aiManagerUpdating,
+                        onClick = {
+                            aiManagerUpdating = true
+                            manager.updateBoardAiManagerEntry(
+                                service = session.service,
+                                accessPassword = session.accessPassword,
+                                canManage = session.canManageBoard,
+                                boardId = session.boardId,
+                                aiManagerModel = null
+                            ) { result ->
+                                aiManagerUpdating = false
+                                result.onSuccess {
+                                    showAiManagerDialog = false
+                                    aiManagerError = null
+                                    manager.refreshOpenBoard()
+                                }.onFailure { error ->
+                                    aiManagerError = error.message ?: error.javaClass.simpleName
+                                }
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.family_board_ai_manager_clear))
+                    }
+                    aiModels.forEach { model ->
+                        Button(
+                            enabled = !aiManagerUpdating,
+                            onClick = {
+                                aiManagerUpdating = true
+                                manager.updateBoardAiManagerEntry(
+                                    service = session.service,
+                                    accessPassword = session.accessPassword,
+                                    canManage = session.canManageBoard,
+                                    boardId = session.boardId,
+                                    aiManagerModel = model
+                                ) { result ->
+                                    aiManagerUpdating = false
+                                    result.onSuccess {
+                                        showAiManagerDialog = false
+                                        aiManagerError = null
+                                        manager.refreshOpenBoard()
+                                    }.onFailure { error ->
+                                        aiManagerError = error.message ?: error.javaClass.simpleName
+                                    }
+                                }
+                            }
+                        ) {
+                            Text(
+                                if (session.aiManagerModel.equals(model, ignoreCase = true)) {
+                                    stringResource(R.string.family_board_ai_manager_current, model)
+                                } else {
+                                    model
+                                }
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    enabled = !aiManagerUpdating,
+                    onClick = {
+                        showAiManagerDialog = false
+                        aiManagerError = null
+                    }
+                ) {
+                    Text(stringResource(R.string.common_cancel))
+                }
             }
         )
     }
@@ -1912,9 +2024,20 @@ private fun BulletinBoardPage(
             "/ai stop" to context.getString(R.string.family_board_command_ai_stop)
         )
     }
-    val composeTargets = remember(session.agents, session.participants, session.commands, commandDescriptions) {
+    val aiManagerModel = session.aiManagerModel?.trim()?.takeIf { it.isNotEmpty() }
+    val aiAgents = remember(session.agents) {
+        session.agents.map { it.trim() }.filter { it.isNotEmpty() }
+    }
+    val composeAgentTargets = remember(aiManagerModel, aiAgents) {
+        if (aiManagerModel != null) {
+            emptyList()
+        } else {
+            aiAgents
+        }
+    }
+    val composeTargets = remember(composeAgentTargets, session.participants, session.commands, commandDescriptions) {
         BulletinBoardMention.buildComposeTargets(
-            session.agents,
+            composeAgentTargets,
             session.participants,
             session.commands,
             commandDescriptions
@@ -2325,8 +2448,28 @@ private fun BulletinBoardPage(
             )
             IconButton(
                 onClick = {
-                    onPost(draftMessage.text)
-                    draftMessage = TextFieldValue("")
+                    val raw = draftMessage.text.trim()
+                    if (raw.isNotEmpty()) {
+                        if (aiManagerModel != null) {
+                            val containsAiMention = aiAgents.any { model ->
+                                Regex("(?:^|\\s)@${Regex.escape(model)}(?:\\s|$)", RegexOption.IGNORE_CASE)
+                                    .containsMatchIn(raw)
+                            }
+                            if (containsAiMention) {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_ai_manager_mention_conflict, aiManagerModel),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                                return@IconButton
+                            }
+                            val normalized = if (raw.startsWith("@", ignoreCase = false)) raw else "@$aiManagerModel $raw"
+                            onPost(normalized)
+                        } else {
+                            onPost(raw)
+                        }
+                        draftMessage = TextFieldValue("")
+                    }
                 },
                 enabled = draftMessage.text.trim().isNotEmpty() && !transferInProgress,
                 modifier = Modifier.size(40.dp)

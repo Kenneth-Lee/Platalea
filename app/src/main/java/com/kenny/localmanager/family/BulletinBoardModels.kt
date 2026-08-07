@@ -45,7 +45,8 @@ data class BulletinBoardInfo(
     val name: String,
     val revision: Long,
     val messageCount: Int,
-    val roleIds: List<String>? = null
+    val roleIds: List<String>? = null,
+    val aiManagerModel: String? = null
 ) {
     companion object {
         fun roleIdsFromMeta(meta: JSONObject): List<String>? = when {
@@ -75,8 +76,14 @@ data class BulletinBoardInfo(
                 name = obj.optString("name", obj.getString("id")),
                 revision = obj.optLong("revision"),
                 messageCount = obj.optInt("message_count"),
-                roleIds = roleIds
+                roleIds = roleIds,
+                aiManagerModel = aiManagerModelFromMeta(obj)
             )
+        }
+
+        fun aiManagerModelFromMeta(meta: JSONObject): String? {
+            val raw = meta.optString("ai_manager_model", "").trim()
+            return raw.takeIf { it.isNotEmpty() }
         }
     }
 }
@@ -184,7 +191,8 @@ data class BulletinBoardSnapshot(
     val roleClass: String? = null,
     val agents: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
-    val commands: List<String> = emptyList()
+    val commands: List<String> = emptyList(),
+    val aiManagerModel: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("ok", true)
@@ -196,6 +204,7 @@ data class BulletinBoardSnapshot(
         put("agents", JSONArray(agents))
         put("participants", JSONArray(participants))
         put("commands", JSONArray(commands))
+        put("ai_manager_model", aiManagerModel ?: JSONObject.NULL)
     }
 
     companion object {
@@ -230,6 +239,7 @@ data class BulletinBoardOpenSession(
     val agents: List<String> = emptyList(),
     val participants: List<String> = emptyList(),
     val commands: List<String> = emptyList(),
+    val aiManagerModel: String? = null,
     val loading: Boolean = false,
     val lastError: String? = null
 )

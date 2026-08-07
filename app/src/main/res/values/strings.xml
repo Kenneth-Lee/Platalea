@@ -439,6 +439,11 @@
     <string name="family_board_name_duplicate">留言板名称已存在：%1$s</string>
     <string name="family_board_rename">重命名留言板</string>
     <string name="family_board_rename_title">重命名留言板</string>
+    <string name="family_board_ai_manager_title">AI 管理者</string>
+    <string name="family_board_ai_manager_desc">设置后，本留言板的所有消息都会默认发送给该 AI；同时禁止 @ 任意 AI 模型，避免冲突。</string>
+    <string name="family_board_ai_manager_clear">不使用 AI 管理者</string>
+    <string name="family_board_ai_manager_current">当前：%1$s</string>
+    <string name="family_board_ai_manager_mention_conflict">当前留言板已设置 AI 管理者：%1$s，不能再 @ 任何 AI 模型。</string>
     <string name="family_board_import_name_label">导入后的留言板名称</string>
     <string name="family_board_import_name_conflict">归档包内名称「%1$s」与现有留言板重名，请指定新名称。</string>
     <string name="family_board_delete_board_title">删除留言板</string>

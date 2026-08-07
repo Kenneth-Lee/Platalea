@@ -297,7 +297,7 @@ class BulletinBoardAgent:
                 if message.deleted or self._is_agent_message(message) or is_ai_status_message(message):
                     self._mark_processed(board.id, message.id)
                     continue
-                if extract_mention_for_models(message.content, self._config.model_names) is not None:
+                if self._resolve_trigger(snapshot, message) is not None:
                     self.notify_new_message(board.id, message.id)
 
     def _process_message(self, board_id: str, message_id: str) -> None:
@@ -316,18 +316,36 @@ class BulletinBoardAgent:
         if is_ai_status_message(message):
             self._mark_processed(board_id, message_id)
             return
+        trigger = self._resolve_trigger(snapshot, message)
         if self._get_active_run(board_id) is not None:
-            mention = extract_mention_for_models(message.content, self._config.model_names)
-            if mention is not None:
+            if trigger is not None:
                 self._mark_processed(board_id, message_id)
                 LOGGER.info("Agent 忙碌中，忽略新 @ board=%s message=%s", board_id, message_id)
                 return
         self._mark_processed(board_id, message_id)
-        mention = extract_mention_for_models(message.content, self._config.model_names)
-        if mention is None:
+        if trigger is None:
             return
-        model_name, question = mention
+        model_name, question = trigger
         self._handle_mention(board_id, message, model_name, question, snapshot.messages)
+
+    def _resolve_trigger(
+        self,
+        snapshot: BulletinBoardSnapshot,
+        message: BulletinMessage,
+    ) -> tuple[str, str] | None:
+        manager_model = (snapshot.ai_manager_model or "").strip()
+        mentions = extract_mention_for_models(message.content, self._config.model_names)
+        if manager_model:
+            if mentions is not None:
+                mentioned_model, _question = mentions
+                if mentioned_model.lower() != manager_model.lower():
+                    return None
+                return mentions
+            plain = message.content.strip()
+            if not plain:
+                return None
+            return (manager_model, plain)
+        return mentions
 
     def _handle_mention(
         self,
