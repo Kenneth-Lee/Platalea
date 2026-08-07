@@ -353,7 +353,6 @@ private typealias RunProgressBlock = suspend (
 internal enum class MainTab(val key: String, val labelRes: Int) {
     DIRECTORY("directory", R.string.main_tab_directory),
     RECENT("recent", R.string.main_tab_recent),
-    CRASH_REPORT("crash_report", R.string.main_tab_crash_report),
     PLAYER("player", R.string.main_tab_player),
     FTP("ftp", R.string.main_tab_ftp),
     FAMILY_NETWORK("family_network", R.string.main_tab_family_network),
@@ -382,7 +381,6 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
     return when (tab) {
         MainTab.DIRECTORY -> Icons.Default.Folder
         MainTab.RECENT -> Icons.AutoMirrored.Filled.List
-        MainTab.CRASH_REPORT -> Icons.Default.Warning
         MainTab.PLAYER -> Icons.AutoMirrored.Filled.QueueMusic
         MainTab.FTP -> Icons.Default.Wifi
         MainTab.FAMILY_NETWORK -> Icons.Default.Home
@@ -1007,7 +1005,6 @@ private fun ScrollableMainTabBar(
     }
     val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
     val candidateTabs = listOf(
-        MainTab.CRASH_REPORT,
         MainTab.CONFIG,
         MainTab.GIT_PROJECTS,
         MainTab.BOOK_NOTE,
@@ -1165,7 +1162,6 @@ private fun MainTabContentHost(
     onDeleteRecentItem: (RecentOpenItem) -> Unit,
     onClearRecentItems: () -> Unit,
     directoryContent: @Composable () -> Unit,
-    crashReportContent: @Composable () -> Unit,
     ftpContent: @Composable () -> Unit,
     familyNetworkContent: @Composable () -> Unit,
     configContent: @Composable () -> Unit,
@@ -1188,7 +1184,6 @@ private fun MainTabContentHost(
                 onClearRecentItems = onClearRecentItems
             )
         )
-        MainTab.CRASH_REPORT -> crashReportContent()
         MainTab.FTP -> ftpContent()
         MainTab.FAMILY_NETWORK -> familyNetworkContent()
         MainTab.CONFIG -> configContent()
@@ -1204,48 +1199,6 @@ private fun MainTabContentHost(
 }
 
 @Composable
-private fun CrashReportTabRoute(
-    snapshot: CrashReportSnapshot?,
-    onCopy: (String) -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text(
-            text = stringResource(R.string.crash_tab_title),
-            style = MaterialTheme.typography.titleMedium
-        )
-        if (snapshot == null) {
-            Text(
-                text = stringResource(R.string.crash_tab_empty),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
-            )
-            return@Column
-        }
-        Text(
-            text = snapshot.fileName,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall
-        )
-        Button(onClick = { onCopy(snapshot.content) }) {
-            Icon(Icons.Default.ContentCopy, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text(stringResource(R.string.crash_tab_copy))
-        }
-        SelectionContainer {
-            Text(
-                text = snapshot.content,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-    }
-}
-
 private fun fileItemSubtitle(model: DocumentFileModel): String {
     val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
     return if (model.displaySize.isNotEmpty()) "${model.displaySize}  $dateStr" else dateStr
@@ -1696,7 +1649,6 @@ private fun FileBrowserAppScreen(
     var saveCompletedToken by remember { mutableStateOf(0) }
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
-    var crashReportSnapshot by remember { mutableStateOf<CrashReportSnapshot?>(null) }
     val scope = rememberCoroutineScope()
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
@@ -1729,11 +1681,6 @@ private fun FileBrowserAppScreen(
     LaunchedEffect(Unit) {
         rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
     }
-    LaunchedEffect(rootUri) {
-        crashReportSnapshot = withContext(Dispatchers.IO) {
-            CrashReportStore.latestSnapshot(context)
-        }
-    }
     LaunchedEffect(prefs) {
         prefs.recentRootUris.collect { recentRootUris = it }
     }
@@ -1759,7 +1706,11 @@ private fun FileBrowserAppScreen(
 
     LaunchedEffect(prefs, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
-            currentMainTab = MainTab.CRASH_REPORT
+            Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
+            withContext(Dispatchers.IO) {
+                CrashReportStore.exportLatestToRootAndClear(context)
+            }
+            currentMainTab = MainTab.ABOUT
             CrashReportStore.markLatestSeen(context)
             return@LaunchedEffect
         }
@@ -3311,20 +3262,6 @@ private fun FileBrowserAppScreen(
                                     }
                                 }
                             )
-                        )
-                    },
-                    crashReportContent = {
-                        CrashReportTabRoute(
-                            snapshot = crashReportSnapshot,
-                            onCopy = { text ->
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                if (clipboard == null) {
-                                    Toast.makeText(context, context.getString(R.string.crash_tab_copy_failed), Toast.LENGTH_SHORT).show()
-                                } else {
-                                    clipboard.setPrimaryClip(ClipData.newPlainText("crash-report", text))
-                                    Toast.makeText(context, context.getString(R.string.crash_tab_copy_done), Toast.LENGTH_SHORT).show()
-                                }
-                            }
                         )
                     },
                     gitShareContent = {

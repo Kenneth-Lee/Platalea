@@ -31,7 +31,6 @@ object CrashReportStore {
     private const val CRASH_DIR_NAME = "崩溃记录"
     private const val CRASH_SUFFIX = ".crash"
     private const val PREFS = "crash_report_store"
-    private const val KEY_LAST_RECORDED = "last_recorded"
     private const val KEY_LAST_SEEN = "last_seen"
     private val installed = AtomicBoolean(false)
 
@@ -41,14 +40,8 @@ object CrashReportStore {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
-                val reportFile = writeCrashReport(appContext, thread, throwable)
-                reportFile?.name?.let { token ->
-                    appContext
-                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                        .edit()
-                        .putString(KEY_LAST_RECORDED, token)
-                        .apply()
-                }
+                writeCrashReport(appContext, thread, throwable)
+                pruneOldReports(appContext)
             }
             previous?.uncaughtException(thread, throwable)
         }
@@ -56,20 +49,19 @@ object CrashReportStore {
 
     fun hasUnseenCrash(context: Context): Boolean {
         val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val recorded = prefs.getString(KEY_LAST_RECORDED, null)?.trim()?.takeIf { it.isNotEmpty() }
         val seen = prefs.getString(KEY_LAST_SEEN, null)?.trim()?.takeIf { it.isNotEmpty() }
-        return recorded != null && recorded != seen
+        val latest = latestReportFile(context)?.name?.trim()?.takeIf { it.isNotEmpty() }
+        return latest != null && latest != seen
     }
 
     fun markLatestSeen(context: Context) {
         val appContext = context.applicationContext
-        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val recorded = prefs.getString(KEY_LAST_RECORDED, null)
+        val latest = latestReportFile(appContext)?.name
         appContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_LAST_SEEN, recorded)
-            .apply()
+            .putString(KEY_LAST_SEEN, latest)
+            .commit()
     }
 
     fun latestSummary(context: Context): String? {
@@ -80,28 +72,13 @@ object CrashReportStore {
     }
 
     fun latestSnapshot(context: Context): CrashReportSnapshot? {
-        val rootUri = runBlocking { Preferences(context).rootUri.first() } ?: return null
-        val rootDocumentUri = try {
-            Uri.parse(rootUri)
-        } catch (_: Exception) {
-            return null
-        }
-        val parentUri = resolveParentDocumentUri(rootDocumentUri, rootDocumentUri) ?: return null
-        val crashDirUri = findChildByName(context, parentUri, CRASH_DIR_NAME) ?: return null
-        val crashDoc = DocumentFile.fromTreeUri(context, crashDirUri)
-            ?: DocumentFile.fromSingleUri(context, crashDirUri)
-            ?: return null
-        val latestDoc = crashDoc.listFilesSafe()
-            .filter { it.isFile && it.name?.startsWith("crash-") == true && it.name?.endsWith(CRASH_SUFFIX) == true }
-            .maxByOrNull { it.lastModified() }
-            ?: return null
-        val text = runCatching {
-            context.contentResolver.openInputStream(latestDoc.uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
-        }.getOrNull() ?: return null
+        val latestFile = latestReportFile(context) ?: return null
+        syncReportToRoot(context, latestFile)
+        val text = runCatching { latestFile.readText(Charsets.UTF_8) }.getOrNull() ?: return null
         val preview = text.lineSequence().take(8).joinToString("\n").trim()
         return CrashReportSnapshot(
-            fileName = latestDoc.name ?: "crash-report",
-            modifiedAt = latestDoc.lastModified(),
+            fileName = latestFile.name,
+            modifiedAt = latestFile.lastModified(),
             preview = preview,
             content = text
         )
@@ -112,9 +89,17 @@ object CrashReportStore {
         appContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .remove(KEY_LAST_RECORDED)
             .remove(KEY_LAST_SEEN)
-            .apply()
+            .commit()
+    }
+
+    fun exportLatestToRootAndClear(context: Context): Boolean {
+        val latestFile = latestReportFile(context) ?: return false
+        val exported = syncReportToRoot(context, latestFile)
+        if (exported) {
+            clearInternalReports(context)
+        }
+        return exported
     }
 
     fun buildShareIntent(context: Context): Intent? {
@@ -128,7 +113,7 @@ object CrashReportStore {
 
     private fun writeCrashReport(context: Context, thread: Thread, throwable: Throwable): File? {
         val now = Date()
-        val nameTime = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(now)
+        val nameTime = SimpleDateFormat("yyyyMMdd-HHmmss-SSS", Locale.US).format(now)
         val readableTime = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSSZ", Locale.US).format(now)
         val stack = stackTraceOf(throwable)
         val report = buildString {
@@ -143,28 +128,41 @@ object CrashReportStore {
             appendLine(stack)
         }
 
+        val fileName = "crash-$nameTime$CRASH_SUFFIX"
+        return try {
+            val file = File(reportsDir(context), fileName)
+            file.writeText(report, Charsets.UTF_8)
+            file
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun syncReportToRoot(context: Context, reportFile: File): Boolean {
         val rootUri = runBlocking { Preferences(context).rootUri.first() }
-        val targetRoot = rootUri?.takeIf { it.isNotBlank() } ?: return null
+        val targetRoot = rootUri?.takeIf { it.isNotBlank() } ?: return false
         val rootDocumentUri = try {
             Uri.parse(targetRoot)
         } catch (_: Exception) {
-            return null
+            return false
         }
-        val parentUri = resolveParentDocumentUri(rootDocumentUri, rootDocumentUri) ?: return null
+        val parentUri = resolveParentDocumentUri(rootDocumentUri, rootDocumentUri) ?: return false
+        val crashDirUri = createOrFindCrashDir(context, parentUri) ?: return false
+        if (findChildByName(context, crashDirUri, reportFile.name) != null) return true
         val cr = context.contentResolver
-        val crashDirUri = createOrFindCrashDir(context, parentUri) ?: return null
-        val fileName = "crash-$nameTime$CRASH_SUFFIX"
         val createdUri = try {
-            DocumentsContract.createDocument(cr, crashDirUri, "text/plain", fileName)
+            DocumentsContract.createDocument(cr, crashDirUri, "text/plain", reportFile.name)
         } catch (_: Exception) {
             null
-        } ?: return null
-        return try {
-            cr.openOutputStream(createdUri)?.use { it.write(report.toByteArray(Charsets.UTF_8)) }
-            File(fileName)
-        } catch (_: Exception) {
-            null
-        }
+        } ?: return false
+        return runCatching {
+            cr.openOutputStream(createdUri)?.use { output ->
+                reportFile.inputStream().use { input ->
+                    input.copyTo(output)
+                }
+            }
+            true
+        }.getOrDefault(false)
     }
 
     private fun createOrFindCrashDir(context: Context, parentUri: Uri): Uri? {
@@ -215,7 +213,7 @@ object CrashReportStore {
     }
 
     private fun reportsDir(context: Context): File {
-        return File(context.cacheDir, CRASH_DIR_NAME).apply { mkdirs() }
+        return File(context.filesDir, CRASH_DIR_NAME).apply { mkdirs() }
     }
 
     private fun latestReportFile(context: Context): File? {
@@ -234,5 +232,12 @@ object CrashReportStore {
         files.drop(keep).forEach { file ->
             runCatching { file.delete() }
         }
+    }
+
+    private fun clearInternalReports(context: Context) {
+        reportsDir(context)
+            .listFiles()
+            ?.filter { it.isFile && it.name.startsWith("crash-") && it.name.endsWith(CRASH_SUFFIX) }
+            ?.forEach { file -> runCatching { file.delete() } }
     }
 }

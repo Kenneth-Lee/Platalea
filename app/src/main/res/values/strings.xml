@@ -13,6 +13,7 @@
     <string name="common_ok">确定</string>
     <string name="common_unknown_error">未知错误</string>
     <string name="common_select_root_first">请先选择根目录</string>
+    <string name="crash_report_found_toast">发现新的崩溃记录</string>
     <string name="common_create">创建</string>
     <string name="common_delete">删除</string>
     <string name="common_delete_failed">删除失败</string>
@@ -20,7 +21,6 @@
     <string name="common_disabled">关闭</string>
     <string name="main_tab_directory">目录</string>
     <string name="main_tab_recent">最近</string>
-    <string name="main_tab_crash_report">崩溃记录</string>
     <string name="main_tab_player">播放器</string>
     <string name="main_tab_ftp">FTP</string>
     <string name="main_tab_family_network">家庭网络</string>

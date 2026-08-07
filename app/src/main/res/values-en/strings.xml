@@ -13,12 +13,12 @@
     <string name="common_ok">OK</string>
     <string name="common_unknown_error">Unknown error</string>
     <string name="common_select_root_first">Please select a root directory first.</string>
+    <string name="crash_report_found_toast">New crash report found</string>
     <string name="common_create">Create</string>
     <string name="common_delete">Delete</string>
     <string name="common_delete_failed">Delete failed</string>
     <string name="main_tab_directory">Files</string>
     <string name="main_tab_recent">Recent</string>
-    <string name="main_tab_crash_report">Crash</string>
     <string name="main_tab_player">Player</string>
     <string name="main_tab_ftp">FTP</string>
     <string name="main_tab_family_network">Family</string>
