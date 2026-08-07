@@ -73,22 +73,26 @@ def clear_server_pid() -> None:
     _clear_pid()
 
 
-def _terminate_pid(pid: int, timeout: float = 6.0) -> bool:
+def _terminate_pid(pid: int, timeout: float = 6.0) -> tuple[bool, str | None]:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
-        return False
+        return False, None
+    except PermissionError:
+        return False, "permission_denied"
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not is_process_alive(pid):
-            return True
+            return True, None
         time.sleep(0.2)
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
-        return True
+        return True, None
+    except PermissionError:
+        return False, "permission_denied"
     time.sleep(0.1)
-    return not is_process_alive(pid)
+    return (not is_process_alive(pid), None)
 
 
 def _find_listener_pids(port: int) -> list[int]:
@@ -269,13 +273,27 @@ def stop_server(config_path: Path | None = None) -> int:
         return 0
 
     stopped: list[int] = []
+    permission_denied: list[int] = []
     for pid in targets:
-        if _terminate_pid(pid):
+        ok, reason = _terminate_pid(pid)
+        if ok:
             stopped.append(pid)
+        elif reason == "permission_denied":
+            permission_denied.append(pid)
 
     _clear_pid()
 
     if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
+        if permission_denied:
+            print(
+                "Server is still running and cannot be stopped due to insufficient permission "
+                f"(pid: {', '.join(str(pid) for pid in permission_denied)}).\n"
+                "这通常表示当前服务进程由其他用户或系统托管启动。\n"
+                "请先检查: platalea service status\n"
+                "如为旧版 macOS launchd 遗留单元，执行: platalea service install",
+                file=sys.stderr,
+            )
+            return 1
         print(f"Server did not stop (port {port} still in use).", file=sys.stderr)
         return 1
 

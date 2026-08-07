@@ -217,6 +217,13 @@ def _format_status(status: SupervisorStatus, owner: str, state_path: Path) -> No
     print(f"平台后端: {status.platform}")
     print(f"已安装: {'是' if status.installed else '否'}")
     print(f"owner: {owner or '(unknown)'}")
+    current_user = getpass.getuser().strip()
+    if owner and current_user and owner != current_user:
+        print(
+            "警告: 当前 shell 用户与 service owner 不一致，"
+            "`platalea stop` 可能因权限不足失败。"
+            f" current_user={current_user} owner={owner}"
+        )
     print(f"privileged unit: {status.privileged_unit}")
     print(f"bootstrap unit: {status.user_server_unit}")
     print(f"状态文件: {state_path}")

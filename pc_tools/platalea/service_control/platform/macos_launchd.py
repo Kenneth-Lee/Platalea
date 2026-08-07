@@ -158,17 +158,28 @@ class MacOSLaunchdAdapter:
         layout = launchd_layout()
         privileged_loaded = self._is_loaded(PRIVILEGED_LABEL)
         bootstrap_loaded = self._is_loaded(BOOTSTRAP_LABEL)
+        legacy_loaded = self._is_loaded(LEGACY_USER_SERVER_LABEL)
+        legacy_plist = launchd_units_dir() / f"{LEGACY_USER_SERVER_LABEL}.plist"
         installed = (
             layout.privileged_plist.exists()
             or layout.bootstrap_plist.exists()
             or privileged_loaded
             or bootstrap_loaded
+            or legacy_loaded
+            or legacy_plist.exists()
         )
         details = []
         details.append(f"privileged_plist={layout.privileged_plist}")
         details.append(f"bootstrap_plist={layout.bootstrap_plist}")
         details.append(f"privileged_loaded={'yes' if privileged_loaded else 'no'}")
         details.append(f"bootstrap_loaded={'yes' if bootstrap_loaded else 'no'}")
+        details.append(f"legacy_server_plist={legacy_plist}")
+        details.append(f"legacy_server_loaded={'yes' if legacy_loaded else 'no'}")
+        if legacy_loaded or legacy_plist.exists():
+            details.append(
+                "warning=检测到旧版 com.localmanager.platalea.server 遗留单元，"
+                "可能导致重复启动、端口竞争或 mDNS 不可发现；请执行 `platalea service install` 清理。"
+            )
         return SupervisorStatus(
             platform="macos",
             privileged_unit=PRIVILEGED_LABEL,
