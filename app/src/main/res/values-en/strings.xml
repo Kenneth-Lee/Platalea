@@ -18,6 +18,7 @@
     <string name="common_delete_failed">Delete failed</string>
     <string name="main_tab_directory">Files</string>
     <string name="main_tab_recent">Recent</string>
+    <string name="main_tab_crash_report">Crash</string>
     <string name="main_tab_player">Player</string>
     <string name="main_tab_ftp">FTP</string>
     <string name="main_tab_family_network">Family</string>
@@ -139,6 +140,11 @@
     <string name="main_menu_empty_trash">Empty Trash</string>
     <string name="main_menu_config">Configuration</string>
     <string name="main_menu_about">About</string>
+    <string name="crash_tab_title">Crash Report</string>
+    <string name="crash_tab_empty">No crash report could be loaded. Please check root permissions or the crash-report folder.</string>
+    <string name="crash_tab_copy">Copy Full Report</string>
+    <string name="crash_tab_copy_done">Crash report copied</string>
+    <string name="crash_tab_copy_failed">Copy failed: clipboard service is unavailable</string>
     <string name="fab_copy_to_current">Copy to current directory</string>
     <string name="fab_move_to_current">Move to current directory</string>
     <string name="directory_pick_already_active">A file pick is already in progress. Finish or cancel it first.</string>

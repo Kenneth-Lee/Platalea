@@ -526,7 +526,7 @@ class FamilyNetworkManager(context: Context) {
                 if (boardStore.snapshot(boardId) != null) {
                     Result.success(Unit)
                 } else {
-                    Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_71757)))
+                    Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_71757, boardId)))
                 }
             }
         }
@@ -610,9 +610,14 @@ class FamilyNetworkManager(context: Context) {
                     ).mapCatching { text ->
                         val json = JSONObject(text)
                         if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_19687)))
+                            throw IllegalStateException(
+                                json.optString(
+                                    "message",
+                                    appContext.getString(R.string.family_msg_19687, appContext.getString(R.string.common_unknown_error))
+                                )
+                            )
                         }
-                        json.optString("message", appContext.getString(R.string.family_msg_19687))
+                        json.optString("message", appContext.getString(R.string.family_msg_19687, appContext.getString(R.string.common_unknown_error)))
                     }
                 }
             }
@@ -708,7 +713,7 @@ class FamilyNetworkManager(context: Context) {
                 if (service.isSelf) {
                     runCatching {
                         if (boardStore.isBoardNameTaken(trimmed)) {
-                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357))
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
                         }
                         boardStore.createBoard(trimmed, roleIds)
                             ?: throw IllegalStateException(appContext.getString(R.string.family_msg_64304))
@@ -765,7 +770,7 @@ class FamilyNetworkManager(context: Context) {
                 if (service.isSelf) {
                     runCatching {
                         if (boardStore.isBoardNameTaken(trimmed, excludeBoardId = boardId)) {
-                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357))
+                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
                         }
                         boardStore.renameBoard(boardId, trimmed)
                             ?: throw IllegalStateException(appContext.getString(R.string.family_msg_90260))
@@ -893,7 +898,7 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess {
-                appendLog(appContext.getString(R.string.family_msg_83171))
+                appendLog(appContext.getString(R.string.family_msg_83171, boardId))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
                     closeBulletinBoard()
@@ -940,7 +945,7 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess { savedPath ->
-                appendLog(appContext.getString(R.string.family_msg_17812))
+                appendLog(appContext.getString(R.string.family_msg_17812, savedPath))
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_12658, error.message ?: error.javaClass.simpleName))
             }
@@ -1015,7 +1020,7 @@ class FamilyNetworkManager(context: Context) {
                 )
             }
             result.onSuccess { path ->
-                appendLog(appContext.getString(R.string.family_msg_60034))
+                appendLog(appContext.getString(R.string.family_msg_60034, path))
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_60609, error.message ?: error.javaClass.simpleName))
             }
@@ -1063,8 +1068,8 @@ class FamilyNetworkManager(context: Context) {
                     }
                 }
             }
-            result.onSuccess {
-                appendLog(appContext.getString(R.string.family_msg_60034))
+            result.onSuccess { path ->
+                appendLog(appContext.getString(R.string.family_msg_60034, path))
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_60609, error.message ?: error.javaClass.simpleName))
             }
@@ -1185,7 +1190,7 @@ class FamilyNetworkManager(context: Context) {
                         openBoardSession = open.copy(loading = false, lastError = detail)
                     )
                 }
-                appendError(appContext.getString(R.string.family_msg_19687))
+                appendError(appContext.getString(R.string.family_msg_19687, detail))
             }
         }
     }
@@ -1844,7 +1849,7 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess {
-                appendLog(appContext.getString(R.string.family_msg_02548))
+                appendLog(appContext.getString(R.string.family_msg_02548, messageId))
                 refreshOpenBoard()
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_20886, error.message ?: error.javaClass.simpleName))
@@ -1876,7 +1881,7 @@ class FamilyNetworkManager(context: Context) {
                 }
             }
             result.onSuccess {
-                appendLog(appContext.getString(R.string.family_msg_72725))
+                appendLog(appContext.getString(R.string.family_msg_72725, messageId))
                 refreshOpenBoard()
             }.onFailure { error ->
                 appendError(appContext.getString(R.string.family_msg_10024, error.message ?: error.javaClass.simpleName))
@@ -1963,7 +1968,7 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onRegistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                appendError(appContext.getString(R.string.family_msg_61384, serviceInfo.serviceName))
+                appendError(appContext.getString(R.string.family_msg_61384, errorCode, serviceInfo.serviceName))
                 _state.update { it.copy(isRegistered = false) }
             }
 
@@ -1973,7 +1978,7 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onUnregistrationFailed(serviceInfo: NsdServiceInfo, errorCode: Int) {
-                appendError(appContext.getString(R.string.family_msg_11672, serviceInfo.serviceName))
+                appendError(appContext.getString(R.string.family_msg_11672, errorCode, serviceInfo.serviceName))
             }
         }
         registrationListener = listener
@@ -2002,7 +2007,7 @@ class FamilyNetworkManager(context: Context) {
                     }
                     return
                 }
-                appendError(appContext.getString(R.string.family_msg_41010))
+                appendError(appContext.getString(R.string.family_msg_41010, serviceType, errorCode))
                 _state.update { it.copy(isDiscovering = false) }
                 try {
                     manager.stopServiceDiscovery(this)
@@ -2011,7 +2016,7 @@ class FamilyNetworkManager(context: Context) {
             }
 
             override fun onStopDiscoveryFailed(serviceType: String, errorCode: Int) {
-                appendError(appContext.getString(R.string.family_msg_28896))
+                appendError(appContext.getString(R.string.family_msg_28896, serviceType, errorCode))
                 _state.update { it.copy(isDiscovering = false) }
                 try {
                     manager.stopServiceDiscovery(this)
@@ -2349,7 +2354,7 @@ class FamilyNetworkManager(context: Context) {
     private fun loadLocalBoardSnapshot(boardId: String): Result<BulletinBoardSnapshot> {
         return runCatching {
             val snapshot = boardStore.snapshot(boardId)
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_71757))
+                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_71757, boardId))
             snapshot.copy(
                 canManage = true,
                 roleId = "admin",

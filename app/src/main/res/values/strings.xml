@@ -20,6 +20,7 @@
     <string name="common_disabled">关闭</string>
     <string name="main_tab_directory">目录</string>
     <string name="main_tab_recent">最近</string>
+    <string name="main_tab_crash_report">崩溃记录</string>
     <string name="main_tab_player">播放器</string>
     <string name="main_tab_ftp">FTP</string>
     <string name="main_tab_family_network">家庭网络</string>
@@ -144,6 +145,11 @@
     <string name="main_menu_empty_trash">清空回收站</string>
     <string name="main_menu_config">配置</string>
     <string name="main_menu_about">关于</string>
+    <string name="crash_tab_title">崩溃记录</string>
+    <string name="crash_tab_empty">未读取到崩溃记录。请检查根目录权限或崩溃记录目录。</string>
+    <string name="crash_tab_copy">复制全文</string>
+    <string name="crash_tab_copy_done">崩溃记录已复制</string>
+    <string name="crash_tab_copy_failed">复制失败：系统剪贴板不可用</string>
     <string name="fab_copy_to_current">拷贝到当前目录</string>
     <string name="fab_move_to_current">移动到当前目录</string>
     <string name="directory_pick_already_active">已有进行中的文件拣选，请先完成或取消</string>
@@ -1749,7 +1755,7 @@ OPF目录文件: %2$s</string>
     <string name="family_msg_10024">删除留言失败：%1$s</string>
     <string name="family_msg_11426">保存 boardpack 失败：%1$s</string>
     <string name="family_msg_11649">目录</string>
-    <string name="family_msg_11672">mDNS 服务注销失败，错误码=%1$d，service=%1$s</string>
+    <string name="family_msg_11672">mDNS 服务注销失败，错误码=%1$d，service=%2$s</string>
     <string name="family_msg_11874">无法写入文件</string>
     <string name="family_msg_12658">导出失败：%1$s</string>
     <string name="family_msg_13838">删除留言板失败：%1$s</string>

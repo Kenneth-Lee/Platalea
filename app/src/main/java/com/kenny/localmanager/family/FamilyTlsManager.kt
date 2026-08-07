@@ -42,7 +42,7 @@ class FamilyTlsManager(private val context: Context) {
 
     fun openHttpsConnection(url: URL, expectedFingerprintSha256: String): HttpsURLConnection {
         val connection = url.openConnection() as? HttpsURLConnection
-            ?: throw IllegalStateException(context.getString(R.string.family_msg_07788))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_07788, url.toString()))
         val normalizedFingerprint = normalizeFingerprint(expectedFingerprintSha256)
         if (normalizedFingerprint.isBlank()) {
             throw IllegalStateException(context.getString(R.string.family_msg_22248))

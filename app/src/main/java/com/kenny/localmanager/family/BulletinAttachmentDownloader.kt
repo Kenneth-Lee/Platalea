@@ -114,7 +114,7 @@ object BulletinAttachmentDownloader {
     ): Uri? {
         val mime = guessMimeType(ref.name)
         val created = downloadDir.createFile(mime, targetName)
-            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162, targetName))
         return try {
             downloadToSafFileStream(
                 context = context,
@@ -147,7 +147,7 @@ object BulletinAttachmentDownloader {
         val files = meta.optJSONArray("files")
             ?: throw IllegalStateException(context.getString(R.string.family_msg_03372))
         val attachmentDir = downloadDir.createDirectory(targetName)
-            ?: throw IllegalStateException(context.getString(R.string.family_msg_18940))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_18940, targetName))
 
         var aggregateDownloaded = 0L
         for (i in 0 until files.length()) {
@@ -233,7 +233,7 @@ object BulletinAttachmentDownloader {
             val safe = BulletinAttachmentDownloadPaths.sanitizeSegment(segment)
             parent = parent.findFile(safe)?.takeIf { it.isDirectory }
                 ?: parent.createDirectory(safe)
-                ?: throw IllegalStateException(context.getString(R.string.family_msg_05412))
+                ?: throw IllegalStateException(context.getString(R.string.family_msg_05412, safe))
         }
         val fileName = BulletinAttachmentDownloadPaths.sanitizeSegment(parts.last())
         parent.findFile(fileName)?.let { existing ->
@@ -243,7 +243,7 @@ object BulletinAttachmentDownloader {
         }
         val mime = guessMimeType(fileName)
         val created = parent.createFile(mime, fileName)
-            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162))
+            ?: throw IllegalStateException(context.getString(R.string.family_msg_53162, fileName))
         downloadToSafFileStream(
             context = context,
             transport = transport,

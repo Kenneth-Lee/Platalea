@@ -299,7 +299,7 @@ class BulletinBoardHttpHandler(
 
     private fun getAttachmentMeta(boardId: String, attachmentId: String): FamilyHttpResponse {
         val meta = store.attachments.getAttachmentMeta(boardId, attachmentId)
-            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_34495)))
+            ?: return FamilyHttpResponse(404, jsonError("attachment_not_found", context.getString(R.string.family_msg_34495, attachmentId)))
         return FamilyHttpResponse(200, meta.toString())
     }
 
@@ -342,7 +342,7 @@ class BulletinBoardHttpHandler(
         val name = payload.optString("name").trim()
         if (name.isEmpty()) return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
         if (store.isBoardNameTaken(name)) {
-            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
+            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614, name))
         }
         val roleIds = parseRoleIdsFromPayload(payload) ?: emptyList()
         val board = store.createBoard(name, roleIds)
@@ -358,7 +358,7 @@ class BulletinBoardHttpHandler(
             return badRequest("invalid_board", context.getString(R.string.family_msg_82976))
         }
         if (name != null && store.isBoardNameTaken(name, excludeBoardId = boardId)) {
-            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614))
+            return badRequest("board_name_duplicate", context.getString(R.string.family_msg_76614, name))
         }
         val board = store.updateBoard(boardId, name = name, roleIds = roleIds)
             ?: return badRequest("board_rename_failed", context.getString(R.string.family_msg_90260))
@@ -405,10 +405,10 @@ class BulletinBoardHttpHandler(
 
     private fun exportBoard(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
         if (!canAccessBoardForId(boardId, auth)) {
-            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         }
         val snapshot = store.snapshot(boardId)
-            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         val markdown = BulletinBoardExporter.snapshotToMarkdown(context, snapshot)
         return FamilyHttpResponse(
             200,
@@ -419,10 +419,10 @@ class BulletinBoardHttpHandler(
 
     private fun exportBoardpack(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
         if (!canAccessBoardForId(boardId, auth)) {
-            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         }
         val board = store.getBoardInfo(boardId)
-            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         val tempFile = File.createTempFile("boardpack_export_", ".zip", context.cacheDir)
         return try {
             FileOutputStream(tempFile).use { output ->
@@ -469,10 +469,10 @@ class BulletinBoardHttpHandler(
 
     private fun getMessages(boardId: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
         if (!canAccessBoardForId(boardId, auth)) {
-            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         }
         val snapshot = store.snapshot(boardId)
-            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         val participants = BulletinBoardMention.collectParticipants(snapshot.messages)
         val body = snapshot.copy(
             canManage = auth.canManageBoard,
@@ -489,7 +489,7 @@ class BulletinBoardHttpHandler(
 
     private fun createMessage(boardId: String, bodyText: String, auth: FamilyNetworkSessionAuth): FamilyHttpResponse {
         if (!canAccessBoardForId(boardId, auth)) {
-            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757)))
+            return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
         }
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val content = payload.optString("content")

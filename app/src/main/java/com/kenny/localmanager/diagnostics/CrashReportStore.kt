@@ -41,12 +41,14 @@ object CrashReportStore {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             runCatching {
-                writeCrashReport(appContext, thread, throwable)
-                appContext
-                    .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit()
-                    .putString(KEY_LAST_RECORDED, "written")
-                    .apply()
+                val reportFile = writeCrashReport(appContext, thread, throwable)
+                reportFile?.name?.let { token ->
+                    appContext
+                        .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                        .edit()
+                        .putString(KEY_LAST_RECORDED, token)
+                        .apply()
+                }
             }
             previous?.uncaughtException(thread, throwable)
         }
@@ -54,17 +56,19 @@ object CrashReportStore {
 
     fun hasUnseenCrash(context: Context): Boolean {
         val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val recorded = prefs.getString(KEY_LAST_RECORDED, null)
-        val seen = prefs.getString(KEY_LAST_SEEN, null)
-        return recorded == "written" && recorded != seen
+        val recorded = prefs.getString(KEY_LAST_RECORDED, null)?.trim()?.takeIf { it.isNotEmpty() }
+        val seen = prefs.getString(KEY_LAST_SEEN, null)?.trim()?.takeIf { it.isNotEmpty() }
+        return recorded != null && recorded != seen
     }
 
     fun markLatestSeen(context: Context) {
         val appContext = context.applicationContext
+        val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val recorded = prefs.getString(KEY_LAST_RECORDED, null)
         appContext
             .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
-            .putString(KEY_LAST_SEEN, "written")
+            .putString(KEY_LAST_SEEN, recorded)
             .apply()
     }
 
