@@ -582,6 +582,72 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    suspend fun fetchRemoteSystemConfig(
+        service: FamilyDiscoveredService,
+        accessPassword: String? = null
+    ): Result<FamilyRemoteConfigSnapshot> = withContext(Dispatchers.IO) {
+        boardApiRequest(
+            service = service,
+            method = "GET",
+            path = "/system/config",
+            accessPassword = accessPassword?.trim()?.ifEmpty { null }
+        ).mapCatching { text ->
+            val json = JSONObject(text)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
+            }
+            FamilyRemoteConfigParser.parseSnapshot(json)
+        }
+    }
+
+    suspend fun patchRemoteSystemConfigRoles(
+        service: FamilyDiscoveredService,
+        accessPassword: String? = null,
+        expectedRevision: Long,
+        rolesPatch: JSONObject,
+    ): Result<FamilyRemoteConfigPatchResult> = withContext(Dispatchers.IO) {
+        val body = JSONObject().apply {
+            put("auth", JSONObject().apply {
+                put("roles", rolesPatch)
+            })
+        }
+        boardApiRequest(
+            service = service,
+            method = "PATCH",
+            path = "/system/config",
+            body = body.toString(),
+            accessPassword = accessPassword?.trim()?.ifEmpty { null },
+            extraHeaders = mapOf("If-Match-Revision" to expectedRevision.toString())
+        ).mapCatching { text ->
+            val json = JSONObject(text)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
+            }
+            FamilyRemoteConfigParser.parsePatchResult(json)
+        }
+    }
+
+    suspend fun waitRemoteSystemConfigChanges(
+        service: FamilyDiscoveredService,
+        accessPassword: String? = null,
+        sinceRevision: Long,
+        timeoutMs: Long = 25_000L,
+    ): Result<FamilyRemoteConfigChangeEvent> = withContext(Dispatchers.IO) {
+        val safeTimeout = timeoutMs.coerceIn(0L, 60_000L)
+        boardApiRequest(
+            service = service,
+            method = "GET",
+            path = "/system/config/changes?since=$sinceRevision&timeout_ms=$safeTimeout",
+            accessPassword = accessPassword?.trim()?.ifEmpty { null }
+        ).mapCatching { text ->
+            val json = JSONObject(text)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
+            }
+            FamilyRemoteConfigParser.parseChangeEvent(json)
+        }
+    }
+
     suspend fun remoteCanManageBoard(
         service: FamilyDiscoveredService,
         accessPassword: String?,
@@ -2506,7 +2572,8 @@ class FamilyNetworkManager(context: Context) {
         method: String,
         path: String,
         body: String? = null,
-        accessPassword: String? = null
+        accessPassword: String? = null,
+        extraHeaders: Map<String, String> = emptyMap()
     ): Result<String> {
         var attemptedHost = service.host.trim().ifEmpty { service.host }
         val result = runCatching {
@@ -2555,6 +2622,11 @@ class FamilyNetworkManager(context: Context) {
                 setRequestProperty("Accept", "application/json")
                 accessPassword?.let {
                     setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+                }
+                extraHeaders.forEach { (key, value) ->
+                    if (key.isNotBlank()) {
+                        setRequestProperty(key, value)
+                    }
                 }
                 if (body != null) {
                     doOutput = true

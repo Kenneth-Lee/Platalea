@@ -47,7 +47,11 @@ from .family_common import (
     read_request_body,
     start_https_server,
 )
-from .paths import service_control_paths
+from .paths import app_dir, service_control_paths
+from .runtime_config import (
+    RuntimeConfigConflictError,
+    RuntimeConfigRepository,
+)
 
 LOGGER = logging.getLogger("local_manager.bulletin_server")
 LEGACY_MAX_IMPORT_BYTES = 524288000
@@ -175,10 +179,25 @@ def load_config(config_path: Path) -> tuple[ServerConfig, AgentConfig | None]:
 
 class AuthService:
     def __init__(self, roles: RolesConfig) -> None:
+        self._lock = threading.RLock()
         self._roles = roles
 
     def resolve(self, headers: dict[str, str]) -> AuthContext | None:
-        return self._roles.resolve(headers)
+        with self._lock:
+            return self._roles.resolve(headers)
+
+    @property
+    def auth_required(self) -> bool:
+        with self._lock:
+            return self._roles.auth_required
+
+    def update_roles(self, roles: RolesConfig) -> None:
+        with self._lock:
+            self._roles = roles
+
+    def roles_snapshot(self) -> RolesConfig:
+        with self._lock:
+            return self._roles
 
 
 class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
@@ -192,6 +211,10 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
     def auth_service(self) -> AuthService:
         return self.server.auth_service  # type: ignore[attr-defined]
 
+    @property
+    def runtime_config(self) -> RuntimeConfigRepository:
+        return self.server.runtime_config  # type: ignore[attr-defined]
+
     def do_GET(self) -> None:
         self._dispatch("GET")
 
@@ -201,6 +224,9 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         self._dispatch("PUT")
 
+    def do_PATCH(self) -> None:
+        self._dispatch("PATCH")
+
     def do_DELETE(self) -> None:
         self._dispatch("DELETE")
 
@@ -209,7 +235,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
         query_string = self.path.split("?", 1)[1] if "?" in self.path else ""
         if normalized_path.startswith("/boards"):
             auth = self.auth_service.resolve(self._header_map())
-            if auth is None and self.auth_service._roles.auth_required:
+            if auth is None and self.auth_service.auth_required:
                 json_response(
                     self,
                     HTTPStatus.UNAUTHORIZED,
@@ -220,7 +246,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            body_bytes = read_request_body(self) if method in {"POST", "PUT"} else b""
+            body_bytes = read_request_body(self) if method in {"POST", "PUT", "PATCH"} else b""
             response = handle_board_request(
                 self.store,
                 method,
@@ -253,7 +279,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 
         if method == "GET" and normalized_path == "/agent":
             auth = self.auth_service.resolve(self._header_map())
-            if auth is None and self.auth_service._roles.auth_required:
+            if auth is None and self.auth_service.auth_required:
                 json_response(
                     self,
                     HTTPStatus.UNAUTHORIZED,
@@ -275,6 +301,188 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 json_response(self, HTTPStatus.OK, agent._config.to_public_json())
             return
 
+        if method == "GET" and normalized_path == "/system/config":
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None and self.auth_service.auth_required:
+                json_response(
+                    self,
+                    HTTPStatus.UNAUTHORIZED,
+                    {
+                        "ok": False,
+                        "error": "unauthorized",
+                        "message": "需要正确的网络服务密码",
+                    },
+                )
+                return
+            if auth is None or not auth.can_manage:
+                json_response(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden", "message": "需要管理员权限"})
+                return
+            json_response(self, HTTPStatus.OK, self.runtime_config.snapshot_public())
+            return
+
+        if method == "PATCH" and normalized_path == "/system/config":
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None and self.auth_service.auth_required:
+                json_response(
+                    self,
+                    HTTPStatus.UNAUTHORIZED,
+                    {
+                        "ok": False,
+                        "error": "unauthorized",
+                        "message": "需要正确的网络服务密码",
+                    },
+                )
+                return
+            if auth is None or not auth.can_manage:
+                json_response(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden", "message": "需要管理员权限"})
+                return
+            payload = _parse_json(read_request_body(self).decode("utf-8"))
+            if payload is None:
+                json_response(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": "invalid_json",
+                        "message": "请求体不是合法 JSON",
+                    },
+                )
+                return
+            rev_raw = (self.headers.get("If-Match-Revision") or "").strip()
+            if not rev_raw:
+                json_response(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": "missing_revision",
+                        "message": "缺少 If-Match-Revision 请求头",
+                    },
+                )
+                return
+            try:
+                expected_revision = int(rev_raw)
+            except ValueError:
+                json_response(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": "invalid_revision",
+                        "message": "If-Match-Revision 必须是整数",
+                    },
+                )
+                return
+            try:
+                result = self.runtime_config.patch(expected_revision=expected_revision, payload=payload)
+            except RuntimeConfigConflictError as exc:
+                json_response(
+                    self,
+                    HTTPStatus.CONFLICT,
+                    {
+                        "ok": False,
+                        "error": "revision_conflict",
+                        "message": "配置已被其他客户端更新，请刷新后重试",
+                        "server_revision": exc.server_revision,
+                        "changed_paths": list(exc.changed_paths),
+                        "server_snapshot": exc.server_snapshot,
+                    },
+                )
+                return
+            except ValueError as exc:
+                json_response(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": "invalid_config_patch",
+                        "message": str(exc),
+                    },
+                )
+                return
+
+            self.auth_service.update_roles(result.roles)
+            actor = f"{auth.role_id}@{self.client_address[0] if self.client_address else 'unknown'}"
+            LOGGER.info(
+                "配置更新成功: actor=%s revision=%d changed_paths=%s",
+                actor,
+                result.revision,
+                ",".join(result.changed_paths),
+            )
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "revision": result.revision,
+                    "updated_at": result.updated_at,
+                    "changed_domains": list(result.changed_domains),
+                    "changed_paths": list(result.changed_paths),
+                    "snapshot": self.runtime_config.snapshot_public(),
+                },
+            )
+            return
+
+        if method == "GET" and normalized_path == "/system/config/changes":
+            auth = self.auth_service.resolve(self._header_map())
+            if auth is None and self.auth_service.auth_required:
+                json_response(
+                    self,
+                    HTTPStatus.UNAUTHORIZED,
+                    {
+                        "ok": False,
+                        "error": "unauthorized",
+                        "message": "需要正确的网络服务密码",
+                    },
+                )
+                return
+            if auth is None or not auth.can_manage:
+                json_response(self, HTTPStatus.FORBIDDEN, {"ok": False, "error": "forbidden", "message": "需要管理员权限"})
+                return
+            params = parse_qs(query_string, keep_blank_values=True)
+            since_raw = (params.get("since") or ["0"])[0].strip()
+            timeout_raw = (params.get("timeout_ms") or ["25000"])[0].strip()
+            try:
+                since = int(since_raw or "0")
+                timeout_ms = int(timeout_raw or "25000")
+            except ValueError:
+                json_response(
+                    self,
+                    HTTPStatus.BAD_REQUEST,
+                    {
+                        "ok": False,
+                        "error": "invalid_query",
+                        "message": "since 与 timeout_ms 必须是整数",
+                    },
+                )
+                return
+            event = self.runtime_config.wait_for_changes(since=since, timeout_ms=timeout_ms)
+            if event is None:
+                snapshot = self.runtime_config.snapshot_public()
+                json_response(
+                    self,
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "changed": False,
+                        "revision": int(snapshot.get("revision", 0)),
+                    },
+                )
+                return
+            json_response(
+                self,
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "changed": True,
+                    "revision": event.revision,
+                    "updated_at": event.updated_at,
+                    "changed_domains": list(event.changed_domains),
+                    "changed_paths": list(event.changed_paths),
+                },
+            )
+            return
+
         if method == "POST" and normalized_path == "/power/shutdown":
             if not getattr(self.server, "supports_power_shutdown", False):
                 LOGGER.warning("远程关机请求被拒绝: unsupported endpoint path=%s", normalized_path)
@@ -289,7 +497,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                 )
                 return
             auth = self.auth_service.resolve(self._header_map())
-            if auth is None and self.auth_service._roles.auth_required:
+            if auth is None and self.auth_service.auth_required:
                 LOGGER.warning("远程关机请求被拒绝: 未认证 path=%s", normalized_path)
                 json_response(
                     self,
@@ -395,7 +603,7 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 def requires_manage_auth(method: str, path: str) -> bool:
     if method == "POST" and path in {"/boards", "/boards/import"}:
         return True
-    if method == "PUT" and path.startswith("/boards/") and "/messages" not in path and "/attachments" not in path:
+    if method in {"PUT", "PATCH"} and path.startswith("/boards/") and "/messages" not in path and "/attachments" not in path:
         return True
     if (
         method == "DELETE"
@@ -550,7 +758,7 @@ def handle_board_request(
         }
 
     if (
-        method == "PUT"
+        method in {"PUT", "PATCH"}
         and path.startswith("/boards/")
         and "/messages" not in path
         and "/attachments" not in path
@@ -1131,6 +1339,12 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
 
     store = BulletinBoardStore(config.board_root)
     auth_service = AuthService(config.roles)
+    runtime_config_file = app_dir() / "runtime_config.json"
+    runtime_config = RuntimeConfigRepository(
+        runtime_file=runtime_config_file,
+        base_roles=config.roles,
+    )
+    auth_service.update_roles(runtime_config.current_roles())
     instance_id = load_or_create_instance_id(config.instance_id_file)
     service_type = normalize_service_type(config.service_type)
     hostname = normalize_hostname(config.hostname)
@@ -1145,6 +1359,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
     write_server_pid()
     https_server.store = store  # type: ignore[attr-defined]
     https_server.auth_service = auth_service  # type: ignore[attr-defined]
+    https_server.runtime_config = runtime_config  # type: ignore[attr-defined]
     https_server.max_import_bytes = config.max_import_bytes  # type: ignore[attr-defined]
     https_server.supports_power_shutdown = config.supports_power_shutdown  # type: ignore[attr-defined]
 
@@ -1160,7 +1375,7 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
             port=config.port,
             instance_id=instance_id,
             tls_fingerprint=tls_fingerprint,
-            auth_required=config.auth_required,
+            auth_required=auth_service.auth_required,
             supports_power_shutdown=config.supports_power_shutdown,
             platform="python",
         )
@@ -1229,10 +1444,12 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
             config.max_import_bytes,
             config.max_import_bytes / (1024 ** 3),
         )
+    current_roles = auth_service.roles_snapshot()
     LOGGER.info(
-        "密码策略: roles=%s auth_required=%s",
-        ",".join(sorted(config.roles.roles.keys())),
-        config.auth_required,
+        "密码策略: roles=%s auth_required=%s runtime_config=%s",
+        ",".join(sorted(current_roles.roles.keys())),
+        current_roles.auth_required,
+        runtime_config_file,
     )
     LOGGER.info("默认留言板 ID: %s", DEFAULT_BOARD_ID)
 
