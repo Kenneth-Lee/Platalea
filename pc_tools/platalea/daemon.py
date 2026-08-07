@@ -54,7 +54,7 @@ def already_running_message(config_path: Path) -> str | None:
     )
     responding = is_server_responding(probe_host, port, ca_cert=ca_cert, password=password)
     pid = _read_pid()
-    pid_alive = pid is not None and is_process_alive(pid)
+    pid_alive = pid is not None and _is_platalea_server_process(pid)
     if pid_alive:
         if responding:
             return f"Server already running (pid {pid}, port {port})."
@@ -199,6 +199,41 @@ def is_process_alive(pid: int) -> bool:
             return True
 
 
+def _pid_command_line(pid: int) -> str:
+    proc_cmdline = Path(f"/proc/{pid}/cmdline")
+    if proc_cmdline.exists():
+        try:
+            raw = proc_cmdline.read_bytes().replace(b"\x00", b" ").strip()
+            if raw:
+                return raw.decode("utf-8", "replace")
+        except OSError:
+            pass
+
+    try:
+        proc = subprocess.run(
+            ["ps", "-o", "command=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if proc.returncode != 0:
+        return ""
+    return proc.stdout.strip()
+
+
+def _is_platalea_server_process(pid: int) -> bool:
+    if not is_process_alive(pid):
+        return False
+    command_line = _pid_command_line(pid).lower()
+    if not command_line:
+        return False
+    # Strict match: pid file must point to the actual background server process.
+    return "platalea" in command_line and "_serve-daemon" in command_line
+
+
 def is_server_responding(
     host: str,
     port: int,
@@ -234,7 +269,7 @@ def is_server_responding(
 
 def server_status(host: str, port: int, *, ca_cert: Path, password: str = "") -> str:
     pid = _read_pid()
-    if pid is not None and is_process_alive(pid):
+    if pid is not None and _is_platalea_server_process(pid):
         if is_server_responding(host, port, ca_cert=ca_cert, password=password):
             return f"running (pid {pid}, port {port})"
         return f"starting or unhealthy (pid {pid}, port {port})"
@@ -252,7 +287,7 @@ def stop_server(config_path: Path | None = None) -> int:
 
     targets: list[int] = []
     pid_from_file = _read_pid()
-    if pid_from_file is not None and is_process_alive(pid_from_file):
+    if pid_from_file is not None and _is_platalea_server_process(pid_from_file):
         targets.append(pid_from_file)
 
     if is_server_responding(probe_host, port, ca_cert=ca_cert, password=password):
