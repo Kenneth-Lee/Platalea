@@ -21,6 +21,7 @@ class BulletinBoardAccessTests(unittest.TestCase):
             is_admin=True,
             can_create_boards=True,
             can_manage_boards=True,
+            allowed_agent_models=None,
         )
         self.guest = AuthContext(
             role_id="guest",
@@ -28,6 +29,7 @@ class BulletinBoardAccessTests(unittest.TestCase):
             is_admin=False,
             can_create_boards=False,
             can_manage_boards=False,
+            allowed_agent_models=None,
         )
 
     def tearDown(self) -> None:
@@ -121,6 +123,32 @@ class BulletinBoardAccessTests(unittest.TestCase):
         board = response["body"]["board"]
         self.assertEqual(board["role_ids"], ["guest"])
         self.assertTrue(can_access_board(self.guest, ("guest",)))
+
+    def test_empty_allowed_models_does_not_block_ai_manager_post(self) -> None:
+        board = self.store.create_board("公开", role_ids=("guest",))
+        assert board is not None
+        updated = self.store.update_board(board.id, ai_manager_model="qwen2.5")
+        assert updated is not None
+
+        restricted_guest = AuthContext(
+            role_id="guest",
+            role_label="访客",
+            is_admin=False,
+            can_create_boards=False,
+            can_manage_boards=False,
+            allowed_agent_models=(),
+        )
+        response = handle_board_request(
+            self.store,
+            "POST",
+            f"/boards/{board.id}/messages",
+            json.dumps({"content": "你好", "author_label": "访客"}).encode("utf-8"),
+            restricted_guest,
+            {},
+            agent=None,
+        )
+        self.assertEqual(response["status"].value, 200)
+        self.assertTrue(response["body"]["ok"])
 
 
 if __name__ == "__main__":

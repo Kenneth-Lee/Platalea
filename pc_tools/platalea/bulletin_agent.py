@@ -335,12 +335,9 @@ class BulletinBoardAgent:
     ) -> tuple[str, str] | None:
         manager_model = (snapshot.ai_manager_model or "").strip()
         mentions = extract_mention_for_models(message.content, self._config.model_names)
+        if mentions is not None:
+            return mentions
         if manager_model:
-            if mentions is not None:
-                mentioned_model, _question = mentions
-                if mentioned_model.lower() != manager_model.lower():
-                    return None
-                return mentions
             plain = message.content.strip()
             if not plain:
                 return None

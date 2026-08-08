@@ -354,6 +354,7 @@
     <string name="family_board_rename_title">Rename Bulletin Board</string>
     <string name="family_board_ai_manager_title">AI Manager</string>
     <string name="family_board_ai_manager_desc">When set, every message in this board is treated as a conversation with this AI. Mentioning any AI model with @ is disabled to avoid conflicts.</string>
+    <string name="family_board_ai_manager_info">AI manager: %1$s</string>
     <string name="family_board_ai_manager_clear">Disable AI manager</string>
     <string name="family_board_ai_manager_current">Current: %1$s</string>
     <string name="family_board_ai_manager_mention_conflict">This board already has AI manager %1$s; mentioning any AI model with @ is not allowed.</string>
@@ -364,8 +365,8 @@
     <string name="family_board_remote_config_role_selector">Select role to edit</string>
     <string name="family_board_remote_config_role_label">Role label</string>
     <string name="family_board_remote_config_role_password">New password (leave empty to keep)</string>
-    <string name="family_board_remote_config_role_allowed_models">Allowed AI models (comma-separated)</string>
-    <string name="family_board_remote_config_role_allowed_models_hint">Leave empty for no restriction. When set, only these models are allowed, including AI manager auto-routing.</string>
+    <string name="family_board_remote_config_role_allowed_models">Allowed AI models</string>
+    <string name="family_board_remote_config_role_allowed_models_hint">Select from the server list. Leave empty for no restriction, including AI manager auto-routing.</string>
     <string name="family_board_remote_config_can_create">Can create boards</string>
     <string name="family_board_remote_config_can_manage">Can manage boards</string>
     <string name="family_board_remote_config_saved">Remote config saved</string>

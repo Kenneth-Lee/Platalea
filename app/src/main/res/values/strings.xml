@@ -442,6 +442,7 @@
     <string name="family_board_ai_manager_title">AI 管理者</string>
     <string name="family_board_ai_manager_desc">设置后，本留言板的所有消息都会默认发送给该 AI；同时禁止 @ 任意 AI 模型，避免冲突。</string>
     <string name="family_board_ai_manager_clear">不使用 AI 管理者</string>
+    <string name="family_board_ai_manager_info">AI 管理者：%1$s</string>
     <string name="family_board_ai_manager_current">当前：%1$s</string>
     <string name="family_board_ai_manager_mention_conflict">当前留言板已设置 AI 管理者：%1$s，不能再 @ 任何 AI 模型。</string>
     <string name="family_board_remote_config_center">远程配置中心</string>
@@ -451,8 +452,8 @@
     <string name="family_board_remote_config_role_selector">选择要编辑的角色</string>
     <string name="family_board_remote_config_role_label">角色显示名</string>
     <string name="family_board_remote_config_role_password">新密码（留空则不修改）</string>
-    <string name="family_board_remote_config_role_allowed_models">可用 AI 引擎（逗号分隔）</string>
-    <string name="family_board_remote_config_role_allowed_models_hint">留空表示不限制；填写后仅允许使用这些模型（含 AI 管理者自动转发）。</string>
+    <string name="family_board_remote_config_role_allowed_models">可用 AI 引擎</string>
+    <string name="family_board_remote_config_role_allowed_models_hint">从服务器列表中勾选；留空表示不限制（含 AI 管理者自动转发）。</string>
     <string name="family_board_remote_config_can_create">允许创建留言板</string>
     <string name="family_board_remote_config_can_manage">允许管理留言板</string>
     <string name="family_board_remote_config_saved">远程配置已保存</string>

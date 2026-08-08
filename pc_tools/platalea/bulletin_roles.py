@@ -132,7 +132,7 @@ def _normalize_allowed_agent_models(value: Any, *, field: str) -> tuple[str, ...
     if isinstance(value, str):
         text = value.strip()
         if not text:
-            return ()
+            return None
         return (text,)
     if not isinstance(value, list):
         raise ValueError(f"{field} 必须是字符串数组、字符串或 null")
@@ -143,6 +143,8 @@ def _normalize_allowed_agent_models(value: Any, *, field: str) -> tuple[str, ...
             continue
         if name not in result:
             result.append(name)
+    if not result:
+        return None
     return tuple(result)
 
 

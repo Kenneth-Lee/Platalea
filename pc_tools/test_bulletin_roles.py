@@ -20,6 +20,7 @@ class BulletinRolesTests(unittest.TestCase):
             is_admin=True,
             can_create_boards=True,
             can_manage_boards=True,
+            allowed_agent_models=None,
         )
         self.assertTrue(can_access_board(auth, ()))
         self.assertTrue(can_access_board(auth, ("guest",)))
@@ -32,6 +33,7 @@ class BulletinRolesTests(unittest.TestCase):
             is_admin=False,
             can_create_boards=False,
             can_manage_boards=False,
+            allowed_agent_models=None,
         )
         self.assertTrue(can_access_board(auth, ("guest", "family")))
         self.assertFalse(can_access_board(auth, ()))
@@ -110,12 +112,29 @@ class BulletinRolesTests(unittest.TestCase):
             is_admin=False,
             can_create_boards=False,
             can_manage_boards=False,
+            allowed_agent_models=None,
         )
         from platalea.bulletin_roles import auth_session_fields
 
         fields = auth_session_fields(guest)
         self.assertEqual(fields["role_class"], "user")
         self.assertEqual(fields["role_id"], "guest")
+
+    def test_empty_allowed_models_treated_as_unrestricted(self) -> None:
+        roles = load_roles_config(
+            {
+                "roles": {
+                    "admin": {"password": "host"},
+                    "guest": {
+                        "password": "guest",
+                        "allowed_agent_models": [],
+                    },
+                }
+            },
+        )
+        guest = roles.resolve({"X-Network-Service-Password": "guest"})
+        assert guest is not None
+        self.assertIsNone(guest.allowed_agent_models)
 
 
 if __name__ == "__main__":

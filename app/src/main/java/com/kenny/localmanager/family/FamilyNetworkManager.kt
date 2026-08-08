@@ -600,6 +600,30 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    suspend fun fetchRemoteAgentModels(
+        service: FamilyDiscoveredService,
+        accessPassword: String? = null
+    ): Result<List<String>> = withContext(Dispatchers.IO) {
+        boardApiRequest(
+            service = service,
+            method = "GET",
+            path = "/agent",
+            accessPassword = accessPassword?.trim()?.ifEmpty { null }
+        ).mapCatching { text ->
+            val json = JSONObject(text)
+            if (!json.optBoolean("ok", false)) {
+                throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
+            }
+            val models = buildList {
+                val arr = json.optJSONArray("models") ?: JSONArray()
+                for (i in 0 until arr.length()) {
+                    arr.optString(i).trim().takeIf { it.isNotEmpty() }?.let { add(it) }
+                }
+            }.distinctBy { it.lowercase() }
+            models
+        }
+    }
+
     suspend fun patchRemoteSystemConfigRoles(
         service: FamilyDiscoveredService,
         accessPassword: String? = null,
@@ -1977,19 +2001,26 @@ class FamilyNetworkManager(context: Context) {
     ): String? {
         val trimmed = rawContent.trim()
         val managerModel = session.aiManagerModel?.trim()?.takeIf { it.isNotEmpty() } ?: return trimmed
-        val aiModels = session.agents.map { it.trim() }.filter { it.isNotEmpty() }
-        val hasMentionedAi = aiModels.any { model ->
-            Regex("(?:^|\\s)@${Regex.escape(model)}(?:\\s|$)", RegexOption.IGNORE_CASE)
-                .containsMatchIn(trimmed)
-        }
-        if (hasMentionedAi) {
-            return null
-        }
         if (trimmed.isEmpty()) {
             return trimmed
         }
-        val managerMentionRegex = Regex("(?:^|\\s)@${Regex.escape(managerModel)}(?:\\s|$)", RegexOption.IGNORE_CASE)
-        if (managerMentionRegex.containsMatchIn(trimmed)) {
+        val aiModels = session.agents
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .associateBy { it.lowercase() }
+        val managerLower = managerModel.lowercase()
+        val mentionRegex = Regex("(?:^|\\s)@([^\\s@]+)")
+        val mentions = mentionRegex.findAll(trimmed)
+            .map { it.groupValues[1].trim().lowercase() }
+            .filter { it.isNotEmpty() }
+            .toList()
+        val hasOtherAiMention = mentions.any { mention ->
+            mention != managerLower && aiModels.containsKey(mention)
+        }
+        if (hasOtherAiMention) {
+            return null
+        }
+        if (mentions.any { it == managerLower }) {
             return trimmed
         }
         return "@$managerModel $trimmed"

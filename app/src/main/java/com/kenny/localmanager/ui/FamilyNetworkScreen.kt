@@ -236,7 +236,7 @@ fun FamilyNetworkScreen(
     var remoteConfigRoleLabel by remember { mutableStateOf("") }
     var remoteConfigRoleCanCreate by remember { mutableStateOf(false) }
     var remoteConfigRoleCanManage by remember { mutableStateOf(false) }
-    var remoteConfigRoleAllowedModelsInput by remember { mutableStateOf("") }
+    var remoteConfigRoleAllowedModels by remember { mutableStateOf<Set<String>>(emptySet()) }
     var remoteConfigRolePassword by remember { mutableStateOf("") }
     var remoteConfigPendingRevision by remember { mutableStateOf<Long?>(null) }
     var remoteConfigIgnorePendingUpToRevision by remember { mutableStateOf<Long?>(null) }
@@ -245,6 +245,9 @@ fun FamilyNetworkScreen(
     var remoteConfigConflictSnapshot by remember { mutableStateOf<FamilyRemoteConfigSnapshot?>(null) }
     var remoteConfigShowAddRoleDialog by remember { mutableStateOf(false) }
     var remoteConfigNewRoleId by remember { mutableStateOf("") }
+    var remoteConfigShowAllowedModelsDialog by remember { mutableStateOf(false) }
+    var remoteConfigAvailableAgentModels by remember { mutableStateOf<List<String>>(emptyList()) }
+    var remoteConfigAvailableAgentModelsLoading by remember { mutableStateOf(false) }
 
     LaunchedEffect(boardSession?.boardId) {
         messageForwardSelectionMode = false
@@ -816,7 +819,7 @@ fun FamilyNetworkScreen(
                                                     remoteConfigRoleLabel = first.label.orEmpty()
                                                     remoteConfigRoleCanCreate = first.canCreateBoards
                                                     remoteConfigRoleCanManage = first.canManageBoards
-                                                    remoteConfigRoleAllowedModelsInput = first.allowedAgentModels?.joinToString(", ").orEmpty()
+                                                    remoteConfigRoleAllowedModels = first.allowedAgentModels.orEmpty().toSet()
                                                 }
                                                 remoteConfigPendingRevision = null
                                             }.onFailure { error ->
@@ -1407,6 +1410,7 @@ fun FamilyNetworkScreen(
                     service = session.service,
                     accessPassword = session.accessPassword
                 )
+
                 remoteConfigLoading = false
                 result.onSuccess {
                     remoteConfigSnapshot = it
@@ -1420,14 +1424,69 @@ fun FamilyNetworkScreen(
                         remoteConfigRoleLabel = first?.label.orEmpty()
                         remoteConfigRoleCanCreate = first?.canCreateBoards ?: false
                         remoteConfigRoleCanManage = first?.canManageBoards ?: false
-                        remoteConfigRoleAllowedModelsInput = first?.allowedAgentModels?.joinToString(", ").orEmpty()
+                        remoteConfigRoleAllowedModels = first?.allowedAgentModels.orEmpty().toSet()
                         remoteConfigRolePassword = ""
                     }
                 }.onFailure { error ->
                     remoteConfigError = error.message ?: error.javaClass.simpleName
                 }
+
             }
         }
+
+        if (remoteConfigShowAllowedModelsDialog) {
+            AlertDialog(
+                onDismissRequest = { remoteConfigShowAllowedModelsDialog = false },
+                title = { Text(stringResource(R.string.family_board_remote_config_role_allowed_models)) },
+                text = {
+                    when {
+                        remoteConfigAvailableAgentModelsLoading -> {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                CircularProgressIndicator()
+                                Text(stringResource(R.string.family_board_remote_config_loading))
+                            }
+                        }
+                        remoteConfigAvailableAgentModels.isEmpty() -> {
+                            Text(stringResource(R.string.family_board_remote_config_role_allowed_models_hint))
+                        }
+                        else -> {
+                            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                remoteConfigAvailableAgentModels.forEach { model ->
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Checkbox(
+                                            checked = model in remoteConfigRoleAllowedModels,
+                                            onCheckedChange = { checked ->
+                                                remoteConfigRoleAllowedModels = if (checked) {
+                                                    remoteConfigRoleAllowedModels + model
+                                                } else {
+                                                    remoteConfigRoleAllowedModels - model
+                                                }
+                                            }
+                                        )
+                                        Text(model)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { remoteConfigShowAllowedModelsDialog = false }) {
+                        Text(stringResource(R.string.common_ok))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { remoteConfigShowAllowedModelsDialog = false }) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                }
+            )
+        }
+
         LaunchedEffect(showRemoteConfigDialog, session.service.deviceKey, session.accessPassword) {
             if (!showRemoteConfigDialog) return@LaunchedEffect
             while (showRemoteConfigDialog) {
@@ -1459,7 +1518,7 @@ fun FamilyNetworkScreen(
                 remoteConfigRoleLabel = selectedRole.label.orEmpty()
                 remoteConfigRoleCanCreate = selectedRole.canCreateBoards
                 remoteConfigRoleCanManage = selectedRole.canManageBoards
-                remoteConfigRoleAllowedModelsInput = selectedRole.allowedAgentModels?.joinToString(", ").orEmpty()
+                remoteConfigRoleAllowedModels = selectedRole.allowedAgentModels.orEmpty().toSet()
                 remoteConfigRolePassword = ""
                 remoteConfigConflictRevision = null
                 remoteConfigConflictPaths = emptyList()
@@ -1551,9 +1610,7 @@ fun FamilyNetworkScreen(
                                                 remoteConfigRoleLabel = selectedAfterApply?.label.orEmpty()
                                                 remoteConfigRoleCanCreate = selectedAfterApply?.canCreateBoards ?: false
                                                 remoteConfigRoleCanManage = selectedAfterApply?.canManageBoards ?: false
-                                                remoteConfigRoleAllowedModelsInput = selectedAfterApply?.allowedAgentModels
-                                                    ?.joinToString(", ")
-                                                    .orEmpty()
+                                                remoteConfigRoleAllowedModels = selectedAfterApply?.allowedAgentModels.orEmpty().toSet()
                                                 remoteConfigRolePassword = ""
                                                 remoteConfigPendingRevision = null
                                             } else {
@@ -1576,15 +1633,11 @@ fun FamilyNetworkScreen(
                                                 put("label", remoteConfigRoleLabel)
                                                 put("can_create_boards", remoteConfigRoleCanCreate)
                                                 put("can_manage_boards", remoteConfigRoleCanManage)
-                                                val allowedModels = remoteConfigRoleAllowedModelsInput
-                                                    .split(',')
-                                                    .map { it.trim() }
-                                                    .filter { it.isNotEmpty() }
-                                                    .distinct()
+                                                val allowedModels = remoteConfigRoleAllowedModels
                                                 if (allowedModels.isEmpty()) {
                                                     put("allowed_agent_models", JSONObject.NULL)
                                                 } else {
-                                                    put("allowed_agent_models", JSONArray(allowedModels))
+                                                    put("allowed_agent_models", JSONArray(allowedModels.toList().sortedBy { it.lowercase() }))
                                                 }
                                                 if (remoteConfigRolePassword.isNotBlank()) {
                                                     put("password", remoteConfigRolePassword)
@@ -1691,7 +1744,7 @@ fun FamilyNetworkScreen(
                                             remoteConfigRoleLabel = role.label.orEmpty()
                                             remoteConfigRoleCanCreate = role.canCreateBoards
                                             remoteConfigRoleCanManage = role.canManageBoards
-                                            remoteConfigRoleAllowedModelsInput = role.allowedAgentModels?.joinToString(", ").orEmpty()
+                                            remoteConfigRoleAllowedModels = role.allowedAgentModels.orEmpty().toSet()
                                             remoteConfigRolePassword = ""
                                         }
                                     )
@@ -1735,7 +1788,7 @@ fun FamilyNetworkScreen(
                                                 remoteConfigRoleLabel = first?.label.orEmpty()
                                                 remoteConfigRoleCanCreate = first?.canCreateBoards ?: false
                                                 remoteConfigRoleCanManage = first?.canManageBoards ?: false
-                                                remoteConfigRoleAllowedModelsInput = first?.allowedAgentModels?.joinToString(", ").orEmpty()
+                                                remoteConfigRoleAllowedModels = first?.allowedAgentModels.orEmpty().toSet()
                                                 remoteConfigRolePassword = ""
                                                 remoteConfigPendingRevision = null
                                                 remoteConfigIgnorePendingUpToRevision = patched.revision
@@ -1783,17 +1836,41 @@ fun FamilyNetworkScreen(
                                 singleLine = true,
                                 visualTransformation = PasswordVisualTransformation()
                             )
-                            OutlinedTextField(
-                                value = remoteConfigRoleAllowedModelsInput,
-                                onValueChange = { remoteConfigRoleAllowedModelsInput = it },
-                                label = { Text(stringResource(R.string.family_board_remote_config_role_allowed_models)) },
+                            Button(
                                 enabled = !remoteConfigSaving,
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                supportingText = {
-                                    Text(stringResource(R.string.family_board_remote_config_role_allowed_models_hint))
+                                onClick = {
+                                    remoteConfigShowAllowedModelsDialog = true
+                                    if (remoteConfigAvailableAgentModels.isEmpty() && !remoteConfigAvailableAgentModelsLoading) {
+                                        remoteConfigAvailableAgentModelsLoading = true
+                                        scope.launch {
+                                            val result = manager.fetchRemoteAgentModels(
+                                                service = session.service,
+                                                accessPassword = session.accessPassword
+                                            )
+                                            remoteConfigAvailableAgentModelsLoading = false
+                                            result.onSuccess { models ->
+                                                remoteConfigAvailableAgentModels = models
+                                            }.onFailure { error ->
+                                                remoteConfigError = error.message ?: error.javaClass.simpleName
+                                            }
+                                        }
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.fillMaxWidth()) {
+                                    Text(stringResource(R.string.family_board_remote_config_role_allowed_models))
+                                    Text(
+                                        text = if (remoteConfigRoleAllowedModels.isEmpty()) {
+                                            stringResource(R.string.family_board_remote_config_role_allowed_models_hint)
+                                        } else {
+                                            remoteConfigRoleAllowedModels.joinToString(", ")
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.9f)
+                                    )
                                 }
-                            )
+                            }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Checkbox(
                                     checked = remoteConfigRoleCanCreate,
@@ -1833,15 +1910,11 @@ fun FamilyNetworkScreen(
                             put("label", remoteConfigRoleLabel)
                             put("can_create_boards", remoteConfigRoleCanCreate)
                             put("can_manage_boards", remoteConfigRoleCanManage)
-                            val allowedModels = remoteConfigRoleAllowedModelsInput
-                                .split(',')
-                                .map { it.trim() }
-                                .filter { it.isNotEmpty() }
-                                .distinct()
+                            val allowedModels = remoteConfigRoleAllowedModels
                             if (allowedModels.isEmpty()) {
                                 put("allowed_agent_models", JSONObject.NULL)
                             } else {
-                                put("allowed_agent_models", JSONArray(allowedModels))
+                                put("allowed_agent_models", JSONArray(allowedModels.toList().sortedBy { it.lowercase() }))
                             }
                             if (remoteConfigRolePassword.isNotBlank()) {
                                 put("password", remoteConfigRolePassword)
@@ -1974,11 +2047,11 @@ fun FamilyNetworkScreen(
                                             .firstOrNull { it.roleId == roleId }
                                             ?.canManageBoards
                                             ?: false
-                                        remoteConfigRoleAllowedModelsInput = newSnapshot.roles
+                                        remoteConfigRoleAllowedModels = newSnapshot.roles
                                             .firstOrNull { it.roleId == roleId }
                                             ?.allowedAgentModels
-                                            ?.joinToString(", ")
                                             .orEmpty()
+                                            .toSet()
                                         remoteConfigRolePassword = ""
                                         remoteConfigPendingRevision = null
                                         remoteConfigIgnorePendingUpToRevision = patched.revision
@@ -1992,7 +2065,7 @@ fun FamilyNetworkScreen(
                                         remoteConfigRoleLabel = ""
                                         remoteConfigRoleCanCreate = false
                                         remoteConfigRoleCanManage = false
-                                        remoteConfigRoleAllowedModelsInput = ""
+                                        remoteConfigRoleAllowedModels = emptySet()
                                         remoteConfigRolePassword = ""
                                     }
                                     remoteConfigShowAddRoleDialog = false
@@ -2985,6 +3058,14 @@ private fun BulletinBoardPage(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+        session.aiManagerModel?.takeIf { it.isNotBlank() }?.let { aiManagerModel ->
+            Text(
+                stringResource(R.string.family_board_ai_manager_info, aiManagerModel),
+                modifier = Modifier.padding(horizontal = 10.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         session.lastError?.let { error ->
             Text(
                 error,
@@ -3146,24 +3227,7 @@ private fun BulletinBoardPage(
                 onClick = {
                     val raw = draftMessage.text.trim()
                     if (raw.isNotEmpty()) {
-                        if (aiManagerModel != null) {
-                            val containsAiMention = aiAgents.any { model ->
-                                Regex("(?:^|\\s)@${Regex.escape(model)}(?:\\s|$)", RegexOption.IGNORE_CASE)
-                                    .containsMatchIn(raw)
-                            }
-                            if (containsAiMention) {
-                                Toast.makeText(
-                                    context,
-                                    context.getString(R.string.family_board_ai_manager_mention_conflict, aiManagerModel),
-                                    Toast.LENGTH_LONG
-                                ).show()
-                                return@IconButton
-                            }
-                            val normalized = if (raw.startsWith("@", ignoreCase = false)) raw else "@$aiManagerModel $raw"
-                            onPost(normalized)
-                        } else {
-                            onPost(raw)
-                        }
+                        onPost(raw)
                         draftMessage = TextFieldValue("")
                     }
                 },

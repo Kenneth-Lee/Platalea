@@ -290,10 +290,10 @@ def _apply_roles_patch(next_roles_raw: dict[str, dict[str, Any]], payload: dict[
                             continue
                         if name not in normalized:
                             normalized.append(name)
-                    existing[field] = normalized
+                    existing[field] = normalized or None
                 elif isinstance(value, str):
                     name = value.strip()
-                    existing[field] = [name] if name else []
+                    existing[field] = [name] if name else None
                 else:
                     raise ValueError(f"auth.roles.{role_id}.allowed_agent_models 必须是字符串数组、字符串或 null")
             else:
