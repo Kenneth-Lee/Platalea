@@ -623,8 +623,15 @@ def _format_byte_count(bytes_value: int) -> str:
 
 
 def _ai_manager_model_from_meta(meta: dict[str, Any]) -> str | None:
-    value = str(meta.get("ai_manager_model", "")).strip()
-    return value or None
+    raw = meta.get("ai_manager_model")
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    if value.lower() in {"none", "null"}:
+        return None
+    return value
 
 
 def _format_attachment_line(attachment: dict[str, Any]) -> str:

@@ -667,7 +667,21 @@ def _parse_ai_manager_model_payload(payload: dict[str, Any]) -> str | None:
     raw = payload.get("ai_manager_model")
     if raw is None:
         return ""
-    return str(raw).strip()
+    text = str(raw).strip()
+    if text.lower() in {"none", "null"}:
+        return ""
+    return text
+
+
+def _extract_mentioned_models(content: str) -> list[str]:
+    result: list[str] = []
+    for match in re.finditer(r"(?:^|\s)@([^\s@]+)", content):
+        model = match.group(1).strip()
+        if not model:
+            continue
+        if model not in result:
+            result.append(model)
+    return result
 
 
 def _require_board_access(
@@ -903,6 +917,26 @@ def handle_board_request(
         author_label = str(payload.get("author_label", "访客"))
         author_device = str(payload.get("author_device", "")).strip() or None
         ai_manager_model = board_info.ai_manager_model
+        allowed_models = auth.allowed_agent_models
+        if allowed_models is not None:
+            allowed_set = {name.strip().lower() for name in allowed_models if name.strip()}
+            configured_models = set()
+            if agent is not None:
+                configured_models.update(agent._config.models_for_board(board_id))
+            if ai_manager_model:
+                configured_models.add(ai_manager_model)
+            mentioned_models = _extract_mentioned_models(content)
+            for model in mentioned_models:
+                if model in configured_models and model.lower() not in allowed_set:
+                    return _bad_request(
+                        "agent_model_forbidden",
+                        f"当前角色无权使用 AI 引擎：{model}",
+                    )
+            if ai_manager_model and content.strip() and ai_manager_model.lower() not in allowed_set:
+                return _bad_request(
+                    "agent_model_forbidden",
+                    f"当前角色无权使用 AI 管理者引擎：{ai_manager_model}",
+                )
         if ai_manager_model:
             agent_models = list(agent._config.models_for_board(board_id)) if agent is not None else []
             conflict_models = agent_models or [ai_manager_model]

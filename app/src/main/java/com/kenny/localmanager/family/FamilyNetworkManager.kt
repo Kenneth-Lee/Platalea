@@ -621,6 +621,22 @@ class FamilyNetworkManager(context: Context) {
         ).mapCatching { text ->
             val json = JSONObject(text)
             if (!json.optBoolean("ok", false)) {
+                val errorCode = json.optString("error").trim()
+                if (errorCode == "revision_conflict") {
+                    throw FamilyRemoteConfigConflictException(
+                        message = json.optString("message", appContext.getString(R.string.family_msg_80883)),
+                        serverRevision = json.optLong("server_revision"),
+                        changedPaths = buildList {
+                            val arr = json.optJSONArray("changed_paths") ?: JSONArray()
+                            for (i in 0 until arr.length()) {
+                                arr.optString(i).trim().takeIf { it.isNotEmpty() }?.let { add(it) }
+                            }
+                        },
+                        serverSnapshot = json.optJSONObject("server_snapshot")?.let {
+                            FamilyRemoteConfigParser.parseSnapshot(it)
+                        }
+                    )
+                }
                 throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_80883)))
             }
             FamilyRemoteConfigParser.parsePatchResult(json)

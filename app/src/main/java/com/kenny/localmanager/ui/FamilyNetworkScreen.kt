@@ -57,6 +57,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -118,11 +120,15 @@ import com.kenny.localmanager.family.BulletinBoardPack
 import com.kenny.localmanager.family.BulletinMessage
 import com.kenny.localmanager.family.FamilyDiscoveredService
 import com.kenny.localmanager.family.FamilyNetworkManager
+import com.kenny.localmanager.family.FamilyRemoteConfigConflictException
+import com.kenny.localmanager.family.FamilyRemoteConfigSnapshot
 import com.kenny.localmanager.family.FamilyNetworkState
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
+import org.json.JSONObject
 
 private data class BoardListSession(
     val service: FamilyDiscoveredService,
@@ -220,6 +226,25 @@ fun FamilyNetworkScreen(
     var exportPackProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var exportPackStage by remember { mutableStateOf<String?>(null) }
     var exportPackInProgress by remember { mutableStateOf(false) }
+    var showRemoteConfigDialog by remember { mutableStateOf(false) }
+    var remoteConfigSnapshot by remember { mutableStateOf<FamilyRemoteConfigSnapshot?>(null) }
+    var remoteConfigLoading by remember { mutableStateOf(false) }
+    var remoteConfigSaving by remember { mutableStateOf(false) }
+    var remoteConfigError by remember { mutableStateOf<String?>(null) }
+    var remoteConfigSelectedRoleId by remember { mutableStateOf<String?>(null) }
+    var remoteConfigRoleMenuExpanded by remember { mutableStateOf(false) }
+    var remoteConfigRoleLabel by remember { mutableStateOf("") }
+    var remoteConfigRoleCanCreate by remember { mutableStateOf(false) }
+    var remoteConfigRoleCanManage by remember { mutableStateOf(false) }
+    var remoteConfigRoleAllowedModelsInput by remember { mutableStateOf("") }
+    var remoteConfigRolePassword by remember { mutableStateOf("") }
+    var remoteConfigPendingRevision by remember { mutableStateOf<Long?>(null) }
+    var remoteConfigIgnorePendingUpToRevision by remember { mutableStateOf<Long?>(null) }
+    var remoteConfigConflictRevision by remember { mutableStateOf<Long?>(null) }
+    var remoteConfigConflictPaths by remember { mutableStateOf<List<String>>(emptyList()) }
+    var remoteConfigConflictSnapshot by remember { mutableStateOf<FamilyRemoteConfigSnapshot?>(null) }
+    var remoteConfigShowAddRoleDialog by remember { mutableStateOf(false) }
+    var remoteConfigNewRoleId by remember { mutableStateOf("") }
 
     LaunchedEffect(boardSession?.boardId) {
         messageForwardSelectionMode = false
@@ -761,6 +786,45 @@ fun FamilyNetworkScreen(
                                 )
                             }
                             if (session.canManageBoards) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.family_board_remote_config_center)) },
+                                    onClick = {
+                                        boardListUiState.showActionsMenu = false
+                                        showRemoteConfigDialog = true
+                                        remoteConfigError = null
+                                        remoteConfigSnapshot = null
+                                        remoteConfigSelectedRoleId = null
+                                        remoteConfigRoleMenuExpanded = false
+                                        remoteConfigRolePassword = ""
+                                        remoteConfigPendingRevision = null
+                                        remoteConfigIgnorePendingUpToRevision = null
+                                        remoteConfigConflictRevision = null
+                                        remoteConfigConflictPaths = emptyList()
+                                        remoteConfigConflictSnapshot = null
+                                        remoteConfigLoading = true
+                                        scope.launch {
+                                            val result = manager.fetchRemoteSystemConfig(
+                                                service = session.service,
+                                                accessPassword = session.accessPassword
+                                            )
+                                            remoteConfigLoading = false
+                                            result.onSuccess { snapshot ->
+                                                remoteConfigSnapshot = snapshot
+                                                val first = snapshot.roles.firstOrNull()
+                                                if (first != null) {
+                                                    remoteConfigSelectedRoleId = first.roleId
+                                                    remoteConfigRoleLabel = first.label.orEmpty()
+                                                    remoteConfigRoleCanCreate = first.canCreateBoards
+                                                    remoteConfigRoleCanManage = first.canManageBoards
+                                                    remoteConfigRoleAllowedModelsInput = first.allowedAgentModels?.joinToString(", ").orEmpty()
+                                                }
+                                                remoteConfigPendingRevision = null
+                                            }.onFailure { error ->
+                                                remoteConfigError = error.message ?: error.javaClass.simpleName
+                                            }
+                                        }
+                                    }
+                                )
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.family_board_import_pack)) },
                                     onClick = {
@@ -1329,6 +1393,638 @@ fun FamilyNetworkScreen(
                 }
             }
         )
+    }
+
+    if (showRemoteConfigDialog && boardListSession != null) {
+        val session = boardListSession!!
+        val snapshot = remoteConfigSnapshot
+        val selectedRole = snapshot?.roles?.firstOrNull { it.roleId == remoteConfigSelectedRoleId }
+        val reloadRemoteConfig: () -> Unit = {
+            remoteConfigLoading = true
+            remoteConfigError = null
+            scope.launch {
+                val result = manager.fetchRemoteSystemConfig(
+                    service = session.service,
+                    accessPassword = session.accessPassword
+                )
+                remoteConfigLoading = false
+                result.onSuccess {
+                    remoteConfigSnapshot = it
+                    remoteConfigPendingRevision = null
+                    remoteConfigConflictRevision = null
+                    remoteConfigConflictPaths = emptyList()
+                    remoteConfigConflictSnapshot = null
+                    if (remoteConfigSelectedRoleId == null || it.roles.none { role -> role.roleId == remoteConfigSelectedRoleId }) {
+                        val first = it.roles.firstOrNull()
+                        remoteConfigSelectedRoleId = first?.roleId
+                        remoteConfigRoleLabel = first?.label.orEmpty()
+                        remoteConfigRoleCanCreate = first?.canCreateBoards ?: false
+                        remoteConfigRoleCanManage = first?.canManageBoards ?: false
+                        remoteConfigRoleAllowedModelsInput = first?.allowedAgentModels?.joinToString(", ").orEmpty()
+                        remoteConfigRolePassword = ""
+                    }
+                }.onFailure { error ->
+                    remoteConfigError = error.message ?: error.javaClass.simpleName
+                }
+            }
+        }
+        LaunchedEffect(showRemoteConfigDialog, session.service.deviceKey, session.accessPassword) {
+            if (!showRemoteConfigDialog) return@LaunchedEffect
+            while (showRemoteConfigDialog) {
+                val currentSnapshot = remoteConfigSnapshot
+                if (currentSnapshot == null) {
+                    delay(500)
+                    continue
+                }
+                val baseRevision = currentSnapshot.revision
+                manager.waitRemoteSystemConfigChanges(
+                    service = session.service,
+                    accessPassword = session.accessPassword,
+                    sinceRevision = baseRevision,
+                    timeoutMs = 25_000L
+                ).onSuccess { event ->
+                    if (event.changed && event.revision > baseRevision) {
+                        val ignoredRevision = remoteConfigIgnorePendingUpToRevision
+                        if (ignoredRevision != null && event.revision <= ignoredRevision) {
+                            remoteConfigIgnorePendingUpToRevision = null
+                        } else {
+                            remoteConfigPendingRevision = event.revision
+                        }
+                    }
+                }
+            }
+        }
+        if (selectedRole != null && !remoteConfigSaving) {
+            LaunchedEffect(selectedRole.roleId) {
+                remoteConfigRoleLabel = selectedRole.label.orEmpty()
+                remoteConfigRoleCanCreate = selectedRole.canCreateBoards
+                remoteConfigRoleCanManage = selectedRole.canManageBoards
+                remoteConfigRoleAllowedModelsInput = selectedRole.allowedAgentModels?.joinToString(", ").orEmpty()
+                remoteConfigRolePassword = ""
+                remoteConfigConflictRevision = null
+                remoteConfigConflictPaths = emptyList()
+                remoteConfigConflictSnapshot = null
+            }
+        }
+        AlertDialog(
+            onDismissRequest = {
+                if (!remoteConfigSaving) {
+                    showRemoteConfigDialog = false
+                    remoteConfigError = null
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_remote_config_center)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (remoteConfigLoading) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(stringResource(R.string.family_board_remote_config_loading))
+                        }
+                    }
+                    remoteConfigPendingRevision?.let { pendingRevision ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    stringResource(
+                                        R.string.family_board_remote_config_pending_notice,
+                                        pendingRevision
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                TextButton(
+                                    enabled = !remoteConfigLoading && !remoteConfigSaving,
+                                    onClick = {
+                                        reloadRemoteConfig()
+                                    }
+                                ) {
+                                    Text(stringResource(R.string.family_board_remote_config_apply_latest))
+                                }
+                            }
+                        }
+                    }
+                    remoteConfigConflictRevision?.let { conflictRevision ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.errorContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    stringResource(
+                                        R.string.family_board_remote_config_conflict_notice,
+                                        conflictRevision
+                                    ),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                                if (remoteConfigConflictPaths.isNotEmpty()) {
+                                    Text(
+                                        remoteConfigConflictPaths.joinToString(prefix = "changed: "),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
+                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    TextButton(
+                                        enabled = !remoteConfigSaving,
+                                        onClick = {
+                                            val serverSnapshot = remoteConfigConflictSnapshot
+                                            if (serverSnapshot != null) {
+                                                remoteConfigSnapshot = serverSnapshot
+                                                val selectedAfterApply = serverSnapshot.roles
+                                                    .firstOrNull { it.roleId == remoteConfigSelectedRoleId }
+                                                    ?: serverSnapshot.roles.firstOrNull()
+                                                remoteConfigSelectedRoleId = selectedAfterApply?.roleId
+                                                remoteConfigRoleLabel = selectedAfterApply?.label.orEmpty()
+                                                remoteConfigRoleCanCreate = selectedAfterApply?.canCreateBoards ?: false
+                                                remoteConfigRoleCanManage = selectedAfterApply?.canManageBoards ?: false
+                                                remoteConfigRoleAllowedModelsInput = selectedAfterApply?.allowedAgentModels
+                                                    ?.joinToString(", ")
+                                                    .orEmpty()
+                                                remoteConfigRolePassword = ""
+                                                remoteConfigPendingRevision = null
+                                            } else {
+                                                reloadRemoteConfig()
+                                            }
+                                            remoteConfigConflictRevision = null
+                                            remoteConfigConflictPaths = emptyList()
+                                            remoteConfigConflictSnapshot = null
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.family_board_remote_config_apply_server))
+                                    }
+                                    TextButton(
+                                        enabled = !remoteConfigSaving && remoteConfigSelectedRoleId != null,
+                                        onClick = {
+                                            val roleId = remoteConfigSelectedRoleId ?: return@TextButton
+                                            remoteConfigSaving = true
+                                            remoteConfigError = null
+                                            val rolePayload = JSONObject().apply {
+                                                put("label", remoteConfigRoleLabel)
+                                                put("can_create_boards", remoteConfigRoleCanCreate)
+                                                put("can_manage_boards", remoteConfigRoleCanManage)
+                                                val allowedModels = remoteConfigRoleAllowedModelsInput
+                                                    .split(',')
+                                                    .map { it.trim() }
+                                                    .filter { it.isNotEmpty() }
+                                                    .distinct()
+                                                if (allowedModels.isEmpty()) {
+                                                    put("allowed_agent_models", JSONObject.NULL)
+                                                } else {
+                                                    put("allowed_agent_models", JSONArray(allowedModels))
+                                                }
+                                                if (remoteConfigRolePassword.isNotBlank()) {
+                                                    put("password", remoteConfigRolePassword)
+                                                }
+                                            }
+                                            val patch = JSONObject().apply { put(roleId, rolePayload) }
+                                            val retryRevision = conflictRevision
+                                            scope.launch {
+                                                val result = manager.patchRemoteSystemConfigRoles(
+                                                    service = session.service,
+                                                    accessPassword = session.accessPassword,
+                                                    expectedRevision = retryRevision,
+                                                    rolesPatch = patch
+                                                )
+                                                remoteConfigSaving = false
+                                                result.onSuccess { patched ->
+                                                    remoteConfigSnapshot = patched.snapshot ?: remoteConfigSnapshot
+                                                    remoteConfigRolePassword = ""
+                                                    remoteConfigConflictRevision = null
+                                                    remoteConfigConflictPaths = emptyList()
+                                                    remoteConfigConflictSnapshot = null
+                                                    remoteConfigPendingRevision = null
+                                                    remoteConfigIgnorePendingUpToRevision = patched.revision
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.family_board_remote_config_saved),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                }.onFailure { error ->
+                                                    if (error is FamilyRemoteConfigConflictException) {
+                                                        remoteConfigConflictRevision = error.serverRevision
+                                                        remoteConfigConflictPaths = error.changedPaths
+                                                        remoteConfigConflictSnapshot = error.serverSnapshot
+                                                    }
+                                                    remoteConfigError = error.message ?: error.javaClass.simpleName
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.family_board_remote_config_retry_draft))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    snapshot?.let { config ->
+                        Text(
+                            stringResource(R.string.family_board_remote_config_revision, config.revision),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            stringResource(R.string.family_board_remote_config_roles),
+                            style = MaterialTheme.typography.labelMedium
+                        )
+                        ExposedDropdownMenuBox(
+                            expanded = remoteConfigRoleMenuExpanded,
+                            onExpandedChange = { expanded ->
+                                if (!remoteConfigSaving && !remoteConfigLoading) {
+                                    remoteConfigRoleMenuExpanded = expanded
+                                }
+                            }
+                        ) {
+                            val selectedRoleDisplay = config.roles
+                                .firstOrNull { it.roleId == remoteConfigSelectedRoleId }
+                                ?.let { role ->
+                                    val label = role.label.orEmpty().ifBlank { "-" }
+                                    "${role.roleId} ($label)"
+                                }
+                                ?: remoteConfigSelectedRoleId.orEmpty()
+                            OutlinedTextField(
+                                value = selectedRoleDisplay,
+                                onValueChange = {},
+                                readOnly = true,
+                                enabled = !remoteConfigSaving && !remoteConfigLoading,
+                                label = { Text(stringResource(R.string.family_board_remote_config_role_selector)) },
+                                trailingIcon = {
+                                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = remoteConfigRoleMenuExpanded)
+                                },
+                                modifier = Modifier
+                                    .menuAnchor()
+                                    .fillMaxWidth(),
+                                singleLine = true
+                            )
+                            ExposedDropdownMenu(
+                                expanded = remoteConfigRoleMenuExpanded,
+                                onDismissRequest = { remoteConfigRoleMenuExpanded = false }
+                            ) {
+                                config.roles.forEach { role ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Column {
+                                                Text(role.roleId)
+                                                Text(
+                                                    role.label.orEmpty().ifBlank { "-" },
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            remoteConfigRoleMenuExpanded = false
+                                            remoteConfigSelectedRoleId = role.roleId
+                                            remoteConfigRoleLabel = role.label.orEmpty()
+                                            remoteConfigRoleCanCreate = role.canCreateBoards
+                                            remoteConfigRoleCanManage = role.canManageBoards
+                                            remoteConfigRoleAllowedModelsInput = role.allowedAgentModels?.joinToString(", ").orEmpty()
+                                            remoteConfigRolePassword = ""
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(
+                                enabled = !remoteConfigSaving && !remoteConfigLoading,
+                                onClick = {
+                                    remoteConfigShowAddRoleDialog = true
+                                    remoteConfigNewRoleId = ""
+                                    remoteConfigError = null
+                                }
+                            ) {
+                                Text(stringResource(R.string.family_board_remote_config_add_role))
+                            }
+                            TextButton(
+                                enabled = !remoteConfigSaving && !remoteConfigLoading && remoteConfigSelectedRoleId != null && remoteConfigSelectedRoleId != "admin",
+                                onClick = {
+                                    val roleId = remoteConfigSelectedRoleId ?: return@TextButton
+                                    val baseRevision = remoteConfigSnapshot?.revision ?: return@TextButton
+                                    remoteConfigSaving = true
+                                    remoteConfigError = null
+                                    val patch = JSONObject().apply { put(roleId, JSONObject.NULL) }
+                                    scope.launch {
+                                        val result = manager.patchRemoteSystemConfigRoles(
+                                            service = session.service,
+                                            accessPassword = session.accessPassword,
+                                            expectedRevision = baseRevision,
+                                            rolesPatch = patch
+                                        )
+                                        remoteConfigSaving = false
+                                        result.onSuccess { patched ->
+                                            val newSnapshot = patched.snapshot
+                                            if (newSnapshot != null) {
+                                                remoteConfigSnapshot = newSnapshot
+                                                val first = newSnapshot.roles.firstOrNull()
+                                                remoteConfigSelectedRoleId = first?.roleId
+                                                remoteConfigRoleLabel = first?.label.orEmpty()
+                                                remoteConfigRoleCanCreate = first?.canCreateBoards ?: false
+                                                remoteConfigRoleCanManage = first?.canManageBoards ?: false
+                                                remoteConfigRoleAllowedModelsInput = first?.allowedAgentModels?.joinToString(", ").orEmpty()
+                                                remoteConfigRolePassword = ""
+                                                remoteConfigPendingRevision = null
+                                                remoteConfigIgnorePendingUpToRevision = patched.revision
+                                                remoteConfigConflictRevision = null
+                                                remoteConfigConflictPaths = emptyList()
+                                                remoteConfigConflictSnapshot = null
+                                                Toast.makeText(
+                                                    context,
+                                                    context.getString(R.string.family_board_remote_config_deleted, roleId),
+                                                    Toast.LENGTH_SHORT
+                                                ).show()
+                                            } else {
+                                                reloadRemoteConfig()
+                                            }
+                                        }.onFailure { error ->
+                                            if (error is FamilyRemoteConfigConflictException) {
+                                                remoteConfigConflictRevision = error.serverRevision
+                                                remoteConfigConflictPaths = error.changedPaths
+                                                remoteConfigConflictSnapshot = error.serverSnapshot
+                                            }
+                                            remoteConfigError = error.message ?: error.javaClass.simpleName
+                                        }
+                                    }
+                                }
+                            ) {
+                                Text(stringResource(R.string.family_board_remote_config_delete_role))
+                            }
+                        }
+
+                        if (remoteConfigSelectedRoleId != null) {
+                            OutlinedTextField(
+                                value = remoteConfigRoleLabel,
+                                onValueChange = { remoteConfigRoleLabel = it },
+                                label = { Text(stringResource(R.string.family_board_remote_config_role_label)) },
+                                enabled = !remoteConfigSaving,
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = remoteConfigRolePassword,
+                                onValueChange = { remoteConfigRolePassword = it },
+                                label = { Text(stringResource(R.string.family_board_remote_config_role_password)) },
+                                enabled = !remoteConfigSaving,
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+                            OutlinedTextField(
+                                value = remoteConfigRoleAllowedModelsInput,
+                                onValueChange = { remoteConfigRoleAllowedModelsInput = it },
+                                label = { Text(stringResource(R.string.family_board_remote_config_role_allowed_models)) },
+                                enabled = !remoteConfigSaving,
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                supportingText = {
+                                    Text(stringResource(R.string.family_board_remote_config_role_allowed_models_hint))
+                                }
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = remoteConfigRoleCanCreate,
+                                    enabled = !remoteConfigSaving,
+                                    onCheckedChange = { remoteConfigRoleCanCreate = it }
+                                )
+                                Text(stringResource(R.string.family_board_remote_config_can_create))
+                            }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Checkbox(
+                                    checked = remoteConfigRoleCanManage,
+                                    enabled = !remoteConfigSaving,
+                                    onCheckedChange = { remoteConfigRoleCanManage = it }
+                                )
+                                Text(stringResource(R.string.family_board_remote_config_can_manage))
+                            }
+                        }
+                    }
+                    remoteConfigError?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = !remoteConfigSaving && !remoteConfigLoading && snapshot != null && remoteConfigSelectedRoleId != null,
+                    onClick = {
+                        val roleId = remoteConfigSelectedRoleId ?: return@Button
+                        val baseRevision = snapshot?.revision ?: return@Button
+                        remoteConfigSaving = true
+                        remoteConfigError = null
+                        val rolePayload = JSONObject().apply {
+                            put("label", remoteConfigRoleLabel)
+                            put("can_create_boards", remoteConfigRoleCanCreate)
+                            put("can_manage_boards", remoteConfigRoleCanManage)
+                            val allowedModels = remoteConfigRoleAllowedModelsInput
+                                .split(',')
+                                .map { it.trim() }
+                                .filter { it.isNotEmpty() }
+                                .distinct()
+                            if (allowedModels.isEmpty()) {
+                                put("allowed_agent_models", JSONObject.NULL)
+                            } else {
+                                put("allowed_agent_models", JSONArray(allowedModels))
+                            }
+                            if (remoteConfigRolePassword.isNotBlank()) {
+                                put("password", remoteConfigRolePassword)
+                            }
+                        }
+                        val patch = JSONObject().apply { put(roleId, rolePayload) }
+                        scope.launch {
+                            val result = manager.patchRemoteSystemConfigRoles(
+                                service = session.service,
+                                accessPassword = session.accessPassword,
+                                expectedRevision = baseRevision,
+                                rolesPatch = patch
+                            )
+                            remoteConfigSaving = false
+                            result.onSuccess { patched ->
+                                val newSnapshot = patched.snapshot
+                                if (newSnapshot != null) {
+                                    remoteConfigSnapshot = newSnapshot
+                                    remoteConfigRolePassword = ""
+                                    remoteConfigPendingRevision = null
+                                    remoteConfigIgnorePendingUpToRevision = patched.revision
+                                    remoteConfigConflictRevision = null
+                                    remoteConfigConflictPaths = emptyList()
+                                    remoteConfigConflictSnapshot = null
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.family_board_remote_config_saved),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                    showRemoteConfigDialog = false
+                                } else {
+                                    remoteConfigIgnorePendingUpToRevision = patched.revision
+                                    reloadRemoteConfig()
+                                    showRemoteConfigDialog = false
+                                }
+                            }.onFailure { error ->
+                                if (error is FamilyRemoteConfigConflictException) {
+                                    remoteConfigConflictRevision = error.serverRevision
+                                    remoteConfigConflictPaths = error.changedPaths
+                                    remoteConfigConflictSnapshot = error.serverSnapshot
+                                }
+                                remoteConfigError = error.message ?: error.javaClass.simpleName
+                            }
+                        }
+                    }
+                ) {
+                    Text(stringResource(R.string.common_ok))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !remoteConfigSaving,
+                    onClick = {
+                        reloadRemoteConfig()
+                    }
+                ) {
+                    Text(stringResource(R.string.family_board_remote_config_refresh))
+                }
+            }
+        )
+
+        if (remoteConfigShowAddRoleDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!remoteConfigSaving) {
+                        remoteConfigShowAddRoleDialog = false
+                    }
+                },
+                title = { Text(stringResource(R.string.family_board_remote_config_add_role)) },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = remoteConfigNewRoleId,
+                            onValueChange = { remoteConfigNewRoleId = it },
+                            label = { Text(stringResource(R.string.family_board_remote_config_new_role_id)) },
+                            enabled = !remoteConfigSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = !remoteConfigSaving,
+                        onClick = {
+                            val roleId = remoteConfigNewRoleId.trim()
+                            if (roleId.isEmpty()) {
+                                remoteConfigError = context.getString(R.string.family_board_remote_config_new_role_id_required)
+                                return@Button
+                            }
+                            val snapshotNow = remoteConfigSnapshot
+                            if (snapshotNow == null) {
+                                remoteConfigError = context.getString(R.string.family_board_remote_config_loading)
+                                return@Button
+                            }
+                            if (snapshotNow.roles.any { it.roleId == roleId }) {
+                                remoteConfigError = context.getString(
+                                    R.string.family_board_remote_config_new_role_exists,
+                                    roleId
+                                )
+                                return@Button
+                            }
+
+                            remoteConfigSaving = true
+                            remoteConfigError = null
+                            val rolePayload = JSONObject()
+                            val patch = JSONObject().apply { put(roleId, rolePayload) }
+                            scope.launch {
+                                val result = manager.patchRemoteSystemConfigRoles(
+                                    service = session.service,
+                                    accessPassword = session.accessPassword,
+                                    expectedRevision = snapshotNow.revision,
+                                    rolesPatch = patch
+                                )
+                                remoteConfigSaving = false
+                                result.onSuccess { patched ->
+                                    val newSnapshot = patched.snapshot
+                                    if (newSnapshot != null) {
+                                        remoteConfigSnapshot = newSnapshot
+                                        remoteConfigSelectedRoleId = roleId
+                                        remoteConfigRoleLabel = newSnapshot.roles
+                                            .firstOrNull { it.roleId == roleId }
+                                            ?.label
+                                            .orEmpty()
+                                        remoteConfigRoleCanCreate = newSnapshot.roles
+                                            .firstOrNull { it.roleId == roleId }
+                                            ?.canCreateBoards
+                                            ?: false
+                                        remoteConfigRoleCanManage = newSnapshot.roles
+                                            .firstOrNull { it.roleId == roleId }
+                                            ?.canManageBoards
+                                            ?: false
+                                        remoteConfigRoleAllowedModelsInput = newSnapshot.roles
+                                            .firstOrNull { it.roleId == roleId }
+                                            ?.allowedAgentModels
+                                            ?.joinToString(", ")
+                                            .orEmpty()
+                                        remoteConfigRolePassword = ""
+                                        remoteConfigPendingRevision = null
+                                        remoteConfigIgnorePendingUpToRevision = patched.revision
+                                        remoteConfigConflictRevision = null
+                                        remoteConfigConflictPaths = emptyList()
+                                        remoteConfigConflictSnapshot = null
+                                    } else {
+                                        remoteConfigIgnorePendingUpToRevision = patched.revision
+                                        reloadRemoteConfig()
+                                        remoteConfigSelectedRoleId = roleId
+                                        remoteConfigRoleLabel = ""
+                                        remoteConfigRoleCanCreate = false
+                                        remoteConfigRoleCanManage = false
+                                        remoteConfigRoleAllowedModelsInput = ""
+                                        remoteConfigRolePassword = ""
+                                    }
+                                    remoteConfigShowAddRoleDialog = false
+                                    Toast.makeText(
+                                        context,
+                                        context.getString(R.string.family_board_remote_config_created, roleId),
+                                        Toast.LENGTH_SHORT
+                                    ).show()
+                                }.onFailure { error ->
+                                    if (error is FamilyRemoteConfigConflictException) {
+                                        remoteConfigConflictRevision = error.serverRevision
+                                        remoteConfigConflictPaths = error.changedPaths
+                                        remoteConfigConflictSnapshot = error.serverSnapshot
+                                    }
+                                    remoteConfigError = error.message ?: error.javaClass.simpleName
+                                }
+                            }
+                        }
+                    ) {
+                        Text(stringResource(R.string.family_board_remote_config_create_role))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        enabled = !remoteConfigSaving,
+                        onClick = { remoteConfigShowAddRoleDialog = false }
+                    ) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                }
+            )
+        }
     }
 
     bulletinForwardPayload?.let { payload ->

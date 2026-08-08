@@ -19,6 +19,7 @@ class RoleDefinition:
     label: str | None
     can_create_boards: bool
     can_manage_boards: bool
+    allowed_agent_models: tuple[str, ...] | None
 
     @property
     def is_admin(self) -> bool:
@@ -32,6 +33,7 @@ class AuthContext:
     is_admin: bool
     can_create_boards: bool
     can_manage_boards: bool
+    allowed_agent_models: tuple[str, ...] | None
 
     @property
     def can_manage(self) -> bool:
@@ -61,6 +63,7 @@ class RolesConfig:
                     is_admin=True,
                     can_create_boards=True,
                     can_manage_boards=True,
+                    allowed_agent_models=None,
                 )
             return _auth_from_role(admin)
 
@@ -119,7 +122,28 @@ def _auth_from_role(role: RoleDefinition) -> AuthContext:
         is_admin=role.is_admin,
         can_create_boards=role.can_create_boards,
         can_manage_boards=role.can_manage_boards,
+        allowed_agent_models=role.allowed_agent_models,
     )
+
+
+def _normalize_allowed_agent_models(value: Any, *, field: str) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ()
+        return (text,)
+    if not isinstance(value, list):
+        raise ValueError(f"{field} 必须是字符串数组、字符串或 null")
+    result: list[str] = []
+    for item in value:
+        name = str(item).strip()
+        if not name:
+            continue
+        if name not in result:
+            result.append(name)
+    return tuple(result)
 
 
 def load_roles_config(
@@ -144,12 +168,17 @@ def _parse_roles_config(roles_raw: dict[str, Any]) -> RolesConfig:
         is_admin = rid == ADMIN_ROLE_ID
         can_create = bool(value.get("can_create_boards", is_admin))
         can_manage = bool(value.get("can_manage_boards", is_admin))
+        allowed_models = _normalize_allowed_agent_models(
+            value.get("allowed_agent_models"),
+            field=f"roles.{rid}.allowed_agent_models",
+        )
         roles[rid] = RoleDefinition(
             role_id=rid,
             password=password,
             label=label,
             can_create_boards=can_create,
             can_manage_boards=can_manage,
+            allowed_agent_models=allowed_models,
         )
     if ADMIN_ROLE_ID not in roles:
         raise ValueError(f"roles 必须包含 admin 角色（{ADMIN_ROLE_ID!r}）")

@@ -82,8 +82,15 @@ data class BulletinBoardInfo(
         }
 
         fun aiManagerModelFromMeta(meta: JSONObject): String? {
+            if (!meta.has("ai_manager_model") || meta.isNull("ai_manager_model")) {
+                return null
+            }
             val raw = meta.optString("ai_manager_model", "").trim()
-            return raw.takeIf { it.isNotEmpty() }
+            if (raw.isEmpty()) return null
+            if (raw.equals("null", ignoreCase = true) || raw.equals("none", ignoreCase = true)) {
+                return null
+            }
+            return raw
         }
     }
 }

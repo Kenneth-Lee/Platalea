@@ -176,6 +176,9 @@ class RuntimeConfigRepository:
                             "label": role.label,
                             "can_create_boards": role.can_create_boards,
                             "can_manage_boards": role.can_manage_boards,
+                            "allowed_agent_models": list(role.allowed_agent_models)
+                            if role.allowed_agent_models is not None
+                            else None,
                             "password_set": bool(role.password),
                         }
                         for role_id, role in sorted(self._roles.roles.items())
@@ -232,6 +235,9 @@ def _role_to_raw(role: RoleDefinition) -> dict[str, Any]:
         "label": role.label or "",
         "can_create_boards": role.can_create_boards,
         "can_manage_boards": role.can_manage_boards,
+        "allowed_agent_models": list(role.allowed_agent_models)
+        if role.allowed_agent_models is not None
+        else None,
     }
 
 
@@ -267,12 +273,29 @@ def _apply_roles_patch(next_roles_raw: dict[str, dict[str, Any]], payload: dict[
             raise ValueError(f"auth.roles.{role_id} 必须是对象或 null")
 
         existing = dict(next_roles_raw.get(role_id, {}))
-        for field in ("label", "password", "can_create_boards", "can_manage_boards"):
+        for field in ("label", "password", "can_create_boards", "can_manage_boards", "allowed_agent_models"):
             if field not in patch_value:
                 continue
             value = patch_value[field]
             if field in {"label", "password"}:
                 existing[field] = str(value).strip()
+            elif field == "allowed_agent_models":
+                if value is None:
+                    existing[field] = None
+                elif isinstance(value, list):
+                    normalized: list[str] = []
+                    for item in value:
+                        name = str(item).strip()
+                        if not name:
+                            continue
+                        if name not in normalized:
+                            normalized.append(name)
+                    existing[field] = normalized
+                elif isinstance(value, str):
+                    name = value.strip()
+                    existing[field] = [name] if name else []
+                else:
+                    raise ValueError(f"auth.roles.{role_id}.allowed_agent_models 必须是字符串数组、字符串或 null")
             else:
                 existing[field] = bool(value)
 
@@ -284,5 +307,7 @@ def _apply_roles_patch(next_roles_raw: dict[str, dict[str, Any]], payload: dict[
             existing["can_create_boards"] = role_id == "admin"
         if "can_manage_boards" not in existing:
             existing["can_manage_boards"] = role_id == "admin"
+        if "allowed_agent_models" not in existing:
+            existing["allowed_agent_models"] = None
 
         next_roles_raw[role_id] = existing
