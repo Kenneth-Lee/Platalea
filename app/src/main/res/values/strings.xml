@@ -221,6 +221,7 @@
     <string name="context_remove_from_pending">从待处理列表移除</string>
     <string name="context_add_to_pending">加入待处理列表</string>
     <string name="context_details">详细信息</string>
+    <string name="context_details_with_edit">详细信息（含修改）</string>
     <string name="context_choose_open_app">选择打开应用</string>
     <string name="new_menu_title">新建</string>
     <string name="new_menu_file">新建文件</string>

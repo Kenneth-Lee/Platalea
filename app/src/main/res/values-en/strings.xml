@@ -196,6 +196,7 @@
     <string name="context_remove_from_pending">Remove from pending list</string>
     <string name="context_add_to_pending">Add to pending list</string>
     <string name="context_details">Details</string>
+    <string name="context_details_with_edit">Details (with edit)</string>
     <string name="context_choose_open_app">Choose an app to open</string>
     <string name="new_menu_title">New</string>
     <string name="new_menu_file">New file</string>

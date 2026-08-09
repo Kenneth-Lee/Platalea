@@ -7437,7 +7437,7 @@ internal fun FileBrowserScreen(
                             showFileDetail = menuTarget
                             contextMenuTarget = null
                         }
-                    ) { Text(context.getString(R.string.context_details), color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_details_with_edit), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
