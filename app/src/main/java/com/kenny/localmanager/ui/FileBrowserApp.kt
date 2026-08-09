@@ -8,13 +8,17 @@ import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.graphics.pdf.PdfRenderer
 import android.icu.text.Transliterator
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.util.Base64
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
 import androidx.activity.compose.BackHandler
@@ -150,6 +154,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
+import androidx.exifinterface.media.ExifInterface
+import org.json.JSONObject
 import android.widget.Toast
 import android.provider.DocumentsContract
 import androidx.lifecycle.Lifecycle
@@ -1441,6 +1447,660 @@ private fun readTrackMetadata(context: Context, uriString: String): TrackMetadat
             )
         }
     }.getOrElse { TrackMetadata() }
+}
+
+private enum class DetailMetadataKind {
+    AUDIO,
+    VIDEO,
+    IMAGE,
+    PDF,
+    ARCHIVE,
+    UNKNOWN
+}
+
+private data class DetailMetadataRow(
+    val label: String,
+    val value: String,
+    val isSection: Boolean = false
+)
+
+private data class EditableImageExif(
+    val takenTime: String = "",
+    val artist: String = "",
+    val description: String = "",
+    val software: String = "",
+    val copyright: String = ""
+)
+
+private const val EXIF_TAG_XP_AUTHOR = "XPAuthor"
+private const val EXIF_TAG_XP_COMMENT = "XPComment"
+private const val EXIF_TAG_XP_SOFTWARE = "XPSoftware"
+private const val EXIF_TAG_XP_COPYRIGHT = "XPCopyright"
+private const val LM_EXIF_USER_COMMENT_PREFIX = "LM_EXIF_B64_V1:"
+private const val LM_EXIF_SOFTWARE_MARKER_PREFIX = " [LMEXIF:"
+private const val LM_EXIF_SOFTWARE_MARKER_SUFFIX = "]"
+
+private data class LmExifPayload(
+    val artist: String,
+    val description: String,
+    val software: String,
+    val copyright: String
+)
+
+private fun inferDetailMetadataKind(
+    fileName: String,
+    mimeType: String,
+    isDirectory: Boolean
+): DetailMetadataKind {
+    if (isDirectory) return DetailMetadataKind.UNKNOWN
+    val normalizedMime = mimeType.lowercase(Locale.ROOT)
+    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    if (normalizedMime.startsWith("audio/")) return DetailMetadataKind.AUDIO
+    if (normalizedMime.startsWith("video/")) return DetailMetadataKind.VIDEO
+    if (normalizedMime.startsWith("image/")) return DetailMetadataKind.IMAGE
+    if (normalizedMime == "application/pdf" || ext == "pdf") return DetailMetadataKind.PDF
+    if (isExtractableArchive(fileName)) return DetailMetadataKind.ARCHIVE
+    return when (ext) {
+        "mp3", "m4a", "flac", "ogg", "wav", "aac" -> DetailMetadataKind.AUDIO
+        "mp4", "mkv", "webm", "mov", "avi" -> DetailMetadataKind.VIDEO
+        "jpg", "jpeg", "png", "webp", "heic", "bmp", "gif" -> DetailMetadataKind.IMAGE
+        else -> DetailMetadataKind.UNKNOWN
+    }
+}
+
+private fun appendMetaIfNotBlank(
+    rows: MutableList<DetailMetadataRow>,
+    label: String,
+    raw: String?
+) {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    rows += DetailMetadataRow(label, value)
+}
+
+private fun appendMetaSection(
+    rows: MutableList<DetailMetadataRow>,
+    label: String
+) {
+    rows += DetailMetadataRow(label = label, value = "", isSection = true)
+}
+
+private fun formatBitrate(raw: String?): String? {
+    val bps = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
+    if (bps <= 0) return null
+    return "${(bps / 1000.0).toInt()} kbps"
+}
+
+private fun formatSampleRate(raw: String?): String? {
+    val hz = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
+    if (hz <= 0) return null
+    return "${hz} Hz"
+}
+
+private fun formatDurationMs(raw: String?): String? {
+    val ms = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
+    if (ms < 0) return null
+    return formatPlaybackTime(ms.toInt())
+}
+
+private fun formatDurationUs(rawUs: Long?): String? {
+    val us = rawUs ?: return null
+    if (us < 0) return null
+    val ms = (us / 1000L).coerceAtMost(Int.MAX_VALUE.toLong())
+    return formatPlaybackTime(ms.toInt())
+}
+
+private fun formatVideoResolution(widthRaw: String?, heightRaw: String?): String? {
+    val width = widthRaw?.trim()?.toIntOrNull()
+    val height = heightRaw?.trim()?.toIntOrNull()
+    if (width == null || height == null || width <= 0 || height <= 0) return null
+    return "${width} x ${height}"
+}
+
+private fun formatExifExposureTime(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val seconds = value.toDoubleOrNull()
+    if (seconds != null && seconds > 0) {
+        return if (seconds < 1.0) {
+            val denominator = (1.0 / seconds).toInt().coerceAtLeast(1)
+            "1/${denominator} s"
+        } else {
+            "${"%.3f".format(Locale.getDefault(), seconds)} s"
+        }
+    }
+    return value
+}
+
+private fun formatExifFocalLength(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val mm = value.toDoubleOrNull()
+    return if (mm != null && mm > 0) {
+        "${"%.1f".format(Locale.getDefault(), mm)} mm"
+    } else {
+        value
+    }
+}
+
+private fun formatExifAperture(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val fNumber = value.toDoubleOrNull()
+    return if (fNumber != null && fNumber > 0) {
+        "f/${"%.1f".format(Locale.getDefault(), fNumber)}"
+    } else {
+        value
+    }
+}
+
+private fun formatExifGps(exif: ExifInterface): String? {
+    var lat = exif.getAttributeDouble(ExifInterface.TAG_GPS_LATITUDE, Double.NaN)
+    var lon = exif.getAttributeDouble(ExifInterface.TAG_GPS_LONGITUDE, Double.NaN)
+    if (lat.isNaN() || lon.isNaN()) return null
+    val latRef = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE_REF)?.trim()?.uppercase(Locale.ROOT)
+    val lonRef = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF)?.trim()?.uppercase(Locale.ROOT)
+    if (latRef == "S") lat = -kotlin.math.abs(lat)
+    if (lonRef == "W") lon = -kotlin.math.abs(lon)
+    return "${"%.6f".format(Locale.getDefault(), lat)}, ${"%.6f".format(Locale.getDefault(), lon)}"
+}
+
+private fun formatExifOrientation(raw: String?): String? {
+    val orientation = raw?.trim()?.toIntOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
+    return when (orientation) {
+        ExifInterface.ORIENTATION_NORMAL -> "0°"
+        ExifInterface.ORIENTATION_ROTATE_90 -> "90°"
+        ExifInterface.ORIENTATION_ROTATE_180 -> "180°"
+        ExifInterface.ORIENTATION_ROTATE_270 -> "270°"
+        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> "flip-horizontal"
+        ExifInterface.ORIENTATION_FLIP_VERTICAL -> "flip-vertical"
+        ExifInterface.ORIENTATION_TRANSPOSE -> "transpose"
+        ExifInterface.ORIENTATION_TRANSVERSE -> "transverse"
+        else -> orientation.toString()
+    }
+}
+
+private fun formatExifWhiteBalance(raw: String?): String? {
+    return when (raw?.trim()) {
+        "0" -> "auto"
+        "1" -> "manual"
+        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
+    }
+}
+
+private fun formatExifFlash(raw: String?): String? {
+    val value = raw?.trim()?.toIntOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
+    return if ((value and 0x1) == 1) "fired" else "not-fired"
+}
+
+private fun formatExifMeteringMode(raw: String?): String? {
+    return when (raw?.trim()) {
+        "0" -> "unknown"
+        "1" -> "average"
+        "2" -> "center-weighted"
+        "3" -> "spot"
+        "4" -> "multi-spot"
+        "5" -> "pattern"
+        "6" -> "partial"
+        "255" -> "other"
+        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
+    }
+}
+
+private fun formatExifExposureCompensation(raw: String?): String? {
+    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val ev = value.toDoubleOrNull()
+    return if (ev != null) {
+        "${"%.2f".format(Locale.getDefault(), ev)} EV"
+    } else {
+        value
+    }
+}
+
+private fun formatExifColorSpace(raw: String?): String? {
+    return when (raw?.trim()) {
+        "1" -> "sRGB"
+        "65535" -> "uncalibrated"
+        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
+    }
+}
+
+private fun formatExifAltitude(exif: ExifInterface): String? {
+    val raw = exif.getAttributeDouble(ExifInterface.TAG_GPS_ALTITUDE, Double.NaN)
+    if (raw.isNaN()) return null
+    var altitude = raw
+    val ref = exif.getAttributeInt(ExifInterface.TAG_GPS_ALTITUDE_REF, 0)
+    if (ref == 1) altitude = -kotlin.math.abs(altitude)
+    return "${"%.1f".format(Locale.getDefault(), altitude)} m"
+}
+
+private fun normalizeExifDateTime(value: String): String {
+    val trimmed = value.trim()
+    if (trimmed.isEmpty()) return ""
+    // 允许用户输入 YYYY-MM-DD HH:MM:SS，保存前转成 EXIF 常用的 YYYY:MM:DD HH:MM:SS
+    val datePart = trimmed.take(10)
+    val normalizedDatePart = if (datePart.length == 10 && datePart[4] == '-' && datePart[7] == '-') {
+        datePart.replace('-', ':')
+    } else {
+        datePart
+    }
+    return if (trimmed.length > 10) {
+        normalizedDatePart + trimmed.substring(10)
+    } else {
+        normalizedDatePart
+    }
+}
+
+private fun decodeXpExifText(exif: ExifInterface, tag: String): String? {
+    fun decodeUtf16Le(raw: ByteArray): String? {
+        if (raw.isEmpty()) return null
+        var end = raw.size
+        while (end >= 2 && raw[end - 1] == 0.toByte() && raw[end - 2] == 0.toByte()) {
+            end -= 2
+        }
+        if (end <= 0) return null
+        return runCatching {
+            String(raw, 0, end, Charsets.UTF_16LE).trim().ifEmpty { null }
+        }.getOrNull()
+    }
+
+    exif.getAttributeBytes(tag)?.let { bytes ->
+        decodeUtf16Le(bytes)?.let { return it }
+    }
+
+    val rawAttr = exif.getAttribute(tag)?.trim().orEmpty()
+    if (rawAttr.isBlank()) return null
+    val parsedBytes = runCatching {
+        rawAttr.split(',')
+            .mapNotNull { token -> token.trim().takeIf { it.isNotEmpty() }?.toIntOrNull() }
+            .map { (it and 0xFF).toByte() }
+            .toByteArray()
+    }.getOrNull()
+    if (parsedBytes != null && parsedBytes.isNotEmpty()) {
+        decodeUtf16Le(parsedBytes)?.let { return it }
+    }
+    return rawAttr.ifEmpty { null }
+}
+
+private fun encodeXpExifText(value: String): String {
+    val bytes = (value + "\u0000").toByteArray(Charsets.UTF_16LE)
+    return bytes.joinToString(separator = ",") { (it.toInt() and 0xFF).toString() }
+}
+
+private fun readExifTextWithUnicodeFallback(
+    exif: ExifInterface,
+    standardTag: String,
+    xpTag: String? = null
+): String {
+    val standard = exif.getAttribute(standardTag)?.trim().orEmpty()
+    val xp = xpTag?.let { decodeXpExifText(exif, it) }.orEmpty()
+    return when {
+        xp.isNotBlank() -> xp
+        standard.isNotBlank() -> standard
+        else -> ""
+    }
+}
+
+private fun writeExifTextWithUnicodeSupport(
+    exif: ExifInterface,
+    standardTag: String,
+    value: String,
+    xpTag: String? = null
+) {
+    val normalized = value.trim()
+    if (normalized.isBlank()) {
+        exif.setAttribute(standardTag, null)
+        xpTag?.let { exif.setAttribute(it, null) }
+        return
+    }
+    exif.setAttribute(standardTag, normalized)
+    xpTag?.let { exif.setAttribute(it, encodeXpExifText(normalized)) }
+}
+
+private fun decodeLmExifPayloadToken(token: String): LmExifPayload? {
+    val normalized = token.trim().takeIf { it.isNotEmpty() } ?: return null
+    val jsonText = runCatching {
+        val bytes = Base64.decode(normalized, Base64.URL_SAFE or Base64.NO_WRAP)
+        String(bytes, Charsets.UTF_8)
+    }.getOrNull() ?: return null
+    return runCatching {
+        val json = JSONObject(jsonText)
+        LmExifPayload(
+            artist = json.optString("artist").trim(),
+            description = json.optString("description").trim(),
+            software = json.optString("software").trim(),
+            copyright = json.optString("copyright").trim()
+        )
+    }.getOrNull()
+}
+
+private fun encodeLmExifPayloadToken(data: EditableImageExif): String? {
+    val payload = JSONObject().apply {
+        put("artist", data.artist.trim())
+        put("description", data.description.trim())
+        put("software", data.software.trim())
+        put("copyright", data.copyright.trim())
+    }
+    val hasAny = payload.optString("artist").isNotBlank() ||
+        payload.optString("description").isNotBlank() ||
+        payload.optString("software").isNotBlank() ||
+        payload.optString("copyright").isNotBlank()
+    if (!hasAny) return null
+    return Base64.encodeToString(payload.toString().toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
+}
+
+private fun splitSoftwareAndPayloadToken(rawSoftware: String?): Pair<String, String?> {
+    val value = rawSoftware?.trim().orEmpty()
+    if (value.isEmpty()) return "" to null
+    val start = value.lastIndexOf(LM_EXIF_SOFTWARE_MARKER_PREFIX)
+    if (start < 0) return value to null
+    val end = value.indexOf(LM_EXIF_SOFTWARE_MARKER_SUFFIX, start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length)
+    if (end <= start) return value to null
+    val token = value.substring(start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length, end).trim()
+    val clean = (value.substring(0, start) + value.substring(end + LM_EXIF_SOFTWARE_MARKER_SUFFIX.length)).trim()
+    return clean to token.takeIf { it.isNotEmpty() }
+}
+
+private fun readLmExifPayload(exif: ExifInterface): LmExifPayload? {
+    val raw = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+    if (raw.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
+        val token = raw.removePrefix(LM_EXIF_USER_COMMENT_PREFIX)
+        decodeLmExifPayloadToken(token)?.let { return it }
+    }
+    val (_, tokenFromSoftware) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
+    return tokenFromSoftware?.let { decodeLmExifPayloadToken(it) }
+}
+
+private fun writeLmExifPayload(exif: ExifInterface, data: EditableImageExif) {
+    val token = encodeLmExifPayloadToken(data)
+    val (cleanSoftware, _) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
+    if (token == null) {
+        val existing = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+        if (existing.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
+            exif.setAttribute(ExifInterface.TAG_USER_COMMENT, null)
+        }
+        writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, cleanSoftware, EXIF_TAG_XP_SOFTWARE)
+        return
+    }
+    exif.setAttribute(ExifInterface.TAG_USER_COMMENT, LM_EXIF_USER_COMMENT_PREFIX + token)
+    val softwareWithMarker = if (data.software.trim().isBlank()) {
+        "${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
+    } else {
+        "${data.software.trim()}${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
+    }
+    writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, softwareWithMarker, EXIF_TAG_XP_SOFTWARE)
+}
+
+private fun readEditableImageExif(context: Context, uri: Uri): EditableImageExif {
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val exif = ExifInterface(input)
+        val lmPayload = readLmExifPayload(exif)
+        return EditableImageExif(
+            takenTime = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL).orEmpty(),
+            artist = lmPayload?.artist?.takeIf { it.isNotBlank() }
+                ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_ARTIST, EXIF_TAG_XP_AUTHOR),
+            description = lmPayload?.description?.takeIf { it.isNotBlank() }
+                ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_IMAGE_DESCRIPTION, EXIF_TAG_XP_COMMENT),
+            software = lmPayload?.software?.takeIf { it.isNotBlank() }
+                ?: splitSoftwareAndPayloadToken(readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_SOFTWARE, EXIF_TAG_XP_SOFTWARE)).first,
+            copyright = lmPayload?.copyright?.takeIf { it.isNotBlank() }
+                ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_COPYRIGHT, EXIF_TAG_XP_COPYRIGHT)
+        )
+    }
+    return EditableImageExif()
+}
+
+private fun saveEditableImageExif(
+    context: Context,
+    uri: Uri,
+    data: EditableImageExif
+): String? {
+    return try {
+        val pfd = context.contentResolver.openFileDescriptor(uri, "rw")
+            ?: return "openFileDescriptor returned null (rw)"
+        pfd.use {
+            val exif = ExifInterface(it.fileDescriptor)
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, normalizeExifDateTime(data.takenTime).ifBlank { null })
+            writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_ARTIST, data.artist, EXIF_TAG_XP_AUTHOR)
+            writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_IMAGE_DESCRIPTION, data.description, EXIF_TAG_XP_COMMENT)
+            writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_COPYRIGHT, data.copyright, EXIF_TAG_XP_COPYRIGHT)
+            writeLmExifPayload(exif, data)
+            exif.saveAttributes()
+        }
+        val readBack = readEditableImageExif(context, uri)
+        val mismatch = mutableListOf<String>()
+        if (readBack.artist.trim() != data.artist.trim()) mismatch += "artist"
+        if (readBack.description.trim() != data.description.trim()) mismatch += "description"
+        if (readBack.software.trim() != data.software.trim()) mismatch += "software"
+        if (readBack.copyright.trim() != data.copyright.trim()) mismatch += "copyright"
+        if (mismatch.isNotEmpty()) {
+            return "post-save verification mismatch: ${mismatch.joinToString(",")}; readBack=${readBack}"
+        }
+        null
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+    }
+}
+
+private fun MediaFormat.stringOrNull(key: String): String? {
+    return if (containsKey(key)) getString(key)?.trim()?.takeIf { it.isNotEmpty() } else null
+}
+
+private fun MediaFormat.intOrNull(key: String): Int? {
+    return if (containsKey(key)) runCatching { getInteger(key) }.getOrNull() else null
+}
+
+private fun MediaFormat.floatOrNull(key: String): Float? {
+    return if (containsKey(key)) runCatching { getFloat(key) }.getOrNull() else null
+}
+
+private fun MediaFormat.longOrNull(key: String): Long? {
+    return if (containsKey(key)) runCatching { getLong(key) }.getOrNull() else null
+}
+
+private fun loadVideoTrackMetadataRows(context: Context, uri: Uri): List<DetailMetadataRow> {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setDataSource(context, uri, null)
+        val rows = mutableListOf<DetailMetadataRow>()
+        var hasVideoTrack = false
+        var hasAudioTrack = false
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            val mime = format.stringOrNull(MediaFormat.KEY_MIME).orEmpty()
+            if (mime.startsWith("video/")) {
+                if (!hasVideoTrack) {
+                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_video_tracks))
+                    hasVideoTrack = true
+                }
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_video_track_mime_label, index + 1),
+                    mime
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_video_track_resolution_label, index + 1),
+                    formatVideoResolution(
+                        format.intOrNull(MediaFormat.KEY_WIDTH)?.toString(),
+                        format.intOrNull(MediaFormat.KEY_HEIGHT)?.toString()
+                    )
+                )
+                val frameRate = format.floatOrNull(MediaFormat.KEY_FRAME_RATE)
+                    ?: format.intOrNull(MediaFormat.KEY_FRAME_RATE)?.toFloat()
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_video_track_fps_label, index + 1),
+                    frameRate?.let { "${"%.2f".format(Locale.getDefault(), it)} fps" }
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_video_track_bitrate_label, index + 1),
+                    formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_video_track_duration_label, index + 1),
+                    formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
+                )
+            } else if (mime.startsWith("audio/")) {
+                if (!hasAudioTrack) {
+                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tracks))
+                    hasAudioTrack = true
+                }
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_audio_track_mime_label, index + 1),
+                    mime
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_audio_track_sample_rate_label, index + 1),
+                    formatSampleRate(format.intOrNull(MediaFormat.KEY_SAMPLE_RATE)?.toString())
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_audio_track_channel_count_label, index + 1),
+                    format.intOrNull(MediaFormat.KEY_CHANNEL_COUNT)?.toString()
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_audio_track_bitrate_label, index + 1),
+                    formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_audio_track_duration_label, index + 1),
+                    formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
+                )
+            }
+        }
+        rows
+    } finally {
+        runCatching { extractor.release() }
+    }
+}
+
+private fun loadTypeSpecificMetadataRows(
+    context: Context,
+    uri: Uri,
+    fileName: String,
+    mimeType: String,
+    isDirectory: Boolean
+): List<DetailMetadataRow> {
+    if (isDirectory) return emptyList()
+    return when (inferDetailMetadataKind(fileName, mimeType, isDirectory)) {
+        DetailMetadataKind.AUDIO -> runCatching {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(context, uri)
+                val rows = mutableListOf<DetailMetadataRow>()
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_title_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_genre_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_year_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_duration_label), formatDurationMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bitrate_label), formatBitrate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)))
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_sample_rate_label), formatSampleRate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)))
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bits_per_sample_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE))
+                }
+                rows
+            }
+        }.getOrElse { emptyList() }
+
+        DetailMetadataKind.VIDEO -> runCatching {
+            MediaMetadataRetriever().use { retriever ->
+                retriever.setDataSource(context, uri)
+                val rows = mutableListOf<DetailMetadataRow>()
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_duration_label), formatDurationMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bitrate_label), formatBitrate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)))
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_resolution_label),
+                    formatVideoResolution(
+                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH),
+                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
+                    )
+                )
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_rotation_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION))
+                rows += loadVideoTrackMetadataRows(context, uri)
+                rows
+            }
+        }.getOrElse { emptyList() }
+
+        DetailMetadataKind.IMAGE -> runCatching {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                val rows = mutableListOf<DetailMetadataRow>()
+                val exif = ExifInterface(input)
+                val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
+                    .takeIf { it > 0 }
+                    ?: exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0).takeIf { it > 0 }
+                val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
+                    .takeIf { it > 0 }
+                    ?: exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0).takeIf { it > 0 }
+                if (width != null && height != null) {
+                    appendMetaIfNotBlank(
+                        rows,
+                        context.getString(R.string.browser_meta_resolution_label),
+                        "${width} x ${height}"
+                    )
+                }
+                val lmPayload = readLmExifPayload(exif)
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_taken_time_label), exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL))
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_artist_label),
+                    lmPayload?.artist?.takeIf { it.isNotBlank() }
+                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_ARTIST, EXIF_TAG_XP_AUTHOR)
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_description_label),
+                    lmPayload?.description?.takeIf { it.isNotBlank() }
+                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_IMAGE_DESCRIPTION, EXIF_TAG_XP_COMMENT)
+                )
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_camera_make_label), exif.getAttribute(ExifInterface.TAG_MAKE))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_camera_model_label), exif.getAttribute(ExifInterface.TAG_MODEL))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_lens_model_label), exif.getAttribute(ExifInterface.TAG_LENS_MODEL))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_iso_label), exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_exposure_label), formatExifExposureTime(exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_aperture_label), formatExifAperture(exif.getAttribute(ExifInterface.TAG_F_NUMBER)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_focal_length_label), formatExifFocalLength(exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_orientation_label), formatExifOrientation(exif.getAttribute(ExifInterface.TAG_ORIENTATION)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_white_balance_label), formatExifWhiteBalance(exif.getAttribute(ExifInterface.TAG_WHITE_BALANCE)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_flash_label), formatExifFlash(exif.getAttribute(ExifInterface.TAG_FLASH)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_metering_mode_label), formatExifMeteringMode(exif.getAttribute(ExifInterface.TAG_METERING_MODE)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_exposure_compensation_label), formatExifExposureCompensation(exif.getAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE)))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_color_space_label), formatExifColorSpace(exif.getAttribute(ExifInterface.TAG_COLOR_SPACE)))
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_software_label),
+                    lmPayload?.software?.takeIf { it.isNotBlank() }
+                        ?: splitSoftwareAndPayloadToken(readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_SOFTWARE, EXIF_TAG_XP_SOFTWARE)).first
+                )
+                appendMetaIfNotBlank(
+                    rows,
+                    context.getString(R.string.browser_meta_copyright_label),
+                    lmPayload?.copyright?.takeIf { it.isNotBlank() }
+                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_COPYRIGHT, EXIF_TAG_XP_COPYRIGHT)
+                )
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_gps_label), formatExifGps(exif))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_altitude_label), formatExifAltitude(exif))
+                rows
+            } ?: emptyList()
+        }.getOrElse { emptyList() }
+
+        DetailMetadataKind.PDF -> runCatching {
+            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    val rows = mutableListOf<DetailMetadataRow>()
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_page_count_label), renderer.pageCount.toString())
+                    rows
+                }
+            } ?: emptyList()
+        }.getOrElse { emptyList() }
+
+        DetailMetadataKind.ARCHIVE,
+        DetailMetadataKind.UNKNOWN -> emptyList()
+    }
 }
 
 private fun trackFilterTarget(
@@ -7756,15 +8416,17 @@ internal fun FileBrowserScreen(
         var zipDetailResult by remember(detailTarget.uri) { mutableStateOf<ZipFirstLevelResult?>(null) }
         var zipDetailPassword by remember(detailTarget.uri) { mutableStateOf("") }
         var zipDetailShowPasswordInput by remember(detailTarget.uri) { mutableStateOf(false) }
+        var showTypeSpecificMeta by remember(detailTarget.uri) { mutableStateOf(false) }
+        var typeSpecificMetaLoaded by remember(detailTarget.uri) { mutableStateOf(false) }
+        var typeSpecificMetaLoading by remember(detailTarget.uri) { mutableStateOf(false) }
+        var typeSpecificMetaRows by remember(detailTarget.uri) { mutableStateOf<List<DetailMetadataRow>>(emptyList()) }
+        var typeSpecificMetaError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
+        var showImageExifEditDialog by remember(detailTarget.uri) { mutableStateOf(false) }
+        var imageExifLoading by remember(detailTarget.uri) { mutableStateOf(false) }
+        var imageExifSaving by remember(detailTarget.uri) { mutableStateOf(false) }
+        var imageExifSaveError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
+        var imageExifForm by remember(detailTarget.uri) { mutableStateOf(EditableImageExif()) }
         val detailScope = rememberCoroutineScope()
-
-        LaunchedEffect(detailTarget.uri) {
-            if (isArchiveFile) {
-                zipDetailResult = withContext(Dispatchers.IO) {
-                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, null)
-                }
-            }
-        }
 
         LaunchedEffect(detailTarget.uri) {
             withContext(Dispatchers.IO) {
@@ -7817,6 +8479,41 @@ internal fun FileBrowserScreen(
         val lastModifiedFromMeta = detailMeta[DocumentsContract.Document.COLUMN_LAST_MODIFIED]?.toLongOrNull()
         val lastModifiedMetaStr = if (lastModifiedFromMeta != null && lastModifiedFromMeta > 0) fmt.format(java.util.Date(lastModifiedFromMeta)) else ""
         val displayModified = lastModifiedStr.ifEmpty { lastModifiedMetaStr }
+        val detailMetaKind = inferDetailMetadataKind(detailTarget.name, mimeType, detailTarget.isDirectory)
+
+        suspend fun loadTypeSpecificMetadataNow(forceReload: Boolean = false) {
+            if (!showTypeSpecificMeta || detailTarget.isDirectory) return
+            if (!forceReload && typeSpecificMetaLoaded) return
+            typeSpecificMetaLoading = true
+            typeSpecificMetaError = null
+            val rows = try {
+                withContext(Dispatchers.IO) {
+                    loadTypeSpecificMetadataRows(
+                        context = context,
+                        uri = detailTarget.uri,
+                        fileName = detailTarget.name,
+                        mimeType = mimeType,
+                        isDirectory = detailTarget.isDirectory
+                    )
+                }
+            } catch (e: Exception) {
+                typeSpecificMetaError = e.message ?: e.javaClass.simpleName
+                emptyList()
+            }
+            typeSpecificMetaRows = rows
+            typeSpecificMetaLoaded = true
+            typeSpecificMetaLoading = false
+
+            if (isArchiveFile && zipDetailResult == null) {
+                zipDetailResult = withContext(Dispatchers.IO) {
+                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, null)
+                }
+            }
+        }
+
+        LaunchedEffect(showTypeSpecificMeta, detailTarget.uri, mimeType) {
+            loadTypeSpecificMetadataNow(forceReload = false)
+        }
 
         Dialog(onDismissRequest = { showFileDetail = null }) {
             Surface(
@@ -7905,74 +8602,167 @@ internal fun FileBrowserScreen(
                     if (!detailTarget.isDirectory) MetaRow(context.getString(R.string.browser_size_field), sizeStr)
                     MetaRow(context.getString(R.string.browser_modified_field), displayModified)
 
-                    if (isArchiveFile) {
+                    if (!detailTarget.isDirectory) {
                         Spacer(Modifier.height(16.dp))
-                        Text(stringResource(R.string.browser_archive_contents), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.height(8.dp))
-                        when (val r = zipDetailResult) {
-                            is ZipFirstLevelResult.Ok -> {
-                                if (r.entries.isEmpty()) {
-                                    Text(stringResource(R.string.browser_empty_placeholder), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                } else {
-                                    Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                                        r.entries.forEach { entry ->
-                                            Text(entry, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                                        }
-                                    }
-                                }
-                            }
-                            is ZipFirstLevelResult.OkSingleDir -> {
-                                Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                                    Text("${r.rootDirName}/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                    if (r.children.isEmpty()) {
-                                        Text(stringResource(R.string.browser_empty_placeholder_indent), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                stringResource(R.string.browser_type_specific_section_title),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(onClick = { showTypeSpecificMeta = !showTypeSpecificMeta }) {
+                                Text(
+                                    if (showTypeSpecificMeta) {
+                                        stringResource(R.string.browser_type_specific_collapse)
                                     } else {
-                                        r.children.forEach { child ->
-                                            Text("  $child", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                        stringResource(R.string.browser_type_specific_expand)
+                                    }
+                                )
+                            }
+                        }
+
+                        if (showTypeSpecificMeta) {
+                            Spacer(Modifier.height(8.dp))
+                            if (detailMetaKind == DetailMetadataKind.IMAGE) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            detailScope.launch {
+                                                imageExifLoading = true
+                                                imageExifSaveError = null
+                                                imageExifForm = withContext(Dispatchers.IO) {
+                                                    readEditableImageExif(context, detailTarget.uri)
+                                                }
+                                                imageExifLoading = false
+                                                showImageExifEditDialog = true
+                                            }
                                         }
+                                    ) {
+                                        Text(stringResource(R.string.browser_type_specific_edit_image_meta))
                                     }
                                 }
+                                Spacer(Modifier.height(8.dp))
                             }
-                            ZipFirstLevelResult.Encrypted -> {
-                                if (!zipDetailShowPasswordInput) {
-                                    OutlinedButton(onClick = { zipDetailShowPasswordInput = true }) {
-                                        Text(stringResource(R.string.browser_enter_password_view))
-                                    }
-                                } else {
-                                    Column(Modifier.fillMaxWidth()) {
-                                        ReliablePasswordInputField(
-                                            value = zipDetailPassword,
-                                            onValueChange = { zipDetailPassword = it },
-                                            label = { Text(stringResource(R.string.browser_enter_password)) },
-                                            modifier = Modifier.fillMaxWidth()
+                            when {
+                                typeSpecificMetaLoading -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(Modifier.size(20.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            stringResource(R.string.browser_type_specific_loading),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
-                                        Spacer(Modifier.height(8.dp))
-                                        Row(horizontalArrangement = Arrangement.End) {
-                                            TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text(stringResource(R.string.common_cancel)) }
-                                            Spacer(Modifier.width(8.dp))
-                                            Button(
-                                                onClick = {
-                                                    detailScope.launch {
-                                                        val res = withContext(Dispatchers.IO) {
-                                                            getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, zipDetailPassword.toCharArray())
-                                                        }
-                                                        zipDetailResult = res
-                                                        if (res is ZipFirstLevelResult.Error) {
-                                                            Toast.makeText(context, context.getString(R.string.browser_password_wrong_or_unreadable), Toast.LENGTH_SHORT).show()
-                                                        }
-                                                    }
-                                                },
-                                                enabled = zipDetailPassword.isNotEmpty()
-                                            ) { Text(stringResource(R.string.common_ok)) }
+                                    }
+                                }
+                                typeSpecificMetaError != null -> {
+                                    Text(
+                                        stringResource(R.string.browser_type_specific_error, typeSpecificMetaError ?: ""),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                                typeSpecificMetaRows.isNotEmpty() -> {
+                                    typeSpecificMetaRows.forEach { row ->
+                                        if (row.isSection) {
+                                            Spacer(Modifier.height(8.dp))
+                                            Text(
+                                                text = row.label,
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        } else {
+                                            MetaRow(row.label, row.value)
                                         }
                                     }
                                 }
+                                else -> {
+                                    Text(
+                                        stringResource(R.string.browser_type_specific_empty),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                            ZipFirstLevelResult.Error -> {
-                                Text(stringResource(R.string.browser_cannot_read_archive), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            }
-                            null -> {
-                                CircularProgressIndicator(Modifier.size(24.dp))
+
+                            if (isArchiveFile) {
+                                Spacer(Modifier.height(12.dp))
+                                Text(stringResource(R.string.browser_archive_contents), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Spacer(Modifier.height(8.dp))
+                                when (val r = zipDetailResult) {
+                                    is ZipFirstLevelResult.Ok -> {
+                                        if (r.entries.isEmpty()) {
+                                            Text(stringResource(R.string.browser_empty_placeholder), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        } else {
+                                            Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                                                r.entries.forEach { entry ->
+                                                    Text(entry, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    is ZipFirstLevelResult.OkSingleDir -> {
+                                        Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
+                                            Text("${r.rootDirName}/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                            if (r.children.isEmpty()) {
+                                                Text(stringResource(R.string.browser_empty_placeholder_indent), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            } else {
+                                                r.children.forEach { child ->
+                                                    Text("  $child", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ZipFirstLevelResult.Encrypted -> {
+                                        if (!zipDetailShowPasswordInput) {
+                                            OutlinedButton(onClick = { zipDetailShowPasswordInput = true }) {
+                                                Text(stringResource(R.string.browser_enter_password_view))
+                                            }
+                                        } else {
+                                            Column(Modifier.fillMaxWidth()) {
+                                                ReliablePasswordInputField(
+                                                    value = zipDetailPassword,
+                                                    onValueChange = { zipDetailPassword = it },
+                                                    label = { Text(stringResource(R.string.browser_enter_password)) },
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                                Spacer(Modifier.height(8.dp))
+                                                Row(horizontalArrangement = Arrangement.End) {
+                                                    TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text(stringResource(R.string.common_cancel)) }
+                                                    Spacer(Modifier.width(8.dp))
+                                                    Button(
+                                                        onClick = {
+                                                            detailScope.launch {
+                                                                val res = withContext(Dispatchers.IO) {
+                                                                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, zipDetailPassword.toCharArray())
+                                                                }
+                                                                zipDetailResult = res
+                                                                if (res is ZipFirstLevelResult.Error) {
+                                                                    Toast.makeText(context, context.getString(R.string.browser_password_wrong_or_unreadable), Toast.LENGTH_SHORT).show()
+                                                                }
+                                                            }
+                                                        },
+                                                        enabled = zipDetailPassword.isNotEmpty()
+                                                    ) { Text(stringResource(R.string.common_ok)) }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ZipFirstLevelResult.Error -> {
+                                        Text(stringResource(R.string.browser_cannot_read_archive), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                                    }
+                                    null -> {
+                                        CircularProgressIndicator(Modifier.size(24.dp))
+                                    }
+                                }
                             }
                         }
                     }
@@ -7983,6 +8773,112 @@ internal fun FileBrowserScreen(
                     }
                 }
             }
+        }
+
+        if (showImageExifEditDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!imageExifSaving) showImageExifEditDialog = false
+                },
+                title = { Text(stringResource(R.string.browser_type_specific_edit_image_meta_title)) },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (imageExifLoading) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.browser_type_specific_loading))
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = imageExifForm.takenTime,
+                                onValueChange = { imageExifForm = imageExifForm.copy(takenTime = it) },
+                                label = { Text(stringResource(R.string.browser_meta_taken_time_label)) },
+                                supportingText = { Text(stringResource(R.string.browser_meta_taken_time_hint)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = imageExifForm.artist,
+                                onValueChange = { imageExifForm = imageExifForm.copy(artist = it) },
+                                label = { Text(stringResource(R.string.browser_meta_artist_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = imageExifForm.description,
+                                onValueChange = { imageExifForm = imageExifForm.copy(description = it) },
+                                label = { Text(stringResource(R.string.browser_meta_description_label)) },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = imageExifForm.software,
+                                onValueChange = { imageExifForm = imageExifForm.copy(software = it) },
+                                label = { Text(stringResource(R.string.browser_meta_software_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = imageExifForm.copyright,
+                                onValueChange = { imageExifForm = imageExifForm.copy(copyright = it) },
+                                label = { Text(stringResource(R.string.browser_meta_copyright_label)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            imageExifSaveError?.takeIf { it.isNotBlank() }?.let { errorText ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(R.string.browser_type_specific_save_error, errorText),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (imageExifLoading || imageExifSaving) return@TextButton
+                            detailScope.launch {
+                                imageExifSaving = true
+                                imageExifSaveError = null
+                                val saveError = withContext(Dispatchers.IO) {
+                                    saveEditableImageExif(context, detailTarget.uri, imageExifForm)
+                                }
+                                imageExifSaving = false
+                                if (saveError == null) {
+                                    showImageExifEditDialog = false
+                                    Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
+                                    typeSpecificMetaLoaded = false
+                                    loadTypeSpecificMetadataNow(forceReload = true)
+                                } else {
+                                    imageExifSaveError = saveError
+                                }
+                            }
+                        },
+                        enabled = !imageExifLoading && !imageExifSaving
+                    ) {
+                        Text(if (imageExifSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { if (!imageExifSaving) showImageExifEditDialog = false },
+                        enabled = !imageExifSaving
+                    ) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                }
+            )
         }
     }
 
