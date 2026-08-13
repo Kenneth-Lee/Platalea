@@ -97,4 +97,14 @@ class BatchMetadataEditTest {
 
         assertEquals(listOf("album"), compareChangedAudioAnnotationFields(before, expected, actual))
     }
+
+    @Test
+    fun archiveDetection_supportsTarCompressedFormats() {
+        assertEquals(true, isExtractableArchive("backup.tar.gz"))
+        assertEquals(true, isExtractableArchive("backup.tar.bz2"))
+        assertEquals(true, isExtractableArchive("backup.tar.xz"))
+        assertEquals(true, isExtractableArchive("backup.tgz"))
+        assertEquals(true, isExtractableArchive("backup.tbz2"))
+        assertEquals(true, isExtractableArchive("backup.txz"))
+    }
 }

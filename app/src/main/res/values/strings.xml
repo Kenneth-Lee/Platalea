@@ -215,6 +215,7 @@
     <string name="context_import_stardict">导入星际词典</string>
     <string name="context_restore">恢复</string>
     <string name="context_quick_mask">遮罩</string>
+    <string name="context_compress_archive">压缩…</string>
     <string name="context_compress_zip">压缩为 ZIP</string>
     <string name="context_compress_7z">压缩为 7Z</string>
     <string name="context_share_to_git">共享到 Git</string>
@@ -411,6 +412,7 @@
     <string name="pending_list_action_mask">遮罩</string>
     <string name="pending_list_action_gpg_encrypt">GPG 加密</string>
     <string name="pending_list_action_gpg_decrypt">GPG 解密</string>
+    <string name="pending_list_action_archive">压缩</string>
     <string name="pending_list_action_zip">压缩 ZIP</string>
     <string name="pending_list_action_7z">压缩 7Z</string>
     <string name="bulletin_forward_pick_device">选择目标设备</string>
@@ -1288,11 +1290,19 @@ OPF目录文件: %2$s</string>
     <string name="browser_llm_parse_failed_title">LLM 对话文件解析失败</string>
     <string name="browser_view_pic_zip_title">查看图片压缩包</string>
     <string name="browser_extracting_file">正在解压 %1$s…</string>
+    <string name="browser_compress_archive_title">压缩格式</string>
+    <string name="browser_compress_archive_confirm">将 %1$s 压缩为 %2$s？</string>
+    <string name="browser_compress_format_label">格式</string>
+    <string name="browser_compress_auto_name_hint">自动生成输出文件：%1$s</string>
+    <string name="browser_compress_tar_no_password">当前格式不支持密码保护（tar.gz / tar.bz2 / tar.xz 仅为归档压缩，不提供加密）。</string>
+    <string name="browser_compress_single_file_warning">警告：此格式按“单文件压缩”处理，所选项会逐个分别生成压缩文件。</string>
     <string name="browser_compress_zip_title">压缩为 ZIP</string>
     <string name="browser_compress_zip_confirm">确定将 %1$s 压缩为 %2$s？</string>
     <string name="browser_compress_action">压缩</string>
     <string name="browser_compress_7z_title">压缩为 7Z</string>
     <string name="browser_compress_7z_confirm">确定将 %1$s 压缩为 %2$s？</string>
+    <string name="browser_compress_pending_archive_title">压缩待处理列表</string>
+    <string name="browser_pending_compress_archive_desc">将 %1$d 个项目按所选格式压缩为一个归档；若选单文件格式，则每个项目分别压缩。</string>
     <string name="browser_compress_pending_zip_title">压缩待处理列表为 ZIP</string>
     <string name="browser_filename_label">文件名</string>
     <string name="browser_password_optional_label">密码（留空则不加密）</string>

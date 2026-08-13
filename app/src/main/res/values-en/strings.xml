@@ -190,6 +190,7 @@
     <string name="context_import_stardict">Import StarDict</string>
     <string name="context_restore">Restore</string>
     <string name="context_quick_mask">Mask</string>
+    <string name="context_compress_archive">Compress…</string>
     <string name="context_compress_zip">Compress to ZIP</string>
     <string name="context_compress_7z">Compress to 7Z</string>
     <string name="context_share_to_git">Share to Git</string>
@@ -327,6 +328,7 @@
     <string name="pending_list_action_mask">Mask</string>
     <string name="pending_list_action_gpg_encrypt">GPG encrypt</string>
     <string name="pending_list_action_gpg_decrypt">GPG decrypt</string>
+    <string name="pending_list_action_archive">Compress</string>
     <string name="pending_list_action_zip">Compress ZIP</string>
     <string name="pending_list_action_7z">Compress 7Z</string>
     <string name="bulletin_forward_pick_device">Select target device</string>
@@ -1237,11 +1239,19 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_llm_parse_failed_title">LLM conversation parse failed</string>
     <string name="browser_view_pic_zip_title">View image archive</string>
     <string name="browser_extracting_file">Extracting %1$s…</string>
+    <string name="browser_compress_archive_title">Compression format</string>
+    <string name="browser_compress_archive_confirm">Compress %1$s to %2$s?</string>
+    <string name="browser_compress_format_label">Format</string>
+    <string name="browser_compress_auto_name_hint">Auto-generated output: %1$s</string>
+    <string name="browser_compress_tar_no_password">This format does not support password protection (tar.gz / tar.bz2 / tar.xz are archive compression only and do not encrypt).</string>
+    <string name="browser_compress_single_file_warning">Warning: this format is single-file compression. Each selected item will generate its own output file.</string>
     <string name="browser_compress_zip_title">Compress to ZIP</string>
     <string name="browser_compress_zip_confirm">Compress %1$s to %2$s?</string>
     <string name="browser_compress_action">Compress</string>
     <string name="browser_compress_7z_title">Compress to 7Z</string>
     <string name="browser_compress_7z_confirm">Compress %1$s to %2$s?</string>
+    <string name="browser_compress_pending_archive_title">Compress pending list</string>
+    <string name="browser_pending_compress_archive_desc">Compress %1$d items using the selected format; if you choose a single-file format, each item is compressed separately.</string>
     <string name="browser_compress_pending_zip_title">Compress pending list to ZIP</string>
     <string name="browser_filename_label">File name</string>
     <string name="browser_password_optional_label">Password (leave blank for no encryption)</string>

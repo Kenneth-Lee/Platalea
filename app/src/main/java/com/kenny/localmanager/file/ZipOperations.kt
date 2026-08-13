@@ -12,6 +12,15 @@ import org.apache.commons.compress.PasswordRequiredException
 import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry
 import org.apache.commons.compress.archivers.sevenz.SevenZFile
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
+import org.apache.commons.compress.archivers.tar.TarArchiveEntry
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
+import org.apache.commons.compress.compressors.bzip2.BZip2CompressorOutputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
+import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
@@ -41,6 +50,29 @@ private fun isRarName(name: String?): Boolean =
 
 private fun is7zName(name: String?): Boolean =
     name?.endsWith(".7z", ignoreCase = true) == true
+
+private fun isTarName(name: String?): Boolean {
+    val lower = name?.lowercase(Locale.ROOT) ?: return false
+    return lower.endsWith(".tar", ignoreCase = true) ||
+        lower.endsWith(".tar.gz", ignoreCase = true) ||
+        lower.endsWith(".tgz", ignoreCase = true) ||
+        lower.endsWith(".tar.bz2", ignoreCase = true) ||
+        lower.endsWith(".tbz2", ignoreCase = true) ||
+        lower.endsWith(".tar.xz", ignoreCase = true) ||
+        lower.endsWith(".txz", ignoreCase = true)
+}
+
+private fun openTarArchiveInputStream(file: File, archiveName: String?): TarArchiveInputStream {
+    val lower = (archiveName ?: file.name).lowercase(Locale.ROOT)
+    val raw = file.inputStream()
+    val source = when {
+        lower.endsWith(".tar.gz", ignoreCase = true) || lower.endsWith(".tgz", ignoreCase = true) -> GzipCompressorInputStream(raw)
+        lower.endsWith(".tar.bz2", ignoreCase = true) || lower.endsWith(".tbz2", ignoreCase = true) -> BZip2CompressorInputStream(raw)
+        lower.endsWith(".tar.xz", ignoreCase = true) || lower.endsWith(".txz", ignoreCase = true) -> XZCompressorInputStream(raw)
+        else -> raw
+    }
+    return TarArchiveInputStream(source)
+}
 
 private fun hasRarSignature(file: File): Boolean {
     if (!file.exists() || file.length() < 7) return false
@@ -149,6 +181,9 @@ fun unzipToParent(
         }
         if (is7zName(archiveName) || has7zSignature(zipFile)) {
             return un7zToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
+        }
+        if (isTarName(archiveName)) {
+            return untarToParent(context, zipFile, parentDirUri, treeUri, archiveName, setProgress)
         }
 
         val zip = ZipFile(zipFile)
@@ -445,6 +480,47 @@ private fun resolveParentForZip(context: Context, targetParentUri: Uri, treeUri:
     }
 }
 
+enum class ArchiveCompressionFormat(
+    val label: String,
+    val extension: String,
+    val supportsPassword: Boolean = false,
+    val compressesSingleFileOnly: Boolean = false
+) {
+    ZIP("ZIP", "zip", supportsPassword = true),
+    SEVEN_Z("7Z", "7z", supportsPassword = true),
+    TAR("tar", "tar"),
+    TAR_GZ("tar.gz", "tar.gz"),
+    TAR_BZ2("tar.bz2", "tar.bz2"),
+    TAR_XZ("tar.xz", "tar.xz"),
+    GZ("gz", "gz", compressesSingleFileOnly = true),
+    BZ2("bz2", "bz2", compressesSingleFileOnly = true),
+    XZ("xz", "xz", compressesSingleFileOnly = true)
+}
+
+fun buildArchiveOutputName(baseName: String, format: ArchiveCompressionFormat): String {
+    val trimmed = baseName.trim().ifBlank { "archive" }
+    val lower = trimmed.lowercase(Locale.ROOT)
+    val withoutKnownArchive = when {
+        lower.endsWith(".tar.gz") || lower.endsWith(".tgz") -> trimmed.substringBeforeLast(".", trimmed).substringBeforeLast(".", trimmed)
+        lower.endsWith(".tar.bz2") || lower.endsWith(".tbz2") -> trimmed.substringBeforeLast(".", trimmed).substringBeforeLast(".", trimmed)
+        lower.endsWith(".tar.xz") || lower.endsWith(".txz") -> trimmed.substringBeforeLast(".", trimmed).substringBeforeLast(".", trimmed)
+        lower.endsWith(".tar") || lower.endsWith(".zip") || lower.endsWith(".7z") || lower.endsWith(".gz") || lower.endsWith(".bz2") || lower.endsWith(".xz") -> trimmed.substringBeforeLast(".", trimmed)
+        else -> trimmed.substringBeforeLast(".", trimmed)
+    }
+    val cleanBase = withoutKnownArchive.ifBlank { "archive" }
+    return when (format) {
+        ArchiveCompressionFormat.ZIP -> if (cleanBase.equals(trimmed, ignoreCase = true) && trimmed.endsWith(".zip", ignoreCase = true)) trimmed else "$cleanBase.${format.extension}"
+        ArchiveCompressionFormat.SEVEN_Z -> if (cleanBase.equals(trimmed, ignoreCase = true) && trimmed.endsWith(".7z", ignoreCase = true)) trimmed else "$cleanBase.${format.extension}"
+        ArchiveCompressionFormat.TAR -> if (trimmed.endsWith(".tar", ignoreCase = true)) trimmed else "$cleanBase.tar"
+        ArchiveCompressionFormat.TAR_GZ -> if (trimmed.endsWith(".tar.gz", ignoreCase = true)) trimmed else "$cleanBase.tar.gz"
+        ArchiveCompressionFormat.TAR_BZ2 -> if (trimmed.endsWith(".tar.bz2", ignoreCase = true)) trimmed else "$cleanBase.tar.bz2"
+        ArchiveCompressionFormat.TAR_XZ -> if (trimmed.endsWith(".tar.xz", ignoreCase = true)) trimmed else "$cleanBase.tar.xz"
+        ArchiveCompressionFormat.GZ -> if (trimmed.endsWith(".gz", ignoreCase = true)) trimmed else "$cleanBase.gz"
+        ArchiveCompressionFormat.BZ2 -> if (trimmed.endsWith(".bz2", ignoreCase = true)) trimmed else "$cleanBase.bz2"
+        ArchiveCompressionFormat.XZ -> if (trimmed.endsWith(".xz", ignoreCase = true)) trimmed else "$cleanBase.xz"
+    }
+}
+
 fun buildZipParametersForCompression(password: CharArray?): ZipParameters {
     return ZipParameters().apply {
         compressionLevel = CompressionLevel.NORMAL
@@ -453,6 +529,200 @@ fun buildZipParametersForCompression(password: CharArray?): ZipParameters {
             encryptionMethod = EncryptionMethod.AES
             aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
         }
+    }
+}
+
+private fun resolveCompressionMimeType(fileName: String): String = when {
+    fileName.endsWith(".tar.gz", ignoreCase = true) || fileName.endsWith(".tgz", ignoreCase = true) -> "application/gzip"
+    fileName.endsWith(".tar.bz2", ignoreCase = true) || fileName.endsWith(".tbz2", ignoreCase = true) -> "application/x-bzip2"
+    fileName.endsWith(".tar.xz", ignoreCase = true) || fileName.endsWith(".txz", ignoreCase = true) -> "application/x-xz"
+    fileName.endsWith(".tar", ignoreCase = true) -> "application/x-tar"
+    fileName.endsWith(".gz", ignoreCase = true) -> "application/gzip"
+    fileName.endsWith(".bz2", ignoreCase = true) -> "application/x-bzip2"
+    fileName.endsWith(".xz", ignoreCase = true) -> "application/x-xz"
+    fileName.endsWith(".zip", ignoreCase = true) -> MIME_ZIP
+    fileName.endsWith(".7z", ignoreCase = true) -> MIME_7Z
+    else -> "application/octet-stream"
+}
+
+private fun addDocumentEntryToTar(
+    tarOut: TarArchiveOutputStream,
+    context: Context,
+    docUri: Uri,
+    treeUri: Uri?,
+    entryRelativePath: String,
+    nameHint: String?
+) {
+    val doc = DocumentFile.fromSingleUri(context, resolveDocUriWithTree(docUri, treeUri)) ?: return
+    val targetName = nameHint ?: doc.name ?: return
+    if (doc.isDirectory) {
+        val dirEntry = TarArchiveEntry(entryRelativePath.ifBlank { targetName }.trimStart('/'), true)
+        tarOut.putArchiveEntry(dirEntry)
+        tarOut.closeArchiveEntry()
+        val dirDoc = getDirectoryViaTree(context, docUri, treeUri) ?: return
+        dirDoc.listFiles().orEmpty().forEach { child ->
+            val childUri = resolveDocUriWithTree(child.uri, treeUri)
+            val childPath = if (entryRelativePath.isBlank()) child.name ?: "" else "$entryRelativePath/${child.name ?: ""}"
+            addDocumentEntryToTar(tarOut, context, childUri, treeUri, childPath, child.name)
+        }
+    } else {
+        val normalizedPath = entryRelativePath.ifBlank { targetName }.replace('\\', '/').trimStart('/')
+        val fileEntry = TarArchiveEntry(normalizedPath)
+        fileEntry.size = doc.length()
+        tarOut.putArchiveEntry(fileEntry)
+        context.contentResolver.openInputStream(resolveDocUriWithTree(docUri, treeUri))?.use { input ->
+            input.copyTo(tarOut)
+        }
+        tarOut.closeArchiveEntry()
+    }
+}
+
+fun compressSingleFileToFormat(
+    context: Context,
+    sourceUri: Uri,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    outputFileName: String,
+    format: ArchiveCompressionFormat,
+    setProgress: (Int, Int) -> Unit
+): Boolean {
+    val resolvedUri = resolveDocUriWithTree(sourceUri, treeUri)
+    val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
+    if (doc.isDirectory) return false
+    val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
+    val cacheDir = File(context.cacheDir, "single_compress_${System.currentTimeMillis()}_${format.name}").apply { mkdirs() }
+    val tempFile = File(cacheDir, outputFileName)
+    try {
+        val compressed = when (format) {
+            ArchiveCompressionFormat.GZ -> tempFile.apply {
+                outputStream().use { out ->
+                    GzipCompressorOutputStream(out).use { gz ->
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(gz) }
+                    }
+                }
+            }
+            ArchiveCompressionFormat.BZ2 -> tempFile.apply {
+                outputStream().use { out ->
+                    BZip2CompressorOutputStream(out).use { bz2 ->
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(bz2) }
+                    }
+                }
+            }
+            ArchiveCompressionFormat.XZ -> tempFile.apply {
+                outputStream().use { out ->
+                    XZCompressorOutputStream(out).use { xz ->
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(xz) }
+                    }
+                }
+            }
+            else -> return false
+        }
+        setProgress(1, 1)
+        val mimeType = resolveCompressionMimeType(outputFileName)
+        val outUri = try {
+            DocumentsContract.createDocument(context.contentResolver, parentResolved, mimeType, outputFileName)
+        } catch (_: Exception) { null } ?: return false
+        compressed.inputStream().use { inp ->
+            context.contentResolver.openOutputStream(outUri)?.use { out -> inp.copyTo(out) }
+        }
+        return true
+    } catch (e: Exception) {
+        Log.e(TAG, "compressSingleFileToFormat failed", e)
+        return false
+    } finally {
+        tempFile.delete()
+        cacheDir.deleteRecursively()
+    }
+}
+
+fun compressTarArchive(
+    context: Context,
+    sourceUris: List<Uri>,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    archiveFileName: String,
+    compressionFormat: ArchiveCompressionFormat,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): Boolean {
+    if (password != null && password.isNotEmpty()) {
+        Log.w(TAG, "compressTarArchive: password ignored for ${compressionFormat.extension}; tar-based formats do not support encryption in this app")
+    }
+    val cr = context.contentResolver
+    val cacheDir = File(context.cacheDir, "tar_compress_${System.currentTimeMillis()}_${compressionFormat.name}").apply { mkdirs() }
+    val total = sourceUris.size.coerceAtLeast(1)
+    val tarPath = when (compressionFormat) {
+        ArchiveCompressionFormat.TAR -> File(cacheDir, archiveFileName)
+        ArchiveCompressionFormat.TAR_GZ, ArchiveCompressionFormat.TAR_BZ2, ArchiveCompressionFormat.TAR_XZ -> {
+            if (archiveFileName.endsWith(".tar", ignoreCase = true)) {
+                File(cacheDir, archiveFileName)
+            } else {
+                val rawName = archiveFileName.substringBeforeLast(".", archiveFileName)
+                File(cacheDir, "$rawName.tar")
+            }
+        }
+        else -> return false
+    }
+    val outputFile = when (compressionFormat) {
+        ArchiveCompressionFormat.TAR -> tarPath
+        ArchiveCompressionFormat.TAR_GZ -> File(cacheDir, archiveFileName)
+        ArchiveCompressionFormat.TAR_BZ2 -> File(cacheDir, archiveFileName)
+        ArchiveCompressionFormat.TAR_XZ -> File(cacheDir, archiveFileName)
+        else -> return false
+    }
+    try {
+        val tarOut = TarArchiveOutputStream(tarPath.outputStream())
+        tarOut.use { out ->
+            sourceUris.forEachIndexed { index, uri ->
+                setProgress(index, total)
+                val resolvedUri = resolveDocUriWithTree(uri, treeUri)
+                val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
+                val entryName = when {
+                    sourceUris.size == 1 -> doc.name ?: "archive"
+                    else -> doc.name ?: "${index}"
+                }
+                addDocumentEntryToTar(out, context, resolvedUri, treeUri, entryName, doc.name)
+            }
+        }
+
+        when (compressionFormat) {
+            ArchiveCompressionFormat.TAR -> {
+                // No extra compression step; tarPath is already the final output.
+            }
+            ArchiveCompressionFormat.TAR_GZ -> {
+                GzipCompressorOutputStream(outputFile.outputStream()).use { gzip ->
+                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(gzip) }
+                }
+            }
+            ArchiveCompressionFormat.TAR_BZ2 -> {
+                BZip2CompressorOutputStream(outputFile.outputStream()).use { bz2 ->
+                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(bz2) }
+                }
+            }
+            ArchiveCompressionFormat.TAR_XZ -> {
+                XZCompressorOutputStream(outputFile.outputStream()).use { xz ->
+                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(xz) }
+                }
+            }
+            else -> return false
+        }
+
+        val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
+        val outUri = try {
+            DocumentsContract.createDocument(cr, parentResolved, resolveCompressionMimeType(archiveFileName), archiveFileName)
+        } catch (_: Exception) { null } ?: return false
+        outputFile.inputStream().use { inp ->
+            cr.openOutputStream(outUri)?.use { out -> inp.copyTo(out) }
+        }
+        setProgress(total, total)
+        return true
+    } catch (e: Exception) {
+        Log.e(TAG, "compressTarArchive failed", e)
+        return false
+    } finally {
+        tarPath.delete()
+        outputFile.delete()
+        cacheDir.deleteRecursively()
     }
 }
 
@@ -750,6 +1020,9 @@ fun getArchiveFirstLevelEntries(
         if (is7zName(archiveName) || has7zSignature(cache)) {
             return get7zFirstLevelEntries(cache, password)
         }
+        if (isTarName(archiveName)) {
+            return getTarFirstLevelEntries(cache, archiveName)
+        }
         val zip = ZipFile(cache)
         if (zip.isEncrypted) {
             if (password == null || password.isEmpty()) return ZipFirstLevelResult.Encrypted
@@ -789,6 +1062,121 @@ fun getArchiveFirstLevelEntries(
         ZipFirstLevelResult.Error
     } finally {
         cache.delete()
+    }
+}
+
+private fun getTarFirstLevelEntries(archiveFile: File, archiveName: String?): ZipFirstLevelResult {
+    return try {
+        val entries = mutableListOf<Pair<String, Boolean>>()
+        openTarArchiveInputStream(archiveFile, archiveName).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                val path = sanitizeArchivePath(entry.name.orEmpty())
+                if (path.isNotEmpty()) {
+                    entries += path to entry.isDirectory
+                }
+                entry = tar.nextEntry
+            }
+        }
+        if (entries.isEmpty()) return ZipFirstLevelResult.Ok(emptyList())
+
+        val firstLevel = mutableSetOf<String>()
+        val firstLevelDirs = mutableSetOf<String>()
+        entries.forEach { (path, isDir) ->
+            val top = path.substringBefore("/")
+            if (top.isNotEmpty()) {
+                firstLevel.add(top)
+                if (isDir || path.contains('/')) {
+                    firstLevelDirs.add(top)
+                }
+            }
+        }
+
+        val sortedFirst = firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it }
+        if (firstLevel.size == 1) {
+            val rootName = firstLevel.single()
+            val prefix = "$rootName/"
+            val childToDir = mutableMapOf<String, Boolean>()
+            entries.forEach { (path, isDir) ->
+                if (!path.startsWith(prefix)) return@forEach
+                val rest = path.removePrefix(prefix)
+                val childName = rest.substringBefore("/")
+                if (childName.isEmpty()) return@forEach
+                val dirChild = isDir || rest.startsWith("$childName/")
+                childToDir[childName] = childToDir[childName] == true || dirChild
+            }
+            if (childToDir.isNotEmpty()) {
+                val children = childToDir.entries
+                    .sortedBy { it.key }
+                    .map { (name, dir) -> if (dir) "$name/" else name }
+                return ZipFirstLevelResult.OkSingleDir(rootName, children)
+            }
+        }
+        ZipFirstLevelResult.Ok(sortedFirst)
+    } catch (e: Exception) {
+        ZipFirstLevelResult.Error
+    }
+}
+
+private fun untarToParent(
+    context: Context,
+    archiveFile: File,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    archiveName: String?,
+    setProgress: (Int, Int) -> Unit
+): UnzipResult {
+    val tempExtractDir = File(archiveFile.parentFile, "extract").apply {
+        deleteRecursively()
+        mkdirs()
+    }
+    return try {
+        val entries = mutableListOf<TarArchiveEntry>()
+        openTarArchiveInputStream(archiveFile, archiveName).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                entries += entry
+                entry = tar.nextEntry
+            }
+        }
+        val total = entries.size.coerceAtLeast(1)
+        setProgress(0, total)
+
+        openTarArchiveInputStream(archiveFile, archiveName).use { tar ->
+            var current = 0
+            var entry = tar.nextEntry
+            while (entry != null) {
+                current++
+                val path = sanitizeArchivePath(entry.name.orEmpty())
+                if (path.isEmpty()) {
+                    setProgress(current, total)
+                    entry = tar.nextEntry
+                    continue
+                }
+                val outFile = File(tempExtractDir, path)
+                if (entry.isDirectory) {
+                    outFile.mkdirs()
+                } else {
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { output ->
+                        tar.copyTo(output)
+                    }
+                }
+                setProgress(current, total)
+                entry = tar.nextEntry
+            }
+        }
+
+        tempExtractDir.listFiles()?.orEmpty()?.forEach { child ->
+            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
+        }
+        setProgress(total, total)
+        UnzipResult.Success
+    } catch (e: Exception) {
+        Log.e(TAG, "untarToParent failed", e)
+        parseUnzipError(e, null)
+    } finally {
+        tempExtractDir.deleteRecursively()
     }
 }
 

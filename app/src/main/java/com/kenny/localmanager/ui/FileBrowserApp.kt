@@ -119,6 +119,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
@@ -210,6 +212,10 @@ import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.toModel
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
+import com.kenny.localmanager.file.ArchiveCompressionFormat
+import com.kenny.localmanager.file.buildArchiveOutputName
+import com.kenny.localmanager.file.compressSingleFileToFormat
+import com.kenny.localmanager.file.compressTarArchive
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.UnzipResult
 import com.kenny.localmanager.file.isArchiveEncrypted
@@ -3138,6 +3144,11 @@ private fun FileBrowserAppScreen(
         var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var sevenZCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var archiveCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var archiveCompressFormat by remember { mutableStateOf(ArchiveCompressionFormat.ZIP) }
+        var archiveCompressName by remember { mutableStateOf("") }
+        var archiveCompressPassword by remember { mutableStateOf("") }
+        var archiveCompressPasswordConfirm by remember { mutableStateOf("") }
         var zipUnzipPassword by remember { mutableStateOf("") }
         var zipUnzipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var zipCompressPassword by remember { mutableStateOf("") }
@@ -3176,12 +3187,17 @@ private fun FileBrowserAppScreen(
         var picZipInProgress by remember { mutableStateOf(false) }
         var showPendingCompressToZip by remember { mutableStateOf(false) }
         var showPendingCompressTo7z by remember { mutableStateOf(false) }
+        var showPendingCompressArchive by remember { mutableStateOf(false) }
         var pendingCompressZipName by remember { mutableStateOf("") }
         var pendingCompressPassword by remember { mutableStateOf("") }
         var pendingCompressPasswordConfirm by remember { mutableStateOf("") }
         var pendingCompress7zName by remember { mutableStateOf("") }
         var pendingCompress7zPassword by remember { mutableStateOf("") }
         var pendingCompress7zPasswordConfirm by remember { mutableStateOf("") }
+        var pendingCompressArchiveName by remember { mutableStateOf("") }
+        var pendingCompressArchiveFormat by remember { mutableStateOf(ArchiveCompressionFormat.ZIP) }
+        var pendingCompressArchivePassword by remember { mutableStateOf("") }
+        var pendingCompressArchivePasswordConfirm by remember { mutableStateOf("") }
         var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
         var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
         var playlistsLoaded by remember { mutableStateOf(false) }
@@ -3697,8 +3713,10 @@ private fun FileBrowserAppScreen(
                 pdfViewState != null -> pdfViewState = null
                 zipCompressTarget != null -> zipCompressTarget = null
                 sevenZCompressTarget != null -> sevenZCompressTarget = null
+                archiveCompressTarget != null -> archiveCompressTarget = null
                 showPendingCompressToZip -> showPendingCompressToZip = false
                 showPendingCompressTo7z -> showPendingCompressTo7z = false
+                showPendingCompressArchive -> showPendingCompressArchive = false
                 fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
                 else -> {
                     requestExitApp()
@@ -3741,6 +3759,44 @@ private fun FileBrowserAppScreen(
         fun clearPendingPlaybackTargetState() {
             pendingPlaybackAudioList = emptyList()
             showPlaybackTargetDialog = false
+        }
+
+        fun compressArchiveItems(
+            sourceUris: List<Uri>,
+            parentDirUri: Uri,
+            treeUri: Uri?,
+            baseName: String,
+            format: ArchiveCompressionFormat,
+            password: CharArray?,
+            setProgress: (Int, Int) -> Unit
+        ): Boolean {
+            if (sourceUris.isEmpty()) return false
+            val outputName = buildArchiveOutputName(baseName, format)
+            if (format.compressesSingleFileOnly) {
+                return sourceUris.all { uri ->
+                    val docName = DocumentFile.fromSingleUri(context, uri)?.name ?: "archive"
+                    compressSingleFileToFormat(
+                        context = context,
+                        sourceUri = uri,
+                        parentDirUri = parentDirUri,
+                        treeUri = treeUri,
+                        outputFileName = buildArchiveOutputName(docName, format),
+                        format = format,
+                        setProgress = setProgress
+                    )
+                }
+            }
+            return when (format) {
+                ArchiveCompressionFormat.ZIP -> compressToZip(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress)
+                ArchiveCompressionFormat.SEVEN_Z -> compressTo7z(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress)
+                ArchiveCompressionFormat.TAR -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress)
+                ArchiveCompressionFormat.TAR_GZ -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress)
+                ArchiveCompressionFormat.TAR_BZ2 -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress)
+                ArchiveCompressionFormat.TAR_XZ -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress)
+                ArchiveCompressionFormat.GZ -> false
+                ArchiveCompressionFormat.BZ2 -> false
+                ArchiveCompressionFormat.XZ -> false
+            }
         }
 
         suspend fun createNewPlaybackPlaylist(audioList: List<DocumentFileModel>) {
@@ -4225,6 +4281,7 @@ private fun FileBrowserAppScreen(
                                     }
                                 },
                                 onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
+                                onCompressArchiveRequest = { archiveCompressTarget = it },
                                 onCompressToZipRequest = { zipCompressTarget = it },
                                 onCompressTo7zRequest = { sevenZCompressTarget = it },
                                 onRequestPassProtect = { model -> passProtectTarget = model },
@@ -4485,6 +4542,18 @@ private fun FileBrowserAppScreen(
                             gpgEncryptSelectedKeyId = null
                             gpgState = GpgOpState.BatchDecrypt(list, displayUri)
                         }
+                    }
+                },
+                onRequestCompressArchive = {
+                    if (pendingList.isEmpty()) {
+                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
+                    } else {
+                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
+                        pendingCompressArchiveName = "archive_$ts"
+                        pendingCompressArchiveFormat = ArchiveCompressionFormat.ZIP
+                        pendingCompressArchivePassword = ""
+                        pendingCompressArchivePasswordConfirm = ""
+                        showPendingCompressArchive = true
                     }
                 },
                 onRequestCompressToZip = {
@@ -6130,62 +6199,129 @@ private fun FileBrowserAppScreen(
                 )
             }
         }
-        zipCompressTarget?.let { target ->
-            val suggestedZipName = if (target.name.contains(".")) "${target.name.substringBeforeLast(".")}.zip" else "${target.name}.zip"
+        archiveCompressTarget?.let { target ->
             val parentDirUri = Uri.parse(displayUri)
             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-            val zipCompressPasswordReady = isOptionalPasswordConfirmed(zipCompressPassword, zipCompressPasswordConfirm)
+            val archiveBaseName = if (target.name.contains(".")) target.name.substringBeforeLast(".") else target.name
+            val generatedArchiveName = buildArchiveOutputName(archiveBaseName, archiveCompressFormat)
+            val archivePasswordReady = isOptionalPasswordConfirmed(archiveCompressPassword, archiveCompressPasswordConfirm)
+            var formatExpanded by remember { mutableStateOf(false) }
             AlertDialog(
                 onDismissRequest = {
-                    zipCompressTarget = null
-                    zipCompressPassword = ""
-                    zipCompressPasswordConfirm = ""
+                    archiveCompressTarget = null
+                    archiveCompressFormat = ArchiveCompressionFormat.ZIP
+                    archiveCompressPassword = ""
+                    archiveCompressPasswordConfirm = ""
                 },
-                title = { Text(stringResource(R.string.context_compress_zip)) },
+                title = { Text(stringResource(R.string.browser_compress_archive_title)) },
                 text = {
                     Column {
-                        Text(stringResource(R.string.browser_compress_zip_confirm, target.name, suggestedZipName), color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.browser_compress_archive_confirm, target.name, generatedArchiveName), color = MaterialTheme.colorScheme.onSurface)
                         Spacer(Modifier.height(12.dp))
-                        PasswordConfirmationFields(
-                            password = zipCompressPassword,
-                            confirmPassword = zipCompressPasswordConfirm,
-                            onPasswordChange = {
-                                zipCompressPassword = it
-                                if (it.isEmpty()) zipCompressPasswordConfirm = ""
-                            },
-                            onConfirmPasswordChange = { zipCompressPasswordConfirm = it },
-                            passwordLabel = context.getString(R.string.browser_password_optional_label),
-                            confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                            enabled = true,
-                            allowBlank = true
+                        ExposedDropdownMenuBox(
+                            expanded = formatExpanded,
+                            onExpandedChange = { formatExpanded = !formatExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = archiveCompressFormat.label,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.browser_compress_format_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = formatExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = formatExpanded,
+                                onDismissRequest = { formatExpanded = false }
+                            ) {
+                                ArchiveCompressionFormat.entries.forEach { format ->
+                                    DropdownMenuItem(
+                                        text = { Text(format.label) },
+                                        onClick = {
+                                            archiveCompressFormat = format
+                                            formatExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.browser_compress_auto_name_hint, generatedArchiveName),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        if (archiveCompressFormat.compressesSingleFileOnly) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.browser_compress_single_file_warning),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                        } else if (!archiveCompressFormat.supportsPassword) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                stringResource(R.string.browser_compress_tar_no_password),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (archiveCompressFormat.supportsPassword) {
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = archiveCompressPassword,
+                                onValueChange = {
+                                    archiveCompressPassword = it
+                                    if (it.isEmpty()) archiveCompressPasswordConfirm = ""
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text(stringResource(R.string.browser_password_optional_label)) },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+                            if (archiveCompressPassword.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = archiveCompressPasswordConfirm,
+                                    onValueChange = { archiveCompressPasswordConfirm = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(stringResource(R.string.browser_password_confirm_label)) },
+                                    singleLine = true,
+                                    isError = archiveCompressPasswordConfirm.isNotEmpty() && archiveCompressPassword != archiveCompressPasswordConfirm,
+                                    visualTransformation = PasswordVisualTransformation()
+                                )
+                            }
+                        }
                     }
                 },
                 confirmButton = {
                     Button(
-                        enabled = zipCompressPasswordReady,
+                        enabled = generatedArchiveName.isNotBlank() && (!archiveCompressFormat.supportsPassword || archivePasswordReady),
                         onClick = {
+                            val format = archiveCompressFormat
+                            val outputName = generatedArchiveName
+                            val pwd = archiveCompressPassword.ifBlank { null }?.toCharArray()
+                            val itemUris = listOf(target.uri)
                             scope.launch {
                                 progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, 1)
                                 delay(50)
-                                val pwd = zipCompressPassword.ifBlank { null }?.toCharArray()
                                 val ok = withContext(Dispatchers.IO) {
-                                    compressToZip(
-                                        context,
-                                        listOf(target.uri),
-                                        parentDirUri,
-                                        treeUri,
-                                        suggestedZipName,
-                                        pwd
-                                    ) { cur, tot ->
-                                        scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                                    if (format.compressesSingleFileOnly) {
+                                        compressSingleFileToFormat(context, target.uri, parentDirUri, treeUri, outputName, format) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                                        }
+                                    } else {
+                                        compressArchiveItems(itemUris, parentDirUri, treeUri, archiveBaseName, format, pwd) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                                        }
                                     }
                                 }
                                 delay(120)
                                 progressOp = null
-                                zipCompressTarget = null
-                                zipCompressPassword = ""
-                                zipCompressPasswordConfirm = ""
+                                archiveCompressTarget = null
+                                archiveCompressFormat = ArchiveCompressionFormat.ZIP
+                                archiveCompressPassword = ""
+                                archiveCompressPasswordConfirm = ""
                                 if (ok) {
                                     Toast.makeText(context, context.getString(R.string.browser_compress_complete), Toast.LENGTH_SHORT).show()
                                     refreshTrigger++
@@ -6198,9 +6334,10 @@ private fun FileBrowserAppScreen(
                 },
                 dismissButton = {
                     TextButton(onClick = {
-                        zipCompressTarget = null
-                        zipCompressPassword = ""
-                        zipCompressPasswordConfirm = ""
+                        archiveCompressTarget = null
+                        archiveCompressFormat = ArchiveCompressionFormat.ZIP
+                        archiveCompressPassword = ""
+                        archiveCompressPasswordConfirm = ""
                     }) { Text(stringResource(R.string.common_cancel)) }
                 }
             )
@@ -6290,6 +6427,131 @@ private fun FileBrowserAppScreen(
                         sevenZCompressPasswordConfirm = ""
                     }) { Text(stringResource(R.string.common_cancel)) }
                 }
+            )
+        }
+        if (showPendingCompressArchive && pendingList.isNotEmpty()) {
+            val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            val currentDirUri = Uri.parse(displayUri)
+            val generatedPendingArchiveName = buildArchiveOutputName("archive", pendingCompressArchiveFormat)
+            val pendingArchivePasswordReady = isOptionalPasswordConfirmed(pendingCompressArchivePassword, pendingCompressArchivePasswordConfirm)
+            var formatExpanded by remember { mutableStateOf(false) }
+            AlertDialog(
+                onDismissRequest = { showPendingCompressArchive = false },
+                title = { Text(stringResource(R.string.browser_compress_pending_archive_title)) },
+                text = {
+                    Column {
+                        Text(stringResource(R.string.browser_pending_compress_archive_desc, pendingList.size), color = MaterialTheme.colorScheme.onSurface)
+                        Spacer(Modifier.height(12.dp))
+                        ExposedDropdownMenuBox(
+                            expanded = formatExpanded,
+                            onExpandedChange = { formatExpanded = !formatExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = pendingCompressArchiveFormat.label,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.browser_compress_format_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = formatExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = formatExpanded,
+                                onDismissRequest = { formatExpanded = false }
+                            ) {
+                                ArchiveCompressionFormat.entries.forEach { format ->
+                                    DropdownMenuItem(
+                                        text = { Text(format.label) },
+                                        onClick = {
+                                            pendingCompressArchiveFormat = format
+                                            formatExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = stringResource(R.string.browser_compress_auto_name_hint, generatedPendingArchiveName),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (pendingCompressArchiveFormat.compressesSingleFileOnly) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(stringResource(R.string.browser_compress_single_file_warning), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        } else if (!pendingCompressArchiveFormat.supportsPassword) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(stringResource(R.string.browser_compress_tar_no_password), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (pendingCompressArchiveFormat.supportsPassword) {
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(
+                                value = pendingCompressArchivePassword,
+                                onValueChange = {
+                                    pendingCompressArchivePassword = it
+                                    if (it.isEmpty()) pendingCompressArchivePasswordConfirm = ""
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                label = { Text(stringResource(R.string.browser_password_optional_label)) },
+                                singleLine = true,
+                                visualTransformation = PasswordVisualTransformation()
+                            )
+                            if (pendingCompressArchivePassword.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = pendingCompressArchivePasswordConfirm,
+                                    onValueChange = { pendingCompressArchivePasswordConfirm = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text(stringResource(R.string.browser_password_confirm_label)) },
+                                    singleLine = true,
+                                    isError = pendingCompressArchivePasswordConfirm.isNotEmpty() && pendingCompressArchivePassword != pendingCompressArchivePasswordConfirm,
+                                    visualTransformation = PasswordVisualTransformation()
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    Button(
+                        enabled = generatedPendingArchiveName.isNotBlank() && (!pendingCompressArchiveFormat.supportsPassword || pendingArchivePasswordReady),
+                        onClick = {
+                            val items = pendingList.toList()
+                            val format = pendingCompressArchiveFormat
+                            val pwd = pendingCompressArchivePassword.ifBlank { null }?.toCharArray()
+                            showPendingCompressArchive = false
+                            scope.launch {
+                                progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
+                                delay(50)
+                                val ok = withContext(Dispatchers.IO) {
+                                    if (format.compressesSingleFileOnly) {
+                                        val allOk = items.all { item ->
+                                            compressSingleFileToFormat(context, item.uri, currentDirUri, rootTreeUri, buildArchiveOutputName(item.name, format), format) { cur, tot ->
+                                                scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                                            }
+                                        }
+                                        allOk
+                                    } else {
+                                        compressArchiveItems(items.map { it.uri }, currentDirUri, rootTreeUri, "archive", format, pwd) { cur, tot ->
+                                            scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                                        }
+                                    }
+                                }
+                                delay(120)
+                                progressOp = null
+                                pendingCompressArchiveFormat = ArchiveCompressionFormat.ZIP
+                                pendingCompressArchivePassword = ""
+                                pendingCompressArchivePasswordConfirm = ""
+                                if (ok) {
+                                    finishPendingListAndReturn()
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_done, generatedPendingArchiveName), Toast.LENGTH_SHORT).show()
+                                    refreshTrigger++
+                                } else {
+                                    Toast.makeText(context, context.getString(R.string.browser_compress_failed), Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        }
+                    ) { Text(stringResource(R.string.browser_compress_action)) }
+                },
+                dismissButton = { TextButton(onClick = { showPendingCompressArchive = false }) { Text(stringResource(R.string.common_cancel)) } }
             )
         }
         if (showPendingCompressToZip && pendingList.isNotEmpty()) {
@@ -7300,11 +7562,18 @@ private fun isCompressedLlmZip(name: String): Boolean =
 private fun isPicZip(name: String): Boolean =
     name.endsWith(".pic.zip", ignoreCase = true)
 
-/** 判断文件名是否为可解压压缩包（.zip / .rar）。 */
-private fun isExtractableArchive(name: String): Boolean =
+/** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩 tar 变体）。 */
+internal fun isExtractableArchive(name: String): Boolean =
     name.endsWith(".zip", ignoreCase = true) ||
         name.endsWith(".rar", ignoreCase = true) ||
-        name.endsWith(".7z", ignoreCase = true)
+        name.endsWith(".7z", ignoreCase = true) ||
+        name.endsWith(".tar", ignoreCase = true) ||
+        name.endsWith(".tar.gz", ignoreCase = true) ||
+        name.endsWith(".tgz", ignoreCase = true) ||
+        name.endsWith(".tar.bz2", ignoreCase = true) ||
+        name.endsWith(".tbz2", ignoreCase = true) ||
+        name.endsWith(".tar.xz", ignoreCase = true) ||
+        name.endsWith(".txz", ignoreCase = true)
 
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
@@ -7718,6 +7987,7 @@ internal fun FileBrowserScreen(
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
     onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
+    onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
     onCompressToZipRequest: (DocumentFileModel) -> Unit = {},
     onCompressTo7zRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
@@ -8517,17 +8787,10 @@ internal fun FileBrowserScreen(
                     TextButton(
                         onClick = {
                             showContextMenu = false
-                            onCompressToZipRequest(menuTarget)
+                            onCompressArchiveRequest(menuTarget)
                             contextMenuTarget = null
                         }
-                    ) { Text(context.getString(R.string.context_compress_zip), color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            onCompressTo7zRequest(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) { Text(context.getString(R.string.context_compress_7z), color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_compress_archive), color = MaterialTheme.colorScheme.onSurface) }
                     if (!menuTarget.isDirectory && onShareFileToGit != null) {
                         TextButton(
                             onClick = {
@@ -9981,6 +10244,7 @@ fun PendingListScreen(
     onRequestBatchMask: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
+    onRequestCompressArchive: () -> Unit = {},
     onRequestCompressToZip: () -> Unit = {},
     onRequestCompressTo7z: () -> Unit = {},
     onRequestForwardToBulletin: () -> Unit = {},
@@ -10078,8 +10342,7 @@ fun PendingListScreen(
                     context.getString(R.string.pending_list_action_mask) to onRequestBatchMask,
                     context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
                     context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
-                    context.getString(R.string.pending_list_action_zip) to onRequestCompressToZip,
-                    context.getString(R.string.pending_list_action_7z) to onRequestCompressTo7z,
+                    context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive,
                     context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
                 )
                 if (batchDetailKind != null) {
