@@ -119,7 +119,8 @@ data class BulletinMessage(
     val deleted: Boolean = false,
     val authorDevice: String? = null,
     val attachments: List<BulletinAttachmentRef> = emptyList(),
-    val messageKind: String = BulletinMessageKind.MESSAGE
+    val messageKind: String = BulletinMessageKind.MESSAGE,
+    val editorLabel: String? = null
 ) {
     val isAiStatus: Boolean
         get() = messageKind == BulletinMessageKind.AI_STATUS ||
@@ -127,6 +128,9 @@ data class BulletinMessage(
 
     val isConversationMessage: Boolean
         get() = !deleted && !isAiStatus
+
+    val isEdited: Boolean
+        get() = editorLabel?.trim()?.takeIf { it.isNotEmpty() } != null
 
     val aiStatusDetail: String
         get() {
@@ -150,6 +154,7 @@ data class BulletinMessage(
             put("message_kind", messageKind)
         }
         authorDevice?.takeIf { it.isNotBlank() }?.let { put("author_device", it) }
+        editorLabel?.trim()?.takeIf { it.isNotEmpty() }?.let { put("editor_label", it) }
         if (attachments.isNotEmpty()) {
             put("attachments", JSONArray(attachments.map { it.toJson() }))
         }
@@ -181,7 +186,8 @@ data class BulletinMessage(
                 deleted = obj.optBoolean("deleted", false),
                 authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() },
                 attachments = attachmentList,
-                messageKind = messageKind
+                messageKind = messageKind,
+                editorLabel = obj.optString("editor_label").takeIf { it.isNotBlank() }
             )
         }
     }

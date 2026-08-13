@@ -2026,22 +2026,24 @@ class FamilyNetworkManager(context: Context) {
         return "@$managerModel $trimmed"
     }
 
-    fun updateBoardMessage(messageId: String, content: String) {
+    fun updateBoardMessage(messageId: String, content: String, authorLabel: String? = null) {
         val session = _state.value.openBoardSession ?: return
         if (!session.canManageBoard) {
             appendError(appContext.getString(R.string.family_msg_68617))
             return
         }
         val trimmed = content.trim()
+        val normalizedAuthor = authorLabel?.trim()?.takeIf { it.isNotEmpty() }
         if (trimmed.isEmpty()) {
             appendError(appContext.getString(R.string.family_msg_41301))
             return
         }
+        val editorLabel = buildAuthorIdentity().first
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 if (session.isHost) {
                     runCatching {
-                        boardStore.updateMessage(session.boardId, messageId, trimmed)
+                        boardStore.updateMessage(session.boardId, messageId, trimmed, normalizedAuthor, editorLabel)
                             ?: throw IllegalStateException(appContext.getString(R.string.family_msg_44812))
                     }.map { }
                 } else {
@@ -2049,7 +2051,11 @@ class FamilyNetworkManager(context: Context) {
                         service = session.service,
                         method = "PUT",
                         path = "/boards/${session.boardId}/messages/$messageId",
-                        body = JSONObject().apply { put("content", trimmed) }.toString(),
+                        body = JSONObject().apply {
+                            put("content", trimmed)
+                            normalizedAuthor?.let { put("author_label", it) }
+                            put("editor_label", editorLabel)
+                        }.toString(),
                         accessPassword = session.accessPassword
                     )
                 }
@@ -3199,7 +3205,8 @@ class FamilyNetworkManager(context: Context) {
                 left.seq == right.seq &&
                 left.content == right.content &&
                 left.updatedAt == right.updatedAt &&
-                left.authorLabel == right.authorLabel
+                left.authorLabel == right.authorLabel &&
+                left.editorLabel == right.editorLabel
         }
     }
 

@@ -308,7 +308,13 @@ class BulletinBoardStore(context: Context) {
         message
     }
 
-    fun updateMessage(boardId: String, messageId: String, content: String): BulletinMessage? = lock.write {
+    fun updateMessage(
+        boardId: String,
+        messageId: String,
+        content: String,
+        authorLabel: String? = null,
+        editorLabel: String? = null
+    ): BulletinMessage? = lock.write {
         val trimmed = content.trim()
         if (trimmed.isEmpty()) return@write null
         val meta = readMeta(boardId) ?: return@write null
@@ -316,7 +322,15 @@ class BulletinBoardStore(context: Context) {
         val index = messages.indexOfFirst { it.id == messageId && !it.deleted }
         if (index < 0) return@write null
         val now = System.currentTimeMillis()
-        val updated = messages[index].copy(content = trimmed, updatedAt = now)
+        val current = messages[index]
+        val normalizedAuthor = authorLabel?.trim()?.takeIf { it.isNotEmpty() }
+        val normalizedEditor = editorLabel?.trim()?.takeIf { it.isNotEmpty() }
+        val updated = current.copy(
+            authorLabel = normalizedAuthor ?: current.authorLabel,
+            content = trimmed,
+            updatedAt = now,
+            editorLabel = normalizedEditor ?: current.editorLabel
+        )
         messages[index] = updated
         writeMessages(boardId, messages)
         writeMeta(boardId, meta.put("revision", meta.optLong("revision") + 1L))

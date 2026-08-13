@@ -533,7 +533,9 @@ class BulletinBoardHttpHandler(
     private fun updateMessage(boardId: String, messageId: String, bodyText: String): FamilyHttpResponse {
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val content = payload.optString("content")
-        val message = store.updateMessage(boardId, messageId, content)
+        val authorLabel = payload.optString("author_label").takeIf { it.isNotBlank() }
+        val editorLabel = payload.optString("editor_label").takeIf { it.isNotBlank() }
+        val message = store.updateMessage(boardId, messageId, content, authorLabel, editorLabel)
             ?: return FamilyHttpResponse(404, jsonError("message_not_found", context.getString(R.string.family_msg_72023)))
         val snapshot = store.snapshot(boardId)
         return FamilyHttpResponse(

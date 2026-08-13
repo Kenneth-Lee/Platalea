@@ -940,7 +940,7 @@ fun FamilyNetworkScreen(
                 hideDotFiles = hideDotFiles,
                 onRefresh = { manager.refreshOpenBoard() },
                 onPost = { manager.postBoardMessage(it) },
-                onUpdate = { id, content -> manager.updateBoardMessage(id, content) },
+                onUpdate = { id, content, author -> manager.updateBoardMessage(id, content, author) },
                 onDelete = { manager.deleteBoardMessage(it) },
                 onOpenAttachmentInternal = { attachment ->
                     scope.launch {
@@ -2773,7 +2773,7 @@ private fun BulletinBoardPage(
     hideDotFiles: Boolean,
     onRefresh: () -> Unit,
     onPost: (String) -> Unit,
-    onUpdate: (String, String) -> Unit,
+    onUpdate: (String, String, String?) -> Unit,
     onDelete: (String) -> Unit,
     onOpenAttachmentInternal: (BulletinAttachmentRef) -> Unit,
     onOpenAttachmentTextHex: (BulletinAttachmentRef) -> Unit,
@@ -2814,6 +2814,7 @@ private fun BulletinBoardPage(
     }
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
+    var editingAuthor by remember { mutableStateOf("") }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var showAttachmentPickDialog by remember { mutableStateOf(false) }
     var pendingDownloadConflict by remember { mutableStateOf<BulletinAttachmentRef?>(null) }
@@ -2848,18 +2849,27 @@ private fun BulletinBoardPage(
             onDismissRequest = { editingMessage = null },
             title = { Text(stringResource(R.string.family_board_edit_title)) },
             text = {
-                OutlinedTextField(
-                    value = editingText,
-                    onValueChange = { editingText = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = 2,
-                    maxLines = 6
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = editingAuthor,
+                        onValueChange = { editingAuthor = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.family_board_author_label)) }
+                    )
+                    OutlinedTextField(
+                        value = editingText,
+                        onValueChange = { editingText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        maxLines = 6
+                    )
+                }
             },
             confirmButton = {
                 Button(onClick = {
                     val target = editingMessage ?: return@Button
-                    onUpdate(target.id, editingText)
+                    onUpdate(target.id, editingText, editingAuthor)
                     editingMessage = null
                 }) { Text(stringResource(R.string.common_save)) }
             },
@@ -3129,6 +3139,7 @@ private fun BulletinBoardPage(
                             onEdit = {
                                 editingMessage = message
                                 editingText = message.content
+                                editingAuthor = message.authorLabel
                             },
                             onDelete = { deletingMessage = message },
                             onAttachmentClick = { attachment -> requestAttachmentPreview(attachment) }
@@ -3321,6 +3332,15 @@ private fun BulletinMessageRow(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            if (message.isEdited) {
+                Text(
+                    text = stringResource(R.string.family_board_message_edited, message.editorLabel.orEmpty()),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             if (message.content.isNotBlank()) {
                 Text(
                     message.content,

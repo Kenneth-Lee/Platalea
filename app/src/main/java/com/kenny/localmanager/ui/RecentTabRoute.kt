@@ -20,8 +20,10 @@ import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -30,6 +32,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -52,6 +58,7 @@ data class RecentTabRouteState(
 @Composable
 fun RecentTabRoute(state: RecentTabRouteState) {
     val context = LocalContext.current
+    var detailItem by remember { mutableStateOf<RecentOpenItem?>(null) }
 
     fun recentTypeLabel(item: RecentOpenItem): String {
         return when (item.type) {
@@ -74,6 +81,37 @@ fun RecentTabRoute(state: RecentTabRouteState) {
             lower.endsWith(".pdf") -> Icons.Default.PictureAsPdf
             else -> Icons.AutoMirrored.Filled.InsertDriveFile
         }
+    }
+
+    detailItem?.let { item ->
+        AlertDialog(
+            onDismissRequest = { detailItem = null },
+            title = { Text(item.title) },
+            text = {
+                Column {
+                    Text("${context.getString(R.string.main_tab_recent)} · ${recentTypeLabel(item)}")
+                    if (!item.uri.isNullOrBlank()) {
+                        Text(
+                            item.uri,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 10
+                        )
+                    }
+                    val timeLabel = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(item.openedAt))
+                    Text(
+                        timeLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { detailItem = null }) {
+                    Text(context.getString(R.string.common_ok))
+                }
+            }
+        )
     }
 
     if (state.items.isEmpty()) {
@@ -133,6 +171,9 @@ fun RecentTabRoute(state: RecentTabRouteState) {
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                        }
+                        IconButton(onClick = { detailItem = item }) {
+                            Icon(Icons.Default.Info, contentDescription = context.getString(R.string.context_details))
                         }
                         IconButton(onClick = { state.onDeleteRecentItem(item) }) {
                             Icon(Icons.Default.Delete, contentDescription = context.getString(R.string.recent_delete_item))
