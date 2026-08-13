@@ -166,6 +166,7 @@ import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
@@ -313,6 +314,10 @@ import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
 import com.kenny.localmanager.family.DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES
+import com.mpatric.mp3agic.ID3v24Tag
+import com.mpatric.mp3agic.Mp3File
+import org.jaudiotagger.audio.AudioFileIO
+import org.jaudiotagger.tag.FieldKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -1464,12 +1469,18 @@ private data class DetailMetadataRow(
     val isSection: Boolean = false
 )
 
-private data class EditableImageExif(
+internal data class EditableImageExif(
     val takenTime: String = "",
     val artist: String = "",
     val description: String = "",
     val software: String = "",
     val copyright: String = ""
+)
+
+internal data class EditableAudioAnnotation(
+    val title: String = "",
+    val artist: String = "",
+    val album: String = ""
 )
 
 private const val EXIF_TAG_XP_AUTHOR = "XPAuthor"
@@ -1486,6 +1497,32 @@ private data class LmExifPayload(
     val software: String,
     val copyright: String
 )
+
+private data class EditableImageExifValidation(
+    val takenTimeError: String? = null,
+    val artistError: String? = null,
+    val descriptionError: String? = null,
+    val softwareError: String? = null,
+    val copyrightError: String? = null
+) {
+    val hasError: Boolean
+        get() = !takenTimeError.isNullOrBlank() ||
+            !artistError.isNullOrBlank() ||
+            !descriptionError.isNullOrBlank() ||
+            !softwareError.isNullOrBlank() ||
+            !copyrightError.isNullOrBlank()
+}
+
+private data class EditableAudioAnnotationValidation(
+    val titleError: String? = null,
+    val artistError: String? = null,
+    val albumError: String? = null
+) {
+    val hasError: Boolean
+        get() = !titleError.isNullOrBlank() || !artistError.isNullOrBlank() || !albumError.isNullOrBlank()
+}
+
+private const val EDITABLE_EXIF_TEXT_MAX_LENGTH = 512
 
 private fun inferDetailMetadataKind(
     fileName: String,
@@ -1687,6 +1724,358 @@ private fun normalizeExifDateTime(value: String): String {
     }
 }
 
+private fun isStrictValidExifDateTime(value: String): Boolean {
+    val normalized = normalizeExifDateTime(value)
+    if (normalized.isBlank()) return true
+    val pattern = Regex("^\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}$")
+    if (!pattern.matches(normalized)) return false
+    val parser = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply { isLenient = false }
+    return runCatching { parser.parse(normalized) != null }.getOrElse { false }
+}
+
+private fun validateEditableImageExifForm(context: Context, data: EditableImageExif): EditableImageExifValidation {
+    val takenTimeError = if (!isStrictValidExifDateTime(data.takenTime)) {
+        context.getString(R.string.browser_meta_taken_time_invalid)
+    } else {
+        null
+    }
+
+    fun lengthError(labelRes: Int, value: String): String? {
+        val trimmed = value.trim()
+        if (trimmed.length <= EDITABLE_EXIF_TEXT_MAX_LENGTH) return null
+        return context.getString(
+            R.string.browser_meta_field_too_long,
+            context.getString(labelRes),
+            EDITABLE_EXIF_TEXT_MAX_LENGTH
+        )
+    }
+
+    return EditableImageExifValidation(
+        takenTimeError = takenTimeError,
+        artistError = lengthError(R.string.browser_meta_artist_label, data.artist),
+        descriptionError = lengthError(R.string.browser_meta_description_label, data.description),
+        softwareError = lengthError(R.string.browser_meta_software_label, data.software),
+        copyrightError = lengthError(R.string.browser_meta_copyright_label, data.copyright)
+    )
+}
+
+private fun validateEditableAudioAnnotationForm(context: Context, data: EditableAudioAnnotation): EditableAudioAnnotationValidation {
+    fun lengthError(labelRes: Int, value: String): String? {
+        val trimmed = value.trim()
+        if (trimmed.length <= EDITABLE_EXIF_TEXT_MAX_LENGTH) return null
+        return context.getString(
+            R.string.browser_meta_field_too_long,
+            context.getString(labelRes),
+            EDITABLE_EXIF_TEXT_MAX_LENGTH
+        )
+    }
+    return EditableAudioAnnotationValidation(
+        titleError = lengthError(R.string.browser_meta_title_label, data.title),
+        artistError = lengthError(R.string.browser_meta_artist_label, data.artist),
+        albumError = lengthError(R.string.browser_meta_album_label, data.album)
+    )
+}
+
+internal fun compareChangedImageExifFields(before: EditableImageExif, expected: EditableImageExif, actual: EditableImageExif): List<String> {
+    val changed = mutableListOf<String>()
+    val checks = listOf(
+        "takenTime" to { before.takenTime.trim() != expected.takenTime.trim() },
+        "artist" to { before.artist.trim() != expected.artist.trim() },
+        "description" to { before.description.trim() != expected.description.trim() },
+        "software" to { before.software.trim() != expected.software.trim() },
+        "copyright" to { before.copyright.trim() != expected.copyright.trim() }
+    )
+    checks.forEach { (field, changedField) ->
+        if (changedField()) changed += field
+    }
+    return changed
+}
+
+internal fun compareChangedAudioAnnotationFields(before: EditableAudioAnnotation, expected: EditableAudioAnnotation, actual: EditableAudioAnnotation): List<String> {
+    val changed = mutableListOf<String>()
+    val checks = listOf(
+        "title" to { before.title.trim() != expected.title.trim() },
+        "artist" to { before.artist.trim() != expected.artist.trim() },
+        "album" to { before.album.trim() != expected.album.trim() }
+    )
+    checks.forEach { (field, changedField) ->
+        if (changedField()) changed += field
+    }
+    return changed
+}
+
+internal fun mergeEditableImageExifForBatch(current: EditableImageExif, patch: EditableImageExif): EditableImageExif {
+    return current.copy(
+        takenTime = patch.takenTime.trim().ifBlank { current.takenTime },
+        artist = patch.artist.trim().ifBlank { current.artist },
+        description = patch.description.trim().ifBlank { current.description },
+        software = patch.software.trim().ifBlank { current.software },
+        copyright = patch.copyright.trim().ifBlank { current.copyright }
+    )
+}
+
+internal fun mergeEditableAudioAnnotationForBatch(current: EditableAudioAnnotation, patch: EditableAudioAnnotation): EditableAudioAnnotation {
+    return current.copy(
+        title = patch.title.trim().ifBlank { current.title },
+        artist = patch.artist.trim().ifBlank { current.artist },
+        album = patch.album.trim().ifBlank { current.album }
+    )
+}
+
+private fun pendingBatchMetadataKind(items: List<DocumentFileModel>): DetailMetadataKind? {
+    if (items.isEmpty()) return null
+    val nonDir = items.filterNot { it.isDirectory }
+    if (nonDir.isEmpty() || nonDir.size != items.size) return null
+    val kinds = nonDir.map { inferDetailMetadataKind(it.name, "", false) }.distinct()
+    return if (kinds.size == 1 && kinds[0] in setOf(DetailMetadataKind.IMAGE, DetailMetadataKind.AUDIO)) {
+        kinds[0]
+    } else {
+        null
+    }
+}
+
+private fun saveBatchEditableImageExif(
+    context: Context,
+    files: List<DocumentFileModel>,
+    patch: EditableImageExif
+): List<String> {
+    if (files.isEmpty()) return emptyList()
+    val errors = mutableListOf<String>()
+    for (file in files) {
+        val current = readEditableImageExif(context, file.uri)
+        val merged = mergeEditableImageExifForBatch(current, patch)
+        val error = saveEditableImageExif(context, file.uri, merged)
+        if (error != null) {
+            errors += "${file.name}: $error"
+        }
+    }
+    return errors
+}
+
+private fun saveBatchEditableAudioAnnotation(
+    context: Context,
+    files: List<DocumentFileModel>,
+    patch: EditableAudioAnnotation,
+    prefs: Preferences
+): List<String> {
+    if (files.isEmpty()) return emptyList()
+    val errors = mutableListOf<String>()
+    for (file in files) {
+        val current = readEditableAudioAnnotation(context, file.uri)
+        val merged = mergeEditableAudioAnnotationForBatch(current, patch)
+        val error = if (isMp3AudioFile(file.name, "")) {
+            saveEditableAudioAnnotationToMp3(context, file.uri, merged)
+        } else if (supportsJaudiotaggerWrite(file.name, "")) {
+            saveEditableAudioAnnotationWithJaudiotagger(context, file.uri, merged, file.name)
+        } else {
+            runCatching {
+                runBlocking {
+                    prefs.setAudioMetaAnnotation(
+                        file.uri.toString(),
+                        AudioMetaAnnotation(
+                            title = merged.title,
+                            artist = merged.artist,
+                            album = merged.album
+                        )
+                    )
+                }
+            }.exceptionOrNull()?.let { e ->
+                "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+            }
+        }
+        if (error != null) {
+            errors += "${file.name}: $error"
+        }
+    }
+    return errors
+}
+
+private fun readEditableAudioAnnotation(context: Context, uri: Uri): EditableAudioAnnotation {
+    return runCatching {
+        MediaMetadataRetriever().use { retriever ->
+            retriever.setDataSource(context, uri)
+            EditableAudioAnnotation(
+                title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)?.trim().orEmpty(),
+                artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)?.trim().orEmpty(),
+                album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)?.trim().orEmpty()
+            )
+        }
+    }.getOrElse { EditableAudioAnnotation() }
+}
+
+private fun isMp3AudioFile(fileName: String, mimeType: String): Boolean {
+    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    val mt = mimeType.trim().lowercase(Locale.ROOT)
+    return ext == "mp3" || mt == "audio/mpeg" || mt == "audio/mp3"
+}
+
+private fun supportsJaudiotaggerWrite(fileName: String, mimeType: String): Boolean {
+    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    val mt = mimeType.trim().lowercase(Locale.ROOT)
+    return when {
+        ext in setOf("m4a", "mp4", "flac", "ogg") -> true
+        mt == "audio/mp4" || mt == "audio/x-m4a" || mt == "audio/flac" || mt == "audio/ogg" || mt == "application/ogg" -> true
+        else -> false
+    }
+}
+
+private fun saveEditableAudioAnnotationToMp3(
+    context: Context,
+    uri: Uri,
+    data: EditableAudioAnnotation
+): String? {
+    return try {
+        val tempIn = File.createTempFile("audio_meta_in_", ".mp3", context.cacheDir)
+        val tempOut = File.createTempFile("audio_meta_out_", ".mp3", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempIn.outputStream().use { output -> input.copyTo(output) }
+            } ?: return "openInputStream returned null"
+
+            val before = readEditableAudioAnnotation(context, uri)
+            val mp3 = Mp3File(tempIn.absolutePath)
+            val tag = mp3.id3v2Tag ?: ID3v24Tag()
+            tag.title = data.title.trim()
+            tag.artist = data.artist.trim()
+            tag.album = data.album.trim()
+            mp3.id3v2Tag = tag
+            mp3.save(tempOut.absolutePath)
+
+            val writeDone = runCatching {
+                context.contentResolver.openOutputStream(uri, "rwt")?.use { out ->
+                    tempOut.inputStream().use { input -> input.copyTo(out) }
+                }
+            }.getOrNull() != null
+
+            if (!writeDone) {
+                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                    tempOut.inputStream().use { input -> input.copyTo(out) }
+                } ?: return "openOutputStream returned null (rwt/wt)"
+            }
+
+            val readBack = readEditableAudioAnnotation(context, uri)
+            val changedFields = compareChangedAudioAnnotationFields(before, data, readBack)
+            val mismatch = changedFields.filter { field ->
+                when (field) {
+                    "title" -> readBack.title.trim() != data.title.trim()
+                    "artist" -> readBack.artist.trim() != data.artist.trim()
+                    "album" -> readBack.album.trim() != data.album.trim()
+                    else -> false
+                }
+            }
+            if (mismatch.isNotEmpty()) {
+                return "post-save verification mismatch: ${mismatch.joinToString(",")}; readBack=$readBack"
+            }
+            null
+        } finally {
+            runCatching { tempIn.delete() }
+            runCatching { tempOut.delete() }
+        }
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+    }
+}
+
+private fun saveEditableAudioAnnotationWithJaudiotagger(
+    context: Context,
+    uri: Uri,
+    data: EditableAudioAnnotation,
+    fileName: String
+): String? {
+    return try {
+        val ext = fileName.substringAfterLast('.', "").ifBlank { "audio" }
+        val tempIn = File.createTempFile("audio_meta_in_", ".${ext}", context.cacheDir)
+        try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                tempIn.outputStream().use { output -> input.copyTo(output) }
+            } ?: return "openInputStream returned null"
+
+            val before = readEditableAudioAnnotation(context, uri)
+            val audioFile = AudioFileIO.read(tempIn)
+            val tag = audioFile.tagOrCreateAndSetDefault
+
+            fun setOrClear(field: FieldKey, value: String) {
+                val normalized = value.trim()
+                if (normalized.isBlank()) {
+                    tag.deleteField(field)
+                } else {
+                    tag.setField(field, normalized)
+                }
+            }
+
+            setOrClear(FieldKey.TITLE, data.title)
+            setOrClear(FieldKey.ARTIST, data.artist)
+            setOrClear(FieldKey.ALBUM, data.album)
+            audioFile.commit()
+
+            val writeDone = runCatching {
+                context.contentResolver.openOutputStream(uri, "rwt")?.use { out ->
+                    tempIn.inputStream().use { input -> input.copyTo(out) }
+                }
+            }.getOrNull() != null
+
+            if (!writeDone) {
+                context.contentResolver.openOutputStream(uri, "wt")?.use { out ->
+                    tempIn.inputStream().use { input -> input.copyTo(out) }
+                } ?: return "openOutputStream returned null (rwt/wt)"
+            }
+
+            val readBack = readEditableAudioAnnotation(context, uri)
+            val changedFields = compareChangedAudioAnnotationFields(before, data, readBack)
+            val mismatch = changedFields.filter { field ->
+                when (field) {
+                    "title" -> readBack.title.trim() != data.title.trim()
+                    "artist" -> readBack.artist.trim() != data.artist.trim()
+                    "album" -> readBack.album.trim() != data.album.trim()
+                    else -> false
+                }
+            }
+            if (mismatch.isNotEmpty()) {
+                return "post-save verification mismatch: ${mismatch.joinToString(",")}; readBack=$readBack"
+            }
+
+            null
+        } finally {
+            runCatching { tempIn.delete() }
+        }
+    } catch (e: Exception) {
+        "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+    }
+}
+
+private fun applyAudioMetaAnnotationRows(
+    context: Context,
+    rows: List<DetailMetadataRow>,
+    annotation: AudioMetaAnnotation?
+): List<DetailMetadataRow> {
+    if (annotation == null) return rows
+    val title = annotation.title.trim()
+    val artist = annotation.artist.trim()
+    val album = annotation.album.trim()
+    if (title.isBlank() && artist.isBlank() && album.isBlank()) return rows
+
+    val titleLabel = context.getString(R.string.browser_meta_title_label)
+    val artistLabel = context.getString(R.string.browser_meta_artist_label)
+    val albumLabel = context.getString(R.string.browser_meta_album_label)
+    val updated = rows.map { row ->
+        if (row.isSection) return@map row
+        when (row.label) {
+            titleLabel -> if (title.isNotBlank()) row.copy(value = title) else row
+            artistLabel -> if (artist.isNotBlank()) row.copy(value = artist) else row
+            albumLabel -> if (album.isNotBlank()) row.copy(value = album) else row
+            else -> row
+        }
+    }
+    val result = updated.toMutableList()
+    val hasTitle = updated.any { !it.isSection && it.label == titleLabel }
+    val hasArtist = updated.any { !it.isSection && it.label == artistLabel }
+    val hasAlbum = updated.any { !it.isSection && it.label == albumLabel }
+    if (title.isNotBlank() && !hasTitle) result += DetailMetadataRow(titleLabel, title)
+    if (artist.isNotBlank() && !hasArtist) result += DetailMetadataRow(artistLabel, artist)
+    if (album.isNotBlank() && !hasAlbum) result += DetailMetadataRow(albumLabel, album)
+    return result
+}
+
 private fun decodeXpExifText(exif: ExifInterface, tag: String): String? {
     fun decodeUtf16Le(raw: ByteArray): String? {
         if (raw.isEmpty()) return null
@@ -1852,6 +2241,7 @@ private fun saveEditableImageExif(
     data: EditableImageExif
 ): String? {
     return try {
+        val before = readEditableImageExif(context, uri)
         val pfd = context.contentResolver.openFileDescriptor(uri, "rw")
             ?: return "openFileDescriptor returned null (rw)"
         pfd.use {
@@ -1864,11 +2254,17 @@ private fun saveEditableImageExif(
             exif.saveAttributes()
         }
         val readBack = readEditableImageExif(context, uri)
-        val mismatch = mutableListOf<String>()
-        if (readBack.artist.trim() != data.artist.trim()) mismatch += "artist"
-        if (readBack.description.trim() != data.description.trim()) mismatch += "description"
-        if (readBack.software.trim() != data.software.trim()) mismatch += "software"
-        if (readBack.copyright.trim() != data.copyright.trim()) mismatch += "copyright"
+        val changedFields = compareChangedImageExifFields(before, data, readBack)
+        val mismatch = changedFields.filter { field ->
+            when (field) {
+                "takenTime" -> readBack.takenTime.trim() != data.takenTime.trim()
+                "artist" -> readBack.artist.trim() != data.artist.trim()
+                "description" -> readBack.description.trim() != data.description.trim()
+                "software" -> readBack.software.trim() != data.software.trim()
+                "copyright" -> readBack.copyright.trim() != data.copyright.trim()
+                else -> false
+            }
+        }
         if (mismatch.isNotEmpty()) {
             return "post-save verification mismatch: ${mismatch.joinToString(",")}; readBack=${readBack}"
         }
@@ -1977,6 +2373,52 @@ private fun loadVideoTrackMetadataRows(context: Context, uri: Uri): List<DetailM
     }
 }
 
+private fun loadAudioTrackMetadataRows(context: Context, uri: Uri): List<DetailMetadataRow> {
+    val extractor = MediaExtractor()
+    return try {
+        extractor.setDataSource(context, uri, null)
+        val rows = mutableListOf<DetailMetadataRow>()
+        var hasAudioTrack = false
+        for (index in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(index)
+            val mime = format.stringOrNull(MediaFormat.KEY_MIME).orEmpty()
+            if (!mime.startsWith("audio/")) continue
+            if (!hasAudioTrack) {
+                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tracks))
+                hasAudioTrack = true
+            }
+            appendMetaIfNotBlank(
+                rows,
+                context.getString(R.string.browser_meta_audio_track_mime_label, index + 1),
+                mime
+            )
+            appendMetaIfNotBlank(
+                rows,
+                context.getString(R.string.browser_meta_audio_track_sample_rate_label, index + 1),
+                formatSampleRate(format.intOrNull(MediaFormat.KEY_SAMPLE_RATE)?.toString())
+            )
+            appendMetaIfNotBlank(
+                rows,
+                context.getString(R.string.browser_meta_audio_track_channel_count_label, index + 1),
+                format.intOrNull(MediaFormat.KEY_CHANNEL_COUNT)?.toString()
+            )
+            appendMetaIfNotBlank(
+                rows,
+                context.getString(R.string.browser_meta_audio_track_bitrate_label, index + 1),
+                formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
+            )
+            appendMetaIfNotBlank(
+                rows,
+                context.getString(R.string.browser_meta_audio_track_duration_label, index + 1),
+                formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
+            )
+        }
+        rows
+    } finally {
+        runCatching { extractor.release() }
+    }
+}
+
 private fun loadTypeSpecificMetadataRows(
     context: Context,
     uri: Uri,
@@ -1990,18 +2432,30 @@ private fun loadTypeSpecificMetadataRows(
             MediaMetadataRetriever().use { retriever ->
                 retriever.setDataSource(context, uri)
                 val rows = mutableListOf<DetailMetadataRow>()
+                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tags))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_title_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_genre_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_year_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_author_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_composer_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_writer_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_WRITER))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_track_number_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_disc_number_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_total_tracks_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_recorded_date_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE))
+
+                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_technical))
+                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_audio_mime_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_duration_label), formatDurationMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)))
                 appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bitrate_label), formatBitrate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                     appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_sample_rate_label), formatSampleRate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)))
                     appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bits_per_sample_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE))
                 }
+                rows += loadAudioTrackMetadataRows(context, uri)
                 rows
             }
         }.getOrElse { emptyList() }
@@ -2303,6 +2757,8 @@ private fun FileBrowserAppScreen(
     var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
     var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
     var currentUri by remember { mutableStateOf<String?>(null) }
+    var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
+    var pendingBatchDetails by remember { mutableStateOf<List<DocumentFileModel>?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
@@ -3983,6 +4439,8 @@ private fun FileBrowserAppScreen(
                 pendingList = pendingList,
                 currentDirPath = currentDirPath,
                 rootUri = rootUri,
+                onShowFileDetails = { file -> showFileDetail = file },
+                onShowBatchDetails = { pendingBatchDetails = pendingList.toList().takeIf { pendingBatchMetadataKind(it) != null } },
                 onRemove = { pendingList.remove(it) },
                 onCopyHere = doCopyHere,
                 onMoveHere = doMoveHere,
@@ -4063,6 +4521,15 @@ private fun FileBrowserAppScreen(
                     }
                 },
                 onDismiss = { showPendingList = false }
+            )
+        }
+        pendingBatchDetails?.let { files ->
+            BatchPendingMetadataDialog(
+                files = files,
+                context = context,
+                prefs = prefs,
+                onDismiss = { pendingBatchDetails = null },
+                onSaved = { pendingBatchDetails = null }
             )
         }
         bulletinForwardPayload?.let { payload ->
@@ -7264,6 +7731,7 @@ internal fun FileBrowserScreen(
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
     val context = LocalContext.current
+    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
     var loading by remember(currentUri) { mutableStateOf(true) }
@@ -8426,6 +8894,13 @@ internal fun FileBrowserScreen(
         var imageExifSaving by remember(detailTarget.uri) { mutableStateOf(false) }
         var imageExifSaveError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
         var imageExifForm by remember(detailTarget.uri) { mutableStateOf(EditableImageExif()) }
+        var imageExifValidation by remember(detailTarget.uri) { mutableStateOf(EditableImageExifValidation()) }
+        var showAudioMetaEditDialog by remember(detailTarget.uri) { mutableStateOf(false) }
+        var audioMetaLoading by remember(detailTarget.uri) { mutableStateOf(false) }
+        var audioMetaSaving by remember(detailTarget.uri) { mutableStateOf(false) }
+        var audioMetaSaveError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
+        var audioMetaForm by remember(detailTarget.uri) { mutableStateOf(EditableAudioAnnotation()) }
+        var audioMetaValidation by remember(detailTarget.uri) { mutableStateOf(EditableAudioAnnotationValidation()) }
         val detailScope = rememberCoroutineScope()
 
         LaunchedEffect(detailTarget.uri) {
@@ -8500,7 +8975,15 @@ internal fun FileBrowserScreen(
                 typeSpecificMetaError = e.message ?: e.javaClass.simpleName
                 emptyList()
             }
-            typeSpecificMetaRows = rows
+            val mergedRows = if (detailMetaKind == DetailMetadataKind.AUDIO) {
+                val annotation = withContext(Dispatchers.IO) {
+                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
+                }
+                applyAudioMetaAnnotationRows(context, rows, annotation)
+            } else {
+                rows
+            }
+            typeSpecificMetaRows = mergedRows
             typeSpecificMetaLoaded = true
             typeSpecificMetaLoading = false
 
@@ -8638,6 +9121,7 @@ internal fun FileBrowserScreen(
                                             detailScope.launch {
                                                 imageExifLoading = true
                                                 imageExifSaveError = null
+                                                imageExifValidation = EditableImageExifValidation()
                                                 imageExifForm = withContext(Dispatchers.IO) {
                                                     readEditableImageExif(context, detailTarget.uri)
                                                 }
@@ -8647,6 +9131,38 @@ internal fun FileBrowserScreen(
                                         }
                                     ) {
                                         Text(stringResource(R.string.browser_type_specific_edit_image_meta))
+                                    }
+                                }
+                                Spacer(Modifier.height(8.dp))
+                            } else if (detailMetaKind == DetailMetadataKind.AUDIO) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            detailScope.launch {
+                                                audioMetaLoading = true
+                                                audioMetaSaveError = null
+                                                audioMetaValidation = EditableAudioAnnotationValidation()
+                                                val annotation = withContext(Dispatchers.IO) {
+                                                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
+                                                }
+                                                val fromFile = withContext(Dispatchers.IO) {
+                                                    readEditableAudioAnnotation(context, detailTarget.uri)
+                                                }
+                                                audioMetaForm = EditableAudioAnnotation(
+                                                    title = annotation?.title?.takeIf { it.isNotBlank() } ?: fromFile.title,
+                                                    artist = annotation?.artist?.takeIf { it.isNotBlank() } ?: fromFile.artist,
+                                                    album = annotation?.album?.takeIf { it.isNotBlank() } ?: fromFile.album
+                                                )
+                                                audioMetaLoading = false
+                                                showAudioMetaEditDialog = true
+                                            }
+                                        }
+                                    ) {
+                                        Text(stringResource(R.string.browser_type_specific_edit_audio_meta))
                                     }
                                 }
                                 Spacer(Modifier.height(8.dp))
@@ -8796,40 +9312,77 @@ internal fun FileBrowserScreen(
                         } else {
                             OutlinedTextField(
                                 value = imageExifForm.takenTime,
-                                onValueChange = { imageExifForm = imageExifForm.copy(takenTime = it) },
+                                onValueChange = {
+                                    imageExifForm = imageExifForm.copy(takenTime = it)
+                                    imageExifValidation = imageExifValidation.copy(takenTimeError = null)
+                                },
                                 label = { Text(stringResource(R.string.browser_meta_taken_time_label)) },
-                                supportingText = { Text(stringResource(R.string.browser_meta_taken_time_hint)) },
+                                isError = !imageExifValidation.takenTimeError.isNullOrBlank(),
+                                supportingText = {
+                                    Text(
+                                        imageExifValidation.takenTimeError
+                                            ?: stringResource(R.string.browser_meta_taken_time_hint)
+                                    )
+                                },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = imageExifForm.artist,
-                                onValueChange = { imageExifForm = imageExifForm.copy(artist = it) },
+                                onValueChange = {
+                                    imageExifForm = imageExifForm.copy(artist = it)
+                                    imageExifValidation = imageExifValidation.copy(artistError = null)
+                                },
                                 label = { Text(stringResource(R.string.browser_meta_artist_label)) },
+                                isError = !imageExifValidation.artistError.isNullOrBlank(),
+                                supportingText = {
+                                    imageExifValidation.artistError?.let { Text(it) }
+                                },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = imageExifForm.description,
-                                onValueChange = { imageExifForm = imageExifForm.copy(description = it) },
+                                onValueChange = {
+                                    imageExifForm = imageExifForm.copy(description = it)
+                                    imageExifValidation = imageExifValidation.copy(descriptionError = null)
+                                },
                                 label = { Text(stringResource(R.string.browser_meta_description_label)) },
+                                isError = !imageExifValidation.descriptionError.isNullOrBlank(),
+                                supportingText = {
+                                    imageExifValidation.descriptionError?.let { Text(it) }
+                                },
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = imageExifForm.software,
-                                onValueChange = { imageExifForm = imageExifForm.copy(software = it) },
+                                onValueChange = {
+                                    imageExifForm = imageExifForm.copy(software = it)
+                                    imageExifValidation = imageExifValidation.copy(softwareError = null)
+                                },
                                 label = { Text(stringResource(R.string.browser_meta_software_label)) },
+                                isError = !imageExifValidation.softwareError.isNullOrBlank(),
+                                supportingText = {
+                                    imageExifValidation.softwareError?.let { Text(it) }
+                                },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
                                 value = imageExifForm.copyright,
-                                onValueChange = { imageExifForm = imageExifForm.copy(copyright = it) },
+                                onValueChange = {
+                                    imageExifForm = imageExifForm.copy(copyright = it)
+                                    imageExifValidation = imageExifValidation.copy(copyrightError = null)
+                                },
                                 label = { Text(stringResource(R.string.browser_meta_copyright_label)) },
+                                isError = !imageExifValidation.copyrightError.isNullOrBlank(),
+                                supportingText = {
+                                    imageExifValidation.copyrightError?.let { Text(it) }
+                                },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth()
                             )
@@ -8848,6 +9401,12 @@ internal fun FileBrowserScreen(
                     TextButton(
                         onClick = {
                             if (imageExifLoading || imageExifSaving) return@TextButton
+                            val validation = validateEditableImageExifForm(context, imageExifForm)
+                            imageExifValidation = validation
+                            if (validation.hasError) {
+                                imageExifSaveError = context.getString(R.string.browser_meta_fix_form_errors)
+                                return@TextButton
+                            }
                             detailScope.launch {
                                 imageExifSaving = true
                                 imageExifSaveError = null
@@ -8874,6 +9433,158 @@ internal fun FileBrowserScreen(
                     TextButton(
                         onClick = { if (!imageExifSaving) showImageExifEditDialog = false },
                         enabled = !imageExifSaving
+                    ) {
+                        Text(stringResource(R.string.common_cancel))
+                    }
+                }
+            )
+        }
+
+        if (showAudioMetaEditDialog) {
+            AlertDialog(
+                onDismissRequest = {
+                    if (!audioMetaSaving) showAudioMetaEditDialog = false
+                },
+                title = { Text(stringResource(R.string.browser_type_specific_edit_audio_meta_title)) },
+                text = {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        if (audioMetaLoading) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(Modifier.size(20.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text(stringResource(R.string.browser_type_specific_loading))
+                            }
+                        } else {
+                            OutlinedTextField(
+                                value = audioMetaForm.title,
+                                onValueChange = {
+                                    audioMetaForm = audioMetaForm.copy(title = it)
+                                    audioMetaValidation = audioMetaValidation.copy(titleError = null)
+                                },
+                                label = { Text(stringResource(R.string.browser_meta_title_label)) },
+                                isError = !audioMetaValidation.titleError.isNullOrBlank(),
+                                supportingText = {
+                                    audioMetaValidation.titleError?.let { Text(it) }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = audioMetaForm.artist,
+                                onValueChange = {
+                                    audioMetaForm = audioMetaForm.copy(artist = it)
+                                    audioMetaValidation = audioMetaValidation.copy(artistError = null)
+                                },
+                                label = { Text(stringResource(R.string.browser_meta_artist_label)) },
+                                isError = !audioMetaValidation.artistError.isNullOrBlank(),
+                                supportingText = {
+                                    audioMetaValidation.artistError?.let { Text(it) }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedTextField(
+                                value = audioMetaForm.album,
+                                onValueChange = {
+                                    audioMetaForm = audioMetaForm.copy(album = it)
+                                    audioMetaValidation = audioMetaValidation.copy(albumError = null)
+                                },
+                                label = { Text(stringResource(R.string.browser_meta_album_label)) },
+                                isError = !audioMetaValidation.albumError.isNullOrBlank(),
+                                supportingText = {
+                                    audioMetaValidation.albumError?.let { Text(it) }
+                                },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+
+                            audioMetaSaveError?.takeIf { it.isNotBlank() }?.let { errorText ->
+                                Spacer(Modifier.height(8.dp))
+                                Text(
+                                    text = stringResource(R.string.browser_type_specific_save_error, errorText),
+                                    color = MaterialTheme.colorScheme.error,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            if (audioMetaLoading || audioMetaSaving) return@TextButton
+                            val validation = validateEditableAudioAnnotationForm(context, audioMetaForm)
+                            audioMetaValidation = validation
+                            if (validation.hasError) {
+                                audioMetaSaveError = context.getString(R.string.browser_meta_fix_form_errors)
+                                return@TextButton
+                            }
+                            detailScope.launch {
+                                audioMetaSaving = true
+                                audioMetaSaveError = null
+                                val saveError = withContext(Dispatchers.IO) {
+                                    if (isMp3AudioFile(detailTarget.name, mimeType)) {
+                                        val writeError = saveEditableAudioAnnotationToMp3(
+                                            context,
+                                            detailTarget.uri,
+                                            audioMetaForm
+                                        )
+                                        if (writeError == null) {
+                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
+                                        }
+                                        writeError
+                                    } else if (supportsJaudiotaggerWrite(detailTarget.name, mimeType)) {
+                                        val writeError = saveEditableAudioAnnotationWithJaudiotagger(
+                                            context,
+                                            detailTarget.uri,
+                                            audioMetaForm,
+                                            detailTarget.name
+                                        )
+                                        if (writeError == null) {
+                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
+                                        }
+                                        writeError
+                                    } else {
+                                        runCatching {
+                                            prefs.setAudioMetaAnnotation(
+                                                detailTarget.uri.toString(),
+                                                AudioMetaAnnotation(
+                                                    title = audioMetaForm.title,
+                                                    artist = audioMetaForm.artist,
+                                                    album = audioMetaForm.album
+                                                )
+                                            )
+                                        }.exceptionOrNull()?.let { e ->
+                                            "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
+                                        }
+                                    }
+                                }
+                                audioMetaSaving = false
+                                if (saveError == null) {
+                                    showAudioMetaEditDialog = false
+                                    Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
+                                    typeSpecificMetaLoaded = false
+                                    loadTypeSpecificMetadataNow(forceReload = true)
+                                } else {
+                                    audioMetaSaveError = saveError
+                                }
+                            }
+                        },
+                        enabled = !audioMetaLoading && !audioMetaSaving
+                    ) {
+                        Text(if (audioMetaSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { if (!audioMetaSaving) showAudioMetaEditDialog = false },
+                        enabled = !audioMetaSaving
                     ) {
                         Text(stringResource(R.string.common_cancel))
                     }
@@ -9055,6 +9766,202 @@ fun FileItem(
     }
 }
 
+@Composable
+private fun BatchPendingMetadataDialog(
+    files: List<DocumentFileModel>,
+    context: Context,
+    prefs: Preferences,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit
+) {
+    val detailScope = rememberCoroutineScope()
+    val batchKind = pendingBatchMetadataKind(files) ?: return
+    val validatingFail = remember(files) { mutableStateOf<String?>(null) }
+    var batchSaving by remember(files) { mutableStateOf(false) }
+    val initialImage = remember(files) {
+        if (batchKind == DetailMetadataKind.IMAGE) runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } else null
+    }
+    val initialAudio = remember(files) {
+        if (batchKind == DetailMetadataKind.AUDIO) runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } else null
+    }
+    var imageForm by remember(files) { mutableStateOf(initialImage ?: EditableImageExif()) }
+    var imageValidation by remember(files) { mutableStateOf(EditableImageExifValidation()) }
+    var audioForm by remember(files) { mutableStateOf(initialAudio ?: EditableAudioAnnotation()) }
+    var audioValidation by remember(files) { mutableStateOf(EditableAudioAnnotationValidation()) }
+
+    LaunchedEffect(files, batchKind) {
+        if (batchKind == DetailMetadataKind.IMAGE) {
+            imageForm = withContext(Dispatchers.IO) { runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } }
+            imageValidation = EditableImageExifValidation()
+        } else if (batchKind == DetailMetadataKind.AUDIO) {
+            audioForm = withContext(Dispatchers.IO) { runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } }
+            audioValidation = EditableAudioAnnotationValidation()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!batchSaving) onDismiss() },
+        title = {
+            Text(
+                when (batchKind) {
+                    DetailMetadataKind.IMAGE -> stringResource(R.string.browser_type_specific_edit_image_meta_title)
+                    DetailMetadataKind.AUDIO -> stringResource(R.string.browser_type_specific_edit_audio_meta_title)
+                    else -> stringResource(R.string.context_details)
+                }
+            )
+        },
+        text = {
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+                Text(
+                    context.getString(R.string.browser_type_specific_empty).takeIf { false } ?: "仅修改已填写的字段，空白项保持原值；未填写项不会被覆盖。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(12.dp))
+                when (batchKind) {
+                    DetailMetadataKind.IMAGE -> {
+                        OutlinedTextField(
+                            value = imageForm.takenTime,
+                            onValueChange = { imageForm = imageForm.copy(takenTime = it); imageValidation = imageValidation.copy(takenTimeError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_taken_time_label)) },
+                            isError = !imageValidation.takenTimeError.isNullOrBlank(),
+                            supportingText = { imageValidation.takenTimeError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = imageForm.artist,
+                            onValueChange = { imageForm = imageForm.copy(artist = it); imageValidation = imageValidation.copy(artistError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_artist_label)) },
+                            isError = !imageValidation.artistError.isNullOrBlank(),
+                            supportingText = { imageValidation.artistError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = imageForm.description,
+                            onValueChange = { imageForm = imageForm.copy(description = it); imageValidation = imageValidation.copy(descriptionError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_description_label)) },
+                            isError = !imageValidation.descriptionError.isNullOrBlank(),
+                            supportingText = { imageValidation.descriptionError?.let { Text(it) } },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = imageForm.software,
+                            onValueChange = { imageForm = imageForm.copy(software = it); imageValidation = imageValidation.copy(softwareError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_software_label)) },
+                            isError = !imageValidation.softwareError.isNullOrBlank(),
+                            supportingText = { imageValidation.softwareError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = imageForm.copyright,
+                            onValueChange = { imageForm = imageForm.copy(copyright = it); imageValidation = imageValidation.copy(copyrightError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_copyright_label)) },
+                            isError = !imageValidation.copyrightError.isNullOrBlank(),
+                            supportingText = { imageValidation.copyrightError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    DetailMetadataKind.AUDIO -> {
+                        OutlinedTextField(
+                            value = audioForm.title,
+                            onValueChange = { audioForm = audioForm.copy(title = it); audioValidation = audioValidation.copy(titleError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_title_label)) },
+                            isError = !audioValidation.titleError.isNullOrBlank(),
+                            supportingText = { audioValidation.titleError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = audioForm.artist,
+                            onValueChange = { audioForm = audioForm.copy(artist = it); audioValidation = audioValidation.copy(artistError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_artist_label)) },
+                            isError = !audioValidation.artistError.isNullOrBlank(),
+                            supportingText = { audioValidation.artistError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = audioForm.album,
+                            onValueChange = { audioForm = audioForm.copy(album = it); audioValidation = audioValidation.copy(albumError = null) },
+                            label = { Text(stringResource(R.string.browser_meta_album_label)) },
+                            isError = !audioValidation.albumError.isNullOrBlank(),
+                            supportingText = { audioValidation.albumError?.let { Text(it) } },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    else -> {}
+                }
+                validatingFail.value?.let { error ->
+                    Spacer(Modifier.height(8.dp))
+                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (batchSaving) return@TextButton
+                    val hasError = when (batchKind) {
+                        DetailMetadataKind.IMAGE -> {
+                            val validation = validateEditableImageExifForm(context, imageForm)
+                            imageValidation = validation
+                            validation.hasError
+                        }
+                        DetailMetadataKind.AUDIO -> {
+                            val validation = validateEditableAudioAnnotationForm(context, audioForm)
+                            audioValidation = validation
+                            validation.hasError
+                        }
+                        else -> false
+                    }
+                    if (hasError) {
+                        validatingFail.value = context.getString(R.string.browser_meta_fix_form_errors)
+                        return@TextButton
+                    }
+                    validatingFail.value = null
+                    detailScope.launch {
+                        batchSaving = true
+                        val errors = withContext(Dispatchers.IO) {
+                            when (batchKind) {
+                                DetailMetadataKind.IMAGE -> saveBatchEditableImageExif(context, files, imageForm)
+                                DetailMetadataKind.AUDIO -> saveBatchEditableAudioAnnotation(context, files, audioForm, prefs)
+                                else -> emptyList()
+                            }
+                        }
+                        batchSaving = false
+                        if (errors.isEmpty()) {
+                            Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
+                            onSaved()
+                            onDismiss()
+                        } else {
+                            validatingFail.value = errors.joinToString("; ")
+                        }
+                    }
+                },
+                enabled = !batchSaving
+            ) {
+                Text(if (batchSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { if (!batchSaving) onDismiss() }, enabled = !batchSaving) {
+                Text(stringResource(R.string.common_cancel))
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PendingListScreen(
@@ -9065,6 +9972,8 @@ fun PendingListScreen(
     title: String? = null,
     confirmLabel: String? = null,
     onConfirm: (() -> Unit)? = null,
+    onShowFileDetails: (DocumentFileModel) -> Unit = {},
+    onShowBatchDetails: () -> Unit = {},
     onRemove: (DocumentFileModel) -> Unit,
     onCopyHere: () -> Unit = {},
     onMoveHere: () -> Unit = {},
@@ -9151,7 +10060,8 @@ fun PendingListScreen(
                 }
                 if (!isPickMode) {
                 val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
-                val pendingActions = listOf(
+                val batchDetailKind = pendingBatchMetadataKind(filteredPendingItems)
+                val pendingActions = mutableListOf(
                     context.getString(R.string.pending_list_action_copy) to onCopyHere,
                     context.getString(R.string.pending_list_action_move) to onMoveHere,
                     context.getString(R.string.pending_list_action_delete) to onRequestDelete,
@@ -9172,6 +10082,9 @@ fun PendingListScreen(
                     context.getString(R.string.pending_list_action_7z) to onRequestCompressTo7z,
                     context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
                 )
+                if (batchDetailKind != null) {
+                    pendingActions.add(context.getString(R.string.context_details) to onShowBatchDetails)
+                }
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -9243,6 +10156,13 @@ fun PendingListScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        IconButton(onClick = { onShowFileDetails(item) }) {
+                            Icon(
+                                Icons.Default.Info,
+                                contentDescription = stringResource(R.string.context_details),
+                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                         IconButton(onClick = { onRemove(item) }) {

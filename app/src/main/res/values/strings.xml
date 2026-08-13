@@ -406,7 +406,7 @@
     <string name="pending_list_action_copy">拷贝</string>
     <string name="pending_list_action_move">移动</string>
     <string name="pending_list_action_delete">删除</string>
-    <string name="pending_list_action_clear_filter">清空过滤</string>
+    <string name="pending_list_action_clear_filter">清空列表</string>
     <string name="pending_list_action_playback">加入播放</string>
     <string name="pending_list_action_mask">遮罩</string>
     <string name="pending_list_action_gpg_encrypt">GPG 加密</string>
@@ -1418,6 +1418,8 @@ OPF目录文件: %2$s</string>
     <string name="browser_type_specific_save_error">保存失败：%1$s</string>
     <string name="browser_type_specific_edit_image_meta">编辑图片信息</string>
     <string name="browser_type_specific_edit_image_meta_title">编辑图片 Exif 信息</string>
+    <string name="browser_type_specific_edit_audio_meta">编辑音频注释</string>
+    <string name="browser_type_specific_edit_audio_meta_title">编辑音频注释信息</string>
     <string name="browser_meta_mime">媒体类型</string>
     <string name="browser_meta_title_label">标题</string>
     <string name="browser_meta_artist_label">艺术家</string>
@@ -1436,6 +1438,9 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_page_count_label">页数</string>
     <string name="browser_meta_taken_time_label">拍摄时间</string>
     <string name="browser_meta_taken_time_hint">支持 YYYY:MM:DD HH:MM:SS 或 YYYY-MM-DD HH:MM:SS</string>
+    <string name="browser_meta_taken_time_invalid">拍摄时间格式无效，请使用 YYYY:MM:DD HH:MM:SS</string>
+    <string name="browser_meta_field_too_long">%1$s不能超过 %2$d 个字符</string>
+    <string name="browser_meta_fix_form_errors">请先修正表单中的错误字段</string>
     <string name="browser_meta_camera_make_label">相机厂商</string>
     <string name="browser_meta_camera_model_label">相机型号</string>
     <string name="browser_meta_lens_model_label">镜头型号</string>
@@ -1454,6 +1459,8 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_altitude_label">海拔</string>
     <string name="browser_meta_group_video_tracks">视频轨道信息</string>
     <string name="browser_meta_group_audio_tracks">音频轨道信息</string>
+    <string name="browser_meta_group_audio_tags">音频标签信息</string>
+    <string name="browser_meta_group_audio_technical">音频技术信息</string>
     <string name="browser_meta_video_track_mime_label">视频轨道 %1$d 编码</string>
     <string name="browser_meta_video_track_resolution_label">视频轨道 %1$d 分辨率</string>
     <string name="browser_meta_video_track_fps_label">视频轨道 %1$d 帧率</string>
@@ -1464,6 +1471,14 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_audio_track_channel_count_label">音频轨道 %1$d 声道数</string>
     <string name="browser_meta_audio_track_bitrate_label">音频轨道 %1$d 码率</string>
     <string name="browser_meta_audio_track_duration_label">音频轨道 %1$d 时长</string>
+    <string name="browser_meta_author_label">作者</string>
+    <string name="browser_meta_composer_label">作曲</string>
+    <string name="browser_meta_writer_label">词作者</string>
+    <string name="browser_meta_track_number_label">曲目号</string>
+    <string name="browser_meta_disc_number_label">碟片号</string>
+    <string name="browser_meta_total_tracks_label">总曲目数</string>
+    <string name="browser_meta_recorded_date_label">录制日期</string>
+    <string name="browser_meta_audio_mime_label">音频编码</string>
     <string name="browser_original_field">原始</string>
     <string name="browser_obfuscated_badge">已混淆</string>
     <string name="browser_rename_to">重命名为:</string>

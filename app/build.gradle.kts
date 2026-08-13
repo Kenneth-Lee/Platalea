@@ -105,6 +105,8 @@ dependencies {
     implementation("org.pgpainless:pgpainless-core:1.7.6")
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("com.mpatric:mp3agic:0.9.1")
+    implementation("net.jthink:jaudiotagger:2.2.5")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.apache.ftpserver:ftpserver-core:1.2.1")
     implementation("org.commonmark:commonmark:0.24.0")

@@ -1290,7 +1290,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_size_example_mb">e.g. 10MB or 1024</string>
     <string name="browser_size_example_large">e.g. 500MB</string>
     <string name="browser_recursive_search_hint">Search recursively from the current directory; blank means no limit.</string>
-    <string name="browser_clear_filter">Clear filter</string>
+    <string name="browser_clear_filter">Clear list</string>
     <string name="browser_current_dir">Current directory: %1$s</string>
     <string name="browser_select_root_prompt">Select a root directory to browse files</string>
     <string name="browser_select_root_button">Select root directory</string>
@@ -1367,6 +1367,8 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_type_specific_save_error">Save failed: %1$s</string>
     <string name="browser_type_specific_edit_image_meta">Edit image metadata</string>
     <string name="browser_type_specific_edit_image_meta_title">Edit image Exif metadata</string>
+    <string name="browser_type_specific_edit_audio_meta">Edit audio annotations</string>
+    <string name="browser_type_specific_edit_audio_meta_title">Edit audio annotation metadata</string>
     <string name="browser_meta_mime">MIME</string>
     <string name="browser_meta_title_label">Title</string>
     <string name="browser_meta_artist_label">Artist</string>
@@ -1385,6 +1387,9 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_page_count_label">Page count</string>
     <string name="browser_meta_taken_time_label">Taken time</string>
     <string name="browser_meta_taken_time_hint">Supports YYYY:MM:DD HH:MM:SS or YYYY-MM-DD HH:MM:SS</string>
+    <string name="browser_meta_taken_time_invalid">Invalid taken time format. Use YYYY:MM:DD HH:MM:SS</string>
+    <string name="browser_meta_field_too_long">%1$s must not exceed %2$d characters</string>
+    <string name="browser_meta_fix_form_errors">Please fix invalid fields before saving</string>
     <string name="browser_meta_camera_make_label">Camera make</string>
     <string name="browser_meta_camera_model_label">Camera model</string>
     <string name="browser_meta_lens_model_label">Lens model</string>
@@ -1403,6 +1408,8 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_altitude_label">Altitude</string>
     <string name="browser_meta_group_video_tracks">Video track details</string>
     <string name="browser_meta_group_audio_tracks">Audio track details</string>
+    <string name="browser_meta_group_audio_tags">Audio tag details</string>
+    <string name="browser_meta_group_audio_technical">Audio technical details</string>
     <string name="browser_meta_video_track_mime_label">Video track %1$d codec</string>
     <string name="browser_meta_video_track_resolution_label">Video track %1$d resolution</string>
     <string name="browser_meta_video_track_fps_label">Video track %1$d frame rate</string>
@@ -1413,6 +1420,14 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_audio_track_channel_count_label">Audio track %1$d channels</string>
     <string name="browser_meta_audio_track_bitrate_label">Audio track %1$d bitrate</string>
     <string name="browser_meta_audio_track_duration_label">Audio track %1$d duration</string>
+    <string name="browser_meta_author_label">Author</string>
+    <string name="browser_meta_composer_label">Composer</string>
+    <string name="browser_meta_writer_label">Writer</string>
+    <string name="browser_meta_track_number_label">Track number</string>
+    <string name="browser_meta_disc_number_label">Disc number</string>
+    <string name="browser_meta_total_tracks_label">Total tracks</string>
+    <string name="browser_meta_recorded_date_label">Recorded date</string>
+    <string name="browser_meta_audio_mime_label">Audio codec</string>
     <string name="browser_original_field">Original</string>
     <string name="browser_obfuscated_badge">Obfuscated</string>
     <string name="browser_rename_to">Rename to:</string>

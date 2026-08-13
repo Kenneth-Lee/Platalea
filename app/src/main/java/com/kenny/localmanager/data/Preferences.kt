@@ -67,6 +67,7 @@ private val READER_AUTO_SCROLL_COUNTDOWN_SECONDS = intPreferencesKey("reader_aut
 private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_json")
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
+private val AUDIO_META_ANNOTATIONS_BY_URI_JSON = stringPreferencesKey("audio_meta_annotations_by_uri_json")
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -124,6 +125,12 @@ data class ManagedGitProject(
     val createdAt: Long,
     val lastSyncAt: Long,
     val lastPushAt: Long
+)
+
+data class AudioMetaAnnotation(
+    val title: String = "",
+    val artist: String = "",
+    val album: String = ""
 )
 
 class Preferences(private val context: Context) {
@@ -559,6 +566,39 @@ class Preferences(private val context: Context) {
                 prefs.remove(QUICK_NOTE_LAST_CATEGORY)
             } else {
                 prefs[QUICK_NOTE_LAST_CATEGORY] = normalized
+            }
+        }
+    }
+
+    suspend fun getAudioMetaAnnotation(uri: String): AudioMetaAnnotation? {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return null
+        val json = context.dataStore.data.first()[AUDIO_META_ANNOTATIONS_BY_URI_JSON]
+        val map = parseAudioMetaAnnotationsByUri(json)
+        return map[normalizedUri]
+    }
+
+    suspend fun setAudioMetaAnnotation(uri: String, annotation: AudioMetaAnnotation?) {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val current = parseAudioMetaAnnotationsByUri(prefs[AUDIO_META_ANNOTATIONS_BY_URI_JSON]).toMutableMap()
+            val normalized = annotation?.let {
+                AudioMetaAnnotation(
+                    title = it.title.trim(),
+                    artist = it.artist.trim(),
+                    album = it.album.trim()
+                )
+            }
+            if (normalized == null || (normalized.title.isBlank() && normalized.artist.isBlank() && normalized.album.isBlank())) {
+                current.remove(normalizedUri)
+            } else {
+                current[normalizedUri] = normalized
+            }
+            if (current.isEmpty()) {
+                prefs.remove(AUDIO_META_ANNOTATIONS_BY_URI_JSON)
+            } else {
+                prefs[AUDIO_META_ANNOTATIONS_BY_URI_JSON] = audioMetaAnnotationsByUriToJson(current)
             }
         }
     }
@@ -1277,6 +1317,52 @@ class Preferences(private val context: Context) {
             )
         }
         return arr.toString()
+    }
+
+    private fun parseAudioMetaAnnotationsByUri(json: String?): Map<String, AudioMetaAnnotation> {
+        if (json.isNullOrBlank()) return emptyMap()
+        return try {
+            val obj = org.json.JSONObject(json)
+            buildMap {
+                val keys = obj.keys()
+                while (keys.hasNext()) {
+                    val uri = keys.next().trim()
+                    if (uri.isBlank()) continue
+                    val value = obj.optJSONObject(uri) ?: continue
+                    val title = value.optString("title").trim()
+                    val artist = value.optString("artist").trim()
+                    val album = value.optString("album").trim()
+                    if (title.isBlank() && artist.isBlank() && album.isBlank()) continue
+                    put(uri, AudioMetaAnnotation(title = title, artist = artist, album = album))
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
+        }
+    }
+
+    private fun audioMetaAnnotationsByUriToJson(map: Map<String, AudioMetaAnnotation>): String {
+        val obj = org.json.JSONObject()
+        map.entries
+            .sortedByDescending { it.key }
+            .take(500)
+            .forEach { (uri, annotation) ->
+                val normalizedUri = uri.trim()
+                if (normalizedUri.isBlank()) return@forEach
+                val title = annotation.title.trim()
+                val artist = annotation.artist.trim()
+                val album = annotation.album.trim()
+                if (title.isBlank() && artist.isBlank() && album.isBlank()) return@forEach
+                obj.put(
+                    normalizedUri,
+                    org.json.JSONObject().apply {
+                        put("title", title)
+                        put("artist", artist)
+                        put("album", album)
+                    }
+                )
+            }
+        return obj.toString()
     }
 
     private fun parseRecentOpenItems(json: String?): List<RecentOpenItem> {
