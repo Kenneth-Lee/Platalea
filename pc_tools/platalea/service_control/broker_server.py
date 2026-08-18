@@ -8,6 +8,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -141,21 +142,35 @@ def _serve_connection(
         return
 
     if op == "shutdown":
-        ok, message = _handle_shutdown(dry_run=dry_run)
         _write_audit(
             state_dir,
             {
                 "ts": int(time.time()),
                 "uid": uid,
-                "action": "shutdown",
-                "ok": ok,
-                "message": message,
+                "action": "shutdown_requested",
+                "ok": True,
+                "message": "shutdown request accepted",
             },
         )
-        if ok:
-            _response(conn, {"ok": True, "op": "shutdown", "message": message})
-        else:
-            _response(conn, {"ok": False, "error": "shutdown_failed", "message": message})
+
+        def _run_shutdown_in_background() -> None:
+            ok, message = _handle_shutdown(dry_run=dry_run)
+            _write_audit(
+                state_dir,
+                {
+                    "ts": int(time.time()),
+                    "uid": uid,
+                    "action": "shutdown",
+                    "ok": ok,
+                    "message": message,
+                },
+            )
+
+        threading.Thread(target=_run_shutdown_in_background, daemon=True).start()
+        _response(
+            conn,
+            {"ok": True, "op": "shutdown", "message": "shutdown request accepted"},
+        )
         return
 
     _response(conn, {"ok": False, "error": "unsupported_op", "message": f"unsupported op: {op}"})

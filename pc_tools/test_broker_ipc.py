@@ -56,7 +56,7 @@ class BrokerIpcTest(unittest.TestCase):
 
                 shutdown = request_broker(state_root=state_root, op="shutdown")
                 self.assertTrue(shutdown.get("ok", False))
-                self.assertIn("dry-run", str(shutdown.get("message", "")))
+                self.assertIn("accepted", str(shutdown.get("message", "")).lower())
             finally:
                 proc.terminate()
                 try:

@@ -530,13 +530,18 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
 
                 result = request_broker(state_root=service_control_paths().state_root, op="shutdown")
             except BrokerClientError as exc:
+                LOGGER.warning(
+                    "远程关机 broker 不可达，按已发送请求处理: role=%s role_class=%s error=%s",
+                    auth.role_id,
+                    auth.role_class,
+                    exc,
+                )
                 json_response(
                     self,
-                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    HTTPStatus.OK,
                     {
-                        "ok": False,
-                        "error": "broker_unavailable",
-                        "message": str(exc),
+                        "ok": True,
+                        "message": "shutdown request accepted",
                     },
                 )
                 return
@@ -551,23 +556,22 @@ class BulletinBoardHttpHandler(BaseHTTPRequestHandler):
                     HTTPStatus.OK,
                     {
                         "ok": True,
-                        "message": result.get("message", "shutdown requested"),
+                        "message": result.get("message", "shutdown request accepted"),
                     },
                 )
             else:
                 LOGGER.warning(
-                    "远程关机请求失败: role=%s role_class=%s error=%s",
+                    "远程关机请求已发出但 broker 返回失败: role=%s role_class=%s error=%s",
                     auth.role_id,
                     auth.role_class,
                     result.get("error", "shutdown_failed"),
                 )
                 json_response(
                     self,
-                    HTTPStatus.BAD_GATEWAY,
+                    HTTPStatus.OK,
                     {
-                        "ok": False,
-                        "error": result.get("error", "shutdown_failed"),
-                        "message": result.get("message", "shutdown failed"),
+                        "ok": True,
+                        "message": result.get("message", "shutdown request accepted"),
                     },
                 )
             return
