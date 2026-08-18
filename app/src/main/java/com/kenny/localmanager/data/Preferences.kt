@@ -47,6 +47,7 @@ private val PLAYER_AUDIO_EFFECTS_ENABLED = booleanPreferencesKey("player_audio_e
 private val PLAYER_AUDIO_EFFECT_PRESET = stringPreferencesKey("player_audio_effect_preset")
 private val PLAYER_HIGH_QUALITY_OUTPUT = booleanPreferencesKey("player_high_quality_output")
 private val LAST_MAIN_TAB = stringPreferencesKey("last_main_tab")
+private val LAST_NON_SERVER_MAIN_TAB = stringPreferencesKey("last_non_server_main_tab")
 private val RECENT_OPEN_ITEMS_JSON = stringPreferencesKey("recent_open_items_json")
 private val STARTUP_DECRYPT_KEY = booleanPreferencesKey("startup_decrypt_key")
 private val EXTERNAL_OPEN_BY_EXTENSION_JSON = stringPreferencesKey("external_open_by_extension_json")
@@ -287,6 +288,11 @@ class Preferences(private val context: Context) {
     /** 主界面上次停留 tab。默认目录页。 */
     val lastMainTab: Flow<String> = context.dataStore.data.map { prefs ->
         prefs[LAST_MAIN_TAB] ?: "directory"
+    }
+
+    /** 在服务器类 tab 之前的最后一个非服务器 tab，避免开启 FTP/家庭网络后下一次直接回到服务器页。 */
+    val lastNonServerMainTab: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[LAST_NON_SERVER_MAIN_TAB] ?: "directory"
     }
 
     val recentOpenItems: Flow<List<RecentOpenItem>> = context.dataStore.data.map { prefs ->
@@ -753,6 +759,13 @@ class Preferences(private val context: Context) {
     suspend fun setLastMainTab(tab: String) {
         context.dataStore.edit { prefs ->
             prefs[LAST_MAIN_TAB] = tab.ifBlank { "directory" }
+        }
+    }
+
+    suspend fun setLastNonServerMainTab(tab: String) {
+        context.dataStore.edit { prefs ->
+            val normalized = tab.ifBlank { "directory" }
+            prefs[LAST_NON_SERVER_MAIN_TAB] = normalized
         }
     }
 

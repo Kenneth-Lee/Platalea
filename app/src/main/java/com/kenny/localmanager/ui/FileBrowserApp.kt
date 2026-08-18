@@ -2838,13 +2838,35 @@ private fun FileBrowserAppScreen(
         }
         val launchTab = MainTab.fromLaunchTarget(initialLaunchTarget)
         val savedTab = MainTab.fromKey(prefs.lastMainTab.first())
-        currentMainTab = launchTab ?: savedTab
+        val savedNonServerTab = MainTab.fromKey(prefs.lastNonServerMainTab.first())
+        val restoreTab = if (launchTab != null) {
+            launchTab
+        } else if (savedTab in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK)) {
+            savedNonServerTab
+        } else {
+            savedTab
+        }
+        currentMainTab = restoreTab
+    }
+
+    fun persistTabChoice(tab: MainTab) {
+        scope.launch {
+            val previousNonServer = currentMainTab
+            if (tab in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK)) {
+                if (previousNonServer != null && previousNonServer !in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK)) {
+                    prefs.setLastNonServerMainTab(previousNonServer.key)
+                }
+            } else {
+                prefs.setLastNonServerMainTab(tab.key)
+            }
+            prefs.setLastMainTab(tab.key)
+        }
     }
 
     fun switchMainTab(tab: MainTab) {
         if (currentMainTab == tab) return
         currentMainTab = tab
-        scope.launch { prefs.setLastMainTab(tab.key) }
+        persistTabChoice(tab)
     }
 
     fun recordRecentOpen(
