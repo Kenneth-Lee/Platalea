@@ -182,6 +182,7 @@
     <string name="context_view_zip_html">View compressed HTML</string>
     <string name="context_view_zip_llm">View compressed LLM</string>
     <string name="context_view_images">View images</string>
+    <string name="context_view_videos">View videos</string>
     <string name="context_gpg_encrypt">Encrypt with GnuPG</string>
     <string name="context_pass_protect">Password protect</string>
     <string name="context_view_password">View password</string>
@@ -1232,6 +1233,11 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_processing_file">Processing %1$s…</string>
     <string name="browser_view_zip_html_title">View compressed HTML</string>
     <string name="browser_view_zip_llm_title">View compressed LLM</string>
+    <string name="browser_view_vid_zip_title">View video archive</string>
+    <string name="browser_no_video_in_archive">No playable video found in the archive</string>
+    <string name="browser_vid_zip_cached">Cached</string>
+    <string name="browser_vid_zip_not_cached">Not cached</string>
+    <string name="browser_vid_zip_size">Size: %1$s</string>
     <string name="browser_view_epub_title">View EPUB</string>
     <string name="browser_open_epub_title">Open EPUB</string>
     <string name="browser_epub_parse_failed_title">EPUB parse failed</string>
@@ -1519,6 +1525,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_exit_encrypted_book">Exit encrypted book</string>
     <string name="browser_exit_encrypted_html">Exit encrypted HTML archive</string>
     <string name="browser_exit_encrypted_md">Exit encrypted Markdown archive</string>
+    <string name="browser_exit_encrypted_vid">Exit encrypted video archive</string>
     <string name="browser_delete_cache_exit_prompt">Delete extracted cache? If not, you will need the password next time but can reuse cache and reading progress.</string>
     <string name="browser_delete_cache_and_exit">Delete cache and exit</string>
     <string name="browser_keep_cache_and_exit">Keep cache and exit</string>

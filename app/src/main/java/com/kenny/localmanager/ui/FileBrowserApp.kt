@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ShortcutInfo
+import androidx.core.content.FileProvider
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
 import android.graphics.pdf.PdfRenderer
@@ -258,6 +259,16 @@ import com.kenny.localmanager.file.tryArchivePassword
 import com.kenny.localmanager.file.getPicZipCacheTimestamp
 import com.kenny.localmanager.file.isPicZipCacheEncrypted
 import com.kenny.localmanager.file.cleanPicZipCache
+import com.kenny.localmanager.file.VidZipExtractResult
+import com.kenny.localmanager.file.extractVidZipToCache
+import com.kenny.localmanager.file.extractVidZipVideoRange
+import com.kenny.localmanager.file.getVidZipCacheDir
+import com.kenny.localmanager.file.getVidZipEntrySize
+import com.kenny.localmanager.file.getVidZipCacheTimestamp
+import com.kenny.localmanager.file.isVidZipCacheEncrypted
+import com.kenny.localmanager.file.readVidZipVideoPaths
+import com.kenny.localmanager.file.tryVidZipPassword
+import com.kenny.localmanager.file.cleanVidZipCache
 import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
@@ -494,6 +505,7 @@ private fun openRecentItemByType(
     onHtmlTarget: (DocumentFileModel) -> Unit,
     onHtmlUrlTarget: (String) -> Unit,
     onPicZipTarget: (DocumentFileModel) -> Unit,
+    onVidZipTarget: (DocumentFileModel) -> Unit,
     onLlmZipTarget: (DocumentFileModel) -> Unit,
     onTxtTarget: (DocumentFileModel) -> Unit,
     onLlmTarget: (DocumentFileModel) -> Unit,
@@ -557,6 +569,7 @@ private fun openRecentItemByType(
                 item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> onMdZipTarget(model)
                 item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
                 item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
+                item.title.endsWith(".vid.zip", ignoreCase = true) -> onVidZipTarget(model)
                 else -> {
                     Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
                     return
@@ -2640,10 +2653,21 @@ private fun fileExtensionKey(name: String): String? {
     return name.substring(dotIndex + 1).trim().lowercase().ifBlank { null }
 }
 
+private fun toExternalLaunchUri(context: Context, uri: Uri): Uri {
+    if (uri.scheme != "file") return uri
+    val path = uri.path ?: return uri
+    val file = java.io.File(path)
+    if (!file.exists()) return uri
+    return runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }.getOrElse { uri }
+}
+
 private fun buildExternalOpenIntent(context: Context, uri: Uri, packageName: String? = null): Intent {
-    val mimeType = context.contentResolver.getType(uri)
+    val externalUri = toExternalLaunchUri(context, uri)
+    val mimeType = context.contentResolver.getType(externalUri)
     return Intent(Intent.ACTION_VIEW).apply {
-        if (mimeType.isNullOrBlank()) data = uri else setDataAndType(uri, mimeType)
+        if (mimeType.isNullOrBlank()) data = externalUri else setDataAndType(externalUri, mimeType)
         if (!packageName.isNullOrBlank()) setPackage(packageName)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -2757,6 +2781,7 @@ private fun FileBrowserAppScreen(
     var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
+    var vidZipViewState by remember { mutableStateOf<VidZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
@@ -3207,6 +3232,10 @@ private fun FileBrowserAppScreen(
         var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var picZipPassword by remember { mutableStateOf("") }
         var picZipInProgress by remember { mutableStateOf(false) }
+        var vidZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
+        var vidZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
+        var vidZipPassword by remember { mutableStateOf("") }
+        var vidZipInProgress by remember { mutableStateOf(false) }
         var showPendingCompressToZip by remember { mutableStateOf(false) }
         var showPendingCompressTo7z by remember { mutableStateOf(false) }
         var showPendingCompressArchive by remember { mutableStateOf(false) }
@@ -3652,6 +3681,59 @@ private fun FileBrowserAppScreen(
                 picZipInProgress = false
             }
         }
+        LaunchedEffect(vidZipTarget) {
+            vidZipEncrypted = null
+            vidZipPassword = ""
+            vidZipInProgress = false
+            val target = vidZipTarget ?: return@LaunchedEffect
+            val cacheDir = getVidZipCacheDir(context, target.uri)
+            val cacheTs = getVidZipCacheTimestamp(cacheDir)
+            if (cacheTs > 0 && !isVidZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                val contentDir = java.io.File(cacheDir, "content")
+                val listFile = java.io.File(cacheDir, ".video_list")
+                if (contentDir.exists() && listFile.exists()) {
+                    val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
+                    if (paths.isNotEmpty()) {
+                        vidZipTarget = null
+                        vidZipViewState = VidZipViewState(
+                            contentDir = contentDir,
+                            videoPaths = paths,
+                            zipFileName = target.name,
+                            zipUri = target.uri,
+                            isEncrypted = false,
+                            password = null,
+                            cleanupCacheDir = cacheDir
+                        )
+                        return@LaunchedEffect
+                    }
+                }
+                cacheDir.deleteRecursively()
+            }
+            vidZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
+            if (vidZipEncrypted == false) {
+                vidZipInProgress = true
+                val paths = withContext(Dispatchers.IO) {
+                    readVidZipVideoPaths(context, target.uri, null, target.name)
+                }
+                vidZipInProgress = false
+                if (paths != null && paths.isNotEmpty()) {
+                    val contentDir = java.io.File(cacheDir, "content")
+                    vidZipTarget = null
+                    vidZipViewState = VidZipViewState(
+                        contentDir = contentDir,
+                        videoPaths = paths,
+                        zipFileName = target.name,
+                        zipUri = target.uri,
+                        isEncrypted = false,
+                        password = null,
+                        cleanupCacheDir = cacheDir
+                    )
+                } else {
+                    vidZipTarget = null
+                    Toast.makeText(context, context.getString(R.string.browser_no_video_in_archive), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
         LaunchedEffect(prefs) {
             prefs.ftpPort.collect { ftpPort = it }
         }
@@ -4068,6 +4150,7 @@ private fun FileBrowserAppScreen(
                                 )
                             },
                             onPicZipTarget = { picZipTarget = it },
+                            onVidZipTarget = { vidZipTarget = it },
                             onLlmZipTarget = { llmZipTarget = it },
                             onTxtTarget = { txtTarget = it },
                             onLlmTarget = { llmTarget = it },
@@ -4289,6 +4372,7 @@ private fun FileBrowserAppScreen(
                                 onRequestTxtView = { txtTarget = it },
                                 onRequestLlmView = { llmTarget = it },
                                 onRequestPicZipView = { picZipTarget = it },
+                                onRequestVidZipView = { vidZipTarget = it },
                                 onRequestDirectoryImageView = { item, dirUri, siblings ->
                                     scope.launch {
                                         runCatching {
@@ -6221,6 +6305,94 @@ private fun FileBrowserAppScreen(
                 )
             }
         }
+        vidZipTarget?.let { target ->
+            val encrypted = vidZipEncrypted
+            if (encrypted == true) {
+                AlertDialog(
+                    onDismissRequest = { if (!vidZipInProgress) { vidZipTarget = null; vidZipPassword = "" } },
+                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
+                    text = {
+                        Column {
+                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
+                            Spacer(Modifier.height(12.dp))
+                            ReliablePasswordInputField(
+                                value = vidZipPassword,
+                                onValueChange = { if (!vidZipInProgress) vidZipPassword = it },
+                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !vidZipInProgress
+                            )
+                            if (vidZipInProgress) {
+                                Spacer(Modifier.height(8.dp))
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = {
+                                if (vidZipInProgress || vidZipPassword.isBlank()) return@Button
+                                vidZipInProgress = true
+                                val pwd = vidZipPassword.toCharArray()
+                                scope.launch {
+                                    val result = withContext(Dispatchers.IO) {
+                                        readVidZipVideoPaths(context, target.uri, pwd, target.name)
+                                    }
+                                    if (result != null && result.isNotEmpty()) {
+                                        val cacheDir = getVidZipCacheDir(context, target.uri)
+                                        vidZipTarget = null
+                                        vidZipPassword = ""
+                                        vidZipViewState = VidZipViewState(
+                                            contentDir = java.io.File(cacheDir, "content"),
+                                            videoPaths = result,
+                                            zipFileName = target.name,
+                                            zipUri = target.uri,
+                                            isEncrypted = true,
+                                            password = pwd,
+                                            cleanupCacheDir = cacheDir
+                                        )
+                                    } else {
+                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
+                                    }
+                                    vidZipInProgress = false
+                                }
+                            }
+                        ) { Text(stringResource(R.string.common_ok)) }
+                    },
+                    dismissButton = {
+                        TextButton(
+                            onClick = { if (!vidZipInProgress) { vidZipTarget = null; vidZipPassword = "" } }
+                        ) { Text(stringResource(R.string.common_cancel)) }
+                    }
+                )
+            } else if (encrypted == null) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
+                    text = {
+                        Column {
+                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            } else if (encrypted == false && vidZipInProgress) {
+                AlertDialog(
+                    onDismissRequest = {},
+                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
+                    text = {
+                        Column {
+                            Text(stringResource(R.string.browser_extracting_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    },
+                    confirmButton = {}
+                )
+            }
+        }
         archiveCompressTarget?.let { target ->
             val parentDirUri = Uri.parse(displayUri)
             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
@@ -7408,6 +7580,223 @@ private fun FileBrowserAppScreen(
                 }
             )
         }
+        vidZipViewState != null -> {
+            val state = vidZipViewState!!
+            LaunchedEffect(state.zipUri, state.recordRecent) {
+                if (state.recordRecent) {
+                    recordRecentOpen(
+                        type = RECENT_TYPE_ZIP_VIEWER,
+                        key = state.zipUri.toString(),
+                        title = state.zipFileName,
+                        uri = state.zipUri.toString()
+                    )
+                }
+            }
+            BackHandler {
+                if (state.isEncrypted) {
+                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                        title = context.getString(R.string.browser_exit_encrypted_vid),
+                        onDelete = {
+                            state.cleanupCacheDir?.deleteRecursively()
+                            vidZipViewState = null
+                            encryptedCacheExitDialog = null
+                        },
+                        onKeep = {
+                            vidZipViewState = null
+                            encryptedCacheExitDialog = null
+                        }
+                    )
+                } else {
+                    vidZipViewState = null
+                }
+            }
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.background
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            stringResource(R.string.browser_view_vid_zip_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            if (state.isEncrypted) {
+                                encryptedCacheExitDialog = EncryptedCacheExitDialogState(
+                                    title = context.getString(R.string.browser_exit_encrypted_vid),
+                                    onDelete = {
+                                        state.cleanupCacheDir?.deleteRecursively()
+                                        vidZipViewState = null
+                                        encryptedCacheExitDialog = null
+                                    },
+                                    onKeep = {
+                                        vidZipViewState = null
+                                        encryptedCacheExitDialog = null
+                                    }
+                                )
+                            } else {
+                                vidZipViewState = null
+                            }
+                        }) {
+                            Text(stringResource(R.string.common_close))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    if (state.videoPaths.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = stringResource(R.string.browser_no_video_in_archive),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            items(state.videoPaths.size) { index ->
+                                val path = state.videoPaths[index]
+                                val file = java.io.File(state.contentDir, path)
+                                val isReady = file.exists()
+                                var extracting by remember(path, state.zipUri) { mutableStateOf(false) }
+                                var itemProgress by remember(path, state.zipUri) { mutableIntStateOf(0) }
+                                val entrySize = remember(path, state.zipUri, state.isEncrypted, state.password) {
+                                    getVidZipEntrySize(context, state.zipUri, path, if (state.isEncrypted) state.password else null)
+                                }
+                                Column(
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            if (extracting || isReady) {
+                                                if (!isReady) return@TextButton
+                                            }
+                                            scope.launch {
+                                                if (!isReady) {
+                                                    extracting = true
+                                                    itemProgress = 0
+                                                    val ok = withContext(Dispatchers.IO) {
+                                                        extractVidZipVideoRange(
+                                                            context,
+                                                            state.contentDir.parentFile ?: return@withContext false,
+                                                            state.contentDir,
+                                                            state.videoPaths,
+                                                            index,
+                                                            index + 1,
+                                                            if (state.isEncrypted) state.password else null,
+                                                            state.zipUri,
+                                                            onProgress = { copied, total ->
+                                                                if (total > 0L) {
+                                                                    val percent = ((copied.toFloat() / total.toFloat()) * 100f).toInt().coerceIn(0, 100)
+                                                                    scope.launch(Dispatchers.Main.immediate) {
+                                                                        itemProgress = percent
+                                                                    }
+                                                                }
+                                                            }
+                                                        )
+                                                    }
+                                                    extracting = false
+                                                    itemProgress = 100
+                                                    if (!ok) {
+                                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
+                                                        return@launch
+                                                    }
+                                                }
+                                                val targetFile = java.io.File(state.contentDir, path)
+                                                val opened = launchExternalOpen(context, android.net.Uri.fromFile(targetFile).toString(), null)
+                                                if (!opened) {
+                                                    Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        enabled = !extracting
+                                    ) {
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Text(
+                                                path,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                            Spacer(Modifier.height(2.dp))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                            ) {
+                                                Text(
+                                                    text = if (isReady) {
+                                                        stringResource(R.string.browser_vid_zip_cached)
+                                                    } else {
+                                                        stringResource(R.string.browser_vid_zip_not_cached)
+                                                    },
+                                                    color = if (isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                                if (entrySize > 0L) {
+                                                    Text(
+                                                        text = stringResource(R.string.browser_vid_zip_size, formatSize(entrySize)),
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        style = MaterialTheme.typography.bodySmall
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (extracting) {
+                                        Spacer(Modifier.height(4.dp))
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    strokeWidth = 2.dp
+                                                )
+                                                Spacer(Modifier.width(8.dp))
+                                                Text(
+                                                    text = stringResource(R.string.browser_extracting_file, path.substringAfterLast('/')),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                Text(
+                                                    text = "$itemProgress%",
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    style = MaterialTheme.typography.bodySmall
+                                                )
+                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            LinearProgressIndicator(
+                                                progress = { itemProgress / 100f },
+                                                modifier = Modifier.fillMaxWidth()
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         pdfViewState != null -> {
             val (pdfUri, pdfName) = pdfViewState!!
             LaunchedEffect(pdfUri) {
@@ -7584,9 +7973,13 @@ private fun isCompressedLlmZip(name: String): Boolean =
 private fun isPicZip(name: String): Boolean =
     name.endsWith(".pic.zip", ignoreCase = true)
 
+/** 判断文件名是否为 .vid.zip 视频压缩包。 */
+internal fun isVidZip(name: String): Boolean =
+    name.endsWith(".vid.zip", ignoreCase = true)
+
 /** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩 tar 变体）。 */
 internal fun isExtractableArchive(name: String): Boolean =
-    name.endsWith(".zip", ignoreCase = true) ||
+    (name.endsWith(".zip", ignoreCase = true) && !isPicZip(name) && !isVidZip(name)) ||
         name.endsWith(".rar", ignoreCase = true) ||
         name.endsWith(".7z", ignoreCase = true) ||
         name.endsWith(".tar", ignoreCase = true) ||
@@ -7660,6 +8053,17 @@ private data class PicZipViewState(
     val isEncrypted: Boolean,
     val password: CharArray? = null,
     val initialIndex: Int = 0,
+    val recordRecent: Boolean = true,
+    val cleanupCacheDir: File? = null
+)
+
+private data class VidZipViewState(
+    val contentDir: java.io.File,
+    val videoPaths: List<String>,
+    val zipFileName: String,
+    val zipUri: Uri,
+    val isEncrypted: Boolean,
+    val password: CharArray? = null,
     val recordRecent: Boolean = true,
     val cleanupCacheDir: File? = null
 )
@@ -8007,6 +8411,7 @@ internal fun FileBrowserScreen(
     onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onRequestPicZipView: (DocumentFileModel) -> Unit = {},
+    onRequestVidZipView: (DocumentFileModel) -> Unit = {},
     onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
@@ -8496,6 +8901,8 @@ internal fun FileBrowserScreen(
                                                 onRequestDirectoryImageView(item, currentUri, galleryImageItems)
                                             isPicZip(item.name) ->
                                                 onRequestPicZipView(item)
+                                            isVidZip(item.name) ->
+                                                onRequestVidZipView(item)
                                             isPdfFile(item.name) ->
                                                 onRequestPdfView(item)
                                             isExtractableArchive(item.name) ->
@@ -8721,6 +9128,15 @@ internal fun FileBrowserScreen(
                                         contextMenuTarget = null
                                     }
                                 ) { Text(context.getString(R.string.context_view_images), color = MaterialTheme.colorScheme.onSurface) }
+                            }
+                            if (isVidZip(menuTarget.name)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRequestVidZipView(menuTarget)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text(context.getString(R.string.context_view_videos), color = MaterialTheme.colorScheme.onSurface) }
                             }
                         }
                         if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {

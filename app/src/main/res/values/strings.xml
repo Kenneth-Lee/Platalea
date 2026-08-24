@@ -207,6 +207,7 @@
     <string name="open_url_confirm">打开</string>
     <string name="context_view_zip_llm">查看压缩 LLM</string>
     <string name="context_view_images">查看图片</string>
+    <string name="context_view_videos">查看视频</string>
     <string name="context_gpg_encrypt">GnuPG 加密</string>
     <string name="context_pass_protect">密码保护</string>
     <string name="context_view_password">查看密码</string>
@@ -1285,6 +1286,11 @@ OPF目录文件: %2$s</string>
     <string name="browser_processing_file">正在处理 %1$s…</string>
     <string name="browser_view_zip_html_title">查看压缩 HTML</string>
     <string name="browser_view_zip_llm_title">查看压缩 LLM</string>
+    <string name="browser_view_vid_zip_title">查看视频压缩包</string>
+    <string name="browser_no_video_in_archive">压缩包里没有可播放的视频</string>
+    <string name="browser_vid_zip_cached">已缓存</string>
+    <string name="browser_vid_zip_not_cached">未缓存</string>
+    <string name="browser_vid_zip_size">大小：%1$s</string>
     <string name="browser_view_epub_title">查看 EPUB 电子书</string>
     <string name="browser_open_epub_title">打开 EPUB</string>
     <string name="browser_epub_parse_failed_title">EPUB 解析失败</string>
@@ -1572,6 +1578,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_exit_encrypted_book">退出加密书籍</string>
     <string name="browser_exit_encrypted_html">退出加密压缩 HTML</string>
     <string name="browser_exit_encrypted_md">退出加密压缩 Markdown</string>
+    <string name="browser_exit_encrypted_vid">退出加密视频压缩包</string>
     <string name="browser_delete_cache_exit_prompt">是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可复用已有缓存并保留阅读进度。</string>
     <string name="browser_delete_cache_and_exit">删除缓存并退出</string>
     <string name="browser_keep_cache_and_exit">保留缓存并退出</string>

@@ -1955,6 +1955,249 @@ fun cleanPicZipCache(context: Context, zipUri: Uri) {
     getPicZipCacheDir(context, zipUri).deleteRecursively()
 }
 
+// ---- .vid.zip 视频压缩包查看 ----
+
+private val VID_VIDEO_EXTENSIONS = setOf(
+    "mp4", "mkv", "avi", "mov", "wmv", "flv", "m4v", "webm", "3gp", "3g2", "rmvb", "rm", "m4a", "mp3"
+)
+
+internal fun isVideoArchiveEntry(path: String): Boolean {
+    val fileName = path.substringAfterLast('/').ifBlank { path }
+    val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+    return ext in VID_VIDEO_EXTENSIONS
+}
+
+data class VidZipExtractResult(
+    val cacheDir: File,
+    val contentDir: File,
+    val videoPaths: List<String>,
+    val isEncrypted: Boolean
+)
+
+fun getVidZipCacheDir(context: Context, zipUri: Uri): File {
+    val key = zipUri.toString().hashCode().toUInt().toString(16)
+    return File(context.cacheDir, "vid_zip_cache/$key")
+}
+
+fun readVidZipVideoPaths(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String
+): List<String>? {
+    val cacheDir = getVidZipCacheDir(context, zipUri)
+    cacheDir.mkdirs()
+    val archiveFile = File(cacheDir, "__archive.zip")
+    val tmpZip = if (archiveFile.exists()) archiveFile else {
+        val tmp = File(context.cacheDir, "vid_zip_scan_${System.currentTimeMillis()}.zip")
+        try {
+            context.contentResolver.openInputStream(zipUri)?.use { input ->
+                tmp.outputStream().use { output -> input.copyTo(output) }
+            } ?: return null
+            tmp
+        } catch (_: Exception) {
+            tmp.delete()
+            return null
+        }
+    }
+    return try {
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+            if (!tryZipPassword(tmpZip, password)) return null
+        }
+        val paths = zip.fileHeaders.asSequence()
+            .filter { !it.isDirectory }
+            .map { it.fileName }
+            .filter(::isVideoArchiveEntry)
+            .sorted()
+            .toList()
+        if (paths.isNotEmpty()) {
+            val listFile = File(cacheDir, ".video_list")
+            if (tmpZip != archiveFile) {
+                tmpZip.copyTo(archiveFile, overwrite = true)
+            }
+            listFile.writeText(paths.joinToString("\n"))
+            File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+            if (encrypted) File(cacheDir, ".encrypted").createNewFile() else File(cacheDir, ".encrypted").delete()
+        }
+        paths
+    } catch (_: Exception) {
+        null
+    } finally {
+        if (tmpZip != archiveFile) tmpZip.delete()
+    }
+}
+
+fun getVidZipCacheTimestamp(cacheDir: File): Long {
+    val tsFile = File(cacheDir, ".cache_ts")
+    return if (tsFile.exists()) tsFile.readText().trim().toLongOrNull() ?: 0L else 0L
+}
+
+fun getVidZipEntrySize(context: Context, zipUri: Uri, entryPath: String, password: CharArray?): Long {
+    val cacheDir = getVidZipCacheDir(context, zipUri)
+    val archiveFile = File(cacheDir, "__archive.zip")
+    val zipFile = if (archiveFile.exists()) archiveFile else {
+        val tmp = File(context.cacheDir, "vid_zip_size_${System.currentTimeMillis()}.zip")
+        try {
+            context.contentResolver.openInputStream(zipUri)?.use { input ->
+                tmp.outputStream().use { output -> input.copyTo(output) }
+            }
+            if (tmp.exists()) tmp else null
+        } catch (_: Exception) {
+            null
+        }
+    }
+    if (zipFile == null) return 0L
+    return try {
+        val zip = ZipFile(zipFile)
+        if (zip.isEncrypted) {
+            if (password == null || password.isEmpty()) return 0L
+            zip.setPassword(password)
+        }
+        val header = zip.getFileHeader(entryPath) ?: return 0L
+        header.uncompressedSize
+    } catch (_: Exception) {
+        0L
+    } finally {
+        if (zipFile.parentFile == context.cacheDir && zipFile.name.startsWith("vid_zip_size_")) {
+            zipFile.delete()
+        }
+    }
+}
+
+fun isVidZipCacheEncrypted(cacheDir: File): Boolean = File(cacheDir, ".encrypted").exists()
+
+@Suppress("UNUSED_PARAMETER")
+fun extractVidZipToCache(
+    context: Context,
+    zipUri: Uri,
+    password: CharArray?,
+    zipFileName: String,
+    initialCount: Int = 1
+): VidZipExtractResult? {
+    val cacheDir = getVidZipCacheDir(context, zipUri)
+    cacheDir.deleteRecursively()
+    cacheDir.mkdirs()
+    val tmpZip = File(cacheDir, "__archive.zip")
+    try {
+        context.contentResolver.openInputStream(zipUri)?.use { input ->
+            tmpZip.outputStream().use { output -> input.copyTo(output) }
+        } ?: return null
+        val zip = ZipFile(tmpZip)
+        val encrypted = zip.isEncrypted
+        if (encrypted) {
+            if (password == null || password.isEmpty()) return null
+            zip.setPassword(password)
+            if (!tryZipPassword(tmpZip, password)) return null
+        }
+        val videoPaths = zip.fileHeaders.asSequence()
+            .filter { !it.isDirectory }
+            .map { it.fileName }
+            .filter(::isVideoArchiveEntry)
+            .sorted()
+            .toList()
+        val contentDir = File(cacheDir, "content").apply { mkdirs() }
+        val toExtract = videoPaths.take(initialCount)
+        for (path in toExtract) {
+            val header = zip.getFileHeader(path) ?: continue
+            zip.extractFile(header, contentDir.path)
+        }
+        File(cacheDir, ".video_list").writeText(videoPaths.joinToString("\n"))
+        File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        if (encrypted) File(cacheDir, ".encrypted").createNewFile()
+        return VidZipExtractResult(cacheDir, contentDir, videoPaths, encrypted)
+    } catch (e: Exception) {
+        Log.e(TAG, "extractVidZipToCache failed", e)
+        cacheDir.deleteRecursively()
+        return null
+    }
+}
+
+@Suppress("UNUSED_PARAMETER")
+fun extractVidZipVideoRange(
+    context: Context,
+    cacheDir: File,
+    contentDir: File,
+    videoPaths: List<String>,
+    fromIndex: Int,
+    toIndex: Int,
+    password: CharArray?,
+    zipUri: Uri? = null,
+    onProgress: ((Long, Long) -> Unit)? = null
+): Boolean {
+    if (fromIndex >= toIndex || fromIndex < 0 || toIndex > videoPaths.size) return true
+    val zipFile = File(cacheDir, "__archive.zip")
+    if (!zipFile.exists() && zipUri != null) {
+        try {
+            context.contentResolver.openInputStream(zipUri)?.use { input ->
+                zipFile.parentFile?.mkdirs()
+                zipFile.outputStream().use { output -> input.copyTo(output) }
+            } ?: return false
+        } catch (_: Exception) {
+            return false
+        }
+    }
+    if (!zipFile.exists()) return false
+    return try {
+        val zip = ZipFile(zipFile)
+        if (zip.isEncrypted && password != null && password.isNotEmpty()) zip.setPassword(password)
+        for (i in fromIndex until toIndex) {
+            val path = videoPaths[i]
+            val destFile = File(contentDir, path)
+            if (destFile.exists()) continue
+            val header = zip.getFileHeader(path) ?: continue
+            val totalBytes = header.uncompressedSize
+            if (totalBytes <= 0L) {
+                zip.extractFile(header, contentDir.path)
+                continue
+            }
+            destFile.parentFile?.mkdirs()
+            val inputStream = zip.getInputStream(header)
+            inputStream.use { input ->
+                destFile.outputStream().use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var copied = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        output.write(buffer, 0, read)
+                        copied += read
+                        onProgress?.invoke(copied, totalBytes)
+                    }
+                }
+            }
+        }
+        true
+    } catch (_: Exception) {
+        false
+    }
+}
+
+fun tryVidZipPassword(context: Context, zipUri: Uri, password: CharArray?): Boolean {
+    if (password == null || password.isEmpty()) return false
+    val cacheDir = getVidZipCacheDir(context, zipUri)
+    val tmpZip = File(cacheDir, "__archive.zip")
+    if (!tmpZip.exists()) {
+        val fallback = java.io.File(context.cacheDir, "vid_zip_verify_${System.currentTimeMillis()}.zip")
+        try {
+            context.contentResolver.openInputStream(zipUri)?.use { input ->
+                fallback.outputStream().use { output -> input.copyTo(output) }
+            } ?: return false
+            return tryZipPassword(fallback, password)
+        } finally {
+            fallback.delete()
+        }
+    }
+    return tryZipPassword(tmpZip, password)
+}
+
+fun cleanVidZipCache(context: Context, zipUri: Uri) {
+    getVidZipCacheDir(context, zipUri).deleteRecursively()
+}
+
 // ---- EPUB 电子书查看 ----
 
 /** EPUB 章节信息 */

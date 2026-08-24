@@ -1,5 +1,7 @@
 package com.kenny.localmanager.file
 
+import net.lingala.zip4j.ZipFile
+import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
 import net.lingala.zip4j.model.enums.EncryptionMethod
 import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile
@@ -53,5 +55,35 @@ class ZipOperationsTest {
         assertFalse(tryArchivePasswordFile(archiveFile, "wrong".toCharArray()))
 
         tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun tryArchivePasswordFileSupportsAesZipPasswords() {
+        val tempDir = Files.createTempDirectory("zipops-zip-test").toFile()
+        val archiveFile = File(tempDir, "movie.vid.zip")
+        val contentFile = File(tempDir, "clip.mp4")
+        contentFile.writeBytes(byteArrayOf(1, 2, 3, 4, 5))
+
+        val params = ZipParameters().apply {
+            isEncryptFiles = true
+            encryptionMethod = EncryptionMethod.AES
+            aesKeyStrength = AesKeyStrength.KEY_STRENGTH_256
+        }
+        ZipFile(archiveFile).use { zip ->
+            zip.setPassword("secret".toCharArray())
+            zip.addFile(contentFile, params)
+        }
+
+        assertTrue(tryArchivePasswordFile(archiveFile, "secret".toCharArray()))
+        assertFalse(tryArchivePasswordFile(archiveFile, "wrong".toCharArray()))
+
+        tempDir.deleteRecursively()
+    }
+
+    @Test
+    fun vidArchiveVideoFilterAcceptsRmvbEntries() {
+        assertTrue(isVideoArchiveEntry("movie.rmvb"))
+        assertTrue(isVideoArchiveEntry("DISC1/clip.mp4"))
+        assertFalse(isVideoArchiveEntry("description.txt"))
     }
 }

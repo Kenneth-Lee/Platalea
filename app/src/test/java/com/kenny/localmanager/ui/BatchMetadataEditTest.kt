@@ -107,4 +107,11 @@ class BatchMetadataEditTest {
         assertEquals(true, isExtractableArchive("backup.tbz2"))
         assertEquals(true, isExtractableArchive("backup.txz"))
     }
+
+    @Test
+    fun vidZipDetection_supportsVideoArchiveNames() {
+        assertEquals(true, isVidZip("clip.vid.zip"))
+        assertEquals(true, isVidZip("movie.VID.ZIP"))
+        assertEquals(false, isVidZip("movie.mp4"))
+    }
 }
