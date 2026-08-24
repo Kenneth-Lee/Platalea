@@ -69,6 +69,9 @@ private val DICT_QUERY_HISTORY_JSON = stringPreferencesKey("dict_query_history_j
 private val QUICK_NOTE_LAST_CATEGORY = stringPreferencesKey("quick_note_last_category")
 private val RECENT_ROOT_URIS_JSON = stringPreferencesKey("recent_root_uris_json")
 private val AUDIO_META_ANNOTATIONS_BY_URI_JSON = stringPreferencesKey("audio_meta_annotations_by_uri_json")
+private val DIRECTORY_SCROLL_MEMORIES_JSON = stringPreferencesKey("directory_scroll_memories_json")
+
+private const val DIRECTORY_SCROLL_MEMORY_MAX_ENTRIES = 400
 
 data class PlaylistAppendResult(
     val found: Boolean,
@@ -132,6 +135,18 @@ data class AudioMetaAnnotation(
     val title: String = "",
     val artist: String = "",
     val album: String = ""
+)
+
+data class DirectoryScrollMemory(
+    val dirUri: String,
+    val anchorUri: String?,
+    val anchorName: String,
+    val index: Int,
+    val offset: Int,
+    val itemCount: Int,
+    val headFingerprint: String,
+    val savedAt: Long,
+    val lastAccessAt: Long
 )
 
 class Preferences(private val context: Context) {
@@ -605,6 +620,67 @@ class Preferences(private val context: Context) {
                 prefs.remove(AUDIO_META_ANNOTATIONS_BY_URI_JSON)
             } else {
                 prefs[AUDIO_META_ANNOTATIONS_BY_URI_JSON] = audioMetaAnnotationsByUriToJson(current)
+            }
+        }
+    }
+
+    suspend fun getDirectoryScrollMemory(uri: String): DirectoryScrollMemory? {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return null
+        var result: DirectoryScrollMemory? = null
+        context.dataStore.edit { prefs ->
+            val now = System.currentTimeMillis()
+            val list = cleanupDirectoryScrollMemories(parseDirectoryScrollMemories(prefs[DIRECTORY_SCROLL_MEMORIES_JSON])).toMutableList()
+            val idx = list.indexOfFirst { it.dirUri == normalizedUri }
+            if (idx >= 0) {
+                val touched = list[idx].copy(lastAccessAt = now)
+                list[idx] = touched
+                result = touched
+            }
+            if (list.isEmpty()) {
+                prefs.remove(DIRECTORY_SCROLL_MEMORIES_JSON)
+            } else {
+                prefs[DIRECTORY_SCROLL_MEMORIES_JSON] = directoryScrollMemoriesToJson(list)
+            }
+        }
+        return result
+    }
+
+    suspend fun setDirectoryScrollMemory(memory: DirectoryScrollMemory) {
+        val normalizedUri = memory.dirUri.trim()
+        if (normalizedUri.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val now = System.currentTimeMillis()
+            val list = cleanupDirectoryScrollMemories(parseDirectoryScrollMemories(prefs[DIRECTORY_SCROLL_MEMORIES_JSON]))
+                .filterNot { it.dirUri == normalizedUri }
+                .toMutableList()
+            list += memory.copy(
+                dirUri = normalizedUri,
+                index = memory.index.coerceAtLeast(0),
+                offset = memory.offset.coerceAtLeast(0),
+                itemCount = memory.itemCount.coerceAtLeast(0),
+                savedAt = now,
+                lastAccessAt = now
+            )
+            val cleaned = cleanupDirectoryScrollMemories(list)
+            if (cleaned.isEmpty()) {
+                prefs.remove(DIRECTORY_SCROLL_MEMORIES_JSON)
+            } else {
+                prefs[DIRECTORY_SCROLL_MEMORIES_JSON] = directoryScrollMemoriesToJson(cleaned)
+            }
+        }
+    }
+
+    suspend fun removeDirectoryScrollMemory(uri: String) {
+        val normalizedUri = uri.trim()
+        if (normalizedUri.isEmpty()) return
+        context.dataStore.edit { prefs ->
+            val list = parseDirectoryScrollMemories(prefs[DIRECTORY_SCROLL_MEMORIES_JSON])
+                .filterNot { it.dirUri == normalizedUri }
+            if (list.isEmpty()) {
+                prefs.remove(DIRECTORY_SCROLL_MEMORIES_JSON)
+            } else {
+                prefs[DIRECTORY_SCROLL_MEMORIES_JSON] = directoryScrollMemoriesToJson(list)
             }
         }
     }
@@ -1352,6 +1428,66 @@ class Preferences(private val context: Context) {
         } catch (_: Exception) {
             emptyMap()
         }
+    }
+
+    private fun parseDirectoryScrollMemories(json: String?): List<DirectoryScrollMemory> {
+        if (json.isNullOrBlank()) return emptyList()
+        return try {
+            val arr = org.json.JSONArray(json)
+            buildList {
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val dirUri = obj.optString("dirUri").trim()
+                    if (dirUri.isBlank()) continue
+                    val anchorName = obj.optString("anchorName").trim()
+                    val savedAt = obj.optLong("savedAt", 0L).coerceAtLeast(0L)
+                    val lastAccessAt = obj.optLong("lastAccessAt", savedAt).coerceAtLeast(0L)
+                    add(
+                        DirectoryScrollMemory(
+                            dirUri = dirUri,
+                            anchorUri = obj.optString("anchorUri").trim().ifBlank { null },
+                            anchorName = anchorName,
+                            index = obj.optInt("index", 0).coerceAtLeast(0),
+                            offset = obj.optInt("offset", 0).coerceAtLeast(0),
+                            itemCount = obj.optInt("itemCount", 0).coerceAtLeast(0),
+                            headFingerprint = obj.optString("headFingerprint").trim(),
+                            savedAt = savedAt,
+                            lastAccessAt = lastAccessAt
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun cleanupDirectoryScrollMemories(list: List<DirectoryScrollMemory>): List<DirectoryScrollMemory> {
+        return list.asSequence()
+            .filter { it.dirUri.isNotBlank() }
+            .sortedByDescending { it.lastAccessAt }
+            .take(DIRECTORY_SCROLL_MEMORY_MAX_ENTRIES)
+            .toList()
+    }
+
+    private fun directoryScrollMemoriesToJson(list: List<DirectoryScrollMemory>): String {
+        val arr = org.json.JSONArray()
+        list.forEach { item ->
+            arr.put(
+                org.json.JSONObject().apply {
+                    put("dirUri", item.dirUri)
+                    put("anchorUri", item.anchorUri ?: "")
+                    put("anchorName", item.anchorName)
+                    put("index", item.index.coerceAtLeast(0))
+                    put("offset", item.offset.coerceAtLeast(0))
+                    put("itemCount", item.itemCount.coerceAtLeast(0))
+                    put("headFingerprint", item.headFingerprint)
+                    put("savedAt", item.savedAt.coerceAtLeast(0L))
+                    put("lastAccessAt", item.lastAccessAt.coerceAtLeast(0L))
+                }
+            )
+        }
+        return arr.toString()
     }
 
     private fun audioMetaAnnotationsByUriToJson(map: Map<String, AudioMetaAnnotation>): String {

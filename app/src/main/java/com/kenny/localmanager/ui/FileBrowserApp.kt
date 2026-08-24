@@ -169,6 +169,7 @@ import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
@@ -8427,6 +8428,7 @@ internal fun FileBrowserScreen(
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
+    val directoryScrollMinItems = 30
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
@@ -8631,6 +8633,97 @@ internal fun FileBrowserScreen(
         }
     }
 
+    fun buildDirectoryHeadFingerprint(list: List<DocumentFileModel>): String {
+        if (list.isEmpty()) return "0"
+        val head = list.asSequence()
+            .take(8)
+            .joinToString("|") { "${it.name}#${it.lastModified}" }
+        return "${list.size}:$head"
+    }
+
+    suspend fun persistDirectoryScrollMemory(uriToSave: String, itemsToSave: List<DocumentFileModel>, wasLoading: Boolean) {
+        if (wasLoading) return
+        if (itemsToSave.size < directoryScrollMinItems) {
+            prefs.removeDirectoryScrollMemory(uriToSave)
+            return
+        }
+        val maxIndex = (itemsToSave.size - 1).coerceAtLeast(0)
+        val index = listState.firstVisibleItemIndex.coerceIn(0, maxIndex)
+        val anchorItem = itemsToSave.getOrNull(index)
+        val now = System.currentTimeMillis()
+        prefs.setDirectoryScrollMemory(
+            DirectoryScrollMemory(
+                dirUri = uriToSave,
+                anchorUri = anchorItem?.uri?.toString(),
+                anchorName = anchorItem?.name.orEmpty(),
+                index = index,
+                offset = listState.firstVisibleItemScrollOffset.coerceAtLeast(0),
+                itemCount = itemsToSave.size,
+                headFingerprint = buildDirectoryHeadFingerprint(itemsToSave),
+                savedAt = now,
+                lastAccessAt = now
+            )
+        )
+    }
+
+    var restoredForUri by remember(currentUri) { mutableStateOf(false) }
+    LaunchedEffect(currentUri, loading, displayItems) {
+        if (restoredForUri || loading) return@LaunchedEffect
+        restoredForUri = true
+        if (displayItems.size < directoryScrollMinItems) return@LaunchedEffect
+        val memory = withContext(Dispatchers.IO) { prefs.getDirectoryScrollMemory(currentUri) } ?: return@LaunchedEffect
+        val fallbackMaxIndex = (displayItems.size - 1).coerceAtLeast(0)
+        val anchorIndex = memory.anchorUri?.let { uri ->
+            displayItems.indexOfFirst { it.uri.toString() == uri }
+        } ?: -1
+        val nameAnchorIndex = if (anchorIndex >= 0 || memory.anchorName.isBlank()) {
+            -1
+        } else {
+            displayItems.indexOfFirst { it.name == memory.anchorName }
+        }
+        val currentFingerprint = buildDirectoryHeadFingerprint(displayItems)
+        val targetIndex = when {
+            anchorIndex >= 0 -> anchorIndex
+            nameAnchorIndex >= 0 -> nameAnchorIndex
+            memory.headFingerprint == currentFingerprint -> memory.index.coerceIn(0, fallbackMaxIndex)
+            else -> -1
+        }
+        if (targetIndex < 0) return@LaunchedEffect
+        val targetOffset = memory.offset.coerceAtLeast(0)
+        runCatching {
+            listState.scrollToItem(targetIndex, targetOffset)
+        }
+    }
+
+    val latestCurrentUriState = androidx.compose.runtime.rememberUpdatedState(currentUri)
+    val latestDisplayItemsState = androidx.compose.runtime.rememberUpdatedState(displayItems)
+    val latestLoadingState = androidx.compose.runtime.rememberUpdatedState(loading)
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, currentUri) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                val uriToSave = latestCurrentUriState.value
+                val itemsToSave = latestDisplayItemsState.value
+                val wasLoading = latestLoadingState.value
+                scope.launch(Dispatchers.IO) {
+                    persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            val uriToSave = latestCurrentUriState.value
+            val itemsToSave = latestDisplayItemsState.value
+            val wasLoading = latestLoadingState.value
+            runBlocking {
+                withContext(Dispatchers.IO) {
+                    persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
+                }
+            }
+        }
+    }
+
     var showFabMenu by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
     var showQuickCopyConfirm by remember { mutableStateOf(false) }
@@ -8762,6 +8855,27 @@ internal fun FileBrowserScreen(
                         titleContentColor = MaterialTheme.colorScheme.onSurface
                     )
                 )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    val totalCount = items.size
+                    val visibleCount = displayItems.size
+                    val countLabel = if (visibleCount != totalCount) {
+                        context.getString(R.string.browser_directory_item_count_filtered, visibleCount, totalCount)
+                    } else {
+                        context.getString(R.string.browser_directory_item_count, totalCount)
+                    }
+                    Text(
+                        text = countLabel,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
                 if (filterVisible) {
                     Row(
                         Modifier

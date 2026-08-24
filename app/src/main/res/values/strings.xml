@@ -1288,6 +1288,8 @@ OPF目录文件: %2$s</string>
     <string name="browser_view_zip_llm_title">查看压缩 LLM</string>
     <string name="browser_view_vid_zip_title">查看视频压缩包</string>
     <string name="browser_no_video_in_archive">压缩包里没有可播放的视频</string>
+    <string name="browser_directory_item_count">目录项目数：%1$d</string>
+    <string name="browser_directory_item_count_filtered">目录项目数：%1$d（总计 %2$d）</string>
     <string name="browser_vid_zip_cached">已缓存</string>
     <string name="browser_vid_zip_not_cached">未缓存</string>
     <string name="browser_vid_zip_size">大小：%1$s</string>

@@ -1235,6 +1235,8 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_view_zip_llm_title">View compressed LLM</string>
     <string name="browser_view_vid_zip_title">View video archive</string>
     <string name="browser_no_video_in_archive">No playable video found in the archive</string>
+    <string name="browser_directory_item_count">Items: %1$d</string>
+    <string name="browser_directory_item_count_filtered">Items: %1$d (total %2$d)</string>
     <string name="browser_vid_zip_cached">Cached</string>
     <string name="browser_vid_zip_not_cached">Not cached</string>
     <string name="browser_vid_zip_size">Size: %1$s</string>
