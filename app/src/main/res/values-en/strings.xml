@@ -2028,6 +2028,7 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="family_self_suffix"> (local)</string>
     <string name="pic_zip_no_images">No images in this archive</string>
     <string name="pic_zip_directory">Directory</string>
+    <string name="pic_zip_directory_all">All</string>
     <string name="pic_zip_rotate">Rotate</string>
     <string name="pic_zip_saving">Saving…</string>
     <string name="pic_zip_save_to_root">Save to root</string>

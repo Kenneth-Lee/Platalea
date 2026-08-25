@@ -9,7 +9,6 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +19,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
@@ -36,12 +34,10 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -76,6 +72,27 @@ private const val SWIPE_THRESHOLD_DP = 50f
 private const val MIN_SCALE = 0.5f
 private const val MAX_SCALE = 5f
 
+private data class PicZipDirectoryOption(
+    val key: String,
+    val label: String,
+    val imagePaths: List<String>
+)
+
+private fun buildPicZipDirectoryOptions(imagePaths: List<String>): List<PicZipDirectoryOption> {
+    val grouped = linkedMapOf<String, MutableList<String>>()
+    imagePaths.forEach { path ->
+        val normalized = path.replace('\\', '/')
+        val dir = normalized.substringBeforeLast('/', "")
+        grouped.getOrPut(dir) { mutableListOf() }.add(path)
+    }
+    return grouped.entries
+        .sortedBy { it.key.lowercase() }
+        .map { (dir, paths) ->
+            val label = if (dir.isBlank()) "/" else dir
+            PicZipDirectoryOption(key = dir, label = label, imagePaths = paths)
+        }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PicZipViewerScreen(
@@ -93,7 +110,27 @@ fun PicZipViewerScreen(
     val cacheDir = contentDir.parentFile!!
     val density = LocalDensity.current
 
-    var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, (imagePaths.size - 1).coerceAtLeast(0))) }
+    val directoryOptions = remember(imagePaths) { buildPicZipDirectoryOptions(imagePaths) }
+    var selectedDirectoryKey by remember(imagePaths) {
+        mutableStateOf(
+            imagePaths.getOrNull(initialIndex)
+                ?.replace('\\', '/')
+                ?.substringBeforeLast('/', "")
+        )
+    }
+    val activeImagePaths = remember(imagePaths, selectedDirectoryKey, directoryOptions) {
+        directoryOptions.firstOrNull { it.key == selectedDirectoryKey }?.imagePaths ?: imagePaths
+    }
+    val dirKey = selectedDirectoryKey
+    val selectedDirectoryLabel = if (dirKey == null) {
+        stringResource(R.string.pic_zip_directory_all)
+    } else if (dirKey.isBlank()) {
+        "/"
+    } else {
+        dirKey
+    }
+
+    var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, (activeImagePaths.size - 1).coerceAtLeast(0))) }
     var currentBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var loading by remember { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
@@ -106,13 +143,23 @@ fun PicZipViewerScreen(
     var rotationDegrees by remember { mutableFloatStateOf(0f) }
     var saveInProgress by remember { mutableStateOf(false) }
 
+    LaunchedEffect(directoryOptions) {
+        if (selectedDirectoryKey != null && directoryOptions.none { it.key == selectedDirectoryKey }) {
+            selectedDirectoryKey = null
+        }
+    }
+
+    LaunchedEffect(activeImagePaths) {
+        currentIndex = currentIndex.coerceIn(0, (activeImagePaths.size - 1).coerceAtLeast(0))
+    }
+
     fun loadBitmapForIndex(index: Int, onLoaded: (() -> Unit)? = null) {
-        if (index < 0 || index >= imagePaths.size) {
+        if (index < 0 || index >= activeImagePaths.size) {
             currentBitmap = null
             onLoaded?.invoke()
             return
         }
-        val path = imagePaths[index]
+        val path = activeImagePaths[index]
         val file = File(contentDir, path)
         scope.launch {
             val bitmap = withContext(Dispatchers.IO) {
@@ -138,21 +185,21 @@ fun PicZipViewerScreen(
     LaunchedEffect(currentIndex) {
         rotationDegrees = 0f
     }
-    LaunchedEffect(currentIndex, imagePaths) {
-        if (imagePaths.isEmpty()) {
+    LaunchedEffect(currentIndex, activeImagePaths) {
+        if (activeImagePaths.isEmpty()) {
             loading = false
             return@LaunchedEffect
         }
         loading = true
         val idx = currentIndex
         val batchStart = (idx / BATCH_SIZE) * BATCH_SIZE
-        val batchEnd = minOf(imagePaths.size, batchStart + BATCH_SIZE)
+        val batchEnd = minOf(activeImagePaths.size, batchStart + BATCH_SIZE)
         withContext(Dispatchers.IO) {
             extractPicZipImageRange(
                 context,
                 cacheDir,
                 contentDir,
-                imagePaths,
+                activeImagePaths,
                 idx,
                 idx + 1,
                 if (isEncrypted) password else null
@@ -164,7 +211,7 @@ fun PicZipViewerScreen(
                 context,
                 cacheDir,
                 contentDir,
-                imagePaths,
+                activeImagePaths,
                 batchStart,
                 batchEnd,
                 if (isEncrypted) password else null
@@ -173,19 +220,19 @@ fun PicZipViewerScreen(
     }
 
     LaunchedEffect(currentIndex) {
-        if (imagePaths.isEmpty()) return@LaunchedEffect
+        if (activeImagePaths.isEmpty()) return@LaunchedEffect
         val batchStart = (currentIndex / BATCH_SIZE) * BATCH_SIZE
         val nextBatchStart = batchStart + BATCH_SIZE
         val prevBatchStart = batchStart - BATCH_SIZE
-        if (currentIndex >= batchStart + BATCH_SIZE - 2 && nextBatchStart < imagePaths.size) {
+        if (currentIndex >= batchStart + BATCH_SIZE - 2 && nextBatchStart < activeImagePaths.size) {
             scope.launch(Dispatchers.IO) {
                 extractPicZipImageRange(
                     context,
                     cacheDir,
                     contentDir,
-                    imagePaths,
+                    activeImagePaths,
                     nextBatchStart,
-                    minOf(imagePaths.size, nextBatchStart + BATCH_SIZE),
+                    minOf(activeImagePaths.size, nextBatchStart + BATCH_SIZE),
                     if (isEncrypted) password else null
                 )
             }
@@ -196,7 +243,7 @@ fun PicZipViewerScreen(
                     context,
                     cacheDir,
                     contentDir,
-                    imagePaths,
+                    activeImagePaths,
                     prevBatchStart,
                     batchStart,
                     if (isEncrypted) password else null
@@ -205,11 +252,13 @@ fun PicZipViewerScreen(
         }
     }
 
-    DisposableEffect(currentIndex, imagePaths.size) {
+    DisposableEffect(currentIndex, activeImagePaths.size, imagePaths.size) {
         onDispose {
-            if (imagePaths.isNotEmpty()) {
+            if (activeImagePaths.isNotEmpty()) {
                 scope.launch(Dispatchers.IO) {
-                    val idx = currentIndex.coerceIn(0, imagePaths.size - 1)
+                    val path = activeImagePaths.getOrNull(currentIndex)
+                    val idx = path?.let { imagePaths.indexOf(it) }?.takeIf { it >= 0 }
+                        ?: currentIndex.coerceIn(0, (imagePaths.size - 1).coerceAtLeast(0))
                     try {
                         File(cacheDir, ".last_index").writeText(idx.toString())
                     } catch (_: Exception) {}
@@ -219,9 +268,11 @@ fun PicZipViewerScreen(
     }
 
     LaunchedEffect(currentIndex) {
-        if (imagePaths.isEmpty()) return@LaunchedEffect
+        if (activeImagePaths.isEmpty()) return@LaunchedEffect
         scope.launch(Dispatchers.IO) {
-            val idx = currentIndex.coerceIn(0, imagePaths.size - 1)
+            val path = activeImagePaths.getOrNull(currentIndex)
+            val idx = path?.let { imagePaths.indexOf(it) }?.takeIf { it >= 0 }
+                ?: currentIndex.coerceIn(0, (imagePaths.size - 1).coerceAtLeast(0))
             try {
                 File(cacheDir, ".last_index").writeText(idx.toString())
             } catch (_: Exception) {}
@@ -269,15 +320,25 @@ fun PicZipViewerScreen(
                     titleContentColor = MaterialTheme.colorScheme.onSurface
                 ),
                 actions = {
-                    if (imagePaths.isNotEmpty()) {
+                    if (activeImagePaths.isNotEmpty()) {
                         Text(
-                            "${currentIndex + 1} / ${imagePaths.size}",
+                            "${currentIndex + 1} / ${activeImagePaths.size}",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
                                 .padding(end = 8.dp)
                                 .padding(vertical = 12.dp)
                                 .clickable { jumpToInput = "${currentIndex + 1}"; showJumpToDialog = true }
+                        )
+                        Text(
+                            selectedDirectoryLabel,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier
+                                .padding(end = 4.dp)
+                                .clickable { showDirectory = true }
                         )
                         IconButton(onClick = { showDirectory = true }) {
                             Icon(Icons.AutoMirrored.Filled.List, contentDescription = stringResource(R.string.pic_zip_directory))
@@ -297,7 +358,7 @@ fun PicZipViewerScreen(
                 .then(if (isZoomed) Modifier else Modifier.padding(padding))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            if (imagePaths.isEmpty()) {
+            if (activeImagePaths.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.pic_zip_no_images), style = MaterialTheme.typography.bodyLarge)
                 }
@@ -363,7 +424,7 @@ fun PicZipViewerScreen(
                                                     currentIndex = currentIndex - 1
                                                     scale = 1f
                                                     offset = Offset.Zero
-                                                } else if (t < -swipeThresholdPx && currentIndex < imagePaths.size - 1) {
+                                                } else if (t < -swipeThresholdPx && currentIndex < activeImagePaths.size - 1) {
                                                     currentIndex = currentIndex + 1
                                                     scale = 1f
                                                     offset = Offset.Zero
@@ -382,7 +443,7 @@ fun PicZipViewerScreen(
                             ) {
                                 Button(
                                     onClick = {
-                                        val relativePath = imagePaths.getOrNull(currentIndex) ?: return@Button
+                                        val relativePath = activeImagePaths.getOrNull(currentIndex) ?: return@Button
                                         val sourceFile = File(contentDir, relativePath)
                                         if (!sourceFile.exists() || saveInProgress) return@Button
                                         scope.launch {
@@ -445,13 +506,13 @@ fun PicZipViewerScreen(
                         Box(Modifier.weight(1f))
                         IconButton(
                             onClick = {
-                                if (currentIndex < imagePaths.size - 1) {
+                                if (currentIndex < activeImagePaths.size - 1) {
                                     currentIndex = currentIndex + 1
                                     scale = 1f
                                     offset = Offset.Zero
                                 }
                             },
-                            enabled = currentIndex < imagePaths.size - 1
+                            enabled = currentIndex < activeImagePaths.size - 1
                         ) {
                             Icon(Icons.Filled.SkipNext, contentDescription = stringResource(R.string.pic_zip_next))
                         }
@@ -462,56 +523,86 @@ fun PicZipViewerScreen(
     }
 
     if (showDirectory) {
-        val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val listState = rememberLazyListState()
-        LaunchedEffect(showDirectory, currentIndex) {
-            if (showDirectory && imagePaths.isNotEmpty()) {
-                listState.animateScrollToItem(currentIndex.coerceIn(0, imagePaths.size - 1))
+        LaunchedEffect(showDirectory, selectedDirectoryKey) {
+            if (showDirectory) {
+                val selectedIdx = if (selectedDirectoryKey == null) {
+                    0
+                } else {
+                    val dirIdx = directoryOptions.indexOfFirst { it.key == selectedDirectoryKey }
+                    if (dirIdx < 0) 0 else dirIdx + 1
+                }
+                listState.animateScrollToItem(selectedIdx)
             }
         }
-        ModalBottomSheet(
+        AlertDialog(
             onDismissRequest = { showDirectory = false },
-            sheetState = sheetState,
-            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp)
-        ) {
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = 32.dp)
-            ) {
-                itemsIndexed(imagePaths) { index, path ->
-                    val name = path.substringAfterLast('/')
-                    val selected = index == currentIndex
-                    Text(
-                        text = "${index + 1}. $name",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                currentIndex = index
-                                scale = 1f
-                                offset = Offset.Zero
-                                showDirectory = false
-                            }
-                            .padding(vertical = 12.dp)
-                    )
+            title = { Text(stringResource(R.string.pic_zip_directory)) },
+            text = {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(320.dp)
+                ) {
+                    item {
+                        val selected = selectedDirectoryKey == null
+                        Text(
+                            text = stringResource(R.string.pic_zip_directory_all) + " (${imagePaths.size})",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val oldPath = activeImagePaths.getOrNull(currentIndex)
+                                    selectedDirectoryKey = null
+                                    currentIndex = oldPath?.let { imagePaths.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                    showDirectory = false
+                                }
+                                .padding(vertical = 12.dp)
+                        )
+                    }
+                    itemsIndexed(directoryOptions) { _, item ->
+                        val selected = item.key == selectedDirectoryKey
+                        Text(
+                            text = "${item.label} (${item.imagePaths.size})",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val oldPath = activeImagePaths.getOrNull(currentIndex)
+                                    selectedDirectoryKey = item.key
+                                    val mappedIndex = oldPath?.let { item.imagePaths.indexOf(it) }?.takeIf { it >= 0 } ?: 0
+                                    currentIndex = mappedIndex
+                                    scale = 1f
+                                    offset = Offset.Zero
+                                    showDirectory = false
+                                }
+                                .padding(vertical = 12.dp)
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDirectory = false }) {
+                    Text(stringResource(R.string.common_cancel))
                 }
             }
-        }
+        )
     }
 
     // 跳转到第几张
-    if (showJumpToDialog && imagePaths.isNotEmpty()) {
+    if (showJumpToDialog && activeImagePaths.isNotEmpty()) {
         AlertDialog(
             onDismissRequest = { showJumpToDialog = false },
             title = { Text(stringResource(R.string.pic_zip_jump_to_title)) },
             text = {
                 Column {
                     Text(
-                        stringResource(R.string.pic_zip_jump_to_hint, imagePaths.size, imagePaths.size),
+                        stringResource(R.string.pic_zip_jump_to_hint, activeImagePaths.size, activeImagePaths.size),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(8.dp))
@@ -527,7 +618,7 @@ fun PicZipViewerScreen(
             confirmButton = {
                 Button(
                     onClick = {
-                        val n = jumpToInput.toIntOrNull()?.coerceIn(1, imagePaths.size) ?: (currentIndex + 1)
+                        val n = jumpToInput.toIntOrNull()?.coerceIn(1, activeImagePaths.size) ?: (currentIndex + 1)
                         currentIndex = n - 1
                         scale = 1f
                         offset = Offset.Zero

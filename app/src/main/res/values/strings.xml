@@ -2081,6 +2081,7 @@ OPF目录文件: %2$s</string>
     <string name="family_self_suffix">（本机）</string>
     <string name="pic_zip_no_images">压缩包内无图片</string>
     <string name="pic_zip_directory">目录</string>
+    <string name="pic_zip_directory_all">全部</string>
     <string name="pic_zip_rotate">旋转</string>
     <string name="pic_zip_saving">保存中</string>
     <string name="pic_zip_save_to_root">保存到根目录</string>
