@@ -1494,6 +1494,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_altitude_label">海拔</string>
     <string name="browser_meta_group_video_tracks">视频轨道信息</string>
     <string name="browser_meta_group_audio_tracks">音频轨道信息</string>
+    <string name="browser_meta_group_epub_book">EPUB 书籍信息</string>
     <string name="browser_meta_group_audio_tags">音频标签信息</string>
     <string name="browser_meta_group_audio_technical">音频技术信息</string>
     <string name="browser_meta_video_track_mime_label">视频轨道 %1$d 编码</string>
@@ -1507,6 +1508,8 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_audio_track_bitrate_label">音频轨道 %1$d 码率</string>
     <string name="browser_meta_audio_track_duration_label">音频轨道 %1$d 时长</string>
     <string name="browser_meta_author_label">作者</string>
+    <string name="browser_meta_language_label">语言</string>
+    <string name="browser_meta_chapter_count_label">章节数</string>
     <string name="browser_meta_composer_label">作曲</string>
     <string name="browser_meta_writer_label">词作者</string>
     <string name="browser_meta_track_number_label">曲目号</string>

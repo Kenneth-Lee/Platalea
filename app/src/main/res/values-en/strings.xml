@@ -1441,6 +1441,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_altitude_label">Altitude</string>
     <string name="browser_meta_group_video_tracks">Video track details</string>
     <string name="browser_meta_group_audio_tracks">Audio track details</string>
+    <string name="browser_meta_group_epub_book">EPUB book metadata</string>
     <string name="browser_meta_group_audio_tags">Audio tag details</string>
     <string name="browser_meta_group_audio_technical">Audio technical details</string>
     <string name="browser_meta_video_track_mime_label">Video track %1$d codec</string>
@@ -1454,6 +1455,8 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_audio_track_bitrate_label">Audio track %1$d bitrate</string>
     <string name="browser_meta_audio_track_duration_label">Audio track %1$d duration</string>
     <string name="browser_meta_author_label">Author</string>
+    <string name="browser_meta_language_label">Language</string>
+    <string name="browser_meta_chapter_count_label">Chapter count</string>
     <string name="browser_meta_composer_label">Composer</string>
     <string name="browser_meta_writer_label">Writer</string>
     <string name="browser_meta_track_number_label">Track number</string>

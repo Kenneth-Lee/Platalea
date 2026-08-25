@@ -1479,6 +1479,7 @@ private enum class DetailMetadataKind {
     VIDEO,
     IMAGE,
     PDF,
+    EPUB,
     ARCHIVE,
     UNKNOWN
 }
@@ -1556,6 +1557,7 @@ private fun inferDetailMetadataKind(
     if (normalizedMime.startsWith("video/")) return DetailMetadataKind.VIDEO
     if (normalizedMime.startsWith("image/")) return DetailMetadataKind.IMAGE
     if (normalizedMime == "application/pdf" || ext == "pdf") return DetailMetadataKind.PDF
+    if (normalizedMime == "application/epub+zip" || ext == "epub") return DetailMetadataKind.EPUB
     if (isExtractableArchive(fileName)) return DetailMetadataKind.ARCHIVE
     return when (ext) {
         "mp3", "m4a", "flac", "ogg", "wav", "aac" -> DetailMetadataKind.AUDIO
@@ -2571,6 +2573,37 @@ private fun loadTypeSpecificMetadataRows(
                 }
             } ?: emptyList()
         }.getOrElse { emptyList() }
+
+        DetailMetadataKind.EPUB -> runCatching {
+            val parseResult = runCatching {
+                val cacheDir = getEpubCacheDir(context, uri)
+                loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
+                    ?: extractEpubToCache(context, uri, null, fileName) { }
+            }.getOrElse { error ->
+                throw IllegalStateException("${error.javaClass.simpleName}: ${error.message ?: "unknown error"}")
+            }
+
+            when (parseResult) {
+                is EpubParseResult.Success -> {
+                    val rows = mutableListOf<DetailMetadataRow>()
+                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_epub_book))
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_title_label), parseResult.result.bookInfo.title)
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_author_label), parseResult.result.bookInfo.author)
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_language_label), parseResult.result.bookInfo.language)
+                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_chapter_count_label), parseResult.result.chapters.size.toString())
+                    rows
+                }
+
+                is EpubParseResult.Error -> {
+                    val detail = parseResult.detail?.trim().orEmpty()
+                    val message = parseResult.message.trim()
+                    val reason = if (detail.isNotEmpty()) "$message ($detail)" else message
+                    throw IllegalStateException(reason)
+                }
+            }
+        }.getOrElse { error ->
+            throw IllegalStateException(error.message ?: error.javaClass.simpleName)
+        }
 
         DetailMetadataKind.ARCHIVE,
         DetailMetadataKind.UNKNOWN -> emptyList()
