@@ -353,6 +353,142 @@ class BulletinAttachmentStore(private val boardsRoot: File) {
         }
     }
 
+    fun mergeReadyAttachmentsIntoSingleDirectory(
+        boardId: String,
+        refs: List<BulletinAttachmentRef>,
+        directoryName: String
+    ): BulletinAttachmentRef? = lock.write {
+        if (readMeta(boardId) == null) return@write null
+        val normalizedRefs = refs.distinctBy { it.id }
+        if (normalizedRefs.isEmpty()) return@write null
+
+        val newAttachmentId = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        val targetDir = attachmentDir(boardId, newAttachmentId)
+        val targetFilesDir = File(targetDir, "files")
+        targetFilesDir.mkdirs()
+
+        val manifestEntries = JSONArray()
+        var totalSize = 0L
+        var fileCount = 0
+
+        normalizedRefs.forEachIndexed { index, ref ->
+            val sourceMeta = readAttachmentMeta(boardId, ref.id) ?: return@write null
+            if (sourceMeta.optString("status") != BulletinAttachmentStatus.READY.wire) return@write null
+            val sourceKind = BulletinAttachmentKind.fromWire(sourceMeta.optString("kind", "file"))
+                ?: return@write null
+            val sourceDir = attachmentDir(boardId, ref.id)
+            if (!sourceDir.exists()) return@write null
+
+            val baseFolder = buildSourceAttachmentFolderName(index, sourceMeta.optString("name").ifBlank { ref.name })
+            when (sourceKind) {
+                BulletinAttachmentKind.FILE -> {
+                    val sourceBlob = File(sourceDir, "blob")
+                    if (!sourceBlob.exists()) return@write null
+                    val fileId = UUID.randomUUID().toString()
+                    val fileDir = File(targetFilesDir, fileId)
+                    fileDir.mkdirs()
+                    val targetBlob = File(fileDir, "blob")
+                    targetBlob.writeBytes(sourceBlob.readBytes())
+                    val sourceName = sourceMeta.optString("name").ifBlank { "file_${index + 1}" }
+                    val relativePath = "$baseFolder/${sanitizePathSegment(sourceName)}"
+                    val size = sourceMeta.optLong("size").takeIf { it >= 0 } ?: sourceBlob.length()
+                    val sha = sourceMeta.optString("sha256").takeIf { it.isNotBlank() } ?: sha256Hex(sourceBlob)
+                    writeFileMemberMeta(
+                        fileDir,
+                        JSONObject().apply {
+                            put("file_id", fileId)
+                            put("path", relativePath)
+                            put("size", size)
+                            put("sha256", sha)
+                            put("uploaded_chunks", JSONArray())
+                        }
+                    )
+                    manifestEntries.put(
+                        JSONObject().apply {
+                            put("file_id", fileId)
+                            put("path", relativePath)
+                            put("size", size)
+                            put("sha256", sha)
+                        }
+                    )
+                    totalSize += size
+                    fileCount++
+                }
+                BulletinAttachmentKind.DIRECTORY -> {
+                    val sourceFilesDir = File(sourceDir, "files")
+                    val sourceManifest = readManifest(sourceFilesDir) ?: return@write null
+                    for (i in 0 until sourceManifest.length()) {
+                        val entry = sourceManifest.getJSONObject(i)
+                        val oldFileId = entry.getString("file_id")
+                        val sourceFileDir = File(sourceFilesDir, oldFileId)
+                        val sourceBlob = File(sourceFileDir, "blob")
+                        if (!sourceBlob.exists()) return@write null
+                        val sourceFileMeta = readFileMemberMeta(sourceFileDir)
+                        val oldPath = entry.optString("path").ifBlank { "file_${i + 1}" }
+                        val fileId = UUID.randomUUID().toString()
+                        val fileDir = File(targetFilesDir, fileId)
+                        fileDir.mkdirs()
+                        val targetBlob = File(fileDir, "blob")
+                        targetBlob.writeBytes(sourceBlob.readBytes())
+                        val normalizedPath = normalizeRelativePath(oldPath)
+                        val relativePath = "$baseFolder/$normalizedPath"
+                        val size = sourceFileMeta?.optLong("size")?.takeIf { it >= 0 }
+                            ?: entry.optLong("size").takeIf { it >= 0 }
+                            ?: sourceBlob.length()
+                        val sha = sourceFileMeta?.optString("sha256")?.takeIf { it.isNotBlank() }
+                            ?: entry.optString("sha256").takeIf { it.isNotBlank() }
+                            ?: sha256Hex(sourceBlob)
+                        writeFileMemberMeta(
+                            fileDir,
+                            JSONObject().apply {
+                                put("file_id", fileId)
+                                put("path", relativePath)
+                                put("size", size)
+                                put("sha256", sha)
+                                put("uploaded_chunks", JSONArray())
+                            }
+                        )
+                        manifestEntries.put(
+                            JSONObject().apply {
+                                put("file_id", fileId)
+                                put("path", relativePath)
+                                put("size", size)
+                                put("sha256", sha)
+                            }
+                        )
+                        totalSize += size
+                        fileCount++
+                    }
+                }
+            }
+        }
+
+        if (fileCount <= 0) return@write null
+
+        File(targetFilesDir, "manifest.json").writeText(
+            JSONObject().apply {
+                put("version", 1)
+                put("entries", manifestEntries)
+            }.toString()
+        )
+
+        val meta = JSONObject().apply {
+            put("id", newAttachmentId)
+            put("board_id", boardId)
+            put("kind", BulletinAttachmentKind.DIRECTORY.wire)
+            put("name", directoryName.trim().ifEmpty { "merged_attachments_$now" })
+            put("status", BulletinAttachmentStatus.READY.wire)
+            put("file_count", fileCount)
+            put("total_size", totalSize)
+            put("chunk_size", BulletinAttachmentDefaults.CHUNK_SIZE)
+            put("created_at", now)
+            put("completed_at", now)
+        }
+        writeAttachmentMeta(boardId, newAttachmentId, meta)
+        attachmentRefFromMeta(meta)
+    }
+
     fun attachmentRefFromMeta(meta: JSONObject): BulletinAttachmentRef {
         val kind = BulletinAttachmentKind.fromWire(meta.optString("kind", "file"))
             ?: BulletinAttachmentKind.FILE
@@ -437,6 +573,23 @@ class BulletinAttachmentStore(private val boardsRoot: File) {
                 add(arr.getInt(i))
             }
         }.toMutableSet()
+    }
+
+    private fun normalizeRelativePath(path: String): String {
+        val normalized = path.replace('\\', '/')
+        val tokens = normalized.split('/').map { it.trim() }
+        val safe = tokens.filter { it.isNotEmpty() && it != "." && it != ".." }
+        return if (safe.isEmpty()) "file" else safe.joinToString("/") { sanitizePathSegment(it) }
+    }
+
+    private fun sanitizePathSegment(value: String): String {
+        val cleaned = value.trim().replace(Regex("[\\\\/:*?\"<>|]"), "_")
+        return cleaned.ifEmpty { "entry" }
+    }
+
+    private fun buildSourceAttachmentFolderName(index: Int, name: String): String {
+        val label = sanitizePathSegment(name).take(64)
+        return String.format("%02d_%s", index + 1, label)
     }
 
     private fun attachmentDir(boardId: String, attachmentId: String): File =

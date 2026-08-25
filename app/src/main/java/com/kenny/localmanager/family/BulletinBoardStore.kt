@@ -353,6 +353,87 @@ class BulletinBoardStore(context: Context) {
         true
     }
 
+    fun mergeMessages(
+        boardId: String,
+        messageIds: List<String>,
+        editorLabel: String? = null
+    ): BulletinMessage? = lock.write {
+        val ids = messageIds.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (ids.size < 2) return@write null
+        val meta = readMeta(boardId) ?: return@write null
+        val messages = readMessages(boardId)
+        val idSet = ids.toSet()
+        val selected = messages
+            .filter { it.id in idSet && !it.deleted && it.isConversationMessage }
+            .sortedBy { it.seq }
+        if (selected.size != ids.size) return@write null
+        val normalizedAuthor = selected.first().authorLabel.trim()
+        if (selected.any { it.authorLabel.trim() != normalizedAuthor }) {
+            return@write null
+        }
+
+        val base = selected.first()
+        val now = System.currentTimeMillis()
+        val normalizedEditor = editorLabel?.trim()?.takeIf { it.isNotEmpty() }
+        val mergedContent = selected
+            .map { it.content.trim() }
+            .filter { it.isNotEmpty() }
+            .joinToString(separator = "\n\n")
+            .ifBlank { base.content.trim() }
+        val sourceAttachments = selected.flatMap { it.attachments }.distinctBy { it.id }
+        val mergedAttachmentDirectory = if (sourceAttachments.isNotEmpty()) {
+            val directoryName = "merged_attachments_$now"
+            attachments.mergeReadyAttachmentsIntoSingleDirectory(
+                boardId = boardId,
+                refs = sourceAttachments,
+                directoryName = directoryName
+            ) ?: return@write null
+        } else {
+            null
+        }
+        val mergedAttachments = mergedAttachmentDirectory?.let { listOf(it) } ?: emptyList()
+
+        val updatedBase = base.copy(
+            content = mergedContent,
+            attachments = mergedAttachments,
+            updatedAt = now,
+            editorLabel = normalizedEditor ?: base.editorLabel
+        )
+
+        for (index in messages.indices) {
+            val message = messages[index]
+            when {
+                message.id == base.id -> {
+                    messages[index] = updatedBase
+                }
+                message.id in idSet -> {
+                    messages[index] = message.copy(
+                        deleted = true,
+                        updatedAt = now,
+                        attachments = emptyList(),
+                        editorLabel = normalizedEditor ?: message.editorLabel
+                    )
+                }
+            }
+        }
+
+        val referencedAttachmentIds = messages
+            .filter { !it.deleted }
+            .flatMap { it.attachments }
+            .map { it.id }
+            .toSet()
+        sourceAttachments
+            .map { it.id }
+            .filter { it !in referencedAttachmentIds }
+            .forEach { oldId ->
+                attachments.deleteAttachment(boardId, oldId)
+            }
+
+        writeMessages(boardId, messages)
+        writeMeta(boardId, meta.put("revision", meta.optLong("revision") + 1L))
+        updatedBase
+    }
+
     private fun boardDir(boardId: String): File = File(rootDir, boardId)
 
     private fun metaFile(boardId: String): File = File(boardDir(boardId), "meta.json")

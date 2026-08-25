@@ -970,6 +970,28 @@ fun FamilyNetworkScreen(
                 onForwardMessages = { messages ->
                     bulletinForwardPayload = BulletinForwardPayload.Messages(boardSession, messages)
                 },
+                onMergeMessages = { messages ->
+                    manager.mergeBoardMessages(messages.map { it.id }) { result ->
+                        result.onSuccess {
+                            Toast.makeText(
+                                context,
+                                context.getString(R.string.family_board_merge_success_toast, messages.size),
+                                Toast.LENGTH_SHORT
+                            ).show()
+                            messageForwardSelectionMode = false
+                            selectedForwardMessageIds = emptySet()
+                        }.onFailure { error ->
+                            Toast.makeText(
+                                context,
+                                context.getString(
+                                    R.string.family_board_merge_failed,
+                                    error.message ?: error.javaClass.simpleName
+                                ),
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
+                    }
+                },
                 messageSelectionMode = messageForwardSelectionMode,
                 onOpenAttachmentTextHex = { attachment ->
                     scope.launch {
@@ -2778,6 +2800,7 @@ private fun BulletinBoardPage(
     onOpenAttachmentInternal: (BulletinAttachmentRef) -> Unit,
     onOpenAttachmentTextHex: (BulletinAttachmentRef) -> Unit,
     onForwardMessages: (List<BulletinMessage>) -> Unit,
+    onMergeMessages: (List<BulletinMessage>) -> Unit,
     messageSelectionMode: Boolean,
     onMessageSelectionModeChange: (Boolean) -> Unit,
     selectedMessageIds: Set<String>,
@@ -2815,6 +2838,7 @@ private fun BulletinBoardPage(
     var editingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var editingText by remember { mutableStateOf("") }
     var editingAuthor by remember { mutableStateOf("") }
+    var editingContentError by remember { mutableStateOf<String?>(null) }
     var deletingMessage by remember { mutableStateOf<BulletinMessage?>(null) }
     var showAttachmentPickDialog by remember { mutableStateOf(false) }
     var pendingDownloadConflict by remember { mutableStateOf<BulletinAttachmentRef?>(null) }
@@ -2822,6 +2846,7 @@ private fun BulletinBoardPage(
     var previewMeta by remember { mutableStateOf<org.json.JSONObject?>(null) }
     var previewLoading by remember { mutableStateOf(false) }
     var previewError by remember { mutableStateOf<String?>(null) }
+    var pendingMergeMessages by remember { mutableStateOf<List<BulletinMessage>?>(null) }
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
     var previousMessageCount by remember(session.service.deviceKey) { mutableIntStateOf(0) }
@@ -2836,6 +2861,13 @@ private fun BulletinBoardPage(
     val conversationMessages = remember(session.messages) {
         session.messages.filter { it.isConversationMessage }
     }
+    val selectedConversationMessages = remember(conversationMessages, selectedMessageIds) {
+        conversationMessages.filter { it.id in selectedMessageIds }
+    }
+    val canMergeSelectedMessages = remember(selectedConversationMessages) {
+        selectedConversationMessages.size >= 2 &&
+            selectedConversationMessages.map { it.authorLabel.trim() }.distinct().size == 1
+    }
 
     LaunchedEffect(session.messages.size) {
         if (session.messages.isNotEmpty() && session.messages.size >= previousMessageCount) {
@@ -2845,8 +2877,12 @@ private fun BulletinBoardPage(
     }
 
     if (editingMessage != null) {
+        val canSaveEdit = editingText.trim().isNotEmpty()
         AlertDialog(
-            onDismissRequest = { editingMessage = null },
+            onDismissRequest = {
+                editingMessage = null
+                editingContentError = null
+            },
             title = { Text(stringResource(R.string.family_board_edit_title)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2859,22 +2895,39 @@ private fun BulletinBoardPage(
                     )
                     OutlinedTextField(
                         value = editingText,
-                        onValueChange = { editingText = it },
+                        onValueChange = {
+                            editingText = it
+                            editingContentError = null
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         minLines = 2,
-                        maxLines = 6
+                        maxLines = 6,
+                        isError = editingContentError != null,
+                        supportingText = {
+                            editingContentError?.let { error ->
+                                Text(error)
+                            }
+                        }
                     )
                 }
             },
             confirmButton = {
                 Button(onClick = {
                     val target = editingMessage ?: return@Button
+                    if (editingText.trim().isEmpty()) {
+                        editingContentError = context.getString(R.string.family_board_edit_empty_content)
+                        return@Button
+                    }
                     onUpdate(target.id, editingText, editingAuthor)
                     editingMessage = null
-                }) { Text(stringResource(R.string.common_save)) }
+                    editingContentError = null
+                }, enabled = canSaveEdit) { Text(stringResource(R.string.common_save)) }
             },
             dismissButton = {
-                TextButton(onClick = { editingMessage = null }) {
+                TextButton(onClick = {
+                    editingMessage = null
+                    editingContentError = null
+                }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             }
@@ -2895,6 +2948,101 @@ private fun BulletinBoardPage(
             },
             dismissButton = {
                 TextButton(onClick = { deletingMessage = null }) {
+                    Text(stringResource(R.string.common_cancel))
+                }
+            }
+        )
+    }
+
+    pendingMergeMessages?.let { mergeMessages ->
+        val mergeAuthor = mergeMessages.firstOrNull()?.authorLabel.orEmpty()
+        val mergeAttachmentCount = mergeMessages.sumOf { it.attachments.size }
+        val mergeMessageLines = remember(mergeMessages) {
+            mergeMessages.mapIndexed { index, msg ->
+                val line = msg.content.trim().ifBlank { "(${msg.id.take(8)})" }
+                "${index + 1}. $line"
+            }
+        }
+        val mergeAttachmentNames = remember(mergeMessages) {
+            mergeMessages
+                .flatMap { it.attachments }
+                .distinctBy { it.id }
+                .map { attachment ->
+                    val prefix = if (attachment.kind == BulletinAttachmentKind.DIRECTORY) "[DIR]" else "[FILE]"
+                    "$prefix ${attachment.name}"
+                }
+        }
+        AlertDialog(
+            onDismissRequest = { pendingMergeMessages = null },
+            title = { Text(stringResource(R.string.family_board_merge_confirm_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        stringResource(
+                            R.string.family_board_merge_confirm_message,
+                            mergeMessages.size,
+                            mergeAuthor
+                        )
+                    )
+                    Text(
+                        stringResource(R.string.family_board_merge_confirm_attachments, mergeAttachmentCount),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        stringResource(R.string.family_board_merge_confirm_content_preview),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 160.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        mergeMessageLines.forEach { line ->
+                            Text(line, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    if (mergeAttachmentNames.isNotEmpty()) {
+                        Text(
+                            stringResource(R.string.family_board_merge_confirm_attachment_preview),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(max = 120.dp)
+                                .verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            mergeAttachmentNames.forEach { name ->
+                                Text(name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.family_board_merge_confirm_irreversible),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val target = pendingMergeMessages ?: return@Button
+                        pendingMergeMessages = null
+                        onMergeMessages(target)
+                    }
+                ) {
+                    Text(stringResource(R.string.family_board_merge_selected_action))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMergeMessages = null }) {
                     Text(stringResource(R.string.common_cancel))
                 }
             }
@@ -3160,7 +3308,7 @@ private fun BulletinBoardPage(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    stringResource(R.string.bulletin_forward_select_messages),
+                    stringResource(R.string.family_board_select_messages_mode),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -3168,22 +3316,36 @@ private fun BulletinBoardPage(
                     TextButton(onClick = { onMessageSelectionModeChange(false) }) {
                         Text(stringResource(R.string.common_cancel))
                     }
+                    if (session.canManageBoard) {
+                        Button(
+                            shape = RoundedCornerShape(0.dp),
+                            enabled = canMergeSelectedMessages && !transferInProgress,
+                            onClick = {
+                                pendingMergeMessages = selectedConversationMessages
+                            }
+                        ) {
+                            Text(stringResource(R.string.family_board_merge_selected_action))
+                        }
+                    }
                     Button(
+                        shape = RoundedCornerShape(0.dp),
                         enabled = selectedMessageIds.isNotEmpty() && !transferInProgress,
                         onClick = {
-                            val selected = conversationMessages.filter { it.id in selectedMessageIds }
-                            onForwardMessages(selected)
+                            onForwardMessages(selectedConversationMessages)
                             onMessageSelectionModeChange(false)
                         }
                     ) {
-                        Text(
-                            stringResource(
-                                R.string.bulletin_forward_messages_action,
-                                selectedMessageIds.size
-                            )
-                        )
+                        Text(stringResource(R.string.bulletin_forward_messages_action))
                     }
                 }
+            }
+            if (session.canManageBoard && selectedConversationMessages.size > 1 && !canMergeSelectedMessages) {
+                Text(
+                    stringResource(R.string.family_board_merge_author_mismatch),
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
             HorizontalDivider()
         }

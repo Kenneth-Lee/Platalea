@@ -61,6 +61,10 @@ class BulletinBoardHttpHandler(
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages")
                 createMessage(boardId, bodyBytes.decodeToString(), auth)
             }
+            method == "POST" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages/merge") -> {
+                val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages/merge")
+                mergeMessages(boardId, bodyBytes.decodeToString())
+            }
             method == "PUT" && normalizedPath.startsWith("/boards/") && normalizedPath.contains("/messages/") -> {
                 val parts = normalizedPath.removePrefix("/boards/").split("/messages/")
                 if (parts.size != 2) return notFound()
@@ -116,6 +120,7 @@ class BulletinBoardHttpHandler(
         }
         if (method == "DELETE" && path.contains("/attachments/")) return true
         if (method in setOf("PUT", "DELETE") && path.contains("/messages")) return true
+        if (method == "POST" && path.endsWith("/messages/merge")) return true
         return false
     }
 
@@ -533,6 +538,9 @@ class BulletinBoardHttpHandler(
     private fun updateMessage(boardId: String, messageId: String, bodyText: String): FamilyHttpResponse {
         val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
         val content = payload.optString("content")
+        if (content.trim().isEmpty()) {
+            return badRequest("invalid_message", context.getString(R.string.family_board_edit_empty_content))
+        }
         val authorLabel = payload.optString("author_label").takeIf { it.isNotBlank() }
         val editorLabel = payload.optString("editor_label").takeIf { it.isNotBlank() }
         val message = store.updateMessage(boardId, messageId, content, authorLabel, editorLabel)
@@ -558,6 +566,31 @@ class BulletinBoardHttpHandler(
             200,
             JSONObject().apply {
                 put("ok", true)
+                put("revision", snapshot?.revision ?: 0L)
+            }.toString()
+        )
+    }
+
+    private fun mergeMessages(boardId: String, bodyText: String): FamilyHttpResponse {
+        val payload = parseJson(bodyText) ?: return badRequest("invalid_json", context.getString(R.string.family_msg_62464))
+        val idsArray = payload.optJSONArray("message_ids") ?: JSONArray()
+        val messageIds = buildList {
+            for (i in 0 until idsArray.length()) {
+                add(idsArray.optString(i).trim())
+            }
+        }.filter { it.isNotEmpty() }.distinct()
+        if (messageIds.size < 2) {
+            return badRequest("invalid_message", context.getString(R.string.family_board_merge_need_two))
+        }
+        val editorLabel = payload.optString("editor_label").takeIf { it.isNotBlank() }
+        val merged = store.mergeMessages(boardId, messageIds, editorLabel)
+            ?: return badRequest("merge_failed", context.getString(R.string.family_board_merge_failed_server))
+        val snapshot = store.snapshot(boardId)
+        return FamilyHttpResponse(
+            200,
+            JSONObject().apply {
+                put("ok", true)
+                put("message", merged.toJson())
                 put("revision", snapshot?.revision ?: 0L)
             }.toString()
         )

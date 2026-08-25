@@ -2101,6 +2101,65 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
+    fun mergeBoardMessages(messageIds: List<String>, onComplete: (Result<Unit>) -> Unit = {}) {
+        val session = _state.value.openBoardSession
+            ?: return onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_18983))))
+        if (!session.canManageBoard) {
+            val error = IllegalStateException(appContext.getString(R.string.family_msg_05464))
+            appendError(error.message ?: error.javaClass.simpleName)
+            onComplete(Result.failure(error))
+            return
+        }
+        val selected = session.messages
+            .filter { it.id in messageIds && it.isConversationMessage }
+            .sortedBy { it.seq }
+        if (selected.size < 2) {
+            val error = IllegalStateException(appContext.getString(R.string.family_board_merge_need_two))
+            appendError(error.message ?: error.javaClass.simpleName)
+            onComplete(Result.failure(error))
+            return
+        }
+        val normalizedAuthor = selected.first().authorLabel.trim()
+        val mixedAuthors = selected.any { it.authorLabel.trim() != normalizedAuthor }
+        if (mixedAuthors) {
+            val error = IllegalStateException(appContext.getString(R.string.family_board_merge_author_mismatch))
+            appendError(error.message ?: error.javaClass.simpleName)
+            onComplete(Result.failure(error))
+            return
+        }
+        val editorLabel = buildAuthorIdentity().first
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (session.isHost) {
+                    runCatching {
+                        boardStore.mergeMessages(session.boardId, selected.map { it.id }, editorLabel)
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_board_merge_failed_server))
+                    }.map { }
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "POST",
+                        path = "/boards/${session.boardId}/messages/merge",
+                        body = JSONObject().apply {
+                            put("message_ids", JSONArray(selected.map { it.id }))
+                            put("editor_label", editorLabel)
+                        }.toString(),
+                        accessPassword = session.accessPassword
+                    )
+                }
+            }
+            result.onSuccess {
+                appendLog(appContext.getString(R.string.family_board_merge_success_log, selected.size, normalizedAuthor))
+                refreshOpenBoard()
+                onComplete(Result.success(Unit))
+            }.onFailure { error ->
+                val detail = error.message ?: error.javaClass.simpleName
+                appendError(appContext.getString(R.string.family_board_merge_failed, detail))
+                onComplete(Result.failure(error))
+            }
+        }
+    }
+
     fun stop() {
         stopIfIdleJob?.cancel()
         if (!started && httpsServer == null && registrationListener == null && discoveryListener == null) return
