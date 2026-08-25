@@ -26,7 +26,7 @@
 本，没有国内版本。
 
 最新一个发布版本在这里：
-[LocalManager-V0.27](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.27/app-release.apk)
+[LocalManager-V0.28](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.28/app-release.apk)
 
 ## 设计思路
 
@@ -559,7 +559,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.25 修复前一版本改错的远程关机功能没有发到服务器上的问题，修复大播放列表，直接点击下一首歌曲会崩溃的问题，阅读器UI优化，播放器支持歌曲查重，混淆和反混淆和并为遮盖功能
 * V0.26 修复一组bug，优化阅读器，支持阅读器自动翻页，背景颜色，播放器列表支持过滤
 * V0.27 留言板支持AI管理员（仿标准的AI对话），程序崩溃手机崩溃记录，家庭网络支持大部分功能可以远程配置，文件详细信息增强，支持.tar.gz/bzip等压缩格式。
-* V0.28 开发中
+* V0.28 远程关机后对方断开手机不再报连接错误，第一次进入应用一定不进入ftp和家庭网络这种带服务的页面，支持.vid.zip格式（打包视频），epub支持在原位置显示章末注释，留言板支持多条目合并，支持.pic.zip分目录浏览
+* V0.29 开发中
 
 ### 已知问题
 
