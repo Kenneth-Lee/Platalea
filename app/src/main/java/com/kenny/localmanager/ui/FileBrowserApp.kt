@@ -9178,7 +9178,9 @@ internal fun FileBrowserScreen(
                     Text(
                         menuTarget.name,
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(16.dp))
                     if (!menuTarget.isDirectory) {
@@ -9380,7 +9382,7 @@ internal fun FileBrowserScreen(
                             showFileDetail = menuTarget
                             contextMenuTarget = null
                         }
-                    ) { Text(context.getString(R.string.context_details_with_edit), color = MaterialTheme.colorScheme.onSurface) }
+                    ) { Text(context.getString(R.string.context_details), color = MaterialTheme.colorScheme.onSurface) }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -9647,7 +9649,13 @@ internal fun FileBrowserScreen(
                 showRenameDialog = false
                 actionTarget = null
             },
-            title = { Text(stringResource(R.string.browser_archive_operation, target.name)) },
+            title = {
+                Text(
+                    stringResource(R.string.browser_archive_operation, target.name),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             text = {
                 Column {
                     Text(stringResource(R.string.browser_rename_to), style = MaterialTheme.typography.bodyMedium)
@@ -9751,6 +9759,11 @@ internal fun FileBrowserScreen(
         } else {
             detailTarget.uri.path ?: detailTarget.uri.toString()
         }
+        val displayPath = if (detailTarget.isDirectory) {
+            fullPath
+        } else {
+            fullPath.substringBeforeLast('/', fullPath).ifEmpty { "/" }
+        }
         val mimeType = detailMeta[DocumentsContract.Document.COLUMN_MIME_TYPE] ?: ""
         val sizeStr = detailTarget.displaySize.ifEmpty {
             detailMeta[DocumentsContract.Document.COLUMN_SIZE]?.toLongOrNull()?.let { sz ->
@@ -9832,10 +9845,10 @@ internal fun FileBrowserScreen(
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SelectionContainer(modifier = Modifier.weight(1f)) {
-                            Text(fullPath, style = MaterialTheme.typography.bodyMedium)
+                            Text(displayPath, style = MaterialTheme.typography.bodyMedium)
                         }
                         IconButton(onClick = {
-                            clipboardManager?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.browser_full_path), fullPath))
+                            clipboardManager?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.browser_full_path), displayPath))
                             Toast.makeText(context, context.getString(R.string.browser_path_copied), Toast.LENGTH_SHORT).show()
                         }) {
                             Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.browser_copy_path), Modifier.size(20.dp))
@@ -9845,39 +9858,45 @@ internal fun FileBrowserScreen(
                     Spacer(Modifier.height(12.dp))
                     Text(stringResource(R.string.browser_rename_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         OutlinedTextField(
                             value = detailRenameValue,
                             onValueChange = { detailRenameValue = it },
-                            singleLine = true,
+                            singleLine = false,
+                            minLines = 1,
+                            maxLines = 6,
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .focusRequester(detailRenameFocus),
                             textStyle = MaterialTheme.typography.bodyMedium
                         )
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(
-                            onClick = {
-                                val newName = detailRenameValue.trim()
-                                if (newName.isNotEmpty() && newName != detailTarget.name) {
-                                    try {
-                                        val renamedUri = context.contentResolver.renameDocument(detailTarget.uri, newName)
-                                        if (renamedUri != null) {
-                                            items = items.map {
-                                                if (it.uri == detailTarget.uri) it.copy(name = newName, uri = renamedUri) else it
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.End
+                        ) {
+                            TextButton(
+                                onClick = {
+                                    val newName = detailRenameValue.trim()
+                                    if (newName.isNotEmpty() && newName != detailTarget.name) {
+                                        try {
+                                            val renamedUri = context.contentResolver.renameDocument(detailTarget.uri, newName)
+                                            if (renamedUri != null) {
+                                                items = items.map {
+                                                    if (it.uri == detailTarget.uri) it.copy(name = newName, uri = renamedUri) else it
+                                                }
+                                                showFileDetail = showFileDetail?.copy(name = newName, uri = renamedUri)
+                                                Toast.makeText(context, context.getString(R.string.browser_renamed), Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                                             }
-                                            showFileDetail = showFileDetail?.copy(name = newName, uri = renamedUri)
-                                            Toast.makeText(context, context.getString(R.string.browser_renamed), Toast.LENGTH_SHORT).show()
-                                        } else {
+                                        } catch (_: Exception) {
                                             Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                                         }
-                                    } catch (_: Exception) {
-                                        Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
                                     }
-                                }
-                            },
-                            enabled = detailRenameValue.trim().let { it.isNotEmpty() && it != detailTarget.name }
-                        ) { Text(stringResource(R.string.common_ok)) }
+                                },
+                                enabled = detailRenameValue.trim().let { it.isNotEmpty() && it != detailTarget.name }
+                            ) { Text(stringResource(R.string.common_ok)) }
+                        }
                     }
 
                     Spacer(Modifier.height(16.dp))
