@@ -65,6 +65,10 @@ class BulletinBoardHttpHandler(
                 val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages/merge")
                 mergeMessages(boardId, bodyBytes.decodeToString())
             }
+            method == "POST" && normalizedPath.startsWith("/boards/") && normalizedPath.endsWith("/messages/avatars/refresh") -> {
+                val boardId = normalizedPath.removePrefix("/boards/").removeSuffix("/messages/avatars/refresh")
+                refreshMessageAvatars(boardId)
+            }
             method == "PUT" && normalizedPath.startsWith("/boards/") && normalizedPath.contains("/messages/") -> {
                 val parts = normalizedPath.removePrefix("/boards/").split("/messages/")
                 if (parts.size != 2) return notFound()
@@ -121,6 +125,7 @@ class BulletinBoardHttpHandler(
         if (method == "DELETE" && path.contains("/attachments/")) return true
         if (method in setOf("PUT", "DELETE") && path.contains("/messages")) return true
         if (method == "POST" && path.endsWith("/messages/merge")) return true
+        if (method == "POST" && path.endsWith("/messages/avatars/refresh")) return true
         return false
     }
 
@@ -509,8 +514,9 @@ class BulletinBoardHttpHandler(
         val content = payload.optString("content")
         val authorLabel = payload.optString("author_label", context.getString(R.string.family_board_guest_label))
         val authorDevice = payload.optString("author_device").takeIf { it.isNotBlank() }
+        val authorAvatarId = payload.optString("author_avatar_id").takeIf { it.isNotBlank() }
         val attachmentRefs = parseAttachmentRefs(payload.optJSONArray("attachments"))
-        val message = store.appendMessage(boardId, authorLabel, content, authorDevice, attachmentRefs)
+        val message = store.appendMessage(boardId, authorLabel, content, authorDevice, authorAvatarId, attachmentRefs)
             ?: return badRequest(
                 "invalid_message",
                 if (attachmentRefs.isNotEmpty()) context.getString(R.string.family_msg_55517) else context.getString(R.string.family_msg_84872)
@@ -591,6 +597,20 @@ class BulletinBoardHttpHandler(
             JSONObject().apply {
                 put("ok", true)
                 put("message", merged.toJson())
+                put("revision", snapshot?.revision ?: 0L)
+            }.toString()
+        )
+    }
+
+    private fun refreshMessageAvatars(boardId: String): FamilyHttpResponse {
+        val changedCount = store.refreshAuthorAvatarsFromLatest(boardId)
+            ?: return FamilyHttpResponse(404, jsonError("board_not_found", context.getString(R.string.family_msg_71757, boardId)))
+        val snapshot = store.snapshot(boardId)
+        return FamilyHttpResponse(
+            200,
+            JSONObject().apply {
+                put("ok", true)
+                put("changed_count", changedCount)
                 put("revision", snapshot?.revision ?: 0L)
             }.toString()
         )

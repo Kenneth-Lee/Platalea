@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -58,6 +59,30 @@ import kotlinx.coroutines.withContext
 private const val CONFIG_MIN_PREVIEW_BYTES = 1024
 private const val CONFIG_MAX_PREVIEW_BYTES = 10 * 1024 * 1024
 
+private fun avatarPatternLabelRes(patternId: String): Int = when (patternId) {
+    "person" -> R.string.config_family_network_avatar_pattern_person
+    "animal" -> R.string.config_family_network_avatar_pattern_animal
+    "plant" -> R.string.config_family_network_avatar_pattern_plant
+    "flower" -> R.string.config_family_network_avatar_pattern_flower
+    "fish" -> R.string.config_family_network_avatar_pattern_fish
+    "object" -> R.string.config_family_network_avatar_pattern_object
+    "star" -> R.string.config_family_network_avatar_pattern_star
+    "bolt" -> R.string.config_family_network_avatar_pattern_bolt
+    else -> R.string.common_unknown_error
+}
+
+private fun avatarColorLabelRes(colorId: String): Int = when (colorId) {
+    "coral" -> R.string.config_family_network_avatar_color_coral
+    "rose" -> R.string.config_family_network_avatar_color_rose
+    "violet" -> R.string.config_family_network_avatar_color_violet
+    "indigo" -> R.string.config_family_network_avatar_color_indigo
+    "blue" -> R.string.config_family_network_avatar_color_blue
+    "teal" -> R.string.config_family_network_avatar_color_teal
+    "green" -> R.string.config_family_network_avatar_color_green
+    "amber" -> R.string.config_family_network_avatar_color_amber
+    else -> R.string.common_unknown_error
+}
+
 data class ConfigTabRouteState(
     val filterVisible: Boolean,
     val onFilterVisibleChange: (Boolean) -> Unit,
@@ -75,6 +100,8 @@ data class ConfigTabRouteState(
     val onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     val familyNetworkUserName: String,
     val onFamilyNetworkUserNameChange: (String) -> Unit,
+    val familyNetworkAvatarId: String,
+    val onFamilyNetworkAvatarIdChange: (String) -> Unit,
     val familyNetworkHostName: String,
     val onFamilyNetworkHostNameChange: (String) -> Unit,
     val onOpenGitConfig: () -> Unit,
@@ -104,6 +131,8 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
         onLocalNetworkServiceEnabledChange = state.onLocalNetworkServiceEnabledChange,
         familyNetworkUserName = state.familyNetworkUserName,
         onFamilyNetworkUserNameChange = state.onFamilyNetworkUserNameChange,
+        familyNetworkAvatarId = state.familyNetworkAvatarId,
+        onFamilyNetworkAvatarIdChange = state.onFamilyNetworkAvatarIdChange,
         familyNetworkHostName = state.familyNetworkHostName,
         onFamilyNetworkHostNameChange = state.onFamilyNetworkHostNameChange,
         onOpenGitConfig = state.onOpenGitConfig,
@@ -135,6 +164,8 @@ private fun ConfigPanel(
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     familyNetworkUserName: String,
     onFamilyNetworkUserNameChange: (String) -> Unit,
+    familyNetworkAvatarId: String,
+    onFamilyNetworkAvatarIdChange: (String) -> Unit,
     familyNetworkHostName: String,
     onFamilyNetworkHostNameChange: (String) -> Unit,
     onOpenGitConfig: () -> Unit,
@@ -152,9 +183,11 @@ private fun ConfigPanel(
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
     var localFamilyNetworkUserName by remember { mutableStateOf(familyNetworkUserName) }
+    var localFamilyNetworkAvatarId by remember { mutableStateOf(familyNetworkAvatarId) }
     var localFamilyNetworkHostName by remember { mutableStateOf(familyNetworkHostName) }
     var localNetworkServiceTimeoutMinutes by remember { mutableStateOf(networkServiceTimeoutMinutes.toString()) }
     var showFtpConfigDialog by remember { mutableStateOf(false) }
+    var showAvatarPickerDialog by remember { mutableStateOf(false) }
     var showEpubTtsConfigDialog by remember { mutableStateOf(false) }
     var showEpubTtsEngineDialog by remember { mutableStateOf(false) }
     var showEpubTtsVoiceDialog by remember { mutableStateOf(false) }
@@ -227,6 +260,9 @@ private fun ConfigPanel(
     LaunchedEffect(familyNetworkHostName) {
         localFamilyNetworkHostName = familyNetworkHostName
     }
+    LaunchedEffect(familyNetworkAvatarId) {
+        localFamilyNetworkAvatarId = familyNetworkAvatarId
+    }
 
     LaunchedEffect(Unit) {
         refreshEpubTtsEngines()
@@ -274,6 +310,45 @@ private fun ConfigPanel(
                                 fontStyle = FontStyle.Italic
                             )
                         }
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = { showAvatarPickerDialog = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        val selectedEntry = FamilyAvatarCatalog.resolveEntry(localFamilyNetworkAvatarId)
+                        val selectedPatternLabel = context.getString(avatarPatternLabelRes(selectedEntry.patternId))
+                        val selectedColorLabel = context.getString(avatarColorLabelRes(selectedEntry.colorId))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FamilyAvatarImage(
+                                avatarId = localFamilyNetworkAvatarId,
+                                modifier = Modifier.size(24.dp),
+                                contentDescription = null
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(context.getString(R.string.config_family_network_avatar))
+                                Text(
+                                    context.getString(
+                                        R.string.config_family_network_avatar_selected,
+                                        selectedPatternLabel,
+                                        selectedColorLabel
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        context.getString(R.string.config_family_network_avatar_hint),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                     Spacer(Modifier.height(12.dp))
                     OutlinedTextField(
@@ -338,6 +413,147 @@ private fun ConfigPanel(
             },
             confirmButton = {
                 TextButton(onClick = { showFtpConfigDialog = false }) {
+                    Text(context.getString(R.string.common_close))
+                }
+            }
+        )
+    }
+
+    if (showAvatarPickerDialog) {
+        val resolvedEntry = FamilyAvatarCatalog.resolveEntry(localFamilyNetworkAvatarId)
+        var selectedPatternId by remember(showAvatarPickerDialog) {
+            mutableStateOf(resolvedEntry.patternId)
+        }
+        var selectedColorId by remember(showAvatarPickerDialog) {
+            mutableStateOf(resolvedEntry.colorId)
+        }
+        val patternRows = remember { FamilyAvatarCatalog.patterns.chunked(4) }
+        val colorRows = remember { FamilyAvatarCatalog.colors.chunked(4) }
+
+        fun applyAvatarSelection(patternId: String, colorId: String) {
+            val selected = FamilyAvatarCatalog.entries.firstOrNull {
+                it.patternId == patternId && it.colorId == colorId
+            } ?: return
+            localFamilyNetworkAvatarId = selected.id
+            onFamilyNetworkAvatarIdChange(selected.id)
+        }
+
+        AlertDialog(
+            onDismissRequest = { showAvatarPickerDialog = false },
+            title = { Text(context.getString(R.string.config_family_network_avatar_choose)) },
+            text = {
+                LazyColumn(modifier = Modifier.height(300.dp)) {
+                    item {
+                        Text(
+                            text = context.getString(R.string.config_family_network_avatar_pattern),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    items(patternRows) { row ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { pattern ->
+                                val selected = pattern.id == selectedPatternId
+                                Card(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        selectedPatternId = pattern.id
+                                        applyAvatarSelection(selectedPatternId, selectedColorId)
+                                    },
+                                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                                        containerColor = if (selected) {
+                                            MaterialTheme.colorScheme.secondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surface
+                                        }
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        val previewId = "${pattern.id}@$selectedColorId"
+                                        FamilyAvatarImage(previewId, Modifier.size(28.dp), null)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            context.getString(avatarPatternLabelRes(pattern.id)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            repeat(4 - row.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                    item {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = context.getString(R.string.config_family_network_avatar_color),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    items(colorRows) { row ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            row.forEach { color ->
+                                val selected = color.id == selectedColorId
+                                Card(
+                                    modifier = Modifier.weight(1f),
+                                    onClick = {
+                                        selectedColorId = color.id
+                                        applyAvatarSelection(selectedPatternId, selectedColorId)
+                                    },
+                                    colors = androidx.compose.material3.CardDefaults.cardColors(
+                                        containerColor = if (selected) {
+                                            MaterialTheme.colorScheme.secondaryContainer
+                                        } else {
+                                            MaterialTheme.colorScheme.surface
+                                        }
+                                    )
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 10.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        val previewId = "$selectedPatternId@${color.id}"
+                                        FamilyAvatarImage(previewId, Modifier.size(28.dp), null)
+                                        Spacer(Modifier.height(4.dp))
+                                        Text(
+                                            context.getString(avatarColorLabelRes(color.id)),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                            repeat(4 - row.size) {
+                                Spacer(Modifier.weight(1f))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showAvatarPickerDialog = false }) {
                     Text(context.getString(R.string.common_close))
                 }
             }
@@ -795,6 +1011,8 @@ fun ConfigDialog(
     onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
     familyNetworkUserName: String,
     onFamilyNetworkUserNameChange: (String) -> Unit,
+    familyNetworkAvatarId: String,
+    onFamilyNetworkAvatarIdChange: (String) -> Unit,
     familyNetworkHostName: String,
     onFamilyNetworkHostNameChange: (String) -> Unit,
     familyNetworkDownloadChunkKb: Int,
@@ -829,6 +1047,8 @@ fun ConfigDialog(
                 onLocalNetworkServiceEnabledChange = onLocalNetworkServiceEnabledChange,
                 familyNetworkUserName = familyNetworkUserName,
                 onFamilyNetworkUserNameChange = onFamilyNetworkUserNameChange,
+                familyNetworkAvatarId = familyNetworkAvatarId,
+                onFamilyNetworkAvatarIdChange = onFamilyNetworkAvatarIdChange,
                 familyNetworkHostName = familyNetworkHostName,
                 onFamilyNetworkHostNameChange = onFamilyNetworkHostNameChange,
                 onOpenGitConfig = onOpenGitConfig,

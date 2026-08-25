@@ -52,6 +52,7 @@ private const val FAMILY_PREFERRED_PORT = 8765
 private const val FAMILY_LOG_LIMIT = 200
 private const val INSTANCE_ID_FILE = "family_network_instance_id"
 private const val FAMILY_IPV4_LIST_ATTR = "ipv4_list"
+private val FAMILY_AVATAR_COLOR_IDS = listOf("coral", "rose", "violet", "indigo", "blue", "teal", "green", "amber")
 
 const val DEFAULT_DOWNLOAD_CHUNK_SIZE_BYTES = 1024L * 1024L
 const val BOARDPACK_IO_BUFFER_SIZE_BYTES = 1024 * 1024
@@ -176,6 +177,7 @@ class FamilyNetworkManager(context: Context) {
     private var userRoles: List<FamilyUserRole> = emptyList()
     private var localServiceEnabled: Boolean = true
     private var familyNetworkUserName: String? = null
+    private var familyNetworkAvatarId: String? = null
     private var familyNetworkHostName: String? = null
     private val boardAccessPasswordCache = mutableMapOf<String, String>()
     private val temporaryAttachmentRoot: File = File(appContext.cacheDir, "family_attachment")
@@ -256,6 +258,7 @@ class FamilyNetworkManager(context: Context) {
         networkPassword: String?,
         localServiceEnabled: Boolean,
         familyNetworkUserName: String? = null,
+        familyNetworkAvatarId: String? = null,
         familyNetworkHostName: String? = null
     ) {
         this.networkPassword = networkPassword?.trim()?.ifEmpty { null }
@@ -263,6 +266,7 @@ class FamilyNetworkManager(context: Context) {
         val hostNameChanged = this.familyNetworkHostName != newHostName
         this.familyNetworkHostName = newHostName
         this.familyNetworkUserName = familyNetworkUserName?.trim()?.ifEmpty { null }
+        this.familyNetworkAvatarId = normalizeAvatarIdForWire(familyNetworkAvatarId)
         val enabledChanged = this.localServiceEnabled != localServiceEnabled
         this.localServiceEnabled = localServiceEnabled
         _state.update { it.copy(localServiceEnabled = localServiceEnabled) }
@@ -1409,7 +1413,7 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 appendLog(appContext.getString(R.string.family_msg_15756, items.size, target.service.displayHostName, target.boardName))
-                val (_, device) = buildAuthorIdentity()
+                val device = buildAuthorIdentity().device
                 val transport = buildAttachmentTransport(target)
                 val uploadResult = withContext(Dispatchers.IO) {
                     BulletinAttachmentUploader.uploadItemsAsSingleDirectory(
@@ -1489,7 +1493,7 @@ class FamilyNetworkManager(context: Context) {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     var sent = 0
-                    val (_, device) = buildAuthorIdentity()
+                    val device = buildAuthorIdentity().device
                     val targetTransport = buildAttachmentTransport(target)
                     val sourceDownload = buildDownloadTransport(sourceSession)
                     for (message in messages) {
@@ -1766,7 +1770,7 @@ class FamilyNetworkManager(context: Context) {
                     )
                 }
                 appendLog(appContext.getString(R.string.family_msg_48713, session.service.displayHostName))
-                val (_, device) = buildAuthorIdentity()
+                val device = buildAuthorIdentity().device
                 val transport: BulletinAttachmentTransport = if (session.isHost) {
                     LocalBulletinAttachmentTransport(boardStore)
                 } else {
@@ -1897,7 +1901,7 @@ class FamilyNetworkManager(context: Context) {
         content: String,
         attachments: List<BulletinAttachmentRef>
     ): Result<Unit> {
-        val (authorLabel, authorDevice) = buildAuthorIdentity()
+        val (authorLabel, authorDevice, authorAvatarId) = buildAuthorIdentity()
         return withContext(Dispatchers.IO) {
             if (target.service.isSelf) {
                 runCatching {
@@ -1906,6 +1910,7 @@ class FamilyNetworkManager(context: Context) {
                         authorLabel,
                         content,
                         authorDevice,
+                        authorAvatarId,
                         attachments
                     ) ?: throw IllegalStateException(
                         if (attachments.isNotEmpty()) appContext.getString(R.string.family_msg_55517) else appContext.getString(R.string.family_msg_84872)
@@ -1920,6 +1925,7 @@ class FamilyNetworkManager(context: Context) {
                         put("content", content)
                         put("author_label", authorLabel)
                         put("author_device", authorDevice)
+                        authorAvatarId?.let { put("author_avatar_id", it) }
                         if (attachments.isNotEmpty()) {
                             put("attachments", JSONArray(attachments.map { it.toJson() }))
                         }
@@ -1956,7 +1962,7 @@ class FamilyNetworkManager(context: Context) {
             )
             return
         }
-        val (authorLabel, authorDevice) = buildAuthorIdentity()
+        val (authorLabel, authorDevice, authorAvatarId) = buildAuthorIdentity()
         val result = withContext(Dispatchers.IO) {
             if (session.isHost) {
                 runCatching {
@@ -1965,6 +1971,7 @@ class FamilyNetworkManager(context: Context) {
                         authorLabel,
                         normalizedContent,
                         authorDevice,
+                        authorAvatarId,
                         attachments
                     ) ?: throw IllegalStateException(
                         if (attachments.isNotEmpty()) appContext.getString(R.string.family_msg_55517) else appContext.getString(R.string.family_msg_84872)
@@ -1979,6 +1986,7 @@ class FamilyNetworkManager(context: Context) {
                         put("content", normalizedContent)
                         put("author_label", authorLabel)
                         put("author_device", authorDevice)
+                        authorAvatarId?.let { put("author_avatar_id", it) }
                         if (attachments.isNotEmpty()) {
                             put("attachments", JSONArray(attachments.map { it.toJson() }))
                         }
@@ -2038,7 +2046,7 @@ class FamilyNetworkManager(context: Context) {
             appendError(appContext.getString(R.string.family_msg_41301))
             return
         }
-        val editorLabel = buildAuthorIdentity().first
+        val editorLabel = buildAuthorIdentity().label
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 if (session.isHost) {
@@ -2127,7 +2135,7 @@ class FamilyNetworkManager(context: Context) {
             onComplete(Result.failure(error))
             return
         }
-        val editorLabel = buildAuthorIdentity().first
+        val editorLabel = buildAuthorIdentity().label
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 if (session.isHost) {
@@ -2155,6 +2163,46 @@ class FamilyNetworkManager(context: Context) {
             }.onFailure { error ->
                 val detail = error.message ?: error.javaClass.simpleName
                 appendError(appContext.getString(R.string.family_board_merge_failed, detail))
+                onComplete(Result.failure(error))
+            }
+        }
+    }
+
+    fun refreshBoardMessageAvatarsByLatest(onComplete: (Result<Int>) -> Unit = {}) {
+        val session = _state.value.openBoardSession
+            ?: return onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_18983))))
+        if (!session.canManageBoard) {
+            val error = IllegalStateException(appContext.getString(R.string.family_msg_05464))
+            appendError(error.message ?: error.javaClass.simpleName)
+            onComplete(Result.failure(error))
+            return
+        }
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (session.isHost) {
+                    runCatching {
+                        boardStore.refreshAuthorAvatarsFromLatest(session.boardId)
+                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_72023))
+                    }
+                } else {
+                    boardApiRequest(
+                        service = session.service,
+                        method = "POST",
+                        path = "/boards/${session.boardId}/messages/avatars/refresh",
+                        accessPassword = session.accessPassword
+                    ).mapCatching { body ->
+                        val json = JSONObject(body)
+                        json.optInt("changed_count", 0)
+                    }
+                }
+            }
+            result.onSuccess { changedCount ->
+                appendLog(appContext.getString(R.string.family_board_avatar_refresh_log, changedCount))
+                refreshOpenBoard()
+                onComplete(Result.success(changedCount))
+            }.onFailure { error ->
+                val detail = error.message ?: error.javaClass.simpleName
+                appendError(appContext.getString(R.string.family_board_avatar_refresh_failed, detail))
                 onComplete(Result.failure(error))
             }
         }
@@ -3246,13 +3294,35 @@ class FamilyNetworkManager(context: Context) {
         Log.e(TAG, message)
     }
 
-    private fun buildAuthorIdentity(): Pair<String, String> {
+    private data class BulletinAuthorIdentity(
+        val label: String,
+        val device: String,
+        val avatarId: String?
+    )
+
+    private fun normalizeAvatarIdForWire(raw: String?): String? {
+        val value = raw?.trim()?.ifEmpty { null } ?: return null
+        if (value.contains('@')) return value
+        if (value.startsWith("avatar_", ignoreCase = true)) {
+            val index = value.removePrefix("avatar_").toIntOrNull() ?: return null
+            if (index <= 0) return null
+            val color = FAMILY_AVATAR_COLOR_IDS[(index - 1) % FAMILY_AVATAR_COLOR_IDS.size]
+            return "person@$color"
+        }
+        return null
+    }
+
+    private fun buildAuthorIdentity(): BulletinAuthorIdentity {
         val instanceId = currentInstanceId.orEmpty()
         val deviceLabel = _state.value.localHostDisplayName.ifBlank {
             resolveLocalDisplayHostName(instanceId)
         }
         val displayLabel = familyNetworkUserName?.takeIf { it.isNotBlank() } ?: deviceLabel
-        return displayLabel to deviceLabel
+        return BulletinAuthorIdentity(
+            label = displayLabel,
+            device = deviceLabel,
+            avatarId = normalizeAvatarIdForWire(familyNetworkAvatarId)
+        )
     }
 
     private fun bulletinMessagesEqual(a: List<BulletinMessage>, b: List<BulletinMessage>): Boolean {
@@ -3265,6 +3335,7 @@ class FamilyNetworkManager(context: Context) {
                 left.content == right.content &&
                 left.updatedAt == right.updatedAt &&
                 left.authorLabel == right.authorLabel &&
+                left.authorAvatarId == right.authorAvatarId &&
                 left.editorLabel == right.editorLabel
         }
     }

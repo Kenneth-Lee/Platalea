@@ -87,6 +87,7 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -98,8 +99,6 @@ import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
@@ -3206,6 +3205,7 @@ private fun FileBrowserAppScreen(
         var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
         var localNetworkServiceEnabled by remember { mutableStateOf(true) }
         var familyNetworkUserName by remember { mutableStateOf("") }
+        var familyNetworkAvatarId by remember { mutableStateOf("") }
         var familyNetworkHostName by remember { mutableStateOf("") }
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
@@ -3784,6 +3784,9 @@ private fun FileBrowserAppScreen(
             prefs.familyNetworkUserName.collect { familyNetworkUserName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
+            prefs.familyNetworkAvatarId.collect { familyNetworkAvatarId = it.orEmpty() }
+        }
+        LaunchedEffect(prefs) {
             prefs.familyNetworkHostName.collect { familyNetworkHostName = it.orEmpty() }
         }
         LaunchedEffect(prefs) {
@@ -3801,11 +3804,12 @@ private fun FileBrowserAppScreen(
                 ftpManager.stop()
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
+        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {
             familyNetworkManager.configure(
                 ftpPassword,
                 localNetworkServiceEnabled,
                 familyNetworkUserName.ifBlank { null },
+                familyNetworkAvatarId.ifBlank { null },
                 familyNetworkHostName.ifBlank { null }
             )
         }
@@ -4487,6 +4491,7 @@ private fun FileBrowserAppScreen(
                             networkPassword = ftpPassword,
                             localServiceEnabled = localNetworkServiceEnabled,
                             familyNetworkUserName = familyNetworkUserName,
+                            familyNetworkAvatarId = familyNetworkAvatarId,
                             familyNetworkHostName = familyNetworkHostName,
                             timeoutMinutes = networkServiceTimeoutMinutes,
                             rootUri = rootUri ?: initialDirUri,
@@ -4516,6 +4521,7 @@ private fun FileBrowserAppScreen(
                                         s.ifBlank { null },
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
+                                        familyNetworkAvatarId.ifBlank { null },
                                         familyNetworkHostName.ifBlank { null }
                                     )
                                 },
@@ -4529,6 +4535,7 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         enabled,
                                         familyNetworkUserName.ifBlank { null },
+                                        familyNetworkAvatarId.ifBlank { null },
                                         familyNetworkHostName.ifBlank { null }
                                     )
                                 },
@@ -4540,6 +4547,19 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         name.ifBlank { null },
+                                        familyNetworkAvatarId.ifBlank { null },
+                                        familyNetworkHostName.ifBlank { null }
+                                    )
+                                },
+                                familyNetworkAvatarId = familyNetworkAvatarId,
+                                onFamilyNetworkAvatarIdChange = { avatarId ->
+                                    familyNetworkAvatarId = avatarId
+                                    scope.launch { prefs.setFamilyNetworkAvatarId(avatarId.ifBlank { null }) }
+                                    familyNetworkManager.configure(
+                                        ftpPassword,
+                                        localNetworkServiceEnabled,
+                                        familyNetworkUserName.ifBlank { null },
+                                        avatarId.ifBlank { null },
                                         familyNetworkHostName.ifBlank { null }
                                     )
                                 },
@@ -4551,6 +4571,7 @@ private fun FileBrowserAppScreen(
                                         ftpPassword,
                                         localNetworkServiceEnabled,
                                         familyNetworkUserName.ifBlank { null },
+                                        familyNetworkAvatarId.ifBlank { null },
                                         name.ifBlank { null }
                                     )
                                 },
@@ -8040,6 +8061,14 @@ private fun isLlmFile(name: String): Boolean =
 private fun isPdfFile(name: String): Boolean =
     name.endsWith(".pdf", ignoreCase = true)
 
+private fun getCompressedPayloadExtension(name: String): String? {
+    if (!name.endsWith(".zip", ignoreCase = true)) return null
+    val withoutZip = name.dropLast(4)
+    val dotIndex = withoutZip.lastIndexOf('.')
+    if (dotIndex <= 0 || dotIndex >= withoutZip.length - 1) return null
+    return withoutZip.substring(dotIndex + 1)
+}
+
 /** 判断文件名是否为图片文件（目录图库查看用；不含 SVG）。 */
 private fun isGalleryImageFile(name: String): Boolean =
     name.endsWith(".jpg", ignoreCase = true) ||
@@ -10535,30 +10564,34 @@ fun FileItem(
 ) {
     val scope = rememberCoroutineScope()
     var pendingClickJob by remember { mutableStateOf<Job?>(null) }
+    val compressedPayloadExt = getCompressedPayloadExtension(model.name)
+    val showCompressedTag = !model.isDirectory && compressedPayloadExt != null
+    val iconName = if (showCompressedTag) "payload.${compressedPayloadExt}" else model.name
     val icon = when {
         model.isDirectory -> Icons.Default.Folder
-        model.name.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
-        model.name.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
-        model.name.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
-        isCompressedMarkdown(model.name) -> Icons.AutoMirrored.Filled.Article
-        isCompressedHtml(model.name) -> Icons.AutoMirrored.Filled.Article
-        isEpubFile(model.name) || isTxtFile(model.name) || isLlmFile(model.name) -> Icons.AutoMirrored.Filled.MenuBook
-        isPdfFile(model.name) -> Icons.Default.PictureAsPdf
-        isPicZip(model.name) -> Icons.Default.Archive
-        isExtractableArchive(model.name) -> Icons.Default.Archive
-        model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
+        iconName.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
+        iconName.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
+        iconName.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
+        iconName.endsWith(".pic", ignoreCase = true) || iconName.endsWith(".png", ignoreCase = true) || iconName.endsWith(".jpg", ignoreCase = true) || iconName.endsWith(".jpeg", ignoreCase = true) || iconName.endsWith(".gif", ignoreCase = true) || iconName.endsWith(".webp", ignoreCase = true) || iconName.endsWith(".bmp", ignoreCase = true) || iconName.endsWith(".heic", ignoreCase = true) -> Icons.Default.Image
+        iconName.endsWith(".vid", ignoreCase = true) || iconName.endsWith(".mp4", ignoreCase = true) || iconName.endsWith(".mkv", ignoreCase = true) || iconName.endsWith(".avi", ignoreCase = true) || iconName.endsWith(".mov", ignoreCase = true) || iconName.endsWith(".webm", ignoreCase = true) -> Icons.Default.PlayArrow
+        iconName.endsWith(".html", ignoreCase = true) || iconName.endsWith(".htm", ignoreCase = true) -> Icons.AutoMirrored.Filled.Article
+        isEpubFile(iconName) || isTxtFile(iconName) || isLlmFile(iconName) -> Icons.AutoMirrored.Filled.MenuBook
+        isPdfFile(iconName) -> Icons.Default.PictureAsPdf
+        isExtractableArchive(iconName) -> Icons.Default.Archive
+        iconName.endsWith(".md", ignoreCase = true) || iconName.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
         else -> Icons.AutoMirrored.Filled.InsertDriveFile
     }
     val iconTint = when {
         model.isDirectory -> MaterialTheme.colorScheme.primary
-        model.name.endsWith(".gpg", ignoreCase = true) -> Color.Red
-        model.name.endsWith(".pass", ignoreCase = true) -> Color.Red
-        model.name.endsWith(".qx", ignoreCase = true) -> Color.Red
-        isEpubFile(model.name) -> Color(0xFF8B4513)  // 棕色，适合书籍
-        isPdfFile(model.name) -> Color(0xFFD32F2F)  // 红色，PDF 标志色
-        isPicZip(model.name) -> MaterialTheme.colorScheme.tertiary
-        isExtractableArchive(model.name) -> MaterialTheme.colorScheme.tertiary
-        model.name.endsWith(".md", ignoreCase = true) || model.name.endsWith(".rst", ignoreCase = true) -> Color.Blue
+        iconName.endsWith(".gpg", ignoreCase = true) -> Color.Red
+        iconName.endsWith(".pass", ignoreCase = true) -> Color.Red
+        iconName.endsWith(".qx", ignoreCase = true) -> Color.Red
+        iconName.endsWith(".pic", ignoreCase = true) || iconName.endsWith(".png", ignoreCase = true) || iconName.endsWith(".jpg", ignoreCase = true) || iconName.endsWith(".jpeg", ignoreCase = true) || iconName.endsWith(".gif", ignoreCase = true) || iconName.endsWith(".webp", ignoreCase = true) || iconName.endsWith(".bmp", ignoreCase = true) || iconName.endsWith(".heic", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
+        iconName.endsWith(".vid", ignoreCase = true) || iconName.endsWith(".mp4", ignoreCase = true) || iconName.endsWith(".mkv", ignoreCase = true) || iconName.endsWith(".avi", ignoreCase = true) || iconName.endsWith(".mov", ignoreCase = true) || iconName.endsWith(".webm", ignoreCase = true) -> MaterialTheme.colorScheme.secondary
+        isEpubFile(iconName) -> Color(0xFF8B4513)
+        isPdfFile(iconName) -> Color(0xFFD32F2F)
+        isExtractableArchive(iconName) -> MaterialTheme.colorScheme.tertiary
+        iconName.endsWith(".md", ignoreCase = true) || iconName.endsWith(".rst", ignoreCase = true) -> Color.Blue
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val clickableOnClick: () -> Unit = if (onDoubleClick != null) {
@@ -10592,19 +10625,42 @@ fun FileItem(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BadgedBox(
-                badge = {
-                    if (hasPreferredExternalApp) {
-                        Badge(containerColor = MaterialTheme.colorScheme.secondary)
-                    }
-                }
-            ) {
+            Box(modifier = Modifier.size(32.dp)) {
                 Icon(
                     icon,
                     contentDescription = null,
-                    Modifier.size(32.dp),
+                    Modifier
+                        .size(32.dp)
+                        .align(Alignment.Center),
                     tint = iconTint
                 )
+                if (showCompressedTag) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(14.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(MaterialTheme.colorScheme.tertiaryContainer)
+                            .border(1.dp, MaterialTheme.colorScheme.surface, RoundedCornerShape(4.dp)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Archive,
+                            contentDescription = null,
+                            modifier = Modifier.size(10.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+                if (hasPreferredExternalApp) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(8.dp)
+                            .clip(RoundedCornerShape(99.dp))
+                            .background(MaterialTheme.colorScheme.secondary)
+                    )
+                }
             }
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {

@@ -179,6 +179,7 @@ fun FamilyNetworkScreen(
     networkPassword: String?,
     localServiceEnabled: Boolean,
     familyNetworkUserName: String = "",
+    familyNetworkAvatarId: String = "",
     familyNetworkHostName: String = "",
     timeoutMinutes: Int = 0,
     rootUri: String? = null,
@@ -205,6 +206,8 @@ fun FamilyNetworkScreen(
     var showBoardMenu by remember { mutableStateOf(false) }
     var showDeleteBoardDialog by remember { mutableStateOf(false) }
     var deleteBoardInProgress by remember { mutableStateOf(false) }
+    var showRefreshAvatarsDialog by remember { mutableStateOf(false) }
+    var refreshAvatarsInProgress by remember { mutableStateOf(false) }
     var showRenameBoardDialog by remember { mutableStateOf(false) }
     var renameBoardName by remember { mutableStateOf("") }
     var renameBoardInProgress by remember { mutableStateOf(false) }
@@ -274,11 +277,12 @@ fun FamilyNetworkScreen(
     var boardAccessInProgress by remember { mutableStateOf(false) }
     var boardAccessError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
+    LaunchedEffect(networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {
         manager.configure(
             networkPassword,
             localServiceEnabled,
             familyNetworkUserName.ifBlank { null },
+            familyNetworkAvatarId.ifBlank { null },
             familyNetworkHostName.ifBlank { null }
         )
     }
@@ -306,11 +310,12 @@ fun FamilyNetworkScreen(
         }
     }
 
-    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkHostName) {
+    DisposableEffect(manager, activity, networkPassword, localServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {
         manager.configure(
             networkPassword,
             localServiceEnabled,
             familyNetworkUserName.ifBlank { null },
+            familyNetworkAvatarId.ifBlank { null },
             familyNetworkHostName.ifBlank { null }
         )
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -541,6 +546,54 @@ fun FamilyNetworkScreen(
         )
     }
 
+    if (showRefreshAvatarsDialog && boardSession != null) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!refreshAvatarsInProgress) {
+                    showRefreshAvatarsDialog = false
+                }
+            },
+            title = { Text(stringResource(R.string.family_board_avatar_refresh_title)) },
+            text = {
+                Text(stringResource(R.string.family_board_avatar_refresh_confirm))
+            },
+            confirmButton = {
+                Button(
+                    enabled = !refreshAvatarsInProgress,
+                    onClick = {
+                        refreshAvatarsInProgress = true
+                        manager.refreshBoardMessageAvatarsByLatest { result ->
+                            refreshAvatarsInProgress = false
+                            showRefreshAvatarsDialog = false
+                            result.onSuccess { changedCount ->
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.family_board_avatar_refresh_success, changedCount),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }.onFailure { error ->
+                                Toast.makeText(
+                                    context,
+                                    context.getString(
+                                        R.string.family_board_avatar_refresh_failed,
+                                        error.message ?: error.javaClass.simpleName
+                                    ),
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        }
+                    }
+                ) { Text(stringResource(R.string.common_apply)) }
+            },
+            dismissButton = {
+                TextButton(
+                    enabled = !refreshAvatarsInProgress,
+                    onClick = { showRefreshAvatarsDialog = false }
+                ) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
+
     if (boardListUiState.showRemoteShutdownDialog && boardListSession != null) {
         val session = requireNotNull(boardListSession)
         AlertDialog(
@@ -711,6 +764,13 @@ fun FamilyNetworkScreen(
                                                 boardAccessRoleIds = session.boardRoleIds?.toSet().orEmpty()
                                                 boardAccessError = null
                                                 showBoardAccessDialog = true
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.family_board_avatar_refresh_title)) },
+                                            onClick = {
+                                                showBoardMenu = false
+                                                showRefreshAvatarsDialog = true
                                             }
                                         )
                                         DropdownMenuItem(
@@ -3431,6 +3491,11 @@ private fun BulletinAiStatusRow(message: BulletinMessage) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        FamilyAvatarImage(
+            avatarId = message.authorAvatarId,
+            modifier = Modifier.size(18.dp),
+            contentDescription = null
+        )
         Icon(
             Icons.Default.SmartToy,
             contentDescription = null,
@@ -3486,6 +3551,12 @@ private fun BulletinMessageRow(
             Checkbox(checked = selected, onCheckedChange = { onToggleSelect() })
             Spacer(Modifier.width(4.dp))
         }
+        FamilyAvatarImage(
+            avatarId = message.authorAvatarId,
+            modifier = Modifier.size(22.dp),
+            contentDescription = null
+        )
+        Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 "${message.authorLabel} · $timeLabel",

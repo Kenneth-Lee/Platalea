@@ -20,6 +20,7 @@ private const val KEY_FTP_PASSWORD = "ftp_password"
 private const val KEY_FTP_TIMEOUT_MINUTES = "ftp_timeout_minutes"
 private const val KEY_LOCAL_NETWORK_SERVICE_ENABLED = "local_network_service_enabled"
 private const val KEY_FAMILY_NETWORK_USER_NAME = "family_network_user_name"
+private const val KEY_FAMILY_NETWORK_AVATAR_ID = "family_network_avatar_id"
 private const val KEY_FAMILY_NETWORK_HOST_NAME = "family_network_host_name"
 private const val KEY_FAMILY_NETWORK_HOST_PASSWORD = "family_network_host_password"
 private const val KEY_FAMILY_NETWORK_EXTRA_ROLES = "family_network_extra_roles"
@@ -89,6 +90,7 @@ suspend fun exportConfig(
         obj.put(KEY_FTP_TIMEOUT_MINUTES, prefs.ftpTimeoutMinutes.first())
         obj.put(KEY_LOCAL_NETWORK_SERVICE_ENABLED, prefs.localNetworkServiceEnabled.first())
         prefs.familyNetworkUserName.first()?.let { obj.put(KEY_FAMILY_NETWORK_USER_NAME, it) }
+        prefs.familyNetworkAvatarId.first()?.let { obj.put(KEY_FAMILY_NETWORK_AVATAR_ID, it) }
         prefs.familyNetworkHostName.first()?.let { obj.put(KEY_FAMILY_NETWORK_HOST_NAME, it) }
         obj.put(KEY_EXTERNAL_OPEN_BY_EXTENSION, JSONObject(prefs.externalOpenByExtension.first()))
         obj.put(KEY_ROOT_BOOKMARKS, RootBookmarkManager(context).toJson())
@@ -189,6 +191,7 @@ fun configJsonCategories(jsonString: String): Set<ConfigExportCategory> {
             obj.has(KEY_FTP_PASSWORD) ||
             obj.has(KEY_FTP_TIMEOUT_MINUTES) ||
             obj.has(KEY_LOCAL_NETWORK_SERVICE_ENABLED) ||
+            obj.has(KEY_FAMILY_NETWORK_AVATAR_ID) ||
             obj.has(KEY_EXTERNAL_OPEN_BY_EXTENSION) ||
             obj.has(KEY_ROOT_BOOKMARKS)
         ) add(ConfigExportCategory.OTHER)
@@ -227,6 +230,9 @@ suspend fun importConfig(
         }
         if (obj.has(KEY_FAMILY_NETWORK_USER_NAME)) {
             prefs.setFamilyNetworkUserName(obj.optString(KEY_FAMILY_NETWORK_USER_NAME).ifBlank { null })
+        }
+        if (obj.has(KEY_FAMILY_NETWORK_AVATAR_ID)) {
+            prefs.setFamilyNetworkAvatarId(obj.optString(KEY_FAMILY_NETWORK_AVATAR_ID).ifBlank { null })
         }
         if (obj.has(KEY_FAMILY_NETWORK_HOST_NAME)) {
             prefs.setFamilyNetworkHostName(obj.optString(KEY_FAMILY_NETWORK_HOST_NAME).ifBlank { null })

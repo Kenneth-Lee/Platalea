@@ -118,6 +118,7 @@ data class BulletinMessage(
     val updatedAt: Long,
     val deleted: Boolean = false,
     val authorDevice: String? = null,
+    val authorAvatarId: String? = null,
     val attachments: List<BulletinAttachmentRef> = emptyList(),
     val messageKind: String = BulletinMessageKind.MESSAGE,
     val editorLabel: String? = null
@@ -154,6 +155,7 @@ data class BulletinMessage(
             put("message_kind", messageKind)
         }
         authorDevice?.takeIf { it.isNotBlank() }?.let { put("author_device", it) }
+        authorAvatarId?.trim()?.takeIf { it.isNotEmpty() }?.let { put("author_avatar_id", it) }
         editorLabel?.trim()?.takeIf { it.isNotEmpty() }?.let { put("editor_label", it) }
         if (attachments.isNotEmpty()) {
             put("attachments", JSONArray(attachments.map { it.toJson() }))
@@ -185,6 +187,7 @@ data class BulletinMessage(
                 updatedAt = obj.optLong("updated_at"),
                 deleted = obj.optBoolean("deleted", false),
                 authorDevice = obj.optString("author_device").takeIf { it.isNotBlank() },
+                authorAvatarId = obj.optString("author_avatar_id").takeIf { it.isNotBlank() },
                 attachments = attachmentList,
                 messageKind = messageKind,
                 editorLabel = obj.optString("editor_label").takeIf { it.isNotBlank() }

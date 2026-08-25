@@ -22,6 +22,7 @@ private val FTP_PORT = intPreferencesKey("ftp_port")
 private val FTP_PASSWORD = stringPreferencesKey("ftp_password")
 private val LOCAL_NETWORK_SERVICE_ENABLED = booleanPreferencesKey("local_network_service_enabled")
 private val FAMILY_NETWORK_USER_NAME = stringPreferencesKey("family_network_user_name")
+private val FAMILY_NETWORK_AVATAR_ID = stringPreferencesKey("family_network_avatar_id")
 private val FAMILY_NETWORK_HOST_NAME = stringPreferencesKey("family_network_host_name")
 private val FAMILY_NETWORK_HOST_PASSWORD = stringPreferencesKey("family_network_host_password")
 private val FAMILY_NETWORK_BOARD_ACCESS_PASSWORDS_JSON = stringPreferencesKey("family_network_board_access_passwords_json")
@@ -238,6 +239,10 @@ class Preferences(private val context: Context) {
 
     val familyNetworkUserName: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[FAMILY_NETWORK_USER_NAME]
+    }
+
+    val familyNetworkAvatarId: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[FAMILY_NETWORK_AVATAR_ID]?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     val familyNetworkHostName: Flow<String?> = context.dataStore.data.map { prefs ->
@@ -754,6 +759,17 @@ class Preferences(private val context: Context) {
                 prefs.remove(FAMILY_NETWORK_USER_NAME)
             } else {
                 prefs[FAMILY_NETWORK_USER_NAME] = trimmed
+            }
+        }
+    }
+
+    suspend fun setFamilyNetworkAvatarId(avatarId: String?) {
+        context.dataStore.edit { prefs ->
+            val trimmed = avatarId?.trim().orEmpty()
+            if (trimmed.isEmpty()) {
+                prefs.remove(FAMILY_NETWORK_AVATAR_ID)
+            } else {
+                prefs[FAMILY_NETWORK_AVATAR_ID] = trimmed
             }
         }
     }

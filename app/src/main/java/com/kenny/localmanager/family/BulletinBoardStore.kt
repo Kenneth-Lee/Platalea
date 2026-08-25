@@ -281,6 +281,7 @@ class BulletinBoardStore(context: Context) {
         authorLabel: String,
         content: String,
         authorDevice: String? = null,
+        authorAvatarId: String? = null,
         attachments: List<BulletinAttachmentRef> = emptyList()
     ): BulletinMessage? = lock.write {
         val trimmed = content.trim()
@@ -300,6 +301,7 @@ class BulletinBoardStore(context: Context) {
             createdAt = now,
             updatedAt = now,
             authorDevice = authorDevice?.trim()?.takeIf { it.isNotEmpty() },
+            authorAvatarId = authorAvatarId?.trim()?.takeIf { it.isNotEmpty() },
             attachments = attachments
         )
         messages += message
@@ -335,6 +337,49 @@ class BulletinBoardStore(context: Context) {
         writeMessages(boardId, messages)
         writeMeta(boardId, meta.put("revision", meta.optLong("revision") + 1L))
         updated
+    }
+
+    fun refreshAuthorAvatarsFromLatest(boardId: String): Int? = lock.write {
+        val meta = readMeta(boardId) ?: return@write null
+        val messages = readMessages(boardId)
+        if (messages.isEmpty()) return@write 0
+
+        val latestAvatarByAuthor = linkedMapOf<String, String?>()
+        messages
+            .asSequence()
+            .filter { !it.deleted && it.isConversationMessage }
+            .sortedBy { it.seq }
+            .forEach { message ->
+                val authorLabel = message.authorLabel.trim()
+                val authorDevice = message.authorDevice?.trim().orEmpty()
+                val key = "$authorLabel|$authorDevice"
+                if (authorLabel.isNotEmpty()) {
+                    latestAvatarByAuthor[key] = message.authorAvatarId?.trim()?.takeIf { it.isNotEmpty() }
+                }
+            }
+        if (latestAvatarByAuthor.isEmpty()) return@write 0
+
+        val now = System.currentTimeMillis()
+        var changed = 0
+        val updatedMessages = messages.map { message ->
+            val authorLabel = message.authorLabel.trim()
+            val authorDevice = message.authorDevice?.trim().orEmpty()
+            val authorKey = "$authorLabel|$authorDevice"
+            val targetAvatar = latestAvatarByAuthor[authorKey] ?: return@map message
+            val currentAvatar = message.authorAvatarId?.trim()?.takeIf { it.isNotEmpty() }
+            if (currentAvatar == targetAvatar) {
+                message
+            } else {
+                changed++
+                message.copy(authorAvatarId = targetAvatar, updatedAt = now)
+            }
+        }
+
+        if (changed > 0) {
+            writeMessages(boardId, updatedMessages)
+            writeMeta(boardId, meta.put("revision", meta.optLong("revision") + 1L))
+        }
+        changed
     }
 
     fun deleteMessage(boardId: String, messageId: String): Boolean = lock.write {
