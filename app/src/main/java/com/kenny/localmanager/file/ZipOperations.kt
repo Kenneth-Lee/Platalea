@@ -2250,6 +2250,85 @@ fun cleanEpubCache(context: Context, epubUri: Uri) {
     getEpubCacheDir(context, epubUri).deleteRecursively()
 }
 
+private fun openEpubInputStreamWithRecovery(
+    context: Context,
+    epubUri: Uri,
+    onLog: (String) -> Unit
+): Pair<java.io.InputStream?, Uri?> {
+    val cr = context.contentResolver
+    try {
+        val direct = cr.openInputStream(epubUri)
+        if (direct != null) return direct to epubUri
+    } catch (e: Exception) {
+        onLog("EPUB 直读失败: ${e.javaClass.simpleName}: ${e.message}")
+    }
+
+    if (epubUri.scheme != "content") return null to null
+    val authority = epubUri.authority ?: return null to null
+    val docId = try { DocumentsContract.getDocumentId(epubUri) } catch (_: Exception) { return null to null }
+    val slash = docId.lastIndexOf('/')
+    if (slash <= 0) return null to null
+
+    val parentId = docId.substring(0, slash)
+    val originalName = docId.substring(slash + 1)
+    val parentDocUri = try { DocumentsContract.buildDocumentUri(authority, parentId) } catch (_: Exception) { return null to null }
+    val childrenUri = try { DocumentsContract.buildChildDocumentsUriUsingTree(parentDocUri, parentId) } catch (_: Exception) { return null to null }
+
+    val projection = arrayOf(
+        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+        DocumentsContract.Document.COLUMN_MIME_TYPE
+    )
+    val candidates = mutableListOf<Pair<String, String>>()
+    try {
+        cr.query(childrenUri, projection, null, null, null)?.use { cursor ->
+            val idIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            if (idIdx >= 0 && nameIdx >= 0 && mimeIdx >= 0) {
+                while (cursor.moveToNext()) {
+                    val childId = cursor.getString(idIdx) ?: continue
+                    val childName = cursor.getString(nameIdx) ?: continue
+                    val mime = cursor.getString(mimeIdx) ?: ""
+                    if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
+                    if (childName.endsWith(".epub", ignoreCase = true)) {
+                        candidates.add(childId to childName)
+                    }
+                }
+            }
+        }
+    } catch (e: Exception) {
+        onLog("EPUB 恢复扫描失败: ${e.javaClass.simpleName}: ${e.message}")
+        return null to null
+    }
+
+    if (candidates.isEmpty()) return null to null
+
+    val baseHint = originalName.substringBefore("(").substringBeforeLast('.').trim()
+    val fallback =
+        candidates.firstOrNull { it.second.equals(originalName, ignoreCase = true) }
+            ?: candidates.firstOrNull {
+                baseHint.isNotBlank() && it.second.contains(baseHint, ignoreCase = true)
+            }
+            ?: if (candidates.size == 1) candidates.first() else null
+
+    if (fallback == null) return null to null
+
+    val recoveredUri = try { DocumentsContract.buildDocumentUri(authority, fallback.first) } catch (_: Exception) { return null to null }
+    return try {
+        val recovered = cr.openInputStream(recoveredUri)
+        if (recovered != null) {
+            onLog("EPUB 已从失效 URI 自动恢复到同目录文件: ${fallback.second}")
+            recovered to recoveredUri
+        } else {
+            null to null
+        }
+    } catch (e: Exception) {
+        onLog("EPUB 自动恢复后仍无法读取: ${e.javaClass.simpleName}: ${e.message}")
+        null to null
+    }
+}
+
 /** 解析 META-INF/container.xml 获取 rootfile（OPF文件）路径。 */
 private fun parseEpubContainer(contentDir: File): String? {
     val containerFile = File(contentDir, "META-INF/container.xml")
@@ -2388,12 +2467,15 @@ fun extractEpubToCache(
     val tmpZip = File(cacheDir, "__archive.zip")
     try {
         onLog(context.getString(R.string.zip_log_start_read_generic))
-        val inputStream = context.contentResolver.openInputStream(epubUri)
+        val (inputStream, recoveredUri) = openEpubInputStreamWithRecovery(context, epubUri, onLog)
         if (inputStream == null) {
             return EpubParseResult.Error(
                 context.getString(R.string.zip_error_open_file),
                 context.getString(R.string.zip_error_input_stream_null_simple)
             )
+        }
+        if (recoveredUri != null && recoveredUri != epubUri) {
+            onLog("提示: 最近记录 URI 可能已失效，已使用可读取文件继续加载。")
         }
         inputStream.use { input ->
             tmpZip.outputStream().use { output ->

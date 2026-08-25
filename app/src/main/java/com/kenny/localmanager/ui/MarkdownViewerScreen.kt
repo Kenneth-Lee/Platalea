@@ -2036,6 +2036,29 @@ private class PageReadyJsBridge(
     }
 }
 
+private class EpubFootnoteDialogBridge(private val context: android.content.Context) {
+    private fun showDialog(title: String, text: String) {
+        Handler(Looper.getMainLooper()).post {
+            try {
+                android.app.AlertDialog.Builder(context)
+                    .setTitle(title)
+                    .setMessage(text)
+                    .setPositiveButton("关闭", null)
+                    .show()
+            } catch (_: Exception) {
+                Toast.makeText(context, text, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    @android.webkit.JavascriptInterface
+    fun showFootnote(message: String?) {
+        val text = message?.trim().orEmpty()
+        if (text.isBlank()) return
+        showDialog("注释", text)
+    }
+}
+
 /** 同页锚点：用 JS 滚动到指定 id，解决 loadDataWithBaseURL 下 WebView 不自动滚动的现象。 */
 private fun scrollToAnchor(view: WebView?, fragment: String) {
     if (fragment.isBlank() || view == null) return
@@ -7734,9 +7757,15 @@ fun EpubViewerScreen(
                                 settings.javaScriptEnabled = true
                                 settings.domStorageEnabled = false
                                 settings.allowFileAccess = true
+                                addJavascriptInterface(EpubFootnoteDialogBridge(context), "androidEpubFootnote")
                                 webViewClient = EpubWebViewClient(opfDir, { url ->
                                     pendingExternalUrl = url
                                 }) { view ->
+                                    Log.d(EPUB_DEBUG, "[脚注] onPageFinished 注入脚注脚本")
+                                    view.evaluateJavascript(buildEpubFootnoteOverlayScript(), null)
+                                    view.evaluateJavascript("(function(){return String(!!window.__lmFootnoteOverlayInstalled);})();") { installed ->
+                                        Log.d(EPUB_DEBUG, "[脚注] 脚本安装状态 installed=$installed")
+                                    }
                                     regexFindUiState = RegexFindUiState()
                                     installRegexFindBridge(view)
                                     pendingFullTextHighlightQuery?.let { pendingQuery ->
@@ -7861,6 +7890,7 @@ fun EpubViewerScreen(
                                     <body>$htmlContent
                                     <script>
                                         ${buildEpubBookmarkMarkerScript(context, currentChapterBookmarks, currentChapterRestoredMarker)}
+                                        ${buildEpubFootnoteOverlayScript()}
                                     </script>
                                     </body>
                                     </html>
@@ -7924,6 +7954,21 @@ private class EpubWebViewClient(
     override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
         val url = request?.url?.toString() ?: return false
         if (!request.isForMainFrame) return false
+        val fragment = request.url?.fragment.orEmpty()
+        val lowerFragment = fragment.lowercase()
+        Log.d(EPUB_DEBUG, "[脚注] shouldOverrideUrlLoading url=$url fragment=$fragment")
+        if (
+            lowerFragment.startsWith("fn") ||
+            lowerFragment.startsWith("fnref") ||
+            lowerFragment.contains("ftn") ||
+            lowerFragment.contains("footnote") ||
+            lowerFragment.contains("note")
+        ) {
+            val safeUrl = org.json.JSONObject.quote(url)
+            Log.d(EPUB_DEBUG, "[脚注] 命中 fragment 拦截，转 JS toggle url=$url")
+            view?.evaluateJavascript("(function(){ if (window.lmToggleFootnoteByUrl) window.lmToggleFootnoteByUrl($safeUrl); })();", null)
+            return true
+        }
         val scheme = request.url?.scheme?.lowercase() ?: ""
         when {
             scheme == "http" || scheme == "https" || scheme == "mailto" -> {
@@ -8059,6 +8104,171 @@ private fun buildEpubBookmarkMarkerScript(
                 resizeTimer = window.setTimeout(ensureMarkers, 60);
             }, { passive: true });
             document.addEventListener('scroll', updateActiveState, { passive: true });
+        })();
+    """.trimIndent()
+}
+
+private fun buildEpubFootnoteOverlayScript(): String {
+    return """
+        (function() {
+            if (window.__lmFootnoteOverlayInstalled === true) return;
+            try {
+                var lastHandledHref = '';
+                var lastHandledAt = 0;
+                var suppressClickUntil = 0;
+                var lastTouchHref = '';
+                var lastTouchAt = 0;
+
+                function findLink(node) {
+                    while (node) {
+                        if (node.tagName && node.tagName.toLowerCase() === 'a') return node;
+                        node = node.parentNode;
+                    }
+                    return null;
+                }
+
+                function resolveDefIdFromHref(href) {
+                    if (!href) return '';
+                    var idx = href.indexOf('#');
+                    if (idx < 0) return '';
+                    var id = href.substring(idx + 1);
+                    try { id = decodeURIComponent(id); } catch (_) {}
+                    if (!id) return '';
+                    if (id.indexOf('fnref') === 0) id = id.replace(/^fnref/, 'fn');
+                    return id;
+                }
+
+                function isLikelyFootnoteHref(href, linkText) {
+                    var lowerHref = (href || '').toLowerCase();
+                    if (lowerHref.indexOf('#') < 0) return false;
+                    if (
+                        lowerHref.indexOf('note') >= 0 ||
+                        lowerHref.indexOf('fn') >= 0 ||
+                        lowerHref.indexOf('ftn') >= 0 ||
+                        lowerHref.indexOf('footnote') >= 0
+                    ) {
+                        return true;
+                    }
+                    var t = (linkText || '').trim();
+                    return /^\[(\d+|[ivxlcdm]+)\]$/i.test(t) || /^\d+$/.test(t);
+                }
+
+                function extractFootnoteTextById(defId) {
+                    var node = document.getElementById(defId);
+                    if (!node) return '';
+                    var source = node;
+                    if (source.tagName && source.tagName.toLowerCase() === 'a' && source.parentNode) {
+                        source = source.parentNode;
+                    }
+                    var text = (source.textContent || '').replace(/\s+/g, ' ').trim();
+                    text = text.replace(/^\[(\d+|[ivxlcdm]+)\]\s*/i, '');
+                    return text;
+                }
+
+                function showFootnoteByHref(href) {
+                    var defId = resolveDefIdFromHref(href);
+                    if (!defId) return;
+                    var noteText = extractFootnoteTextById(defId);
+                    if (!noteText) return;
+                    try {
+                        if (window.androidEpubFootnote && window.androidEpubFootnote.showFootnote) {
+                            window.androidEpubFootnote.showFootnote(noteText);
+                        }
+                    } catch (_) {}
+                }
+
+                function handleLinkEvent(link, evt, source) {
+                    if (!link) return false;
+                    var href = link.getAttribute('href') || '';
+                    var text = (link.textContent || '').trim();
+                    if (!isLikelyFootnoteHref(href, text)) return false;
+                    if (evt) {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                    }
+
+                    var now = Date.now();
+                    if (href === lastHandledHref && (now - lastHandledAt) < 450) {
+                        d('dedupe source=' + source + ' href=' + href);
+                        return true;
+                    }
+                    lastHandledHref = href;
+                    lastHandledAt = now;
+                    if (source.indexOf('touch') >= 0) {
+                        lastTouchHref = href;
+                        lastTouchAt = now;
+                        suppressClickUntil = now + 2200;
+                    }
+                    showFootnoteByHref(href);
+                    return true;
+                }
+
+                function bindLikelyFootnoteLinks() {
+                    var links = document.querySelectorAll('a[href*="#"]');
+                    var boundCount = 0;
+                    for (var i = 0; i < links.length; i++) {
+                        var link = links[i];
+                        if (link.getAttribute('data-lm-footnote-bound') === '1') continue;
+                        var href = link.getAttribute('href') || '';
+                        var text = (link.textContent || '').trim();
+                        if (!isLikelyFootnoteHref(href, text)) continue;
+                        link.setAttribute('data-lm-footnote-bound', '1');
+                        link.addEventListener('click', function(evt) {
+                            handleLinkEvent(this, evt, 'bound-click');
+                        }, true);
+                        boundCount++;
+                    }
+                }
+
+                document.addEventListener('click', function(evt) {
+                    var link = findLink(evt.target);
+
+                    if (!link) return;
+
+                    if (Date.now() < suppressClickUntil) {
+                        var hrefBlocked = link.getAttribute('href') || '';
+                        var textBlocked = (link.textContent || '').trim();
+                        if (isLikelyFootnoteHref(hrefBlocked, textBlocked)) {
+                            evt.preventDefault();
+                            evt.stopPropagation();
+                            return;
+                        }
+                    }
+
+                    var hrefInClick = link.getAttribute('href') || '';
+                    var nowClick = Date.now();
+                    if (
+                        hrefInClick &&
+                        hrefInClick === lastTouchHref &&
+                        (nowClick - lastTouchAt) < 2200
+                    ) {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        return;
+                    }
+
+                    handleLinkEvent(link, evt, 'doc-click');
+                }, true);
+
+                document.addEventListener('touchend', function(evt) {
+                    var touch = evt && evt.changedTouches && evt.changedTouches.length > 0 ? evt.changedTouches[0] : null;
+                    var node = touch ? document.elementFromPoint(touch.clientX, touch.clientY) : evt.target;
+                    var link = findLink(node);
+                    handleLinkEvent(link, evt, 'doc-touchend');
+                }, true);
+
+                window.lmToggleFootnoteByUrl = function(url) {
+                    if (!url) return;
+                    showFootnoteByHref(String(url));
+                };
+
+                bindLikelyFootnoteLinks();
+                setTimeout(bindLikelyFootnoteLinks, 60);
+
+                window.__lmFootnoteOverlayInstalled = true;
+            } catch (e) {
+                window.__lmFootnoteOverlayInstalled = false;
+            }
         })();
     """.trimIndent()
 }
