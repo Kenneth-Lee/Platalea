@@ -160,6 +160,7 @@ import androidx.exifinterface.media.ExifInterface
 import org.json.JSONObject
 import android.widget.Toast
 import android.provider.DocumentsContract
+import android.webkit.MimeTypeMap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.MainActivity
@@ -196,6 +197,7 @@ import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
+import com.kenny.localmanager.file.getDisplayName
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.getTrashUriIfExists
 import com.kenny.localmanager.file.isInsideDirectory
@@ -365,6 +367,18 @@ private data class ExternalAppTarget(
     val packageName: String,
     val label: String
 )
+
+private enum class ExternalOpenTypeHint(val mimeType: String, val labelRes: Int) {
+    VIDEO("video/*", R.string.browser_external_type_video),
+    AUDIO("audio/*", R.string.browser_external_type_audio),
+    TEXT("text/plain", R.string.browser_external_type_text),
+    OTHER("*/*", R.string.browser_external_type_other)
+}
+
+private fun isExternalMimeLowConfidence(mimeType: String): Boolean {
+    val normalized = mimeType.trim().lowercase(Locale.ROOT)
+    return normalized.isBlank() || normalized == "*/*" || normalized == "application/octet-stream"
+}
 
 internal const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
 internal const val RECENT_TYPE_HTML_VIEWER = "html_viewer"
@@ -544,7 +558,7 @@ private fun openRecentItemByType(
                 Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
                 return
             }
-            val opened = launchExternalOpen(context, uri, null)
+            val opened = launchExternalOpen(context, uri, null, item.title)
             if (!opened) {
                 Toast.makeText(context, context.getString(R.string.recent_external_open_failed), Toast.LENGTH_SHORT).show()
                 return
@@ -2845,6 +2859,35 @@ private fun fileExtensionKey(name: String): String? {
     return name.substring(dotIndex + 1).trim().lowercase().ifBlank { null }
 }
 
+private val externalOpenVideoExts = setOf(
+    "rmvb", "rm", "rv", "ram", "mp4", "m4v", "mkv", "avi", "mov", "wmv", "flv",
+    "ts", "m2ts", "mts", "webm", "3gp", "mpeg", "mpg", "vob", "asf"
+)
+private val externalOpenAudioExts = setOf(
+    "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "ape", "amr", "aiff", "alac"
+)
+private val externalOpenImageExts = setOf(
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "tiff", "tif", "svg"
+)
+private val externalOpenTextExts = setOf(
+    "txt", "md", "rst", "log", "json", "xml", "yaml", "yml", "csv", "ini", "toml"
+)
+private val externalOpenArchiveMimeByExt = mapOf(
+    "zip" to "application/zip",
+    "7z" to "application/x-7z-compressed",
+    "rar" to "application/vnd.rar",
+    "tar" to "application/x-tar",
+    "gz" to "application/gzip",
+    "bz2" to "application/x-bzip2",
+    "xz" to "application/x-xz",
+    "pdf" to "application/pdf",
+    "epub" to "application/epub+zip",
+    "apk" to "application/vnd.android.package-archive",
+    "srt" to "application/x-subrip",
+    "ass" to "text/x-ssa",
+    "ssa" to "text/x-ssa"
+)
+
 private fun toExternalLaunchUri(context: Context, uri: Uri): Uri {
     if (uri.scheme != "file") return uri
     val path = uri.path ?: return uri
@@ -2855,11 +2898,43 @@ private fun toExternalLaunchUri(context: Context, uri: Uri): Uri {
     }.getOrElse { uri }
 }
 
-private fun buildExternalOpenIntent(context: Context, uri: Uri, packageName: String? = null): Intent {
+private fun guessExternalOpenMimeType(context: Context, uri: Uri, fileNameHint: String?): String {
+    val resolverMime = context.contentResolver.getType(uri)?.trim()?.lowercase(Locale.ROOT)
+    val validResolverMime = resolverMime
+        ?.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "*/*" }
+    if (validResolverMime != null) return validResolverMime
+
+    val candidateName = fileNameHint
+        ?.takeIf { it.isNotBlank() }
+        ?: context.contentResolver.getDisplayName(uri)
+    val ext = candidateName
+        ?.substringAfterLast('.', "")
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+        .orEmpty()
+    if (ext.isNotEmpty()) {
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { return it }
+        externalOpenArchiveMimeByExt[ext]?.let { return it }
+        if (ext in externalOpenVideoExts) return "video/*"
+        if (ext in externalOpenAudioExts) return "audio/*"
+        if (ext in externalOpenImageExts) return "image/*"
+        if (ext in externalOpenTextExts) return "text/plain"
+    }
+    return resolverMime?.takeIf { it.isNotBlank() } ?: "*/*"
+}
+
+private fun buildExternalOpenIntent(
+    context: Context,
+    uri: Uri,
+    packageName: String? = null,
+    fileNameHint: String? = null,
+    forcedMimeType: String? = null
+): Intent {
     val externalUri = toExternalLaunchUri(context, uri)
-    val mimeType = context.contentResolver.getType(externalUri)
+    val mimeType = forcedMimeType?.takeIf { it.isNotBlank() }
+        ?: guessExternalOpenMimeType(context, externalUri, fileNameHint)
     return Intent(Intent.ACTION_VIEW).apply {
-        if (mimeType.isNullOrBlank()) data = externalUri else setDataAndType(externalUri, mimeType)
+        setDataAndType(externalUri, mimeType)
         if (!packageName.isNullOrBlank()) setPackage(packageName)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -2867,10 +2942,15 @@ private fun buildExternalOpenIntent(context: Context, uri: Uri, packageName: Str
 }
 
 @Suppress("DEPRECATION")
-private fun queryExternalOpenTargets(context: Context, uriString: String): List<ExternalAppTarget> {
+private fun queryExternalOpenTargets(
+    context: Context,
+    uriString: String,
+    fileNameHint: String? = null,
+    forcedMimeType: String? = null
+): List<ExternalAppTarget> {
     val packageManager = context.packageManager
     return packageManager.queryIntentActivities(
-        buildExternalOpenIntent(context, Uri.parse(uriString)),
+        buildExternalOpenIntent(context, Uri.parse(uriString), fileNameHint = fileNameHint, forcedMimeType = forcedMimeType),
         PackageManager.MATCH_DEFAULT_ONLY
     ).asSequence()
         .mapNotNull { resolveInfo ->
@@ -2886,9 +2966,15 @@ private fun queryExternalOpenTargets(context: Context, uriString: String): List<
         .toList()
 }
 
-private fun launchExternalOpen(context: Context, uriString: String, packageName: String?): Boolean {
+private fun launchExternalOpen(
+    context: Context,
+    uriString: String,
+    packageName: String?,
+    fileNameHint: String? = null,
+    forcedMimeType: String? = null
+): Boolean {
     return runCatching {
-        context.startActivity(buildExternalOpenIntent(context, Uri.parse(uriString), packageName))
+        context.startActivity(buildExternalOpenIntent(context, Uri.parse(uriString), packageName, fileNameHint, forcedMimeType))
         true
     }.getOrElse { false }
 }
@@ -4454,8 +4540,8 @@ private fun FileBrowserAppScreen(
                                 onOpenFile = { uri, name, _ ->
                                     viewingFile = Triple(uri, name, false)
                                 },
-                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice ->
-                                    val opened = launchExternalOpen(context, uri, packageName)
+                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice, forcedMimeType ->
+                                    val opened = launchExternalOpen(context, uri, packageName, name, forcedMimeType)
                                     if (opened) {
                                         recordRecentOpen(
                                             type = RECENT_TYPE_EXTERNAL_OPEN,
@@ -8009,7 +8095,7 @@ private fun FileBrowserAppScreen(
                                                     }
                                                 }
                                                 val targetFile = java.io.File(state.contentDir, path)
-                                                val opened = launchExternalOpen(context, android.net.Uri.fromFile(targetFile).toString(), null)
+                                                val opened = launchExternalOpen(context, android.net.Uri.fromFile(targetFile).toString(), null, targetFile.name)
                                                 if (!opened) {
                                                     Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
                                                 }
@@ -8713,7 +8799,7 @@ internal fun FileBrowserScreen(
     hideDotFiles: Boolean = false,
     preferredExternalPackages: Map<String, String> = emptyMap(),
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
-    onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean) -> Boolean = { _, _, _, _ -> false },
+    onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?) -> Boolean = { _, _, _, _, _ -> false },
     onClearExternalOpenPreference: (name: String) -> Unit = {},
     onAddToPendingList: (DocumentFileModel) -> Unit,
     onRemoveFromPendingList: (DocumentFileModel) -> Unit,
@@ -8779,6 +8865,8 @@ internal fun FileBrowserScreen(
     var showSortMenu by remember { mutableStateOf(false) }
     var externalOpenTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
     var externalOpenOptions by remember { mutableStateOf<List<ExternalAppTarget>>(emptyList()) }
+    var externalOpenForcedMimeType by remember { mutableStateOf<String?>(null) }
+    var externalOpenShowTypeChooser by remember { mutableStateOf(false) }
     var showOpenUrlDialog by remember { mutableStateOf(false) }
     var openUrlInput by remember { mutableStateOf("") }
     var openUrlError by remember { mutableStateOf<String?>(null) }
@@ -8794,13 +8882,12 @@ internal fun FileBrowserScreen(
     var fileSearchError by remember { mutableStateOf<String?>(null) }
 
     fun showExternalOpenDialog(target: DocumentFileModel) {
-        val options = queryExternalOpenTargets(context, target.uri.toString())
-        if (options.isEmpty()) {
-            Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
-            return
-        }
         externalOpenTarget = target
+        externalOpenForcedMimeType = null
+        val autoMime = guessExternalOpenMimeType(context, toExternalLaunchUri(context, target.uri), target.name)
+        val options = queryExternalOpenTargets(context, target.uri.toString(), target.name)
         externalOpenOptions = options
+        externalOpenShowTypeChooser = options.isEmpty() || isExternalMimeLowConfidence(autoMime)
     }
 
     fun normalizeUserInputUrl(raw: String): String? {
@@ -9356,7 +9443,7 @@ internal fun FileBrowserScreen(
                                                 onOpenMarkdownView(item.uri.toString(), item.name, false)
                                             else -> {
                                                 val preferredPackage = fileExtensionKey(item.name)?.let { preferredExternalPackages[it] }
-                                                if (preferredPackage != null && onOpenWithOtherApp(item.uri.toString(), item.name, preferredPackage, false)) {
+                                                if (preferredPackage != null && onOpenWithOtherApp(item.uri.toString(), item.name, preferredPackage, false, null)) {
                                                     Unit
                                                 } else {
                                                     val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
@@ -9727,7 +9814,12 @@ internal fun FileBrowserScreen(
 
     if (externalOpenTarget != null) {
         val target = externalOpenTarget!!
-        Dialog(onDismissRequest = { externalOpenTarget = null; externalOpenOptions = emptyList() }) {
+        Dialog(onDismissRequest = {
+            externalOpenTarget = null
+            externalOpenOptions = emptyList()
+            externalOpenForcedMimeType = null
+            externalOpenShowTypeChooser = false
+        }) {
             Surface(
                 shape = MaterialTheme.shapes.large,
                 color = MaterialTheme.colorScheme.surface,
@@ -9750,32 +9842,95 @@ internal fun FileBrowserScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(16.dp))
-                    externalOpenOptions.forEach { option ->
+                    if (externalOpenShowTypeChooser) {
+                        Text(
+                            stringResource(R.string.browser_external_type_prompt),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        ExternalOpenTypeHint.entries.forEach { hint ->
+                            TextButton(
+                                onClick = {
+                                    externalOpenForcedMimeType = hint.mimeType
+                                    externalOpenOptions = queryExternalOpenTargets(
+                                        context,
+                                        target.uri.toString(),
+                                        target.name,
+                                        hint.mimeType
+                                    )
+                                    if (externalOpenOptions.isEmpty()) {
+                                        Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
+                                        externalOpenShowTypeChooser = true
+                                    } else {
+                                        externalOpenShowTypeChooser = false
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(hint.labelRes), color = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                        if (externalOpenOptions.isNotEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            TextButton(
+                                onClick = {
+                                    externalOpenForcedMimeType = null
+                                    externalOpenShowTypeChooser = false
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(stringResource(R.string.browser_external_use_auto_list), color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    } else {
                         TextButton(
-                            onClick = {
-                                val opened = onOpenWithOtherApp(target.uri.toString(), target.name, option.packageName, true)
-                                if (opened) {
-                                    externalOpenTarget = null
-                                    externalOpenOptions = emptyList()
-                                }
-                            },
+                            onClick = { externalOpenShowTypeChooser = true },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Column(Modifier.fillMaxWidth()) {
-                                Text(option.label, color = MaterialTheme.colorScheme.onSurface)
-                                Text(
-                                    option.packageName,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                            Text(stringResource(R.string.browser_external_filter_by_type), color = MaterialTheme.colorScheme.primary)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        externalOpenOptions.forEach { option ->
+                            TextButton(
+                                onClick = {
+                                    val opened = onOpenWithOtherApp(
+                                        target.uri.toString(),
+                                        target.name,
+                                        option.packageName,
+                                        true,
+                                        externalOpenForcedMimeType
+                                    )
+                                    if (opened) {
+                                        externalOpenTarget = null
+                                        externalOpenOptions = emptyList()
+                                        externalOpenForcedMimeType = null
+                                        externalOpenShowTypeChooser = false
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(Modifier.fillMaxWidth()) {
+                                    Text(option.label, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(
+                                        option.packageName,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
                     }
                     Spacer(Modifier.height(8.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { externalOpenTarget = null; externalOpenOptions = emptyList() }) {
+                        TextButton(onClick = {
+                            externalOpenTarget = null
+                            externalOpenOptions = emptyList()
+                            externalOpenForcedMimeType = null
+                            externalOpenShowTypeChooser = false
+                        }) {
                             Text(context.getString(R.string.common_cancel))
                         }
                     }

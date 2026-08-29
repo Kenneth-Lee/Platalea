@@ -1278,6 +1278,13 @@ OPF目录文件: %2$s</string>
     <string name="browser_restore_failed">恢复失败</string>
     <string name="browser_external_app_unavailable">记住的外部应用不可用，已恢复默认打开方式</string>
     <string name="browser_no_app_to_open">没有可打开的应用</string>
+    <string name="browser_external_type_prompt">未识别到可用应用，请先选择该文件类型：</string>
+    <string name="browser_external_type_video">视频</string>
+    <string name="browser_external_type_audio">音乐</string>
+    <string name="browser_external_type_text">文本</string>
+    <string name="browser_external_type_other">其他</string>
+    <string name="browser_external_filter_by_type">按文件类型筛选应用</string>
+    <string name="browser_external_use_auto_list">使用自动识别的应用列表</string>
     <string name="browser_no_music_in_dir">目录中没有可播放的音乐文件</string>
     <string name="browser_playlist_from_dir_started">已从目录生成播放列表并开始播放</string>
     <string name="browser_moved_to_trash">已移到回收站</string>

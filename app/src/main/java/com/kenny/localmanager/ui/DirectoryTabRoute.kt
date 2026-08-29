@@ -25,7 +25,7 @@ internal data class DirectoryTabRouteState(
     val hideDotFiles: Boolean = false,
     val preferredExternalPackages: Map<String, String> = emptyMap(),
     val onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
-    val onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean) -> Boolean,
+    val onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?) -> Boolean,
     val onClearExternalOpenPreference: (name: String) -> Unit,
     val onAddToPendingList: (DocumentFileModel) -> Unit,
     val onRemoveFromPendingList: (DocumentFileModel) -> Unit,
