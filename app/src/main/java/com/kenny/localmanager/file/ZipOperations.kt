@@ -29,6 +29,9 @@ import net.lingala.zip4j.model.enums.CompressionLevel
 import net.lingala.zip4j.model.enums.EncryptionMethod
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterOutputStream
+import java.io.InterruptedIOException
+import java.io.OutputStream
 import java.nio.channels.SeekableByteChannel
 import java.nio.charset.Charset
 import java.util.Locale
@@ -36,11 +39,117 @@ import java.util.Locale
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
 private const val MIME_7Z = "application/x-7z-compressed"
+private const val ARCHIVE_PROGRESS_UNITS = 10_000
 private val SEVEN_Z_SPLIT_PART_REGEX = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
+
+private class ArchiveOperationCancelledException(message: String) : InterruptedIOException(message)
+
+private fun throwIfCancelled(shouldCancel: () -> Boolean) {
+    if (shouldCancel()) {
+        throw ArchiveOperationCancelledException("archive operation cancelled")
+    }
+}
+
+private fun copyStreamCancellable(
+    input: java.io.InputStream,
+    output: java.io.OutputStream,
+    shouldCancel: () -> Boolean,
+    bufferSize: Int = 64 * 1024,
+    onChunkCopied: (Int) -> Unit = {}
+) {
+    val buffer = ByteArray(bufferSize)
+    while (true) {
+        throwIfCancelled(shouldCancel)
+        val read = input.read(buffer)
+        if (read <= 0) break
+        output.write(buffer, 0, read)
+        onChunkCopied(read)
+    }
+}
+
+private class CancelAwareOutputStream(
+    out: OutputStream,
+    private val shouldCancel: () -> Boolean,
+    private val onBytesWritten: (Int) -> Unit = {}
+) : FilterOutputStream(out) {
+    override fun write(b: Int) {
+        throwIfCancelled(shouldCancel)
+        out.write(b)
+        onBytesWritten(1)
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        throwIfCancelled(shouldCancel)
+        out.write(b, off, len)
+        if (len > 0) onBytesWritten(len)
+    }
+}
+
+private class ArchiveExtractProgressTracker(
+    private val totalEntries: Int,
+    private val totalBytes: Long,
+    private val setProgress: (Int, Int) -> Unit
+) {
+    private var completedEntries = 0
+    private var completedBytes = 0L
+    private var lastUnits = -1
+
+    init {
+        setProgress(0, ARCHIVE_PROGRESS_UNITS)
+    }
+
+    fun onBytes(bytes: Int) {
+        if (totalBytes <= 0L || bytes <= 0) return
+        completedBytes += bytes.toLong()
+        emit()
+    }
+
+    fun onEntryDone() {
+        completedEntries++
+        emit()
+    }
+
+    fun finish() {
+        if (lastUnits != ARCHIVE_PROGRESS_UNITS) {
+            lastUnits = ARCHIVE_PROGRESS_UNITS
+            setProgress(ARCHIVE_PROGRESS_UNITS, ARCHIVE_PROGRESS_UNITS)
+        }
+    }
+
+    private fun emit() {
+        val fraction = if (totalBytes > 0L) {
+            val safeBytes = completedBytes.coerceAtMost(totalBytes)
+            safeBytes.toDouble() / totalBytes.toDouble()
+        } else {
+            completedEntries.toDouble() / totalEntries.coerceAtLeast(1).toDouble()
+        }
+        val units = (fraction * ARCHIVE_PROGRESS_UNITS).toInt().coerceIn(0, ARCHIVE_PROGRESS_UNITS)
+        if (units != lastUnits) {
+            lastUnits = units
+            setProgress(units, ARCHIVE_PROGRESS_UNITS)
+        }
+    }
+}
+
+private fun rarEntryUnpackedSize(header: FileHeader): Long {
+    return try {
+        val value = header.javaClass.methods.firstOrNull {
+            it.name == "getFullUnpackSize" && it.parameterCount == 0
+        }?.invoke(header)
+        when (value) {
+            is Long -> value
+            is Int -> value.toLong()
+            else -> 0L
+        }
+    } catch (_: Exception) {
+        0L
+    }
+}
 
 /** 解压结果 */
 sealed class UnzipResult {
     object Success : UnzipResult()
+    object Cancelled : UnzipResult()
     object PasswordRequired : UnzipResult()
     object WrongPassword : UnzipResult()
     object CorruptedFile : UnzipResult()
@@ -257,13 +366,15 @@ fun unzipToParent(
     treeUri: Uri?,
     archiveName: String?,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false }
 ): UnzipResult {
     val cr = context.contentResolver
+    throwIfCancelled(shouldCancel)
 
     when (val split = resolveSevenZSplitParts(context, zipUri, archiveName, treeUri)) {
         is SevenZSplitPartsResolveResult.Ready -> {
-            return un7zSplitToParent(context, split.parts, parentDirUri, treeUri, password, setProgress)
+            return un7zSplitToParent(context, split.parts, parentDirUri, treeUri, password, setProgress, shouldCancel)
         }
         is SevenZSplitPartsResolveResult.Error -> {
             return UnzipResult.IOError(split.message)
@@ -275,16 +386,16 @@ fun unzipToParent(
     val zipFile = File(cacheDir, "archive.zip")
     try {
         cr.openInputStream(zipUri)?.use { input ->
-            zipFile.outputStream().use { output -> input.copyTo(output) }
+            zipFile.outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
         } ?: return UnzipResult.IOError(context.getString(R.string.zip_read_file_failed))
         if (isRarName(archiveName) || hasRarSignature(zipFile)) {
-            return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
+            return unrarToParent(context, zipFile, parentDirUri, treeUri, password, setProgress, shouldCancel)
         }
         if (is7zName(archiveName) || has7zSignature(zipFile)) {
-            return un7zToParent(context, zipFile, parentDirUri, treeUri, password, setProgress)
+            return un7zToParent(context, zipFile, parentDirUri, treeUri, password, setProgress, shouldCancel)
         }
         if (isTarName(archiveName)) {
-            return untarToParent(context, zipFile, parentDirUri, treeUri, archiveName, setProgress)
+            return untarToParent(context, zipFile, parentDirUri, treeUri, archiveName, setProgress, shouldCancel)
         }
 
         val zip = ZipFile(zipFile)
@@ -292,15 +403,40 @@ fun unzipToParent(
             if (password == null || password.isEmpty()) return UnzipResult.PasswordRequired
             zip.setPassword(password)
         }
-        val total = zip.fileHeaders.size.coerceAtLeast(1)
-        setProgress(0, total)
-        val extractDir = File(cacheDir, "extract").apply { mkdirs() }
+        val writer = try {
+            ArchiveDocumentWriter(context, parentDirUri, treeUri)
+        } catch (e: Exception) {
+            return UnzipResult.IOError("ZIP 解压失败：${e.message ?: "无法定位目标目录"}")
+        }
+        val headers = zip.fileHeaders.orEmpty()
+        val total = headers.size.coerceAtLeast(1)
+        val totalBytes = headers
+            .asSequence()
+            .filter { !it.isDirectory }
+            .map { it.uncompressedSize.coerceAtLeast(0L) }
+            .sum()
+        val progress = ArchiveExtractProgressTracker(total, totalBytes, setProgress)
         try {
-            var current = 0
-            zip.fileHeaders.orEmpty().forEach { header ->
-                zip.extractFile(header, extractDir.path)
-                current++
-                setProgress(current, total)
+            headers.forEach { header ->
+                throwIfCancelled(shouldCancel)
+                val path = sanitizeArchivePath(header.fileName.orEmpty())
+                if (path.isEmpty()) {
+                    progress.onEntryDone()
+                    return@forEach
+                }
+                if (header.isDirectory) {
+                    if (!writer.ensureDirectory(path)) {
+                        return UnzipResult.IOError("ZIP 解压失败：创建目录失败 [$path]")
+                    }
+                } else {
+                    val writeResult = writer.writeFile(path, shouldCancel) { output ->
+                        zip.getInputStream(header).use { input ->
+                            copyStreamCancellable(input, output, shouldCancel, onChunkCopied = progress::onBytes)
+                        }
+                    }
+                    if (writeResult != null) return writeResult
+                }
+                progress.onEntryDone()
             }
         } catch (e: net.lingala.zip4j.exception.ZipException) {
             val msg = e.message.orEmpty().lowercase()
@@ -311,12 +447,7 @@ fun unzipToParent(
                 else -> UnzipResult.IOError(e.message)
             }
         }
-        // 解压到目标目录时，只复制 zip 顶层内容，不要多出一层 extract 目录。
-        // 进度在逐条目解压时已更新到 total，这里只执行复制。
-        extractDir.listFiles()?.orEmpty()?.forEach { child ->
-            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
-        }
-        setProgress(total, total)
+        progress.finish()
         return UnzipResult.Success
     } catch (e: Exception) {
         Log.e(TAG, "unzipToParent failed", e)
@@ -362,27 +493,23 @@ private fun openSevenZFile(channel: SeekableByteChannel, password: CharArray?): 
     }
 }
 
-private fun extractSevenZToParent(
-    context: Context,
+private class ArchiveDocumentWriter(
+    private val context: Context,
     parentDirUri: Uri,
-    treeUri: Uri?,
-    openArchive: () -> SevenZFile,
-    password: CharArray?,
-    setProgress: (Int, Int) -> Unit,
-    failedTag: String
-): UnzipResult {
-    val cr = context.contentResolver
-    val parentResolved = resolveParentForZip(context, parentDirUri, treeUri)
-        ?: return UnzipResult.IOError("7z 解压失败：无法定位目标目录")
-    val dirUriCache = mutableMapOf<String, Uri>("" to parentResolved)
+    treeUri: Uri?
+) {
+    private val cr = context.contentResolver
+    private val rootDirUri: Uri = resolveParentForZip(context, parentDirUri, treeUri)
+        ?: throw IllegalStateException("无法定位目标目录")
+    private val dirUriCache = mutableMapOf<String, Uri>("" to rootDirUri)
 
-    fun ensureTargetDir(relativeDir: String): Uri? {
+    private fun ensureTargetDir(relativeDir: String): Uri? {
         val normalized = sanitizeArchivePath(relativeDir).trimEnd('/')
-        if (normalized.isEmpty()) return parentResolved
+        if (normalized.isEmpty()) return rootDirUri
         dirUriCache[normalized]?.let { return it }
         val segments = normalized.split('/').filter { it.isNotBlank() }
         var currentPath = ""
-        var currentUri = parentResolved
+        var currentUri = rootDirUri
         for (segment in segments) {
             currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
             val cached = dirUriCache[currentPath]
@@ -411,46 +538,84 @@ private fun extractSevenZToParent(
         return currentUri
     }
 
+    fun ensureDirectory(path: String): Boolean {
+        return ensureTargetDir(path) != null
+    }
+
+    fun writeFile(path: String, shouldCancel: () -> Boolean, writeBody: (OutputStream) -> Unit): UnzipResult? {
+        val parentPath = path.substringBeforeLast('/', "")
+        val parentUri = ensureTargetDir(parentPath)
+            ?: return UnzipResult.IOError("解压失败：创建父目录失败 [$path]")
+        val fileName = path.substringAfterLast('/').ifBlank {
+            return UnzipResult.IOError("解压失败：无效文件名 [$path]")
+        }
+        val fileUri = try {
+            DocumentsContract.createDocument(cr, parentUri, "application/octet-stream", fileName)
+        } catch (_: Exception) {
+            null
+        } ?: return UnzipResult.IOError("解压失败：创建目标文件失败 [$path]")
+
+        cr.openOutputStream(fileUri)?.use { output ->
+            throwIfCancelled(shouldCancel)
+            writeBody(output)
+        } ?: return UnzipResult.IOError("解压失败：打开输出流失败 [$path]")
+        return null
+    }
+}
+
+private fun extractSevenZToParent(
+    context: Context,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    openArchive: () -> SevenZFile,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit,
+    failedTag: String,
+    shouldCancel: () -> Boolean
+): UnzipResult {
+    val writer = try {
+        ArchiveDocumentWriter(context, parentDirUri, treeUri)
+    } catch (e: Exception) {
+        return UnzipResult.IOError("7z 解压失败：${e.message ?: "无法定位目标目录"}")
+    }
+
     return try {
         openArchive().use { sevenZ ->
-            val total = sevenZ.entries.count().coerceAtLeast(1)
-            setProgress(0, total)
-            var current = 0
+            val entries = sevenZ.entries.toList()
+            val total = entries.size.coerceAtLeast(1)
+            val totalBytes = entries
+                .asSequence()
+                .filter { !it.isDirectory }
+                .map { it.size.coerceAtLeast(0L) }
+                .sum()
+            val progress = ArchiveExtractProgressTracker(total, totalBytes, setProgress)
             var entry = sevenZ.nextEntry
             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
             while (entry != null) {
+                throwIfCancelled(shouldCancel)
                 val path = sanitizeArchivePath(entry.name.orEmpty())
                 if (path.isNotEmpty()) {
                     if (entry.isDirectory) {
-                        if (ensureTargetDir(path) == null) {
+                        if (!writer.ensureDirectory(path)) {
                             return UnzipResult.IOError("7z 解压失败：创建目录失败 [$path]")
                         }
                     } else {
-                        val parentPath = path.substringBeforeLast('/', "")
-                        val parentUri = ensureTargetDir(parentPath)
-                            ?: return UnzipResult.IOError("7z 解压失败：创建父目录失败 [$path]")
-                        val fileName = path.substringAfterLast('/').ifBlank {
-                            return UnzipResult.IOError("7z 解压失败：无效文件名 [$path]")
-                        }
-                        val fileUri = try {
-                            DocumentsContract.createDocument(cr, parentUri, "application/octet-stream", fileName)
-                        } catch (_: Exception) {
-                            null
-                        } ?: return UnzipResult.IOError("7z 解压失败：创建目标文件失败 [$path]")
-                        cr.openOutputStream(fileUri)?.use { output ->
+                        val writeResult = writer.writeFile(path, shouldCancel) { output ->
                             while (true) {
+                                throwIfCancelled(shouldCancel)
                                 val read = sevenZ.read(buffer)
                                 if (read <= 0) break
                                 output.write(buffer, 0, read)
+                                progress.onBytes(read)
                             }
-                        } ?: return UnzipResult.IOError("7z 解压失败：打开输出流失败 [$path]")
+                        }
+                        if (writeResult != null) return writeResult
                     }
                 }
-                current++
-                setProgress(current, total)
+                progress.onEntryDone()
                 entry = sevenZ.nextEntry
             }
-            setProgress(total, total)
+            progress.finish()
         }
         UnzipResult.Success
     } catch (e: PasswordRequiredException) {
@@ -469,16 +634,18 @@ private fun un7zSplitToParent(
     parentDirUri: Uri,
     treeUri: Uri?,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean
 ): UnzipResult {
     val cacheDir = File(context.cacheDir, "7z_split_unzip_${System.currentTimeMillis()}").apply { mkdirs() }
     val localParts = mutableListOf<File>()
     var channel: SeekableByteChannel? = null
     return try {
         splitParts.forEach { (name, uri) ->
+            throwIfCancelled(shouldCancel)
             val localPart = File(cacheDir, name)
             context.contentResolver.openInputStream(uri)?.use { input ->
-                localPart.outputStream().use { output -> input.copyTo(output) }
+                localPart.outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
             } ?: return UnzipResult.IOError("7z 分卷读取失败：$name")
             localParts += localPart
         }
@@ -490,7 +657,8 @@ private fun un7zSplitToParent(
             openArchive = { openSevenZFile(channel!!, password) },
             password = password,
             setProgress = setProgress,
-            failedTag = "un7zSplitToParent"
+            failedTag = "un7zSplitToParent",
+            shouldCancel = shouldCancel
         )
     } catch (e: Exception) {
         Log.e(TAG, "un7zSplitToParent failed", e)
@@ -513,7 +681,8 @@ private fun un7zToParent(
     parentDirUri: Uri,
     treeUri: Uri?,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean
 ): UnzipResult {
     return extractSevenZToParent(
         context = context,
@@ -522,11 +691,13 @@ private fun un7zToParent(
         openArchive = { openSevenZFile(archiveFile, password) },
         password = password,
         setProgress = setProgress,
-        failedTag = "un7zToParent"
+        failedTag = "un7zToParent",
+        shouldCancel = shouldCancel
     )
 }
 
 private fun parseUnzipError(e: Throwable, password: CharArray?): UnzipResult {
+    if (e is ArchiveOperationCancelledException) return UnzipResult.Cancelled
     val msg = e.message.orEmpty().lowercase()
     return when {
         msg.contains("password") || msg.contains("encrypted") || msg.contains("decrypt") -> {
@@ -551,13 +722,15 @@ private fun unrarToParent(
     parentDirUri: Uri,
     treeUri: Uri?,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean
 ): UnzipResult {
-    val tempExtractDir = File(rarFile.parentFile, "extract").apply {
-        deleteRecursively()
-        mkdirs()
-    }
     var archive: Archive? = null
+    val writer = try {
+        ArchiveDocumentWriter(context, parentDirUri, treeUri)
+    } catch (e: Exception) {
+        return UnzipResult.IOError("RAR 解压失败：${e.message ?: "无法定位目标目录"}")
+    }
     return try {
         archive = openRarArchive(rarFile, password)
         if (archive == null) {
@@ -569,32 +742,32 @@ private fun unrarToParent(
 
         val headers = archive.fileHeaders.orEmpty()
         val total = headers.size.coerceAtLeast(1)
-        setProgress(0, total)
-        var current = 0
+        val totalBytes = headers
+            .asSequence()
+            .filter { !it.isDirectory }
+            .map { rarEntryUnpackedSize(it).coerceAtLeast(0L) }
+            .sum()
+        val progress = ArchiveExtractProgressTracker(total, totalBytes, setProgress)
         headers.forEach { header ->
+            throwIfCancelled(shouldCancel)
             val path = sanitizeArchivePath(rarEntryName(header))
             if (path.isEmpty()) {
-                current++
-                setProgress(current, total)
+                progress.onEntryDone()
                 return@forEach
             }
-            val outFile = File(tempExtractDir, path)
             if (header.isDirectory) {
-                outFile.mkdirs()
-            } else {
-                outFile.parentFile?.mkdirs()
-                FileOutputStream(outFile).use { output ->
-                    archive.extractFile(header, output)
+                if (!writer.ensureDirectory(path)) {
+                    return UnzipResult.IOError("RAR 解压失败：创建目录失败 [$path]")
                 }
+            } else {
+                val writeResult = writer.writeFile(path, shouldCancel) { output ->
+                    archive.extractFile(header, CancelAwareOutputStream(output, shouldCancel, progress::onBytes))
+                }
+                if (writeResult != null) return writeResult
             }
-            current++
-            setProgress(current, total)
+            progress.onEntryDone()
         }
-
-        // RAR 与 ZIP 保持一致：只复制归档顶层内容到目标目录。
-        tempExtractDir.listFiles()?.orEmpty()?.forEach { child ->
-            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
-        }
+        progress.finish()
         UnzipResult.Success
     } catch (e: Exception) {
         Log.e(TAG, "unrarToParent failed", e)
@@ -603,7 +776,6 @@ private fun unrarToParent(
         try {
             archive?.close()
         } catch (_: Exception) {}
-        tempExtractDir.deleteRecursively()
     }
 }
 
@@ -648,8 +820,10 @@ private fun copyLocalDirToDocument(
     local: File,
     parentDocUri: Uri,
     treeUri: Uri?,
+    shouldCancel: () -> Boolean,
     onEach: () -> Unit
 ): Uri? {
+    throwIfCancelled(shouldCancel)
     val cr = context.contentResolver
     val parentResolved = resolveParentForZip(context, parentDocUri, treeUri) ?: return null
     return if (local.isDirectory) {
@@ -657,7 +831,8 @@ private fun copyLocalDirToDocument(
             DocumentsContract.createDocument(cr, parentResolved, DocumentsContract.Document.MIME_TYPE_DIR, local.name)
         } catch (_: Exception) { null } ?: return null
         local.listFiles()?.orEmpty()?.forEach { child ->
-            copyLocalDirToDocument(context, child, newDirUri, treeUri, onEach)
+            throwIfCancelled(shouldCancel)
+            copyLocalDirToDocument(context, child, newDirUri, treeUri, shouldCancel, onEach)
             onEach()
         }
         newDirUri
@@ -667,7 +842,7 @@ private fun copyLocalDirToDocument(
             DocumentsContract.createDocument(cr, parentResolved, mime, local.name)
         } catch (_: Exception) { null } ?: return null
         local.inputStream().use { inp ->
-            cr.openOutputStream(newUri)?.use { inp.copyTo(it) }
+            cr.openOutputStream(newUri)?.use { out -> copyStreamCancellable(inp, out, shouldCancel) }
         }
         onEach()
         newUri
@@ -766,8 +941,10 @@ private fun addDocumentEntryToTar(
     docUri: Uri,
     treeUri: Uri?,
     entryRelativePath: String,
-    nameHint: String?
+    nameHint: String?,
+    shouldCancel: () -> Boolean
 ) {
+    throwIfCancelled(shouldCancel)
     val doc = DocumentFile.fromSingleUri(context, resolveDocUriWithTree(docUri, treeUri)) ?: return
     val targetName = nameHint ?: doc.name ?: return
     if (doc.isDirectory) {
@@ -776,9 +953,10 @@ private fun addDocumentEntryToTar(
         tarOut.closeArchiveEntry()
         val dirDoc = getDirectoryViaTree(context, docUri, treeUri) ?: return
         dirDoc.listFiles().orEmpty().forEach { child ->
+            throwIfCancelled(shouldCancel)
             val childUri = resolveDocUriWithTree(child.uri, treeUri)
             val childPath = if (entryRelativePath.isBlank()) child.name ?: "" else "$entryRelativePath/${child.name ?: ""}"
-            addDocumentEntryToTar(tarOut, context, childUri, treeUri, childPath, child.name)
+            addDocumentEntryToTar(tarOut, context, childUri, treeUri, childPath, child.name, shouldCancel)
         }
     } else {
         val normalizedPath = entryRelativePath.ifBlank { targetName }.replace('\\', '/').trimStart('/')
@@ -786,7 +964,7 @@ private fun addDocumentEntryToTar(
         fileEntry.size = doc.length()
         tarOut.putArchiveEntry(fileEntry)
         context.contentResolver.openInputStream(resolveDocUriWithTree(docUri, treeUri))?.use { input ->
-            input.copyTo(tarOut)
+            copyStreamCancellable(input, tarOut, shouldCancel)
         }
         tarOut.closeArchiveEntry()
     }
@@ -799,7 +977,8 @@ fun compressSingleFileToFormat(
     treeUri: Uri?,
     outputFileName: String,
     format: ArchiveCompressionFormat,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false }
 ): Boolean {
     val resolvedUri = resolveDocUriWithTree(sourceUri, treeUri)
     val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
@@ -807,26 +986,28 @@ fun compressSingleFileToFormat(
     val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
     val cacheDir = File(context.cacheDir, "single_compress_${System.currentTimeMillis()}_${format.name}").apply { mkdirs() }
     val tempFile = File(cacheDir, outputFileName)
+    var outUri: Uri? = null
     try {
+        throwIfCancelled(shouldCancel)
         val compressed = when (format) {
             ArchiveCompressionFormat.GZ -> tempFile.apply {
                 outputStream().use { out ->
                     GzipCompressorOutputStream(out).use { gz ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(gz) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, gz, shouldCancel) }
                     }
                 }
             }
             ArchiveCompressionFormat.BZ2 -> tempFile.apply {
                 outputStream().use { out ->
                     BZip2CompressorOutputStream(out).use { bz2 ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(bz2) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, bz2, shouldCancel) }
                     }
                 }
             }
             ArchiveCompressionFormat.XZ -> tempFile.apply {
                 outputStream().use { out ->
                     XZCompressorOutputStream(out).use { xz ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> input.copyTo(xz) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, xz, shouldCancel) }
                     }
                 }
             }
@@ -834,13 +1015,19 @@ fun compressSingleFileToFormat(
         }
         setProgress(1, 1)
         val mimeType = resolveCompressionMimeType(outputFileName)
-        val outUri = try {
+        outUri = try {
             DocumentsContract.createDocument(context.contentResolver, parentResolved, mimeType, outputFileName)
         } catch (_: Exception) { null } ?: return false
         compressed.inputStream().use { inp ->
-            context.contentResolver.openOutputStream(outUri)?.use { out -> inp.copyTo(out) }
+            context.contentResolver.openOutputStream(outUri)?.use { out -> copyStreamCancellable(inp, out, shouldCancel) }
         }
         return true
+    } catch (e: ArchiveOperationCancelledException) {
+        outUri?.let { uri ->
+            runCatching { context.contentResolver.deleteDocument(uri) }
+        }
+        Log.i(TAG, "compressSingleFileToFormat cancelled")
+        return false
     } catch (e: Exception) {
         Log.e(TAG, "compressSingleFileToFormat failed", e)
         return false
@@ -858,7 +1045,8 @@ fun compressTarArchive(
     archiveFileName: String,
     compressionFormat: ArchiveCompressionFormat,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false }
 ): Boolean {
     if (password != null && password.isNotEmpty()) {
         Log.w(TAG, "compressTarArchive: password ignored for ${compressionFormat.extension}; tar-based formats do not support encryption in this app")
@@ -885,10 +1073,13 @@ fun compressTarArchive(
         ArchiveCompressionFormat.TAR_XZ -> File(cacheDir, archiveFileName)
         else -> return false
     }
+    var outUri: Uri? = null
     try {
+        throwIfCancelled(shouldCancel)
         val tarOut = TarArchiveOutputStream(tarPath.outputStream())
         tarOut.use { out ->
             sourceUris.forEachIndexed { index, uri ->
+                throwIfCancelled(shouldCancel)
                 setProgress(index, total)
                 val resolvedUri = resolveDocUriWithTree(uri, treeUri)
                 val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
@@ -896,7 +1087,7 @@ fun compressTarArchive(
                     sourceUris.size == 1 -> doc.name ?: "archive"
                     else -> doc.name ?: "${index}"
                 }
-                addDocumentEntryToTar(out, context, resolvedUri, treeUri, entryName, doc.name)
+                addDocumentEntryToTar(out, context, resolvedUri, treeUri, entryName, doc.name, shouldCancel)
             }
         }
 
@@ -906,31 +1097,37 @@ fun compressTarArchive(
             }
             ArchiveCompressionFormat.TAR_GZ -> {
                 GzipCompressorOutputStream(outputFile.outputStream()).use { gzip ->
-                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(gzip) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, gzip, shouldCancel) }
                 }
             }
             ArchiveCompressionFormat.TAR_BZ2 -> {
                 BZip2CompressorOutputStream(outputFile.outputStream()).use { bz2 ->
-                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(bz2) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, bz2, shouldCancel) }
                 }
             }
             ArchiveCompressionFormat.TAR_XZ -> {
                 XZCompressorOutputStream(outputFile.outputStream()).use { xz ->
-                    tarPath.inputStream().use { tarIn -> tarIn.copyTo(xz) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, xz, shouldCancel) }
                 }
             }
             else -> return false
         }
 
         val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
-        val outUri = try {
+        outUri = try {
             DocumentsContract.createDocument(cr, parentResolved, resolveCompressionMimeType(archiveFileName), archiveFileName)
         } catch (_: Exception) { null } ?: return false
         outputFile.inputStream().use { inp ->
-            cr.openOutputStream(outUri)?.use { out -> inp.copyTo(out) }
+            cr.openOutputStream(outUri)?.use { out -> copyStreamCancellable(inp, out, shouldCancel) }
         }
         setProgress(total, total)
         return true
+    } catch (e: ArchiveOperationCancelledException) {
+        outUri?.let { uri ->
+            runCatching { context.contentResolver.deleteDocument(uri) }
+        }
+        Log.i(TAG, "compressTarArchive cancelled")
+        return false
     } catch (e: Exception) {
         Log.e(TAG, "compressTarArchive failed", e)
         return false
@@ -957,18 +1154,22 @@ fun compressToZip(
     treeUri: Uri?,
     zipFileName: String,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false }
 ): Boolean {
     val cr = context.contentResolver
     val cacheDir = File(context.cacheDir, "zip_compress_${System.currentTimeMillis()}").apply { mkdirs() }
     val zipPath = File(cacheDir, zipFileName)
+    var outUri: Uri? = null
     try {
+        throwIfCancelled(shouldCancel)
         val total = sourceUris.size
         val zip = ZipFile(zipPath).apply {
             if (password != null && password.isNotEmpty()) setPassword(password)
         }
         val params = buildZipParametersForCompression(password)
         sourceUris.forEachIndexed { index, uri ->
+            throwIfCancelled(shouldCancel)
             setProgress(index, total)
             val resolvedUri = resolveDocUriWithTree(uri, treeUri)
             val doc = DocumentFile.fromSingleUri(context, resolvedUri)
@@ -984,12 +1185,12 @@ fun compressToZip(
             val localEntry = File(cacheDir, name)
             if (doc.isDirectory) {
                 localEntry.mkdirs()
-                copyDocumentToLocal(context, resolvedUri, localEntry, treeUri)
+                copyDocumentToLocal(context, resolvedUri, localEntry, treeUri, shouldCancel)
                 zip.addFolder(localEntry, params)
                 localEntry.deleteRecursively()
             } else {
                 cr.openInputStream(resolvedUri)?.use { input ->
-                    localEntry.outputStream().use { input.copyTo(it) }
+                    localEntry.outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
                 } ?: run {
                     Log.e(TAG, "compressToZip: openInputStream failed for $resolvedUri")
                     return false
@@ -1008,16 +1209,22 @@ fun compressToZip(
             Log.e(TAG, "compressToZip: resolveParentForZip returned null for $parentDirUri")
             return false
         }
-        val outUri = try {
+        outUri = try {
             DocumentsContract.createDocument(cr, parentResolved, MIME_ZIP, zipFileName)
         } catch (e: Exception) {
             Log.e(TAG, "compressToZip: createDocument failed", e)
             null
         } ?: return false
         zipPath.inputStream().use { inp ->
-            cr.openOutputStream(outUri)?.use { inp.copyTo(it) }
+            cr.openOutputStream(outUri)?.use { out -> copyStreamCancellable(inp, out, shouldCancel) }
         }
         return true
+    } catch (e: ArchiveOperationCancelledException) {
+        outUri?.let { uri ->
+            runCatching { context.contentResolver.deleteDocument(uri) }
+        }
+        Log.i(TAG, "compressToZip cancelled")
+        return false
     } catch (e: Exception) {
         Log.e(TAG, "compressToZip failed", e)
         return false
@@ -1035,12 +1242,15 @@ fun compressTo7z(
     treeUri: Uri?,
     sevenZFileName: String,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false }
 ): Boolean {
     val cr = context.contentResolver
     val cacheDir = File(context.cacheDir, "7z_compress_${System.currentTimeMillis()}").apply { mkdirs() }
     val sevenZPath = File(cacheDir, sevenZFileName)
+    var outUri: Uri? = null
     try {
+        throwIfCancelled(shouldCancel)
         val total = sourceUris.size.coerceAtLeast(1)
         val out = if (password != null && password.isNotEmpty()) {
             SevenZOutputFile(sevenZPath, password)
@@ -1049,6 +1259,7 @@ fun compressTo7z(
         }
         out.use { sevenZOut ->
             sourceUris.forEachIndexed { index, uri ->
+                throwIfCancelled(shouldCancel)
                 setProgress(index, total)
                 val resolvedUri = resolveDocUriWithTree(uri, treeUri)
                 val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
@@ -1056,14 +1267,14 @@ fun compressTo7z(
                 val localEntry = File(cacheDir, name)
                 if (doc.isDirectory) {
                     localEntry.mkdirs()
-                    copyDocumentToLocal(context, resolvedUri, localEntry, treeUri)
-                    addLocalTo7z(sevenZOut, localEntry, name)
+                    copyDocumentToLocal(context, resolvedUri, localEntry, treeUri, shouldCancel)
+                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel)
                     localEntry.deleteRecursively()
                 } else {
                     cr.openInputStream(resolvedUri)?.use { input ->
-                        localEntry.outputStream().use { input.copyTo(it) }
+                        localEntry.outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
                     } ?: return false
-                    addLocalTo7z(sevenZOut, localEntry, name)
+                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel)
                     localEntry.delete()
                 }
             }
@@ -1073,15 +1284,21 @@ fun compressTo7z(
 
         if (!sevenZPath.exists() || sevenZPath.length() <= 0L) return false
         val parentResolved = resolveParentForZip(context, parentDirUri, treeUri) ?: return false
-        val outUri = try {
+        outUri = try {
             DocumentsContract.createDocument(cr, parentResolved, MIME_7Z, sevenZFileName)
         } catch (_: Exception) {
             null
         } ?: return false
         sevenZPath.inputStream().use { inp ->
-            cr.openOutputStream(outUri)?.use { inp.copyTo(it) }
+            cr.openOutputStream(outUri)?.use { out -> copyStreamCancellable(inp, out, shouldCancel) }
         }
         return true
+    } catch (e: ArchiveOperationCancelledException) {
+        outUri?.let { uri ->
+            runCatching { context.contentResolver.deleteDocument(uri) }
+        }
+        Log.i(TAG, "compressTo7z cancelled")
+        return false
     } catch (e: Throwable) {
         Log.e(TAG, "compressTo7z failed", e)
         return false
@@ -1091,7 +1308,8 @@ fun compressTo7z(
     }
 }
 
-private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String) {
+private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, shouldCancel: () -> Boolean) {
+    throwIfCancelled(shouldCancel)
     val normalized = entryName.replace('\\', '/')
     if (local.isDirectory) {
         val dirEntryName = if (normalized.endsWith('/')) normalized else "$normalized/"
@@ -1099,8 +1317,9 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String) 
         out.putArchiveEntry(dirEntry)
         out.closeArchiveEntry()
         local.listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
+            throwIfCancelled(shouldCancel)
             val childName = "$normalized/${child.name}"
-            addLocalTo7z(out, child, childName)
+            addLocalTo7z(out, child, childName, shouldCancel)
         }
     } else {
         val fileEntry: SevenZArchiveEntry = out.createArchiveEntry(local, normalized)
@@ -1109,6 +1328,7 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String) 
             local.inputStream().use { input ->
                 val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                 while (true) {
+                    throwIfCancelled(shouldCancel)
                     val read = input.read(buffer)
                     if (read <= 0) break
                     out.write(buffer, 0, read)
@@ -1122,17 +1342,29 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String) 
 
 /** 将 DocumentFile（目录）内容递归复制到已存在的本地目录 localDir。 */
 private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, treeUri: Uri?) {
+    copyDocumentToLocal(context, docUri, localDir, treeUri) { false }
+}
+
+private fun copyDocumentToLocal(
+    context: Context,
+    docUri: Uri,
+    localDir: File,
+    treeUri: Uri?,
+    shouldCancel: () -> Boolean
+) {
+    throwIfCancelled(shouldCancel)
     // 必须用树遍历得到的 DocumentFile，否则 SingleDocumentFile.listFiles() 会抛 UnsupportedOperationException
     val doc = getDirectoryViaTree(context, docUri, treeUri) ?: return
     if (!doc.isDirectory) return
     doc.listFiles().orEmpty().forEach { child ->
+        throwIfCancelled(shouldCancel)
         val name = child.name ?: return@forEach
         val childUri = resolveDocUriWithTree(child.uri, treeUri)
         if (child.isDirectory) {
-            File(localDir, name).apply { mkdirs() }.let { copyDocumentToLocal(context, childUri, it, treeUri) }
+            File(localDir, name).apply { mkdirs() }.let { copyDocumentToLocal(context, childUri, it, treeUri, shouldCancel) }
         } else {
             context.contentResolver.openInputStream(childUri)?.use { input ->
-                File(localDir, name).outputStream().use { input.copyTo(it) }
+                File(localDir, name).outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
             }
         }
     }
@@ -1339,11 +1571,13 @@ private fun untarToParent(
     parentDirUri: Uri,
     treeUri: Uri?,
     archiveName: String?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean
 ): UnzipResult {
-    val tempExtractDir = File(archiveFile.parentFile, "extract").apply {
-        deleteRecursively()
-        mkdirs()
+    val writer = try {
+        ArchiveDocumentWriter(context, parentDirUri, treeUri)
+    } catch (e: Exception) {
+        return UnzipResult.IOError("TAR 解压失败：${e.message ?: "无法定位目标目录"}")
     }
     return try {
         val entries = mutableListOf<TarArchiveEntry>()
@@ -1355,43 +1589,42 @@ private fun untarToParent(
             }
         }
         val total = entries.size.coerceAtLeast(1)
-        setProgress(0, total)
+        val totalBytes = entries
+            .asSequence()
+            .filter { !it.isDirectory }
+            .map { it.size.coerceAtLeast(0L) }
+            .sum()
+        val progress = ArchiveExtractProgressTracker(total, totalBytes, setProgress)
 
         openTarArchiveInputStream(archiveFile, archiveName).use { tar ->
-            var current = 0
             var entry = tar.nextEntry
             while (entry != null) {
-                current++
+                throwIfCancelled(shouldCancel)
                 val path = sanitizeArchivePath(entry.name.orEmpty())
                 if (path.isEmpty()) {
-                    setProgress(current, total)
+                    progress.onEntryDone()
                     entry = tar.nextEntry
                     continue
                 }
-                val outFile = File(tempExtractDir, path)
                 if (entry.isDirectory) {
-                    outFile.mkdirs()
-                } else {
-                    outFile.parentFile?.mkdirs()
-                    FileOutputStream(outFile).use { output ->
-                        tar.copyTo(output)
+                    if (!writer.ensureDirectory(path)) {
+                        return UnzipResult.IOError("TAR 解压失败：创建目录失败 [$path]")
                     }
+                } else {
+                    val writeResult = writer.writeFile(path, shouldCancel) { output ->
+                        copyStreamCancellable(tar, output, shouldCancel, onChunkCopied = progress::onBytes)
+                    }
+                    if (writeResult != null) return writeResult
                 }
-                setProgress(current, total)
+                progress.onEntryDone()
                 entry = tar.nextEntry
             }
         }
-
-        tempExtractDir.listFiles()?.orEmpty()?.forEach { child ->
-            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
-        }
-        setProgress(total, total)
+        progress.finish()
         UnzipResult.Success
     } catch (e: Exception) {
         Log.e(TAG, "untarToParent failed", e)
         parseUnzipError(e, null)
-    } finally {
-        tempExtractDir.deleteRecursively()
     }
 }
 

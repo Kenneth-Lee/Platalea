@@ -1372,6 +1372,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_change_directly">直接更换</string>
     <string name="browser_op_compress">压缩</string>
     <string name="browser_op_extract">解压</string>
+    <string name="browser_operation_cancelled">操作已取消</string>
     <string name="browser_op_public_key_encrypt">公钥加密</string>
     <string name="browser_generate_music_playlist">生成音乐列表</string>
     <string name="browser_confirm_copy_title">确认拷贝到当前目录</string>
