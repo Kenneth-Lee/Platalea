@@ -451,6 +451,7 @@
     <string name="pending_forward_to_bulletin">转发板</string>
     <string name="pending_list_action_copy">拷贝</string>
     <string name="pending_list_action_move">移动</string>
+    <string name="pending_list_action_extract">解压</string>
     <string name="pending_list_action_delete">删除</string>
     <string name="pending_list_action_clear_filter">清空列表</string>
     <string name="pending_list_action_playback">加入播放</string>
@@ -1442,6 +1443,11 @@ OPF目录文件: %2$s</string>
     <string name="browser_encrypting">加密中…</string>
     <string name="browser_processing">处理中…</string>
     <string name="browser_extract_complete">解压完成</string>
+    <string name="browser_extract_batch_done">批量解压完成：成功 %1$d 项</string>
+    <string name="browser_extract_batch_partial">批量解压完成：成功 %1$d 项，失败 %2$d 项</string>
+    <string name="browser_extract_batch_failed">批量解压失败</string>
+    <string name="browser_extract_batch_password_required">以下压缩包需要密码，已跳过：%1$s</string>
+    <string name="browser_no_extract_candidates">待处理列表中没有可解压的压缩包</string>
     <string name="browser_extract_failed_detail">解压失败：%1$s</string>
     <string name="browser_extract_failed_password">解压失败（请检查密码）</string>
     <string name="browser_extract_failed_password_content">解压失败（请检查密码或文件内容）</string>

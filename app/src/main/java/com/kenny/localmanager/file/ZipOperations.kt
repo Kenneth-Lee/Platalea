@@ -21,6 +21,7 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream
 import org.apache.commons.compress.compressors.gzip.GzipCompressorOutputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
 import org.apache.commons.compress.compressors.xz.XZCompressorOutputStream
+import org.apache.commons.compress.utils.MultiReadOnlySeekableByteChannel
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
@@ -28,12 +29,14 @@ import net.lingala.zip4j.model.enums.CompressionLevel
 import net.lingala.zip4j.model.enums.EncryptionMethod
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.channels.SeekableByteChannel
 import java.nio.charset.Charset
 import java.util.Locale
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"
 private const val MIME_7Z = "application/x-7z-compressed"
+private val SEVEN_Z_SPLIT_PART_REGEX = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
 
 /** 解压结果 */
 sealed class UnzipResult {
@@ -49,7 +52,94 @@ private fun isRarName(name: String?): Boolean =
     name?.endsWith(".rar", ignoreCase = true) == true
 
 private fun is7zName(name: String?): Boolean =
-    name?.endsWith(".7z", ignoreCase = true) == true
+    name?.endsWith(".7z", ignoreCase = true) == true || parseSevenZSplitPart(name) != null
+
+private data class SevenZSplitPart(
+    val fullName: String,
+    val baseName: String,
+    val partIndex: Int
+)
+
+private sealed class SevenZSplitPartsResolveResult {
+    object NotSplit : SevenZSplitPartsResolveResult()
+    data class Ready(val parts: List<Pair<String, Uri>>) : SevenZSplitPartsResolveResult()
+    data class Error(val message: String) : SevenZSplitPartsResolveResult()
+}
+
+private fun parseSevenZSplitPart(name: String?): SevenZSplitPart? {
+    val rawName = name?.trim().orEmpty()
+    if (rawName.isEmpty()) return null
+    val m = SEVEN_Z_SPLIT_PART_REGEX.matchEntire(rawName) ?: return null
+    val baseName = m.groupValues[1]
+    val partIndex = m.groupValues[2].toIntOrNull() ?: return null
+    return SevenZSplitPart(fullName = rawName, baseName = baseName, partIndex = partIndex)
+}
+
+private fun resolveSiblingDirectoryViaTree(context: Context, archiveUri: Uri, treeUri: Uri?): DocumentFile? {
+    if (treeUri == null) return null
+    val resolvedArchive = resolveDocUriWithTree(archiveUri, treeUri)
+    val archiveDocId = try {
+        DocumentsContract.getDocumentId(resolvedArchive)
+    } catch (_: Exception) {
+        return null
+    }
+    val parentDocId = archiveDocId.substringBeforeLast('/', "")
+    if (parentDocId.isBlank()) return null
+    val parentUri = try {
+        DocumentsContract.buildDocumentUriUsingTree(treeUri, parentDocId)
+    } catch (_: Exception) {
+        return null
+    }
+    return getDirectoryViaTree(context, parentUri, treeUri)
+}
+
+private fun resolveSevenZSplitParts(
+    context: Context,
+    archiveUri: Uri,
+    archiveName: String?,
+    treeUri: Uri?
+): SevenZSplitPartsResolveResult {
+    val normalizedUri = resolveDocUriWithTree(archiveUri, treeUri)
+    val selectedDoc = DocumentFile.fromSingleUri(context, normalizedUri)
+    val selectedName = archiveName ?: selectedDoc?.name ?: ""
+    val selectedPart = parseSevenZSplitPart(selectedName) ?: return SevenZSplitPartsResolveResult.NotSplit
+
+    val parentDir = resolveSiblingDirectoryViaTree(context, archiveUri, treeUri)
+        ?: return SevenZSplitPartsResolveResult.Error(
+            "7z 分卷自动补全失败：无法读取分卷所在目录（treeUri=${treeUri != null}）。"
+        )
+
+    val candidates = mutableMapOf<Int, Pair<String, Uri>>()
+    parentDir.listFiles().orEmpty().forEach { child ->
+        val childName = child.name ?: return@forEach
+        val part = parseSevenZSplitPart(childName) ?: return@forEach
+        if (!part.baseName.equals(selectedPart.baseName, ignoreCase = true)) return@forEach
+        candidates[part.partIndex] = part.fullName to resolveDocUriWithTree(child.uri, treeUri)
+    }
+
+    if (candidates.isEmpty()) {
+        return SevenZSplitPartsResolveResult.Error(
+            "7z 分卷自动补全失败：目录中未找到同组分卷，目标=$selectedName。"
+        )
+    }
+    if (1 !in candidates) {
+        return SevenZSplitPartsResolveResult.Error(
+            "7z 分卷不完整：缺少首卷 ${selectedPart.baseName}.001。"
+        )
+    }
+
+    val maxIndex = candidates.keys.maxOrNull() ?: 1
+    val missing = (1..maxIndex).filterNot { it in candidates }
+    if (missing.isNotEmpty()) {
+        val missingSuffix = missing.joinToString(",") { String.format(Locale.ROOT, "%03d", it) }
+        return SevenZSplitPartsResolveResult.Error(
+            "7z 分卷不完整：缺少分卷 $missingSuffix（基名 ${selectedPart.baseName}）。"
+        )
+    }
+
+    val ordered = candidates.toSortedMap().values.toList()
+    return SevenZSplitPartsResolveResult.Ready(ordered)
+}
 
 private fun isTarName(name: String?): Boolean {
     val lower = name?.lowercase(Locale.ROOT) ?: return false
@@ -170,6 +260,17 @@ fun unzipToParent(
     setProgress: (Int, Int) -> Unit
 ): UnzipResult {
     val cr = context.contentResolver
+
+    when (val split = resolveSevenZSplitParts(context, zipUri, archiveName, treeUri)) {
+        is SevenZSplitPartsResolveResult.Ready -> {
+            return un7zSplitToParent(context, split.parts, parentDirUri, treeUri, password, setProgress)
+        }
+        is SevenZSplitPartsResolveResult.Error -> {
+            return UnzipResult.IOError(split.message)
+        }
+        SevenZSplitPartsResolveResult.NotSplit -> Unit
+    }
+
     val cacheDir = File(context.cacheDir, "zip_unzip_${System.currentTimeMillis()}").apply { mkdirs() }
     val zipFile = File(cacheDir, "archive.zip")
     try {
@@ -253,20 +354,65 @@ private fun openSevenZFile(archiveFile: File, password: CharArray?): SevenZFile 
     }
 }
 
-private fun un7zToParent(
+private fun openSevenZFile(channel: SeekableByteChannel, password: CharArray?): SevenZFile {
+    return if (password != null && password.isNotEmpty()) {
+        SevenZFile(channel, password)
+    } else {
+        SevenZFile(channel)
+    }
+}
+
+private fun extractSevenZToParent(
     context: Context,
-    archiveFile: File,
     parentDirUri: Uri,
     treeUri: Uri?,
+    openArchive: () -> SevenZFile,
     password: CharArray?,
-    setProgress: (Int, Int) -> Unit
+    setProgress: (Int, Int) -> Unit,
+    failedTag: String
 ): UnzipResult {
-    val tempExtractDir = File(archiveFile.parentFile, "extract").apply {
-        deleteRecursively()
-        mkdirs()
+    val cr = context.contentResolver
+    val parentResolved = resolveParentForZip(context, parentDirUri, treeUri)
+        ?: return UnzipResult.IOError("7z 解压失败：无法定位目标目录")
+    val dirUriCache = mutableMapOf<String, Uri>("" to parentResolved)
+
+    fun ensureTargetDir(relativeDir: String): Uri? {
+        val normalized = sanitizeArchivePath(relativeDir).trimEnd('/')
+        if (normalized.isEmpty()) return parentResolved
+        dirUriCache[normalized]?.let { return it }
+        val segments = normalized.split('/').filter { it.isNotBlank() }
+        var currentPath = ""
+        var currentUri = parentResolved
+        for (segment in segments) {
+            currentPath = if (currentPath.isEmpty()) segment else "$currentPath/$segment"
+            val cached = dirUriCache[currentPath]
+            if (cached != null) {
+                currentUri = cached
+                continue
+            }
+            val existing = findChildByName(context, currentUri, segment)
+            val nextUri = if (existing != null) {
+                existing
+            } else {
+                try {
+                    DocumentsContract.createDocument(
+                        cr,
+                        currentUri,
+                        DocumentsContract.Document.MIME_TYPE_DIR,
+                        segment
+                    )
+                } catch (_: Exception) {
+                    null
+                }
+            } ?: return null
+            dirUriCache[currentPath] = nextUri
+            currentUri = nextUri
+        }
+        return currentUri
     }
+
     return try {
-        openSevenZFile(archiveFile, password).use { sevenZ ->
+        openArchive().use { sevenZ ->
             val total = sevenZ.entries.count().coerceAtLeast(1)
             setProgress(0, total)
             var current = 0
@@ -275,40 +421,109 @@ private fun un7zToParent(
             while (entry != null) {
                 val path = sanitizeArchivePath(entry.name.orEmpty())
                 if (path.isNotEmpty()) {
-                    val outFile = File(tempExtractDir, path)
                     if (entry.isDirectory) {
-                        outFile.mkdirs()
+                        if (ensureTargetDir(path) == null) {
+                            return UnzipResult.IOError("7z 解压失败：创建目录失败 [$path]")
+                        }
                     } else {
-                        outFile.parentFile?.mkdirs()
-                        FileOutputStream(outFile).use { output ->
+                        val parentPath = path.substringBeforeLast('/', "")
+                        val parentUri = ensureTargetDir(parentPath)
+                            ?: return UnzipResult.IOError("7z 解压失败：创建父目录失败 [$path]")
+                        val fileName = path.substringAfterLast('/').ifBlank {
+                            return UnzipResult.IOError("7z 解压失败：无效文件名 [$path]")
+                        }
+                        val fileUri = try {
+                            DocumentsContract.createDocument(cr, parentUri, "application/octet-stream", fileName)
+                        } catch (_: Exception) {
+                            null
+                        } ?: return UnzipResult.IOError("7z 解压失败：创建目标文件失败 [$path]")
+                        cr.openOutputStream(fileUri)?.use { output ->
                             while (true) {
                                 val read = sevenZ.read(buffer)
                                 if (read <= 0) break
                                 output.write(buffer, 0, read)
                             }
-                        }
+                        } ?: return UnzipResult.IOError("7z 解压失败：打开输出流失败 [$path]")
                     }
                 }
                 current++
                 setProgress(current, total)
                 entry = sevenZ.nextEntry
             }
-        }
-
-        tempExtractDir.listFiles().orEmpty().forEach { child ->
-            copyLocalDirToDocument(context, child, parentDirUri, treeUri) { }
+            setProgress(total, total)
         }
         UnzipResult.Success
     } catch (e: PasswordRequiredException) {
-        Log.w(TAG, "un7zToParent: password required")
+        Log.w(TAG, "$failedTag: password required")
         if (password == null || password.isEmpty()) UnzipResult.PasswordRequired
         else UnzipResult.WrongPassword
     } catch (e: Throwable) {
-        Log.e(TAG, "un7zToParent failed", e)
+        Log.e(TAG, "$failedTag failed", e)
+        parseUnzipError(e, password)
+    }
+}
+
+private fun un7zSplitToParent(
+    context: Context,
+    splitParts: List<Pair<String, Uri>>,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): UnzipResult {
+    val cacheDir = File(context.cacheDir, "7z_split_unzip_${System.currentTimeMillis()}").apply { mkdirs() }
+    val localParts = mutableListOf<File>()
+    var channel: SeekableByteChannel? = null
+    return try {
+        splitParts.forEach { (name, uri) ->
+            val localPart = File(cacheDir, name)
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                localPart.outputStream().use { output -> input.copyTo(output) }
+            } ?: return UnzipResult.IOError("7z 分卷读取失败：$name")
+            localParts += localPart
+        }
+        channel = MultiReadOnlySeekableByteChannel.forFiles(*localParts.toTypedArray())
+        extractSevenZToParent(
+            context = context,
+            parentDirUri = parentDirUri,
+            treeUri = treeUri,
+            openArchive = { openSevenZFile(channel!!, password) },
+            password = password,
+            setProgress = setProgress,
+            failedTag = "un7zSplitToParent"
+        )
+    } catch (e: Exception) {
+        Log.e(TAG, "un7zSplitToParent failed", e)
         parseUnzipError(e, password)
     } finally {
-        tempExtractDir.deleteRecursively()
+        try {
+            channel?.close()
+        } catch (_: Exception) {
+        }
+        localParts.forEach { part ->
+            if (part.exists()) part.delete()
+        }
+        cacheDir.deleteRecursively()
     }
+}
+
+private fun un7zToParent(
+    context: Context,
+    archiveFile: File,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit
+): UnzipResult {
+    return extractSevenZToParent(
+        context = context,
+        parentDirUri = parentDirUri,
+        treeUri = treeUri,
+        openArchive = { openSevenZFile(archiveFile, password) },
+        password = password,
+        setProgress = setProgress,
+        failedTag = "un7zToParent"
+    )
 }
 
 private fun parseUnzipError(e: Throwable, password: CharArray?): UnzipResult {

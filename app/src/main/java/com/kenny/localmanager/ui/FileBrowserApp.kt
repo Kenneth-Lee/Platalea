@@ -700,6 +700,151 @@ private fun doMovePendingToCurrentDir(
     }
 }
 
+private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
+
+private data class SevenZSplitPendingRef(
+    val baseName: String,
+    val partIndex: Int
+)
+
+private data class PendingArchiveExtractTarget(
+    val model: DocumentFileModel
+)
+
+private fun parseSevenZSplitPendingRef(fileName: String): SevenZSplitPendingRef? {
+    val trimmed = fileName.trim()
+    val match = sevenZSplitPartRegex.matchEntire(trimmed) ?: return null
+    val baseName = match.groupValues[1]
+    val partIndex = match.groupValues[2].toIntOrNull() ?: return null
+    return SevenZSplitPendingRef(baseName = baseName, partIndex = partIndex)
+}
+
+private fun pendingUriParentKey(uri: Uri): String {
+    val raw = uri.toString()
+    return raw.substringBeforeLast('/', raw)
+}
+
+private fun buildPendingArchiveExtractTargets(pendingList: List<DocumentFileModel>): List<PendingArchiveExtractTarget> {
+    val archives = pendingList.filter { !it.isDirectory && isExtractableArchive(it.name) }
+    if (archives.isEmpty()) return emptyList()
+
+    val grouped = LinkedHashMap<String, MutableList<DocumentFileModel>>()
+    archives.forEach { item ->
+        val splitRef = parseSevenZSplitPendingRef(item.name)
+        val key = if (splitRef != null) {
+            "${pendingUriParentKey(item.uri)}|${splitRef.baseName.lowercase(Locale.ROOT)}"
+        } else {
+            item.uri.toString()
+        }
+        grouped.getOrPut(key) { mutableListOf() }.add(item)
+    }
+
+    return grouped.entries.map { (key, values) ->
+        val representative = values.minWithOrNull(
+            compareBy<DocumentFileModel> {
+                parseSevenZSplitPendingRef(it.name)?.partIndex ?: Int.MAX_VALUE
+            }.thenBy { it.name.lowercase(Locale.ROOT) }
+        ) ?: values.first()
+        PendingArchiveExtractTarget(model = representative)
+    }
+}
+
+private fun doExtractPendingArchivesToCurrentDir(
+    context: Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    displayUri: String,
+    pendingListSnapshot: List<DocumentFileModel>,
+    rootUri: String?,
+    runWithProgress: RunProgressBlock,
+    onAllSuccess: () -> Unit,
+    onRefreshDone: () -> Unit
+) {
+    val extractTargets = buildPendingArchiveExtractTargets(pendingListSnapshot)
+    if (extractTargets.isEmpty()) {
+        Toast.makeText(context, context.getString(R.string.browser_no_extract_candidates), Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    val targetDirUri = Uri.parse(normalizeContentUriString(displayUri))
+    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+    scope.launch {
+        runWithProgress(context.getString(R.string.browser_op_extract), extractTargets.size) { setProgress ->
+            var successCount = 0
+            var failedCount = 0
+            val failedDetails = mutableListOf<String>()
+            val passwordRequiredNames = mutableListOf<String>()
+
+            extractTargets.forEachIndexed { index, target ->
+                val result = withContext(Dispatchers.IO) {
+                    unzipToParent(
+                        context = context,
+                        zipUri = target.model.uri,
+                        parentDirUri = targetDirUri,
+                        treeUri = treeUri,
+                        archiveName = target.model.name,
+                        password = null
+                    ) { _, _ -> }
+                }
+                when (result) {
+                    is UnzipResult.Success -> successCount++
+                    is UnzipResult.PasswordRequired,
+                    is UnzipResult.WrongPassword -> {
+                        failedCount++
+                        passwordRequiredNames += target.model.name
+                    }
+                    is UnzipResult.CorruptedFile -> {
+                        failedCount++
+                        failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_corrupt)}"
+                    }
+                    is UnzipResult.UnsupportedFormat -> {
+                        failedCount++
+                        failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_format)}"
+                    }
+                    is UnzipResult.IOError -> {
+                        failedCount++
+                        val msg = result.message ?: context.getString(R.string.common_unknown_error)
+                        failedDetails += "${target.model.name}: $msg"
+                    }
+                }
+                setProgress(index + 1)
+            }
+
+            if (passwordRequiredNames.isNotEmpty()) {
+                failedDetails += context.getString(
+                    R.string.browser_extract_batch_password_required,
+                    passwordRequiredNames.joinToString(",")
+                )
+            }
+
+            if (failedCount == 0 && successCount > 0) {
+                onAllSuccess()
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.browser_extract_batch_done, successCount),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else if (successCount > 0) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.browser_extract_batch_partial, successCount, failedCount),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } else {
+                Toast.makeText(context, context.getString(R.string.browser_extract_batch_failed), Toast.LENGTH_SHORT).show()
+            }
+
+            if (failedDetails.isNotEmpty()) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.browser_extract_failed_detail, failedDetails.joinToString("; ")),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+            onRefreshDone()
+        }
+    }
+}
+
 private suspend fun runWithUiProgress(
     setProgressState: (OperationProgress?) -> Unit,
     label: String,
@@ -4130,6 +4275,23 @@ private fun FileBrowserAppScreen(
                 onRefreshDone = { refreshTrigger++ }
             )
         }
+        val doExtractArchivesHere: () -> Unit = {
+            doExtractPendingArchivesToCurrentDir(
+                context = context,
+                scope = scope,
+                displayUri = displayUri,
+                pendingListSnapshot = pendingList.toList(),
+                rootUri = rootUri,
+                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                onAllSuccess = {
+                    pendingList.removeAll { !it.isDirectory && isExtractableArchive(it.name) }
+                    if (pendingList.isEmpty()) {
+                        showPendingList = false
+                    }
+                },
+                onRefreshDone = { refreshTrigger++ }
+            )
+        }
         val finishPendingListAndReturn: () -> Unit = {
             pendingList.clear()
             showPendingList = false
@@ -4662,6 +4824,7 @@ private fun FileBrowserAppScreen(
                 onRemove = { pendingList.remove(it) },
                 onCopyHere = doCopyHere,
                 onMoveHere = doMoveHere,
+                onExtractArchivesHere = doExtractArchivesHere,
                 onRequestDelete = { showPendingDeleteConfirm = true },
                 onRequestForwardToBulletin = {
                     if (pendingList.isEmpty()) {
@@ -8037,6 +8200,7 @@ internal fun isExtractableArchive(name: String): Boolean =
     (name.endsWith(".zip", ignoreCase = true) && !isPicZip(name) && !isVidZip(name)) ||
         name.endsWith(".rar", ignoreCase = true) ||
         name.endsWith(".7z", ignoreCase = true) ||
+        sevenZSplitPartRegex.matches(name) ||
         name.endsWith(".tar", ignoreCase = true) ||
         name.endsWith(".tar.gz", ignoreCase = true) ||
         name.endsWith(".tgz", ignoreCase = true) ||
@@ -10900,6 +11064,7 @@ fun PendingListScreen(
     onRemove: (DocumentFileModel) -> Unit,
     onCopyHere: () -> Unit = {},
     onMoveHere: () -> Unit = {},
+    onExtractArchivesHere: () -> Unit = {},
     onRequestDelete: () -> Unit = {},
     onRequestBatchMask: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
@@ -10988,6 +11153,7 @@ fun PendingListScreen(
                 val pendingActions = mutableListOf(
                     context.getString(R.string.pending_list_action_copy) to onCopyHere,
                     context.getString(R.string.pending_list_action_move) to onMoveHere,
+                    context.getString(R.string.pending_list_action_extract) to onExtractArchivesHere,
                     context.getString(R.string.pending_list_action_delete) to onRequestDelete,
                     context.getString(R.string.pending_list_action_clear_filter) to {
                         onClearFilteredList(filteredPendingItems)
