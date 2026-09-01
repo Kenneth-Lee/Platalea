@@ -502,6 +502,45 @@ private class ArchiveDocumentWriter(
     private val rootDirUri: Uri = resolveParentForZip(context, parentDirUri, treeUri)
         ?: throw IllegalStateException("无法定位目标目录")
     private val dirUriCache = mutableMapOf<String, Uri>("" to rootDirUri)
+    private val topLevelNameMap = mutableMapOf<String, String>()
+    private val reservedTopLevelNames = mutableSetOf<String>()
+
+    private fun splitNameAndExtension(name: String): Pair<String, String> {
+        val dotIndex = name.lastIndexOf('.')
+        if (dotIndex <= 0 || dotIndex == name.length - 1) return name to ""
+        return name.substring(0, dotIndex) to name.substring(dotIndex)
+    }
+
+    private fun nextConflictName(originalName: String, index: Int, isDirectory: Boolean): String {
+        if (isDirectory) return "$originalName($index)"
+        val (base, ext) = splitNameAndExtension(originalName)
+        return "$base($index)$ext"
+    }
+
+    private fun reserveTopLevelName(originalName: String, isDirectory: Boolean): String {
+        topLevelNameMap[originalName]?.let { return it }
+        var candidate = originalName
+        var suffix = 1
+        while (
+            candidate in reservedTopLevelNames ||
+            findChildByName(context, rootDirUri, candidate) != null
+        ) {
+            candidate = nextConflictName(originalName, suffix, isDirectory)
+            suffix++
+        }
+        topLevelNameMap[originalName] = candidate
+        reservedTopLevelNames += candidate
+        return candidate
+    }
+
+    private fun remapTopLevelPath(path: String, topLevelIsDirectory: Boolean): String {
+        val normalized = sanitizeArchivePath(path)
+        if (normalized.isEmpty()) return ""
+        val first = normalized.substringBefore('/')
+        val rest = normalized.substringAfter('/', "")
+        val mappedFirst = reserveTopLevelName(first, topLevelIsDirectory)
+        return if (rest.isBlank()) mappedFirst else "$mappedFirst/$rest"
+    }
 
     private fun ensureTargetDir(relativeDir: String): Uri? {
         val normalized = sanitizeArchivePath(relativeDir).trimEnd('/')
@@ -539,14 +578,16 @@ private class ArchiveDocumentWriter(
     }
 
     fun ensureDirectory(path: String): Boolean {
-        return ensureTargetDir(path) != null
+        val mappedPath = remapTopLevelPath(path, topLevelIsDirectory = true)
+        return ensureTargetDir(mappedPath) != null
     }
 
     fun writeFile(path: String, shouldCancel: () -> Boolean, writeBody: (OutputStream) -> Unit): UnzipResult? {
-        val parentPath = path.substringBeforeLast('/', "")
+        val mappedPath = remapTopLevelPath(path, topLevelIsDirectory = path.contains('/'))
+        val parentPath = mappedPath.substringBeforeLast('/', "")
         val parentUri = ensureTargetDir(parentPath)
             ?: return UnzipResult.IOError("解压失败：创建父目录失败 [$path]")
-        val fileName = path.substringAfterLast('/').ifBlank {
+        val fileName = mappedPath.substringAfterLast('/').ifBlank {
             return UnzipResult.IOError("解压失败：无效文件名 [$path]")
         }
         val fileUri = try {
@@ -851,23 +892,7 @@ private fun copyLocalDirToDocument(
 
 @Suppress("UNUSED_PARAMETER")
 private fun resolveParentForZip(context: Context, targetParentUri: Uri, treeUri: Uri?): Uri? {
-    val s = targetParentUri.toString()
-    return when {
-        s.contains("/tree/") && s.contains("/document/") -> try {
-            val treeParsed = Uri.parse(s.substringBefore("/document/"))
-            val docId = DocumentsContract.getDocumentId(targetParentUri)
-            DocumentsContract.buildDocumentUriUsingTree(treeParsed, docId)
-        } catch (_: Exception) { targetParentUri }
-        DocumentsContract.isTreeUri(targetParentUri) -> DocumentsContract.buildDocumentUriUsingTree(
-            targetParentUri,
-            DocumentsContract.getTreeDocumentId(targetParentUri)
-        )
-        treeUri != null -> try {
-            val docId = DocumentsContract.getDocumentId(targetParentUri)
-            DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-        } catch (_: Exception) { targetParentUri }
-        else -> targetParentUri
-    }
+    return resolveParentDocumentUriShared(targetParentUri, treeUri)
 }
 
 enum class ArchiveCompressionFormat(

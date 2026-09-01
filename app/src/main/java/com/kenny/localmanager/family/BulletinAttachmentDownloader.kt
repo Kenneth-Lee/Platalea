@@ -381,8 +381,4 @@ class RemoteBulletinAttachmentDownloadTransport(
         return downloadBlobRequest(path, rangeStart, rangeEndInclusive)
     }
 
-    private fun parseTotalSizeFromContentRange(header: String?): Long? {
-        if (header.isNullOrBlank()) return null
-        return header.substringAfter('/', "").toLongOrNull()?.takeIf { it > 0 }
-    }
 }

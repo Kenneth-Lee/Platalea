@@ -17,6 +17,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -51,6 +52,7 @@ fun rememberQuickNoteTabController(
     var quickNotePassword by remember { mutableStateOf("") }
     var quickNotePasswordRequired by remember { mutableStateOf(false) }
     var quickNoteInProgress by remember { mutableStateOf(false) }
+    var quickNoteLoadRequested by remember { mutableStateOf(false) }
 
     fun resetQuickNotePromptState() {
         quickNotePassword = ""
@@ -75,27 +77,43 @@ fun rememberQuickNoteTabController(
         }
         quickNoteInProgress = true
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                saveQuickNoteData(context, currentData, snapshot)
-            }
-            quickNoteInProgress = false
-            result.onSuccess { saved ->
-                markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                quickNoteData = saved
-                quickNoteEntriesSnapshot = saved.entries
-                quickNoteLastSavedHash = saved.entries.hashCode()
-                onFinished?.invoke(true)
-            }.onFailure { throwable ->
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    saveQuickNoteData(context, currentData, snapshot)
+                }
+                result.onSuccess { saved ->
+                    markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
+                    quickNoteData = saved
+                    quickNoteEntriesSnapshot = saved.entries
+                    quickNoteLastSavedHash = saved.entries.hashCode()
+                    onFinished?.invoke(true)
+                }.onFailure { throwable ->
+                    Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.quick_note_auto_save_failed,
+                            reason,
+                            throwable.message ?: context.getString(R.string.common_unknown_error)
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    onFinished?.invoke(false)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
                 Toast.makeText(
                     context,
                     context.getString(
                         R.string.quick_note_auto_save_failed,
                         reason,
-                        throwable.message ?: context.getString(R.string.common_unknown_error)
+                        error.message ?: context.getString(R.string.common_unknown_error)
                     ),
                     Toast.LENGTH_LONG
                 ).show()
                 onFinished?.invoke(false)
+            } finally {
+                quickNoteInProgress = false
             }
         }
     }
@@ -106,32 +124,61 @@ fun rememberQuickNoteTabController(
             Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return
         }
+        quickNoteLoadRequested = true
         quickNoteStartWithAddDialog = startWithAddDialog
         quickNoteInProgress = true
         scope.launch {
-            when (val result = withContext(Dispatchers.IO) {
-                openQuickNoteData(context, root, password)
-            }) {
-                is QuickNoteOpenResult.Success -> {
-                    quickNoteData = result.data
-                    quickNoteEntriesSnapshot = result.data.entries
-                    quickNoteLastSavedHash = result.data.entries.hashCode()
-                    quickNotePasswordRequired = false
-                    quickNotePassword = ""
+            try {
+                when (val result = withContext(Dispatchers.IO) {
+                    openQuickNoteData(context, root, password)
+                }) {
+                    is QuickNoteOpenResult.Success -> {
+                        quickNoteData = result.data
+                        quickNoteEntriesSnapshot = result.data.entries
+                        quickNoteLastSavedHash = result.data.entries.hashCode()
+                        quickNotePasswordRequired = false
+                        quickNotePassword = ""
+                        quickNoteLoadRequested = false
+                    }
+                    QuickNoteOpenResult.RequiresPassword -> {
+                        quickNotePasswordRequired = true
+                        quickNoteLoadRequested = false
+                    }
+                    is QuickNoteOpenResult.Error -> {
+                        quickNoteLoadRequested = false
+                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    }
                 }
-                QuickNoteOpenResult.RequiresPassword -> {
-                    quickNotePasswordRequired = true
-                }
-                is QuickNoteOpenResult.Error -> {
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                quickNoteLoadRequested = false
+                quickNotePasswordRequired = false
+                Toast.makeText(
+                    context,
+                    error.message ?: context.getString(R.string.common_unknown_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } finally {
+                quickNoteInProgress = false
             }
-            quickNoteInProgress = false
         }
     }
 
-    LaunchedEffect(isActive, rootUri, quickNoteData, quickNoteInProgress) {
-        if (isActive && rootUri != null && quickNoteData == null && !quickNoteInProgress) {
+    LaunchedEffect(isActive, quickNoteData) {
+        if (isActive && quickNoteData == null) {
+            quickNoteLoadRequested = true
+        }
+    }
+
+    LaunchedEffect(rootUri, quickNoteData, quickNoteInProgress, quickNoteLoadRequested, quickNotePasswordRequired) {
+        if (
+            quickNoteLoadRequested &&
+            rootUri != null &&
+            quickNoteData == null &&
+            !quickNoteInProgress &&
+            !quickNotePasswordRequired
+        ) {
             requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
         }
     }
@@ -184,6 +231,7 @@ fun rememberQuickNoteTabController(
                 if (!quickNoteInProgress) {
                     resetQuickNotePromptState()
                     quickNoteStartWithAddDialog = false
+                    quickNoteLoadRequested = false
                 }
             }
         ),

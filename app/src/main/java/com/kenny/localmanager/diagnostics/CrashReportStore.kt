@@ -10,6 +10,7 @@ import com.kenny.localmanager.BuildConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.listFilesSafe
+import com.kenny.localmanager.file.resolveParentDocumentUriShared
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import java.io.File
@@ -146,7 +147,7 @@ object CrashReportStore {
         } catch (_: Exception) {
             return false
         }
-        val parentUri = resolveParentDocumentUri(rootDocumentUri, rootDocumentUri) ?: return false
+        val parentUri = resolveParentDocumentUriShared(rootDocumentUri, rootDocumentUri) ?: return false
         val crashDirUri = createOrFindCrashDir(context, parentUri) ?: return false
         if (findChildByName(context, crashDirUri, reportFile.name) != null) return true
         val cr = context.contentResolver
@@ -173,34 +174,6 @@ object CrashReportStore {
             DocumentsContract.createDocument(cr, parentUri, DocumentsContract.Document.MIME_TYPE_DIR, CRASH_DIR_NAME)
         } catch (_: Exception) {
             null
-        }
-    }
-
-    private fun resolveParentDocumentUri(targetParentUri: Uri, treeUri: Uri?): Uri? {
-        val s = targetParentUri.toString()
-        return when {
-            s.contains("/tree/") && s.contains("/document/") -> try {
-                val treeUriParsed = Uri.parse(s.substringBefore("/document/"))
-                val docId = DocumentsContract.getDocumentId(targetParentUri)
-                DocumentsContract.buildDocumentUriUsingTree(treeUriParsed, docId)
-            } catch (_: Exception) {
-                targetParentUri
-            }
-            DocumentsContract.isTreeUri(targetParentUri) -> try {
-                DocumentsContract.buildDocumentUriUsingTree(
-                    targetParentUri,
-                    DocumentsContract.getTreeDocumentId(targetParentUri)
-                )
-            } catch (_: Exception) {
-                targetParentUri
-            }
-            treeUri != null -> try {
-                val docId = DocumentsContract.getDocumentId(targetParentUri)
-                DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-            } catch (_: Exception) {
-                targetParentUri
-            }
-            else -> targetParentUri
         }
     }
 

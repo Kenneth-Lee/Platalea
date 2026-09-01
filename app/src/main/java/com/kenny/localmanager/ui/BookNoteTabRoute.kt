@@ -16,6 +16,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,27 +76,43 @@ fun rememberBookNoteTabController(
         }
         bookNoteInProgress = true
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                saveBookNoteData(context, currentData, snapshot)
-            }
-            bookNoteInProgress = false
-            result.onSuccess { saved ->
-                markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                bookNoteData = saved
-                bookNoteEntriesSnapshot = saved.entries
-                bookNoteLastSavedHash = saved.entries.hashCode()
-                onFinished?.invoke(true)
-            }.onFailure { throwable ->
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    saveBookNoteData(context, currentData, snapshot)
+                }
+                result.onSuccess { saved ->
+                    markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
+                    bookNoteData = saved
+                    bookNoteEntriesSnapshot = saved.entries
+                    bookNoteLastSavedHash = saved.entries.hashCode()
+                    onFinished?.invoke(true)
+                }.onFailure { throwable ->
+                    Toast.makeText(
+                        context,
+                        context.getString(
+                            R.string.book_note_auto_save_failed,
+                            reason,
+                            throwable.message ?: context.getString(R.string.common_unknown_error)
+                        ),
+                        Toast.LENGTH_LONG
+                    ).show()
+                    onFinished?.invoke(false)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
                 Toast.makeText(
                     context,
                     context.getString(
                         R.string.book_note_auto_save_failed,
                         reason,
-                        throwable.message ?: context.getString(R.string.common_unknown_error)
+                        error.message ?: context.getString(R.string.common_unknown_error)
                     ),
                     Toast.LENGTH_LONG
                 ).show()
                 onFinished?.invoke(false)
+            } finally {
+                bookNoteInProgress = false
             }
         }
     }
@@ -109,26 +126,40 @@ fun rememberBookNoteTabController(
         bookNoteLoadRequested = true
         bookNoteInProgress = true
         scope.launch {
-            when (val result = withContext(Dispatchers.IO) {
-                openBookNoteData(context, root, password)
-            }) {
-                is BookNoteOpenResult.Success -> {
-                    bookNoteData = result.data
-                    bookNoteEntriesSnapshot = result.data.entries
-                    bookNoteLastSavedHash = result.data.entries.hashCode()
-                    bookNotePasswordRequired = false
-                    bookNotePassword = ""
-                    bookNoteLoadRequested = false
+            try {
+                when (val result = withContext(Dispatchers.IO) {
+                    openBookNoteData(context, root, password)
+                }) {
+                    is BookNoteOpenResult.Success -> {
+                        bookNoteData = result.data
+                        bookNoteEntriesSnapshot = result.data.entries
+                        bookNoteLastSavedHash = result.data.entries.hashCode()
+                        bookNotePasswordRequired = false
+                        bookNotePassword = ""
+                        bookNoteLoadRequested = false
+                    }
+                    BookNoteOpenResult.RequiresPassword -> {
+                        bookNotePasswordRequired = true
+                        bookNoteLoadRequested = false
+                    }
+                    is BookNoteOpenResult.Error -> {
+                        bookNoteLoadRequested = false
+                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
+                    }
                 }
-                BookNoteOpenResult.RequiresPassword -> {
-                    bookNotePasswordRequired = true
-                }
-                is BookNoteOpenResult.Error -> {
-                    bookNoteLoadRequested = false
-                    Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                bookNoteLoadRequested = false
+                bookNotePasswordRequired = false
+                Toast.makeText(
+                    context,
+                    error.message ?: context.getString(R.string.common_unknown_error),
+                    Toast.LENGTH_SHORT
+                ).show()
+            } finally {
+                bookNoteInProgress = false
             }
-            bookNoteInProgress = false
         }
     }
 
@@ -138,8 +169,14 @@ fun rememberBookNoteTabController(
         }
     }
 
-    LaunchedEffect(rootUri, bookNoteData, bookNoteInProgress, bookNoteLoadRequested) {
-        if (bookNoteLoadRequested && rootUri != null && bookNoteData == null && !bookNoteInProgress) {
+    LaunchedEffect(rootUri, bookNoteData, bookNoteInProgress, bookNoteLoadRequested, bookNotePasswordRequired) {
+        if (
+            bookNoteLoadRequested &&
+            rootUri != null &&
+            bookNoteData == null &&
+            !bookNoteInProgress &&
+            !bookNotePasswordRequired
+        ) {
             requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
         }
     }
@@ -194,10 +231,7 @@ fun rememberBookNoteTabController(
             requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
         },
         requestLoad = { bookNoteLoadRequested = true },
-        updateEntries = {
-            bookNoteEntriesSnapshot = it
-            bookNoteLoadRequested = true
-        },
+        updateEntries = { bookNoteEntriesSnapshot = it },
         persistHandler = ::persistBookNoteIfNeeded
     )
 }

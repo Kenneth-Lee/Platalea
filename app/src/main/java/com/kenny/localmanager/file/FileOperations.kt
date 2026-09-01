@@ -228,7 +228,7 @@ private const val TRASH_DIR_NAME = ".Trash"
  * 获取根目录下回收站 URI（不创建）。不存在返回 null。
  */
 fun getTrashUriIfExists(context: Context, rootUri: Uri, treeUri: Uri?): Uri? {
-    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    val parentDocUri = resolveParentDocumentUriShared(rootUri, treeUri) ?: rootUri
     return findChildByName(context, parentDocUri, TRASH_DIR_NAME)
 }
 
@@ -292,7 +292,7 @@ fun emptyTrash(context: Context, rootUri: Uri, treeUri: Uri? = null): Boolean {
  */
 fun getOrCreateTrashUri(context: Context, rootUri: Uri, treeUri: Uri?): Uri? {
     val cr = context.contentResolver
-    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    val parentDocUri = resolveParentDocumentUriShared(rootUri, treeUri) ?: rootUri
     val existing = findChildByName(context, parentDocUri, TRASH_DIR_NAME)
     if (existing != null) return existing
     return try {
@@ -425,7 +425,7 @@ fun restoreFromTrash(
     if (!isInsideDirectory(sourceUri, trashUri)) return false
     val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return false
     if (source.name == TRASH_DIR_NAME) return false
-    val parentDocUri = resolveParentDocumentUri(rootUri, treeUri) ?: rootUri
+    val parentDocUri = resolveParentDocumentUriShared(rootUri, treeUri) ?: rootUri
     val name = source.name ?: "unknown"
     val baseName = name.substringBeforeLast(".")
     val ext = if (name.contains(".")) ".${name.substringAfterLast(".")}" else ""
@@ -614,10 +614,10 @@ fun createFileWithBytes(
 ): Boolean {
     val cr = context.contentResolver
     val parentCandidates = if (treeUri != null && !DocumentsContract.isTreeUri(targetParentUri)) {
-        val treeBuilt = resolveParentDocumentUri(targetParentUri, treeUri)
+        val treeBuilt = resolveParentDocumentUriShared(targetParentUri, treeUri)
         listOf(targetParentUri, treeBuilt).filterNotNull().distinct()
     } else {
-        listOf(resolveParentDocumentUri(targetParentUri, treeUri) ?: return false)
+        listOf(resolveParentDocumentUriShared(targetParentUri, treeUri) ?: return false)
     }
     for (parentDocUri in parentCandidates) {
         try {
@@ -628,31 +628,6 @@ fun createFileWithBytes(
         } catch (_: Exception) { }
     }
     return false
-}
-
-/**
- * 解析为目标目录的 document URI，供 createDocument 使用。
- * 重要：若 URI 同时含 /tree/ 与 /document/（树下某文档），须用 getDocumentId 取当前目录 ID，
- * 否则 isTreeUri 为 true 时用 getTreeDocumentId 会误取树根，导致拷贝/移动到上级目录。
- */
-private fun resolveParentDocumentUri(targetParentUri: Uri, treeUri: Uri?): Uri? {
-    val s = targetParentUri.toString()
-    return when {
-        s.contains("/tree/") && s.contains("/document/") -> try {
-            val treeUriParsed = Uri.parse(s.substringBefore("/document/"))
-            val docId = DocumentsContract.getDocumentId(targetParentUri)
-            DocumentsContract.buildDocumentUriUsingTree(treeUriParsed, docId)
-        } catch (_: Exception) { targetParentUri }
-        DocumentsContract.isTreeUri(targetParentUri) -> DocumentsContract.buildDocumentUriUsingTree(
-            targetParentUri,
-            DocumentsContract.getTreeDocumentId(targetParentUri)
-        )
-        treeUri != null -> try {
-            val docId = DocumentsContract.getDocumentId(targetParentUri)
-            DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-        } catch (_: Exception) { targetParentUri }
-        else -> targetParentUri
-    }
 }
 
 /**
@@ -711,10 +686,10 @@ fun copyDocumentTo(
     val source = DocumentFile.fromSingleUri(context, sourceUri) ?: return null
     val name = source.name ?: return null
     val parentCandidates = if (treeUri != null && !DocumentsContract.isTreeUri(targetParentUri)) {
-        val treeBuilt = resolveParentDocumentUri(targetParentUri, treeUri)
+        val treeBuilt = resolveParentDocumentUriShared(targetParentUri, treeUri)
         listOf(targetParentUri, treeBuilt).filterNotNull().distinct()
     } else {
-        listOf(resolveParentDocumentUri(targetParentUri, treeUri) ?: return null)
+        listOf(resolveParentDocumentUriShared(targetParentUri, treeUri) ?: return null)
     }
     for (parentDocUri in parentCandidates) {
         if (source.isDirectory) {
@@ -843,9 +818,9 @@ fun moveDocumentTo(
     val sourceParent = source.parentFile?.uri
     if (sourceParent != null) {
         val targetCandidates = if (treeUri != null && !DocumentsContract.isTreeUri(targetParentUri)) {
-            listOf(targetParentUri, resolveParentDocumentUri(targetParentUri, treeUri)).filterNotNull().distinct()
+            listOf(targetParentUri, resolveParentDocumentUriShared(targetParentUri, treeUri)).filterNotNull().distinct()
         } else {
-            listOf(resolveParentDocumentUri(targetParentUri, treeUri) ?: return false)
+            listOf(resolveParentDocumentUriShared(targetParentUri, treeUri) ?: return false)
         }
         for (targetDocUri in targetCandidates) {
             try {

@@ -59,15 +59,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.file.createFileWithBytes
-import com.kenny.localmanager.file.findChildByName
-import com.kenny.localmanager.file.openInputStreamSafe
-import com.kenny.localmanager.file.writeBytesFull
 import com.kenny.localmanager.data.Preferences
-import com.kenny.localmanager.gpg.GpgHelper
-import com.kenny.localmanager.gpg.findPublicKeyRing
-import com.kenny.localmanager.gpg.loadPublicKeyRings
-import com.kenny.localmanager.gpg.loadSecretKeyRings
 import kotlinx.coroutines.launch
 
 const val QUICK_NOTE_FILE_NAME: String = ".lm.note.md"
@@ -125,26 +117,17 @@ private data class QuickNoteParseResult(
 
 private val QUICK_NOTE_SECTION_BOUNDARY_REGEX = Regex("^#{1,2}\\s+.+$")
 
-private suspend fun readQuickNoteRawText(
-    context: Context,
-    fileInfo: QuickNoteFileInfo,
-    password: String? = null
-): Result<String> {
-    val plainBytes = if (fileInfo.isEncrypted) {
-        val secretKeys = loadSecretKeyRings(context)
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_missing_default_secret_key)))
-        val passphrase = password?.toCharArray()
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_missing_key_password)))
-        val decrypted = context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { input ->
-            GpgHelper.decryptWithSecretKey(input, secretKeys, passphrase) { }
-        }
-        decrypted ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_decrypt_failed)))
-    } else {
-        context.contentResolver.openInputStreamSafe(fileInfo.uri)?.use { it.readBytes() }
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_read_failed)))
-    }
-    return Result.success(String(plainBytes, Charsets.UTF_8))
-}
+private fun quickNoteStorageMessages(context: Context): NoteStorageMessageSet = NoteStorageMessageSet(
+    missingDefaultSecretKey = context.getString(R.string.quick_note_missing_default_secret_key),
+    missingKeyPassword = context.getString(R.string.quick_note_missing_key_password),
+    decryptFailed = context.getString(R.string.quick_note_decrypt_failed),
+    readFailed = context.getString(R.string.quick_note_read_failed),
+    missingDefaultKeypair = context.getString(R.string.quick_note_missing_default_keypair),
+    missingDefaultKey = context.getString(R.string.quick_note_missing_default_key),
+    missingDefaultPublicKey = context.getString(R.string.quick_note_missing_default_public_key),
+    encryptFailed = context.getString(R.string.quick_note_encrypt_failed),
+    saveFailed = context.getString(R.string.quick_note_save_failed)
+)
 
 suspend fun openQuickNoteData(
     context: Context,
@@ -152,12 +135,19 @@ suspend fun openQuickNoteData(
     password: String? = null
 ): QuickNoteOpenResult {
     val rootUri = Uri.parse(rootUriString)
-    val fileInfo = resolveQuickNoteFile(context, rootUri)
+    val fileInfo = resolveOrCreateMarkdownNoteFile(
+        context = context,
+        rootUri = rootUri,
+        plainFileName = QUICK_NOTE_FILE_NAME,
+        encryptedFileName = QUICK_NOTE_GPG_FILE_NAME
+    )
         ?: return QuickNoteOpenResult.Error(context.getString(R.string.quick_note_resolve_failed))
-    if (fileInfo.isEncrypted && password == null) {
-        return QuickNoteOpenResult.RequiresPassword
-    }
-    val rawText = readQuickNoteRawText(context, fileInfo, password).getOrElse {
+    val messages = quickNoteStorageMessages(context)
+    val rawResult = readNoteRawText(context, fileInfo, password, messages)
+    val rawText = rawResult.getOrElse {
+        if (fileInfo.isEncrypted && password == null && it.message == messages.missingKeyPassword) {
+            return QuickNoteOpenResult.RequiresPassword
+        }
         return QuickNoteOpenResult.Error(it.message ?: context.getString(R.string.quick_note_read_failed))
     }
     val parsed = parseQuickNoteSectionContent(rawText)
@@ -177,51 +167,13 @@ suspend fun saveQuickNoteData(
     currentData: QuickNoteLoadedData,
     entries: List<QuickNoteEntry>
 ): Result<QuickNoteLoadedData> {
-    val latestRawText = readQuickNoteRawText(context, currentData.fileInfo, currentData.sourcePassword)
+    val messages = quickNoteStorageMessages(context)
+    val latestRawText = readNoteRawText(context, currentData.fileInfo, currentData.sourcePassword, messages)
         .getOrElse { return Result.failure(it) }
     val mergedText = mergeQuickNoteSection(context, latestRawText, entries)
-    val outBytes = mergedText.toByteArray(Charsets.UTF_8)
-    val ok = if (currentData.fileInfo.isEncrypted) {
-        val secretKeys = loadSecretKeyRings(context)
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_missing_default_keypair)))
-        val defaultKeyId = secretKeys.iterator().asSequence().firstOrNull()?.publicKey?.keyID
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_missing_default_key)))
-        val publicKeys = loadPublicKeyRings(context)
-        val publicKeyRing = findPublicKeyRing(publicKeys, defaultKeyId)
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_missing_default_public_key)))
-        val encrypted = GpgHelper.encryptWithPublicKey(outBytes, publicKeyRing, currentData.fileInfo.fileName)
-            ?: return Result.failure(IllegalStateException(context.getString(R.string.quick_note_encrypt_failed)))
-        context.contentResolver.writeBytesFull(currentData.fileInfo.uri, encrypted)
-    } else {
-        context.contentResolver.writeBytesFull(currentData.fileInfo.uri, outBytes)
-    }
-    return if (ok) {
-        Result.success(currentData.copy(rawText = mergedText, entries = entries))
-    } else {
-        Result.failure(IllegalStateException(context.getString(R.string.quick_note_save_failed)))
-    }
-}
-
-private fun resolveQuickNoteFile(context: Context, rootUri: Uri): QuickNoteFileInfo? {
-    val gpgUri = findChildByName(context, rootUri, QUICK_NOTE_GPG_FILE_NAME)
-    if (gpgUri != null) {
-        return QuickNoteFileInfo(gpgUri, QUICK_NOTE_GPG_FILE_NAME, true)
-    }
-    val plainUri = findChildByName(context, rootUri, QUICK_NOTE_FILE_NAME)
-    if (plainUri != null) {
-        return QuickNoteFileInfo(plainUri, QUICK_NOTE_FILE_NAME, false)
-    }
-    val created = createFileWithBytes(
-        context = context,
-        targetParentUri = rootUri,
-        treeUri = rootUri,
-        fileName = QUICK_NOTE_FILE_NAME,
-        mimeType = "text/markdown",
-        bytes = ByteArray(0)
-    )
-    if (!created) return null
-    val createdUri = findChildByName(context, rootUri, QUICK_NOTE_FILE_NAME) ?: return null
-    return QuickNoteFileInfo(createdUri, QUICK_NOTE_FILE_NAME, false)
+    writeNoteRawText(context, currentData.fileInfo, mergedText, messages)
+        .getOrElse { return Result.failure(it) }
+    return Result.success(currentData.copy(rawText = mergedText, entries = entries))
 }
 
 private fun parseQuickNoteSectionContent(fullText: String): QuickNoteParseResult {

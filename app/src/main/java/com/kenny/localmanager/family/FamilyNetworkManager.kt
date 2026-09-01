@@ -2965,12 +2965,6 @@ class FamilyNetworkManager(context: Context) {
         }
     }
 
-    private fun parseTotalSizeFromContentRange(header: String?): Long? {
-        if (header.isNullOrBlank()) return null
-        val total = header.substringAfter('/', "").toLongOrNull()
-        return total?.takeIf { it > 0 }
-    }
-
     private fun boardApiBytesRequest(
         service: FamilyDiscoveredService,
         path: String,
