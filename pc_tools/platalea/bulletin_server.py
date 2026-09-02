@@ -1483,10 +1483,13 @@ def run_server(config: ServerConfig, agent_config: AgentConfig | None = None) ->
             config.max_import_bytes / (1024 ** 3),
         )
     current_roles = auth_service.roles_snapshot()
+    roles_map = getattr(current_roles, "roles", {})
+    if not isinstance(roles_map, dict):
+        roles_map = {}
     LOGGER.info(
         "密码策略: roles=%s auth_required=%s runtime_config=%s",
-        ",".join(sorted(current_roles.roles.keys())),
-        current_roles.auth_required,
+        ",".join(sorted(roles_map.keys())),
+        getattr(current_roles, "auth_required", False),
         runtime_config_file,
     )
     LOGGER.info("默认留言板 ID: %s", DEFAULT_BOARD_ID)

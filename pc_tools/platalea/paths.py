@@ -30,12 +30,12 @@ LOG_NAME = "server.log"
 
 
 def app_dir() -> Path:
-    return Path.home() / APP_DIR_NAME
+    return Path.home().expanduser() / APP_DIR_NAME
 
 
 def config_path(explicit: str | Path | None = None) -> Path:
     if explicit:
-        return Path(explicit).expanduser().resolve()
+        return Path(explicit).expanduser()
     return app_dir() / CONFIG_NAME
 
 
@@ -48,7 +48,7 @@ def boards_dir(config_file: Path | None = None) -> Path:
                 root = Path(str(raw["board_root"])).expanduser()
                 if not root.is_absolute():
                     root = cfg.parent / root
-                return root.resolve()
+                return root
         except (OSError, json.JSONDecodeError):
             pass
     return app_dir() / BOARDS_DIR_NAME
@@ -63,7 +63,7 @@ def tls_dir(config_file: Path | None = None) -> Path:
                 cert = Path(str(raw["cert_file"])).expanduser()
                 if not cert.is_absolute():
                     cert = cfg.parent / cert
-                return cert.parent.resolve()
+                return cert.parent
         except (OSError, json.JSONDecodeError):
             pass
     return app_dir() / TLS_DIR_NAME
@@ -100,7 +100,7 @@ class ServiceControlPaths:
 def service_control_paths() -> ServiceControlPaths:
     override = os.environ.get("PLATALEA_SERVICE_CONTROL_ROOT", "").strip()
     if override:
-        root = Path(override).expanduser().resolve()
+        root = Path(override).expanduser()
     else:
         current = platform.system().lower()
         if current == "darwin":
@@ -129,21 +129,21 @@ def _linux_service_control_root() -> Path:
 def _detect_sudo_home() -> Path | None:
     sudo_home = os.environ.get("SUDO_HOME", "").strip()
     if sudo_home:
-        return Path(sudo_home).expanduser().resolve()
+        return Path(sudo_home).expanduser()
 
     sudo_uid = os.environ.get("SUDO_UID", "").strip()
     if sudo_uid:
         try:
             uid = int(sudo_uid)
             if pwd is not None:
-                return Path(pwd.getpwuid(uid).pw_dir).resolve()
+                return Path(pwd.getpwuid(uid).pw_dir).expanduser()
         except (ValueError, KeyError):
             pass
 
     sudo_user = os.environ.get("SUDO_USER", "").strip()
     if sudo_user and pwd is not None:
         try:
-            return Path(pwd.getpwnam(sudo_user).pw_dir).resolve()
+            return Path(pwd.getpwnam(sudo_user).pw_dir).expanduser()
         except KeyError:
             return None
 

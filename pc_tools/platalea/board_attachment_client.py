@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import mimetypes
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
@@ -225,6 +227,7 @@ def upload_directory_path(
     ca_cert: str,
     tls_fingerprint: str,
     uploader_device: str = "pc-cli",
+    attachment_name: str | None = None,
     on_progress: Callable[[str, int, int], None] | None = None,
 ) -> dict[str, Any]:
     path = path.expanduser().resolve()
@@ -241,7 +244,7 @@ def upload_directory_path(
         password=password,
         body={
             "kind": "directory",
-            "name": path.name,
+            "name": (attachment_name or path.name).strip() or path.name,
             "entries": entries,
             "uploader_device": uploader_device,
         },
@@ -308,6 +311,87 @@ def upload_directory_path(
         tls_fingerprint=tls_fingerprint,
     )
     return meta_to_attachment_ref(meta)
+
+
+def _split_name_ext(name: str) -> tuple[str, str]:
+    dot = name.rfind(".")
+    if dot <= 0 or dot >= len(name) - 1:
+        return name, ""
+    return name[:dot], name[dot:]
+
+
+def _next_unique_name(name: str, taken: set[str], *, is_dir: bool) -> str:
+    if name not in taken:
+        taken.add(name)
+        return name
+    base, ext = _split_name_ext(name)
+    index = 1
+    while True:
+        candidate = f"{name}({index})" if is_dir else f"{base}({index}){ext}"
+        if candidate not in taken:
+            taken.add(candidate)
+            return candidate
+        index += 1
+
+
+def upload_paths_as_directory_attachment(
+    host: str,
+    port: int,
+    *,
+    board_id: str,
+    paths: list[Path],
+    password: str,
+    ca_cert: str,
+    tls_fingerprint: str,
+    uploader_device: str = "pc-cli",
+    attachment_name: str = "attachments",
+    verbose: bool = True,
+) -> dict[str, Any]:
+    if not paths:
+        raise ValueError("至少指定一个文件或目录路径")
+    normalized_name = attachment_name.strip() or "attachments"
+
+    with tempfile.TemporaryDirectory(prefix="platalea_multi_attach_") as tmp:
+        bundle_dir = Path(tmp) / normalized_name
+        bundle_dir.mkdir(parents=True, exist_ok=True)
+        taken_names: set[str] = set()
+
+        for raw in paths:
+            source = raw.expanduser().resolve()
+            if not source.exists():
+                raise FileNotFoundError(f"路径不存在: {source}")
+            unique_name = _next_unique_name(source.name, taken_names, is_dir=source.is_dir())
+            target = bundle_dir / unique_name
+            if source.is_dir():
+                shutil.copytree(source, target)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+
+        if verbose:
+            print(f"上传多文件目录附件: {normalized_name} ({len(paths)} 项)", file=sys.stderr)
+
+        def on_progress(name: str, uploaded: int, total: int) -> None:
+            if not verbose:
+                return
+            pct = (uploaded * 100 // total) if total > 0 else 100
+            print(f"\r上传 {name}: {pct}% ({uploaded}/{total})", end="", file=sys.stderr, flush=True)
+
+        ref = upload_directory_path(
+            host,
+            port,
+            board_id=board_id,
+            path=bundle_dir,
+            password=password,
+            ca_cert=ca_cert,
+            tls_fingerprint=tls_fingerprint,
+            uploader_device=uploader_device,
+            attachment_name=normalized_name,
+            on_progress=on_progress,
+        )
+        if verbose:
+            print(file=sys.stderr)
+        return ref
 
 
 def upload_paths(

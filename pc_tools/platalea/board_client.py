@@ -48,7 +48,7 @@ BOARD_COMMAND_META: dict[str, dict[str, str]] = {
     },
     "post": {
         "usage": "post [CONTENT] [--attach PATH] [--author NAME]",
-        "summary": "发布消息（正文与 --attach 至少一项；仅附件可省略 CONTENT）",
+        "summary": "发布消息（正文与 --attach 至少一项；post 下多个 --attach 会合并为一个目录附件）",
     },
     "create-board": {
         "usage": "create-board NAME",
@@ -113,6 +113,7 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
             f"  {prog} post \"@qwen2.5 你好\"\n"
             f"  {prog} post \"说明\" --attach ./report.pdf\n"
             f"  {prog} post --attach ./photo.jpg\n"
+            f"  {prog} post \"打包附件\" --attach ./a.txt --attach ./b.txt\n"
             f"  {prog} modify <message_id> \"更新后的正文\"\n"
             f"  {prog} delete <message_id>\n"
             f"  {prog} download-attachment <attachment_id> -o ./downloads/\n"
@@ -192,7 +193,7 @@ def build_parser(*, prog: str = "platalea") -> argparse.ArgumentParser:
         action="append",
         default=[],
         metavar="PATH",
-        help="上传附件并随消息发送（可重复指定多个路径）",
+        help="上传附件并随消息发送（可重复；多个路径会合并为一个目录附件）",
     )
 
     modify = sub.add_parser(
@@ -604,11 +605,23 @@ def print_human(command: str, status: int, body: dict[str, Any], board_id: str) 
 
 
 def _upload_attachment_refs(args: argparse.Namespace, board_id: str, paths: list[str]) -> list[dict[str, Any]]:
-    from .board_attachment_client import upload_paths
+    from .board_attachment_client import upload_paths, upload_paths_as_directory_attachment
 
     host, port, access_password = resolve_connection_args(args)
     if not paths:
         raise ValueError("至少指定一个文件或目录路径")
+    if getattr(args, "command", "") == "post" and len(paths) > 1:
+        merged = upload_paths_as_directory_attachment(
+            host,
+            port,
+            board_id=board_id,
+            paths=[Path(item) for item in paths],
+            password=access_password,
+            ca_cert=args.ca_cert,
+            tls_fingerprint=args.tls_fingerprint,
+            verbose=not args.json,
+        )
+        return [merged]
     return upload_paths(
         host,
         port,

@@ -89,6 +89,111 @@ class BoardClientConnectionArgsTest(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
 
+    def test_post_with_multiple_attachments_merges_to_single_directory_attachment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "port": 8765,
+                        "roles": {
+                            "admin": {
+                                "password": "imhost",
+                            }
+                        },
+                        "default_board": "default",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parser = build_parser(prog="platalea")
+            args = parser.parse_args(
+                [
+                    "--host",
+                    "klmm.local",
+                    "--password",
+                    "imhost",
+                    "--config",
+                    str(config_path),
+                    "post",
+                    "--attach",
+                    "/tmp/a.txt",
+                    "--attach",
+                    "/tmp/b.txt",
+                ]
+            )
+
+            with mock.patch(
+                "platalea.board_client._upload_attachment_refs",
+                return_value=[{"id": "att-dir", "name": "attachments", "kind": "directory", "file_count": 2}],
+            ) as upload_mock, mock.patch(
+                "platalea.board_client.request_api",
+                return_value=(
+                    200,
+                    {
+                        "ok": True,
+                        "message": {
+                            "id": "msg-2",
+                            "author_label": "pc-cli",
+                            "attachments": [{"id": "att-dir", "name": "attachments", "kind": "directory", "file_count": 2}],
+                        },
+                    },
+                ),
+            ):
+                exit_code = _dispatch_board_client(args, parser)
+
+            self.assertEqual(exit_code, 0)
+            upload_mock.assert_called_once()
+
+    def test_modify_with_multiple_attachments_keeps_multi_ref_behavior(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "port": 8765,
+                        "roles": {
+                            "admin": {
+                                "password": "imhost",
+                            }
+                        },
+                        "default_board": "default",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            parser = build_parser(prog="platalea")
+            args = parser.parse_args(
+                [
+                    "--host",
+                    "klmm.local",
+                    "--password",
+                    "imhost",
+                    "--config",
+                    str(config_path),
+                    "modify",
+                    "msg-1",
+                    "--attach",
+                    "/tmp/a.txt",
+                    "--attach",
+                    "/tmp/b.txt",
+                ]
+            )
+
+            with mock.patch(
+                "platalea.board_client._upload_attachment_refs",
+                return_value=[
+                    {"id": "att-a", "name": "a.txt", "kind": "file"},
+                    {"id": "att-b", "name": "b.txt", "kind": "file"},
+                ],
+            ), mock.patch(
+                "platalea.board_client.request_api",
+                return_value=(200, {"ok": True}),
+            ):
+                exit_code = _dispatch_board_client(args, parser)
+
+            self.assertEqual(exit_code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -801,6 +801,28 @@ class FamilyNetworkManager(context: Context) {
         return false
     }
 
+    private fun <T> runBoardMutation(
+        service: FamilyDiscoveredService,
+        accessPassword: String?,
+        localAction: () -> T,
+        remoteAction: (normalizedPassword: String?) -> Result<T>,
+        onSuccess: (T) -> Unit,
+        onFailure: (Throwable) -> Unit,
+        onComplete: (Result<T>) -> Unit
+    ) {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                if (service.isSelf) {
+                    runCatching { localAction() }
+                } else {
+                    remoteAction(accessPassword?.trim()?.ifEmpty { null })
+                }
+            }
+            result.onSuccess(onSuccess).onFailure(onFailure)
+            onComplete(result)
+        }
+    }
+
     fun createBoardEntry(
         service: FamilyDiscoveredService,
         accessPassword: String?,
@@ -820,42 +842,42 @@ class FamilyNetworkManager(context: Context) {
             onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_57102))))
             return
         }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching {
-                        if (boardStore.isBoardNameTaken(trimmed)) {
-                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
-                        }
-                        boardStore.createBoard(trimmed, roleIds)
-                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_64304))
-                    }
-                } else {
-                    boardApiRequest(
-                        service = service,
-                        method = "POST",
-                        path = "/boards",
-                        body = JSONObject().apply {
-                            put("name", trimmed)
-                            put("role_ids", JSONArray(roleIds))
-                        }.toString(),
-                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
-                    ).mapCatching { text ->
-                        val json = JSONObject(text)
-                        if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_64304)))
-                        }
-                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
-                    }
+        runBoardMutation(
+            service = service,
+            accessPassword = accessPassword,
+            localAction = {
+                if (boardStore.isBoardNameTaken(trimmed)) {
+                    throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
                 }
-            }
-            result.onSuccess { board ->
+                boardStore.createBoard(trimmed, roleIds)
+                    ?: throw IllegalStateException(appContext.getString(R.string.family_msg_64304))
+            },
+            remoteAction = { normalizedPassword ->
+                boardApiRequest(
+                    service = service,
+                    method = "POST",
+                    path = "/boards",
+                    body = JSONObject().apply {
+                        put("name", trimmed)
+                        put("role_ids", JSONArray(roleIds))
+                    }.toString(),
+                    accessPassword = normalizedPassword
+                ).mapCatching { text ->
+                    val json = JSONObject(text)
+                    if (!json.optBoolean("ok", false)) {
+                        throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_64304)))
+                    }
+                    BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                }
+            },
+            onSuccess = { board ->
                 appendLog(appContext.getString(R.string.family_msg_41249, board.name))
-            }.onFailure { error ->
+            },
+            onFailure = { error ->
                 appendError(appContext.getString(R.string.family_msg_36032, error.message ?: error.javaClass.simpleName))
-            }
-            onComplete(result)
-        }
+            },
+            onComplete = onComplete
+        )
     }
 
     fun renameBoardEntry(
@@ -877,33 +899,32 @@ class FamilyNetworkManager(context: Context) {
             onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_57102))))
             return
         }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching {
-                        if (boardStore.isBoardNameTaken(trimmed, excludeBoardId = boardId)) {
-                            throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
-                        }
-                        boardStore.renameBoard(boardId, trimmed)
-                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_90260))
-                    }
-                } else {
-                    boardApiRequest(
-                        service = service,
-                        method = "PATCH",
-                        path = "/boards/$boardId",
-                        body = JSONObject().put("name", trimmed).toString(),
-                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
-                    ).mapCatching { text ->
-                        val json = JSONObject(text)
-                        if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
-                        }
-                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
-                    }
+        runBoardMutation(
+            service = service,
+            accessPassword = accessPassword,
+            localAction = {
+                if (boardStore.isBoardNameTaken(trimmed, excludeBoardId = boardId)) {
+                    throw IllegalStateException(appContext.getString(R.string.family_msg_21357, trimmed))
                 }
-            }
-            result.onSuccess { board ->
+                boardStore.renameBoard(boardId, trimmed)
+                    ?: throw IllegalStateException(appContext.getString(R.string.family_msg_90260))
+            },
+            remoteAction = { normalizedPassword ->
+                boardApiRequest(
+                    service = service,
+                    method = "PATCH",
+                    path = "/boards/$boardId",
+                    body = JSONObject().put("name", trimmed).toString(),
+                    accessPassword = normalizedPassword
+                ).mapCatching { text ->
+                    val json = JSONObject(text)
+                    if (!json.optBoolean("ok", false)) {
+                        throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
+                    }
+                    BulletinBoardInfo.fromJson(json.getJSONObject("board"))
+                }
+            },
+            onSuccess = { board ->
                 appendLog(appContext.getString(R.string.family_msg_15134, board.name))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
@@ -913,11 +934,12 @@ class FamilyNetworkManager(context: Context) {
                         )
                     }
                 }
-            }.onFailure { error ->
+            },
+            onFailure = { error ->
                 appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
-            }
-            onComplete(result)
-        }
+            },
+            onComplete = onComplete
+        )
     }
 
     fun updateBoardAccessEntry(
@@ -933,32 +955,31 @@ class FamilyNetworkManager(context: Context) {
             onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_02158))))
             return
         }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching {
-                        boardStore.updateBoard(boardId, roleIds = roleIds)
-                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+        runBoardMutation(
+            service = service,
+            accessPassword = accessPassword,
+            localAction = {
+                boardStore.updateBoard(boardId, roleIds = roleIds)
+                    ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+            },
+            remoteAction = { normalizedPassword ->
+                boardApiRequest(
+                    service = service,
+                    method = "PATCH",
+                    path = "/boards/$boardId",
+                    body = JSONObject().apply {
+                        put("role_ids", JSONArray(roleIds))
+                    }.toString(),
+                    accessPassword = normalizedPassword
+                ).mapCatching { text ->
+                    val json = JSONObject(text)
+                    if (!json.optBoolean("ok", false)) {
+                        throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
                     }
-                } else {
-                    boardApiRequest(
-                        service = service,
-                        method = "PATCH",
-                        path = "/boards/$boardId",
-                        body = JSONObject().apply {
-                            put("role_ids", JSONArray(roleIds))
-                        }.toString(),
-                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
-                    ).mapCatching { text ->
-                        val json = JSONObject(text)
-                        if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
-                        }
-                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
-                    }
+                    BulletinBoardInfo.fromJson(json.getJSONObject("board"))
                 }
-            }
-            result.onSuccess { board ->
+            },
+            onSuccess = { board ->
                 appendLog(appContext.getString(R.string.family_msg_15134, board.name))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
@@ -968,11 +989,12 @@ class FamilyNetworkManager(context: Context) {
                         )
                     }
                 }
-            }.onFailure { error ->
+            },
+            onFailure = { error ->
                 appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
-            }
-            onComplete(result)
-        }
+            },
+            onComplete = onComplete
+        )
     }
 
     fun updateBoardAiManagerEntry(
@@ -989,32 +1011,31 @@ class FamilyNetworkManager(context: Context) {
             return
         }
         val normalized = aiManagerModel?.trim()?.ifEmpty { null }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching {
-                        boardStore.updateBoard(boardId, aiManagerModel = normalized ?: "")
-                            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+        runBoardMutation(
+            service = service,
+            accessPassword = accessPassword,
+            localAction = {
+                boardStore.updateBoard(boardId, aiManagerModel = normalized ?: "")
+                    ?: throw IllegalStateException(appContext.getString(R.string.family_msg_81118))
+            },
+            remoteAction = { normalizedPassword ->
+                boardApiRequest(
+                    service = service,
+                    method = "PATCH",
+                    path = "/boards/$boardId",
+                    body = JSONObject().apply {
+                        put("ai_manager_model", normalized ?: JSONObject.NULL)
+                    }.toString(),
+                    accessPassword = normalizedPassword
+                ).mapCatching { text ->
+                    val json = JSONObject(text)
+                    if (!json.optBoolean("ok", false)) {
+                        throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
                     }
-                } else {
-                    boardApiRequest(
-                        service = service,
-                        method = "PATCH",
-                        path = "/boards/$boardId",
-                        body = JSONObject().apply {
-                            put("ai_manager_model", normalized ?: JSONObject.NULL)
-                        }.toString(),
-                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
-                    ).mapCatching { text ->
-                        val json = JSONObject(text)
-                        if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_81118)))
-                        }
-                        BulletinBoardInfo.fromJson(json.getJSONObject("board"))
-                    }
+                    BulletinBoardInfo.fromJson(json.getJSONObject("board"))
                 }
-            }
-            result.onSuccess { board ->
+            },
+            onSuccess = { board ->
                 appendLog(appContext.getString(R.string.family_msg_15134, board.name))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
@@ -1024,11 +1045,12 @@ class FamilyNetworkManager(context: Context) {
                         )
                     }
                 }
-            }.onFailure { error ->
+            },
+            onFailure = { error ->
                 appendError(appContext.getString(R.string.family_msg_18847, error.message ?: error.javaClass.simpleName))
-            }
-            onComplete(result)
-        }
+            },
+            onComplete = onComplete
+        )
     }
 
     fun deleteBoardEntry(
@@ -1043,39 +1065,39 @@ class FamilyNetworkManager(context: Context) {
             onComplete(Result.failure(IllegalStateException(appContext.getString(R.string.family_msg_22771))))
             return
         }
-        scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                if (service.isSelf) {
-                    runCatching {
-                        if (!boardStore.deleteBoard(boardId)) {
-                            throw IllegalStateException(appContext.getString(R.string.family_msg_96259))
-                        }
-                    }
-                } else {
-                    boardApiRequest(
-                        service = service,
-                        method = "DELETE",
-                        path = "/boards/$boardId",
-                        accessPassword = accessPassword?.trim()?.ifEmpty { null }
-                    ).mapCatching { text ->
-                        val json = JSONObject(text)
-                        if (!json.optBoolean("ok", false)) {
-                            throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_86488)))
-                        }
+        runBoardMutation(
+            service = service,
+            accessPassword = accessPassword,
+            localAction = {
+                if (!boardStore.deleteBoard(boardId)) {
+                    throw IllegalStateException(appContext.getString(R.string.family_msg_96259))
+                }
+            },
+            remoteAction = { normalizedPassword ->
+                boardApiRequest(
+                    service = service,
+                    method = "DELETE",
+                    path = "/boards/$boardId",
+                    accessPassword = normalizedPassword
+                ).mapCatching { text ->
+                    val json = JSONObject(text)
+                    if (!json.optBoolean("ok", false)) {
+                        throw IllegalStateException(json.optString("message", appContext.getString(R.string.family_msg_86488)))
                     }
                 }
-            }
-            result.onSuccess {
+            },
+            onSuccess = {
                 appendLog(appContext.getString(R.string.family_msg_83171, boardId))
                 val open = _state.value.openBoardSession
                 if (open?.service?.deviceKey == service.deviceKey && open.boardId == boardId) {
                     closeBulletinBoard()
                 }
-            }.onFailure { error ->
+            },
+            onFailure = { error ->
                 appendError(appContext.getString(R.string.family_msg_13838, error.message ?: error.javaClass.simpleName))
-            }
-            onComplete(result)
-        }
+            },
+            onComplete = onComplete
+        )
     }
 
     fun exportOpenBoard(
@@ -2737,14 +2759,6 @@ class FamilyNetworkManager(context: Context) {
     ): Result<String> {
         var attemptedHost = service.host.trim().ifEmpty { service.host }
         val result = runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
             val localIp = _state.value.localIp?.trim().orEmpty()
             val recognizedHosts = collectRecognizedServiceHosts(service)
             val sameSubnetHosts = if (isIpv4Address(localIp)) {
@@ -2774,25 +2788,19 @@ class FamilyNetworkManager(context: Context) {
             appendLog(
                 "留言板连接尝试: method=$method path=$path remote=${service.host}:${service.port} attempted=$attemptedHost:${service.port}"
             )
-            val endpoint = URL("https://$targetHost:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = method
-                connectTimeout = 8000
-                readTimeout = 8000
-                setRequestProperty("Accept", "application/json")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-                extraHeaders.forEach { (key, value) ->
-                    if (key.isNotBlank()) {
-                        setRequestProperty(key, value)
-                    }
-                }
-                if (body != null) {
-                    doOutput = true
-                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
-                }
-            }
+            val connection = openBoardApiConnection(
+                service = service,
+                method = method,
+                path = path,
+                hostOverride = targetHost,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 8000,
+                readTimeoutMs = 8000,
+                accept = "application/json",
+                contentType = if (body != null) "application/json; charset=utf-8" else null,
+                doOutput = body != null,
+                extraHeaders = extraHeaders
+            )
             try {
                 if (body != null) {
                     connection.outputStream.use { output ->
@@ -2819,6 +2827,59 @@ class FamilyNetworkManager(context: Context) {
                 Result.failure(enrichedError)
             }
         )
+    }
+
+    private fun requireServiceFingerprint(service: FamilyDiscoveredService): String {
+        val protocol = service.attributes["proto"]?.trim()?.lowercase()
+        if (protocol != FAMILY_TLS_PROTOCOL) {
+            throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
+        }
+        return service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
+    }
+
+    private fun buildBoardApiEndpoint(service: FamilyDiscoveredService, path: String, hostOverride: String? = null): URL {
+        val resolvedHost = hostOverride?.trim()?.ifEmpty { null } ?: service.host
+        return URL("https://$resolvedHost:${service.port}$path")
+    }
+
+    private fun openBoardApiConnection(
+        service: FamilyDiscoveredService,
+        method: String,
+        path: String,
+        hostOverride: String? = null,
+        accessPassword: String? = null,
+        connectTimeoutMs: Int,
+        readTimeoutMs: Int,
+        accept: String? = null,
+        contentType: String? = null,
+        doOutput: Boolean = false,
+        extraHeaders: Map<String, String> = emptyMap()
+    ): HttpURLConnection {
+        val fingerprint = requireServiceFingerprint(service)
+        val endpoint = buildBoardApiEndpoint(service, path, hostOverride)
+        return tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
+            requestMethod = method
+            connectTimeout = connectTimeoutMs
+            readTimeout = readTimeoutMs
+            this.doOutput = doOutput
+            if (!accept.isNullOrBlank()) {
+                setRequestProperty("Accept", accept)
+            }
+            if (!contentType.isNullOrBlank()) {
+                setRequestProperty("Content-Type", contentType)
+            }
+            accessPassword?.let {
+                setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
+            }
+            extraHeaders.forEach { (key, value) ->
+                if (key.isNotBlank()) {
+                    setRequestProperty(key, value)
+                }
+            }
+        }
     }
 
     private fun enrichBoardApiFailure(service: FamilyDiscoveredService, attemptedHost: String, error: Throwable): Throwable {
@@ -2882,24 +2943,15 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<String> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = method
-                connectTimeout = 15000
-                readTimeout = 60000
-                setRequestProperty("Accept", "text/markdown, text/plain, */*")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-            }
+            val connection = openBoardApiConnection(
+                service = service,
+                method = method,
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 60000,
+                accept = "text/markdown, text/plain, */*"
+            )
             try {
                 readApiResponse(connection)
             } finally {
@@ -2916,25 +2968,16 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<BlobDownloadResult> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = "GET"
-                connectTimeout = 15000
-                readTimeout = 120000
-                setRequestProperty("Accept", "application/octet-stream")
-                setRequestProperty("Range", "bytes=$rangeStart-$rangeEndInclusive")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-            }
+            val connection = openBoardApiConnection(
+                service = service,
+                method = "GET",
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 120000,
+                accept = "application/octet-stream",
+                extraHeaders = mapOf("Range" to "bytes=$rangeStart-$rangeEndInclusive")
+            )
             try {
                 val status = connection.responseCode
                 if (status !in listOf(200, 206)) {
@@ -2971,24 +3014,15 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<ByteArray> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = "GET"
-                connectTimeout = 15000
-                readTimeout = 300000
-                setRequestProperty("Accept", "application/zip, application/octet-stream, */*")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-            }
+            val connection = openBoardApiConnection(
+                service = service,
+                method = "GET",
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 300000,
+                accept = "application/zip, application/octet-stream, */*"
+            )
             try {
                 val status = connection.responseCode
                 if (status !in 200..299) {
@@ -3017,24 +3051,15 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<StreamDownloadResult> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = "GET"
-                connectTimeout = 15000
-                readTimeout = 300000
-                setRequestProperty("Accept", "application/zip, application/octet-stream, */*")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-            }
+            val connection = openBoardApiConnection(
+                service = service,
+                method = "GET",
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 300000,
+                accept = "application/zip, application/octet-stream, */*"
+            )
             val status = connection.responseCode
             if (status !in 200..299) {
                 val detail = connection.errorStream?.use { readResponseText(it) }.orEmpty()
@@ -3101,25 +3126,17 @@ class FamilyNetworkManager(context: Context) {
         onUploadProgress: ((processed: Int, total: Int) -> Unit)? = null
     ): Result<String> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = "POST"
-                connectTimeout = 15000
-                readTimeout = 300000
+            val connection = openBoardApiConnection(
+                service = service,
+                method = "POST",
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 300000,
+                contentType = "application/vnd.localmanager.boardpack+zip",
                 doOutput = true
-                setRequestProperty("Content-Type", "application/vnd.localmanager.boardpack+zip")
+            ).apply {
                 file.size.takeIf { it > 0 }?.let { setFixedLengthStreamingMode(it) }
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
             }
             try {
                 appContext.contentResolver.openInputStream(file.uri)?.use { input ->
@@ -3167,25 +3184,16 @@ class FamilyNetworkManager(context: Context) {
         accessPassword: String? = null
     ): Result<Unit> {
         return runCatching {
-            val protocol = service.attributes["proto"]?.trim()?.lowercase()
-            if (protocol != FAMILY_TLS_PROTOCOL) {
-                throw IllegalStateException(appContext.getString(R.string.family_msg_66390, service.serviceName))
-            }
-            val fingerprint = service.attributes[FAMILY_TLS_FINGERPRINT_ATTR]
-                ?.trim()
-                ?.takeIf { it.isNotEmpty() }
-                ?: throw IllegalStateException(appContext.getString(R.string.family_msg_46688, service.serviceName))
-            val endpoint = URL("https://${service.host}:${service.port}$path")
-            val connection = tlsManager.openHttpsConnection(endpoint, fingerprint).apply {
-                requestMethod = method
-                connectTimeout = 15000
-                readTimeout = 15000
+            val connection = openBoardApiConnection(
+                service = service,
+                method = method,
+                path = path,
+                accessPassword = accessPassword,
+                connectTimeoutMs = 15000,
+                readTimeoutMs = 15000,
+                contentType = "application/octet-stream",
                 doOutput = true
-                setRequestProperty("Content-Type", "application/octet-stream")
-                accessPassword?.let {
-                    setRequestProperty(FamilyNetworkAuth.PASSWORD_HEADER, it)
-                }
-            }
+            )
             try {
                 connection.outputStream.use { output -> output.write(body) }
                 readApiResponse(connection)

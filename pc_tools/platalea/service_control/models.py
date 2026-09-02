@@ -111,12 +111,12 @@ def detect_active_owner() -> ActiveOwner:
                 home = ent.pw_dir
                 username = ent.pw_name
             except KeyError:
-                home = os.environ.get("SUDO_HOME", "").strip() or str(Path.home().resolve())
+                home = os.environ.get("SUDO_HOME", "").strip() or str(Path.home().expanduser())
                 username = sudo_user
             return ActiveOwner(uid=uid, username=username, home=home)
 
     username = getpass.getuser().strip()
-    home = str(Path.home().resolve())
+    home = str(Path.home().expanduser())
     uid = int(getuid()) if callable(getuid) else -1
     return ActiveOwner(uid=uid, username=username, home=home)
 

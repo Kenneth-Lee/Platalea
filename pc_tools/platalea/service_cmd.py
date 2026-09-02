@@ -87,7 +87,7 @@ def _resolve_windows_install_credentials(
 def _resolve_install_config_path(*, owner: ActiveOwner, config_arg: str) -> Path:
     if config_arg.strip():
         return config_path(config_arg)
-    return (Path(owner.home) / ".localmanager" / "config.json").expanduser().resolve()
+    return (Path(owner.home).expanduser() / ".localmanager" / "config.json")
 
 
 def build_install_plan(*, owner: ActiveOwner | None = None, config: Path | None = None) -> InstallPlan:
