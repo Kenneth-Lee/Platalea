@@ -65,6 +65,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Clear
@@ -397,6 +398,7 @@ internal enum class MainTab(val key: String, val labelRes: Int) {
     RECENT("recent", R.string.main_tab_recent),
     PLAYER("player", R.string.main_tab_player),
     FTP("ftp", R.string.main_tab_ftp),
+    LOCAL_SHARE("local_share", R.string.main_tab_local_share),
     FAMILY_NETWORK("family_network", R.string.main_tab_family_network),
     CONFIG("config", R.string.main_tab_config),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
@@ -425,6 +427,7 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.RECENT -> Icons.AutoMirrored.Filled.List
         MainTab.PLAYER -> Icons.AutoMirrored.Filled.QueueMusic
         MainTab.FTP -> Icons.Default.Wifi
+        MainTab.LOCAL_SHARE -> Icons.Default.Devices
         MainTab.FAMILY_NETWORK -> Icons.Default.Home
         MainTab.CONFIG -> Icons.Default.Settings
         MainTab.GIT_SHARE -> Icons.Default.Share
@@ -1216,6 +1219,7 @@ private fun ScrollableMainTabBar(
         MainTab.PLAYER,
         MainTab.DICTIONARY,
         MainTab.FTP,
+        MainTab.LOCAL_SHARE,
         MainTab.FAMILY_NETWORK,
         MainTab.GIT_SHARE,
         MainTab.ABOUT
@@ -1366,6 +1370,7 @@ private fun MainTabContentHost(
     onClearRecentItems: () -> Unit,
     directoryContent: @Composable () -> Unit,
     ftpContent: @Composable () -> Unit,
+    localShareContent: @Composable () -> Unit,
     familyNetworkContent: @Composable () -> Unit,
     configContent: @Composable () -> Unit,
     gitShareContent: @Composable () -> Unit,
@@ -1388,6 +1393,7 @@ private fun MainTabContentHost(
             )
         )
         MainTab.FTP -> ftpContent()
+        MainTab.LOCAL_SHARE -> localShareContent()
         MainTab.FAMILY_NETWORK -> familyNetworkContent()
         MainTab.CONFIG -> configContent()
         MainTab.GIT_SHARE -> gitShareContent()
@@ -3445,6 +3451,7 @@ private fun FileBrowserAppScreen(
             dirCache = emptyMap()
         }
         val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
+        val localShareManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
         val familyNetworkManager = remember { com.kenny.localmanager.family.FamilyNetworkManager(context) }
         var ftpPort by remember { mutableStateOf(2121) }
         var ftpPassword by remember { mutableStateOf<String?>(null) }
@@ -4048,6 +4055,9 @@ private fun FileBrowserAppScreen(
         LaunchedEffect(activeMainTab) {
             if (activeMainTab != MainTab.FTP) {
                 ftpManager.stop()
+            }
+            if (activeMainTab != MainTab.LOCAL_SHARE) {
+                localShareManager.stop()
             }
         }
         LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {
@@ -4753,6 +4763,19 @@ private fun FileBrowserAppScreen(
                                 ftpManager = ftpManager,
                                 ftpPort = ftpPort,
                                 ftpPassword = ftpPassword,
+                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
+                                onRequestExitApp = { requestExitApp() }
+                            )
+                        )
+                    },
+                    localShareContent = {
+                        LocalShareTabRoute(
+                            LocalShareTabRouteState(
+                                rootUri = ftpRootUri,
+                                displayUri = displayUri,
+                                manager = localShareManager,
+                                port = ftpPort,
+                                password = ftpPassword,
                                 networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
                                 onRequestExitApp = { requestExitApp() }
                             )
