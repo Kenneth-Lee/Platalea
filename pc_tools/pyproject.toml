@@ -12,6 +12,7 @@ authors = [{ name = "Kenny" }]
 dynamic = ["version"]
 dependencies = [
     "zeroconf>=0.147,<1",
+    "prompt_toolkit>=3.0,<4",
 ]
 
 [project.scripts]

@@ -245,7 +245,7 @@
     <string name="config_startup_decrypt_desc">开启后启动需输入私钥密码解锁；解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。</string>
     <string name="config_reader_hide_floating_next_button">隐藏阅读器悬浮翻页按钮</string>
     <string name="config_reader_hide_floating_next_button_hint">对 EPUB/PDF 阅读器生效。开启后不显示可拖动的“下一章/下页”按钮。</string>
-    <string name="config_viewer_preview_bytes">内部查看器预览长度（字节）</string>
+    <string name="config_viewer_preview_bytes">内部查看器预览长度（字节，非网络服务）</string>
     <string name="config_viewer_preview_range">范围：%1$d～%2$dM</string>
     <string name="config_ftp_password">接入密码（管理员）</string>
     <string name="config_ftp_password_hint">与 FTP 共用，对应 admin 身份：远程连入本机时可管理全部留言板与 FTP；留空则免密。用户身份（朋友、同事等）在家庭网络 Tab 中管理。</string>
@@ -836,6 +836,7 @@
     <string name="ftp_stopped_log">FTP 服务器已停止</string>
     <string name="local_share_title">本地共享</string>
     <string name="local_share_start_exception">启动异常：%1$s</string>
+    <string name="local_share_ip_fetching">获取中…</string>
     <string name="local_share_server_address">共享地址</string>
     <string name="local_share_running">运行中</string>
     <string name="local_share_stopped">已停止</string>
@@ -843,9 +844,9 @@
     <string name="local_share_stop_action">停止服务</string>
     <string name="local_share_start_action">启动服务</string>
     <string name="local_share_connection_help">连接说明</string>
-    <string name="local_share_credentials_hint">用户名 lm，密码沿用配置中的 FTP/管理员密码。可在电脑侧直接访问：</string>
-    <string name="local_share_client_examples">也可使用 lftp、FileZilla、curl 等客户端：</string>
-    <string name="local_share_example_command">lftp -u lm, -e "put local_file" ftp://%1$s:%2$d</string>
+    <string name="local_share_credentials_hint">用户名 lm，密码沿用配置中的 FTP/管理员密码。建议在电脑端使用 platalea：</string>
+    <string name="local_share_client_examples">示例命令：</string>
+    <string name="local_share_example_command">platalea share-cmd ls %1$s --port %2$d --password &lt;password&gt;</string>
     <string name="local_share_port">端口：%1$d</string>
     <string name="local_share_work_log">共享日志</string>
     <string name="local_share_log_clip_label">本地共享日志</string>

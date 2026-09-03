@@ -922,6 +922,7 @@ private fun ConfigPanel(
                     s.filter { it.isDigit() }.toIntOrNull()?.coerceIn(CONFIG_MIN_PREVIEW_BYTES, CONFIG_MAX_PREVIEW_BYTES)?.let { onViewerPreviewBytesChange(it) }
                 },
                 modifier = Modifier.width(120.dp),
+                label = { Text(context.getString(R.string.config_viewer_preview_bytes)) },
                 singleLine = true
             )
         }

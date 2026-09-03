@@ -39,7 +39,9 @@ class DocumentFileSystemView(
 
     @Throws(FtpException::class)
     override fun getFile(file: String?): FtpFile? {
-        val raw = file?.replace("\\", "/")?.trim()?.trimEnd('/') ?: ""
+        val incoming = file?.replace("\\", "/")?.trim() ?: ""
+        if (incoming == "/") return DocumentFileFtpFile(context, rootDoc, "/", onLog = onLog)
+        val raw = incoming.trimEnd('/')
         if (raw.isEmpty() || raw == ".") return workingDir
         val path = if (raw.startsWith("/")) normalizePath(raw)
         else normalizePath((workingDir as DocumentFileFtpFile).getAbsolutePath().trimEnd('/') + "/" + raw)

@@ -65,6 +65,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private fun toLocalShareLogLine(line: String): String {
+    return line
+        .replace("FTP 服务器", "本地共享服务")
+        .replace("FTP server", "Local share service")
+        .replace("FTP", "本地共享")
+        .replace("ftp", "local-share")
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LocalShareScreen(
@@ -194,7 +202,7 @@ fun LocalShareScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            val ip = localIp ?: stringResource(R.string.ftp_ip_fetching)
+            val ip = localIp ?: stringResource(R.string.local_share_ip_fetching)
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -278,7 +286,7 @@ fun LocalShareScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "ftp://lm@$ip:$port",
+                "$ip:$port",
                 style = MaterialTheme.typography.bodyMedium,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.primary
@@ -337,7 +345,7 @@ fun LocalShareScreen(
                 ) {
                     logLines.forEach { line ->
                         Text(
-                            line,
+                            toLocalShareLogLine(line),
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurface

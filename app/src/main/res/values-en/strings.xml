@@ -218,7 +218,7 @@
     <string name="config_hide_dot_files">Hide files starting with .</string>
     <string name="config_startup_decrypt_key">Decrypt key on startup</string>
     <string name="config_startup_decrypt_desc">When enabled, startup asks for the private-key password to unlock it. After a successful unlock, the key stays cached in memory and later key operations will not ask again. This is not exported.</string>
-    <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes)</string>
+    <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes, not network service)</string>
     <string name="config_viewer_preview_range">Range: %1$d to %2$dM</string>
     <string name="config_ftp_password">Access password (admin)</string>
     <string name="config_ftp_password_hint">Shared with FTP as the admin role. Manage all boards and FTP remotely. Leave empty for no password. User roles are managed in the Family Network tab.</string>
@@ -648,6 +648,7 @@
     <string name="ftp_stopped_log">FTP server stopped</string>
     <string name="local_share_title">Local Share</string>
     <string name="local_share_start_exception">Startup error: %1$s</string>
+    <string name="local_share_ip_fetching">Fetching…</string>
     <string name="local_share_server_address">Share Address</string>
     <string name="local_share_running">Running</string>
     <string name="local_share_stopped">Stopped</string>
@@ -655,9 +656,9 @@
     <string name="local_share_stop_action">Stop Service</string>
     <string name="local_share_start_action">Start Service</string>
     <string name="local_share_connection_help">Connection Guide</string>
-    <string name="local_share_credentials_hint">Username is lm. Password reuses the configured FTP/admin password. Access from your PC:</string>
-    <string name="local_share_client_examples">Or use lftp, FileZilla, curl, etc.:</string>
-    <string name="local_share_example_command">lftp -u lm, -e "put local_file" ftp://%1$s:%2$d</string>
+    <string name="local_share_credentials_hint">Username is lm. Password reuses the configured FTP/admin password. Recommended on PC: platalea commands.</string>
+    <string name="local_share_client_examples">Example command:</string>
+    <string name="local_share_example_command">platalea share-cmd ls %1$s --port %2$d --password &lt;password&gt;</string>
     <string name="local_share_port">Port: %1$d</string>
     <string name="local_share_work_log">Share Log</string>
     <string name="local_share_log_clip_label">Local Share Log</string>

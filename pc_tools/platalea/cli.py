@@ -36,6 +36,7 @@ from .gpg_cmd import (
     run_quick_encrypt,
 )
 from .service_cmd import run_service_install, run_service_status, run_service_uninstall
+from .share_cmd import run_share_client, run_share_cmd
 from .paths import (
     app_dir,
     config_path,
@@ -53,7 +54,7 @@ SERVE_COMMANDS = frozenset({
     "status",
 })
 
-GROUP_COMMANDS = frozenset({"gpg", "file", "config", "service", "help"})
+GROUP_COMMANDS = frozenset({"gpg", "file", "config", "service", "share", "help"})
 
 GPG_SUBCOMMANDS: dict[str, Callable[[list[str] | None], int]] = {
     "list-keys": run_list_keys,
@@ -104,7 +105,7 @@ CONFIG_SUBCOMMANDS.update({
     "import": run_import_config,
 })
 
-HELP_TOPICS = frozenset({"serve", "board", "gpg", "file", "config", "service", "discover"})
+HELP_TOPICS = frozenset({"serve", "board", "gpg", "file", "config", "service", "share", "discover"})
 
 
 def _config_flag(parser: argparse.ArgumentParser) -> None:
@@ -304,6 +305,17 @@ def _discover_help() -> str:
                                                 列出当前局域网内提供家庭网络服务的设备"""
 
 
+def _share_help() -> str:
+        return """本地共享（手机端 FTP-like 服务）:
+    share-cmd ls <host> [remote_path] [--port 2121] [--password xxx] [--json]
+    share-cmd get <host> <remote_path> [local_path] [--port 2121] [--password xxx]
+    share-cmd put <host> <local_path> [remote_path] [--port 2121] [--password xxx]
+    share-cmd rm <host> <remote_path> [--port 2121] [--password xxx]
+    share-cmd mkdir <host> <remote_path> [--port 2121] [--password xxx]
+    share-client <host> [--port 2121] [--password xxx]
+                                                交互式模式，进入后可执行 ls/cd/get/put/rm/mkdir/pwd"""
+
+
 def _examples_help() -> str:
     return f"""示例:
   {CLI_NAME} config init
@@ -323,10 +335,13 @@ def _examples_help() -> str:
   {CLI_NAME} gpg pass-encrypt notes.md -r 0xABCD1234
   {CLI_NAME} gpg quick-decrypt "$CIPHER" -p keypass
   {CLI_NAME} config import ~/Downloads/local_manager_config.json
+    {CLI_NAME} share-cmd ls 192.168.1.10 --password xxx
+    {CLI_NAME} share-cmd put 192.168.1.10 ./a.txt /inbox/a.txt --password xxx
+    {CLI_NAME} share-client 192.168.1.10 --password xxx
   {CLI_NAME} help board
   {CLI_NAME} --host 192.168.1.10 --password guest list-boards
 
-分组帮助: {CLI_NAME} help [serve|board|gpg|file|config|service|discover]
+分组帮助: {CLI_NAME} help [serve|board|gpg|file|config|service|share|discover]
 子命令详细说明: {CLI_NAME} <command> -h  或  {CLI_NAME} gpg pass-encrypt -h"""
 
 
@@ -352,6 +367,8 @@ LocalManager PC 端本地工具：家庭留言板 HTTPS 服务、API 与本地�
 
 {_service_help()}
 
+{_share_help()}
+
 {_discover_help()}
 
 {_examples_help()}
@@ -374,6 +391,7 @@ def _print_topic_help(topic: str | None) -> int:
         "file": _file_help,
         "config": _config_help,
         "service": _service_help,
+        "share": _share_help,
         "discover": _discover_help,
     }
     print(printers[topic]())
@@ -391,6 +409,8 @@ def _print_group_usage(group: str) -> None:
         print(_config_help())
     elif group == "service":
         print(_service_help())
+    elif group == "share":
+        print(_share_help())
     elif group == "discover":
         print(_discover_help())
     else:
@@ -479,6 +499,12 @@ def main(argv: list[str] | None = None) -> int:
     if head == "discover":
         return run_discover(argv[1:])
 
+    if head == "share-cmd":
+        return run_share_cmd(argv[1:])
+
+    if head == "share-client":
+        return run_share_client(argv[1:])
+
     if head in SERVE_COMMANDS:
         parser = build_top_parser()
         args = parser.parse_args(argv)
@@ -515,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"未知命令: {head}", file=sys.stderr)
     print(
-        f"运行 {CLI_NAME} help 查看全部命令，或 {CLI_NAME} help [serve|board|gpg|file|config|service|discover]。",
+        f"运行 {CLI_NAME} help 查看全部命令，或 {CLI_NAME} help [serve|board|gpg|file|config|service|share|discover]。",
         file=sys.stderr,
     )
     return 2
