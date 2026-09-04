@@ -21,7 +21,7 @@
     <string name="main_tab_recent">Recent</string>
     <string name="main_tab_player">Player</string>
     <string name="main_tab_ftp">FTP</string>
-    <string name="main_tab_local_share">Local Share</string>
+    <string name="main_tab_local_share">WebUI</string>
     <string name="main_tab_family_network">Family</string>
     <string name="main_tab_config">Config</string>
     <string name="main_tab_git_share">Share</string>
@@ -646,7 +646,7 @@
     <string name="ftp_connection_received">Connection received: %1$s</string>
     <string name="ftp_connection_closed">Connection closed</string>
     <string name="ftp_stopped_log">FTP server stopped</string>
-    <string name="local_share_title">Local Share</string>
+    <string name="local_share_title">WebUI</string>
     <string name="local_share_start_exception">Startup error: %1$s</string>
     <string name="local_share_ip_fetching">Fetching…</string>
     <string name="local_share_server_address">Share Address</string>

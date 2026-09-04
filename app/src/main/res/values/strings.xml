@@ -23,7 +23,7 @@
     <string name="main_tab_recent">最近</string>
     <string name="main_tab_player">播放器</string>
     <string name="main_tab_ftp">FTP</string>
-    <string name="main_tab_local_share">本地共享</string>
+    <string name="main_tab_local_share">WebUI</string>
     <string name="main_tab_family_network">家庭网络</string>
     <string name="main_tab_config">配置</string>
     <string name="main_tab_git_share">共享</string>
@@ -834,7 +834,7 @@
     <string name="ftp_connection_received">收到连接: %1$s</string>
     <string name="ftp_connection_closed">连接已关闭</string>
     <string name="ftp_stopped_log">FTP 服务器已停止</string>
-    <string name="local_share_title">本地共享</string>
+    <string name="local_share_title">WebUI</string>
     <string name="local_share_start_exception">启动异常：%1$s</string>
     <string name="local_share_ip_fetching">获取中…</string>
     <string name="local_share_server_address">共享地址</string>

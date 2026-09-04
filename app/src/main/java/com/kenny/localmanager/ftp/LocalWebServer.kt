@@ -3,7 +3,11 @@ package com.kenny.localmanager.ftp
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
+import com.kenny.localmanager.data.ConfigExportCategory
+import com.kenny.localmanager.data.Preferences
+import com.kenny.localmanager.data.exportConfig
 import com.kenny.localmanager.file.listFilesSafe
+import com.kenny.localmanager.data.importConfig
 import net.lingala.zip4j.ZipFile
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
@@ -26,6 +30,8 @@ import javax.net.ssl.SSLServerSocket
 import javax.net.ssl.SSLSocket
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 
 private data class HttpRequest(
     val method: String,
@@ -40,6 +46,8 @@ private data class UploadedFile(
     val relativePath: String,
     val bytes: ByteArray
 )
+
+private const val WEBUI_QUICK_NOTE_FILE = ".lm.note.md"
 
 class LocalWebServer(
     private val context: Context,
@@ -128,6 +136,12 @@ class LocalWebServer(
                     return
                 }
 
+                if (request.method == "POST" && request.path == "/api/logout") {
+                    activeSessionToken = null
+                    writeJson(output, 200, mapOf("ok" to true))
+                    return
+                }
+
                 if (!isAuthorized(request.headers)) {
                     writeJson(output, 401, mapOf("ok" to false, "error" to "unauthorized"))
                     return
@@ -205,6 +219,62 @@ class LocalWebServer(
                         }
                         val deleted = target.delete()
                         writeJson(output, if (deleted) 200 else 400, mapOf("ok" to deleted, "path" to path))
+                    }
+                    request.method == "GET" && request.path == "/api/quick-note/load" -> {
+                        val result = loadQuickNoteText()
+                        result.onSuccess { text ->
+                            writeJson(output, 200, mapOf("ok" to true, "text" to text))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "load_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "POST" && request.path == "/api/quick-note/save" -> {
+                        val fields = parseFormUrlEncoded(request.body)
+                        val text = fields["text"] ?: ""
+                        val result = saveQuickNoteText(text)
+                        result.onSuccess {
+                            writeJson(output, 200, mapOf("ok" to true, "length" to text.length))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "save_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "GET" && request.path == "/api/config/get" -> {
+                        val result = readWebUiConfig()
+                        result.onSuccess { config ->
+                            writeJson(output, 200, mapOf("ok" to true, "config" to config))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "config_get_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "POST" && request.path == "/api/config/set" -> {
+                        val fields = parseFormUrlEncoded(request.body)
+                        val result = updateWebUiConfig(fields)
+                        result.onSuccess {
+                            writeJson(output, 200, mapOf("ok" to true))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "config_set_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "GET" && request.path == "/api/config/export" -> {
+                        val categories = parseConfigCategories(request.query["categories"])
+                        val result = exportConfigJson(categories)
+                        result.onSuccess { jsonText ->
+                            writeJson(output, 200, mapOf("ok" to true, "json" to jsonText))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "config_export_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "POST" && request.path == "/api/config/import" -> {
+                        val fields = parseFormUrlEncoded(request.body)
+                        val json = fields["json"] ?: ""
+                        val importKeys = fields["import_keys"] != "0"
+                        val categories = parseConfigCategories(fields["categories"])
+                        val result = importConfigJson(json, importKeys, categories)
+                        result.onSuccess { ok ->
+                            writeJson(output, if (ok) 200 else 400, mapOf("ok" to ok))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "config_import_failed", "message" to (error.message ?: "unknown")))
+                        }
                     }
                     else -> {
                         writeJson(output, 404, mapOf("error" to "not_found"))
@@ -384,6 +454,105 @@ class LocalWebServer(
         output.use { it.write(bytes) }
     }
 
+    private fun loadQuickNoteText(): Result<String> {
+        return runCatching {
+            val noteDoc = ensureQuickNoteFile()
+                ?: throw IllegalStateException("quick note file unavailable")
+            val input = context.contentResolver.openInputStream(noteDoc.uri)
+                ?: throw IllegalStateException("open quick note failed")
+            input.use { String(it.readBytes(), Charsets.UTF_8) }
+        }
+    }
+
+    private fun saveQuickNoteText(text: String): Result<Unit> {
+        return runCatching {
+            val noteDoc = ensureQuickNoteFile()
+                ?: throw IllegalStateException("quick note file unavailable")
+            val output = context.contentResolver.openOutputStream(noteDoc.uri, "wt")
+                ?: throw IllegalStateException("open quick note output failed")
+            output.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+        }
+    }
+
+    private fun ensureQuickNoteFile(): DocumentFile? {
+        val existing = rootDoc.listFilesSafe().find { it.name == WEBUI_QUICK_NOTE_FILE && it.isFile }
+        if (existing != null) return existing
+        return rootDoc.createFile("text/markdown", WEBUI_QUICK_NOTE_FILE)
+    }
+
+    private fun readWebUiConfig(): Result<Map<String, Any>> {
+        return runCatching {
+            val prefs = Preferences(context)
+            runBlocking {
+                mapOf(
+                    "ftp_port" to prefs.ftpPort.first(),
+                    "ftp_password" to (prefs.ftpPassword.first() ?: ""),
+                    "ftp_timeout_minutes" to prefs.ftpTimeoutMinutes.first(),
+                    "local_network_service_enabled" to prefs.localNetworkServiceEnabled.first(),
+                    "filter_visible" to prefs.filterVisible.first(),
+                    "hide_dot_files" to prefs.hideDotFiles.first()
+                )
+            }
+        }
+    }
+
+    private fun updateWebUiConfig(fields: Map<String, String>): Result<Unit> {
+        return runCatching {
+            val prefs = Preferences(context)
+            runBlocking {
+                fields["ftp_port"]?.toIntOrNull()?.let { prefs.setFtpPort(it) }
+                if (fields.containsKey("ftp_password")) {
+                    prefs.setFtpPassword(fields["ftp_password"]?.takeIf { it.isNotBlank() })
+                }
+                fields["ftp_timeout_minutes"]?.toIntOrNull()?.let { prefs.setFtpTimeoutMinutes(it) }
+                fields["local_network_service_enabled"]?.let { prefs.setLocalNetworkServiceEnabled(parseBooleanField(it)) }
+                fields["filter_visible"]?.let { prefs.setFilterVisible(parseBooleanField(it)) }
+                fields["hide_dot_files"]?.let { prefs.setHideDotFiles(parseBooleanField(it)) }
+            }
+        }
+    }
+
+    private fun exportConfigJson(categories: Set<ConfigExportCategory>): Result<String> {
+        return runCatching {
+            val prefs = Preferences(context)
+            runBlocking {
+                exportConfig(context, prefs, categories)
+            }
+        }
+    }
+
+    private fun importConfigJson(json: String, importKeys: Boolean, categories: Set<ConfigExportCategory>): Result<Boolean> {
+        return runCatching {
+            val prefs = Preferences(context)
+            runBlocking {
+                importConfig(
+                    context = context,
+                    prefs = prefs,
+                    jsonString = json,
+                    importKeys = importKeys,
+                    categories = categories
+                )
+            }
+        }
+    }
+
+    private fun parseBooleanField(value: String): Boolean {
+        val normalized = value.trim().lowercase(Locale.US)
+        return normalized == "1" || normalized == "true" || normalized == "yes" || normalized == "on"
+    }
+
+    private fun parseConfigCategories(raw: String?): Set<ConfigExportCategory> {
+        if (raw.isNullOrBlank()) return ConfigExportCategory.entries.toSet()
+        val tokens = raw.split(',').map { it.trim().uppercase(Locale.US) }.filter { it.isNotEmpty() }
+        val picked = buildSet {
+            for (token in tokens) {
+                val matched = ConfigExportCategory.entries.firstOrNull { it.name == token }
+                if (matched != null) add(matched)
+            }
+        }
+        return if (picked.isEmpty()) ConfigExportCategory.entries.toSet() else picked
+    }
+
     private fun createUploadTarget(parentDoc: DocumentFile, relativePath: String, overwrite: Boolean): DocumentFile? {
         val fileName = relativePath.substringAfterLast('/')
         val dirSegments = relativePath.substringBeforeLast('/', missingDelimiterValue = "").split("/").filter { it.isNotEmpty() }
@@ -523,84 +692,175 @@ class LocalWebServer(
         else -> "application/octet-stream"
     }
 
-    private fun buildIndexPage(): String = """
+        private fun buildIndexPage(): String = """
 <!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8"> 
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Platalea 本地共享</title>
+        <title>Platalea WebUI</title>
     <style>
       body { font-family: system-ui, sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; }
       .container { max-width: 1024px; margin: 24px auto; padding: 0 16px; }
       .card { background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
       .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
-    input, button { border-radius: 8px; border: 1px solid #475569; background: #0b1220; color: #e2e8f0; padding: 8px 10px; }
+            input, button, textarea { border-radius: 8px; border: 1px solid #475569; background: #0b1220; color: #e2e8f0; padding: 8px 10px; }
       button { cursor: pointer; }
       table { width: 100%; border-collapse: collapse; }
       th, td { padding: 10px; border-bottom: 1px solid rgba(148, 163, 184, 0.2); text-align: left; }
       .muted { opacity: 0.8; }
       code { font-family: monospace; }
-    .name-link { color: #93c5fd; text-decoration: none; cursor: pointer; }
-    .name-link:hover { text-decoration: underline; }
-    .op-link { color: #a7f3d0; text-decoration: none; cursor: pointer; }
-    .op-link:hover { text-decoration: underline; }
-    .secret-mask { -webkit-text-security: disc; }
-    .status { margin-top: 10px; color: #cbd5e1; font-size: 13px; }
-    .progress-wrap { margin-top: 8px; width: 100%; height: 8px; background: rgba(148, 163, 184, 0.2); border-radius: 999px; overflow: hidden; display: none; }
-    .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #38bdf8, #22d3ee); transition: width 0.12s linear; }
+            .name-link { color: #93c5fd; text-decoration: none; cursor: pointer; }
+            .name-link:hover { text-decoration: underline; }
+            .op-link { color: #a7f3d0; text-decoration: none; cursor: pointer; }
+            .op-link:hover { text-decoration: underline; }
+            .secret-mask { -webkit-text-security: disc; }
+            .status { margin-top: 10px; color: #cbd5e1; font-size: 13px; }
+            .progress-wrap { margin-top: 8px; width: 100%; height: 8px; background: rgba(148, 163, 184, 0.2); border-radius: 999px; overflow: hidden; display: none; }
+            .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #38bdf8, #22d3ee); transition: width 0.12s linear; }
+            .app-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+            .tabbar { display: flex; gap: 8px; }
+            .tab-button.active { border-color: #38bdf8; color: #7dd3fc; }
+            .panel { display: none; }
+            .panel.active { display: block; }
+            .note-editor { width: 100%; min-height: 360px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+            .note-toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+            .small { font-size: 12px; opacity: 0.85; }
+            .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+            .config-item { display: flex; flex-direction: column; gap: 6px; }
+            .config-item label { font-size: 12px; opacity: 0.85; }
+            .config-json { width: 100%; min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+            @media (max-width: 768px) {
+                .config-grid { grid-template-columns: 1fr; }
+            }
     </style>
   </head>
   <body>
     <div class="container">
       <div id="loginBox" class="card">
-                <h2>本地共享连接</h2>
+                <h2>WebUI 连接</h2>
         <div class="row">
                     <input id="accessCode" class="secret-mask" type="text" inputmode="text" autocapitalize="off" autocorrect="off" spellcheck="false" autocomplete="off" name="access_code" placeholder="访问密钥">
                     <button id="connectBtn" type="button" autocomplete="off">连接</button>
         </div>
-                <div class="muted">仅需输入密码，用户名不参与校验。</div>
+                <div class="muted">登录后可在 WebUI 中切换文件共享与快速笔记。</div>
       </div>
 
       <div id="appBox" class="card" style="display:none;">
-        <div class="row">
-          <button id="backBtn">返回上级</button>
-          <button id="refreshBtn">刷新</button>
-          <input id="newDirName" placeholder="新目录名">
-          <button id="mkdirBtn">新建目录</button>
+                <div class="app-header">
+                    <div class="tabbar">
+                        <button id="tab-files" class="tab-button active" type="button">文件共享</button>
+                        <button id="tab-note" class="tab-button" type="button">.lm.note.md 编辑</button>
+                        <button id="tab-config" class="tab-button" type="button">配置</button>
+                    </div>
+                    <button id="logoutBtn" type="button">退出登录</button>
         </div>
-        <div class="row">
-                    <button id="pickFilesBtn" type="button">上传文件</button>
-                    <button id="pickDirBtn" type="button">上传目录</button>
-                    <input id="uploadFileInput" type="file" multiple style="display:none">
-                    <input id="uploadDirInput" type="file" webkitdirectory directory multiple style="display:none">
+
+                <div id="panel-files" class="panel active">
+                    <div class="row">
+                        <button id="backBtn">返回上级</button>
+                        <button id="refreshBtn">刷新</button>
+                        <input id="newDirName" placeholder="新目录名">
+                        <button id="mkdirBtn">新建目录</button>
+                    </div>
+                    <div class="row">
+                        <button id="pickFilesBtn" type="button">上传文件</button>
+                        <button id="pickDirBtn" type="button">上传目录</button>
+                        <input id="uploadFileInput" type="file" multiple style="display:none">
+                        <input id="uploadDirInput" type="file" webkitdirectory directory multiple style="display:none">
+                    </div>
+                    <div id="statusText" class="status">准备就绪</div>
+                    <div id="progressWrap" class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
+                    <div class="row"><code id="currentPath">/</code></div>
+                    <table>
+                        <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
+                        <tbody id="entries"></tbody>
+                    </table>
         </div>
-                <div id="statusText" class="status">准备就绪</div>
-                <div id="progressWrap" class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
-        <div class="row"><code id="currentPath">/</code></div>
-        <table>
-          <thead><tr><th>名称</th><th>类型</th><th>大小</th><th>操作</th></tr></thead>
-          <tbody id="entries"></tbody>
-        </table>
+
+                <div id="panel-note" class="panel">
+                    <div class="note-toolbar">
+                        <button id="noteReloadBtn" type="button">重新读取</button>
+                        <button id="noteSaveBtn" type="button">保存笔记</button>
+                        <span id="noteStatus" class="small">未加载</span>
+                    </div>
+                    <textarea id="noteEditor" class="note-editor" placeholder="这里编辑 .lm.note.md 的内容"></textarea>
+                </div>
+
+                <div id="panel-config" class="panel">
+                    <div class="note-toolbar">
+                        <button id="configLoadBtn" type="button">读取配置</button>
+                        <button id="configSaveBtn" type="button">保存配置</button>
+                        <button id="configExportBtn" type="button">导出配置 JSON</button>
+                        <button id="configImportBtn" type="button">导入配置 JSON</button>
+                        <span id="configStatus" class="small">未加载</span>
+                    </div>
+                    <div class="config-grid">
+                        <div class="config-item">
+                            <label>FTP 端口</label>
+                            <input id="cfgFtpPort" type="number" min="1024" max="65535" placeholder="2121">
+                        </div>
+                        <div class="config-item">
+                            <label>FTP 密码（留空表示不改）</label>
+                            <input id="cfgFtpPassword" class="secret-mask" type="text" placeholder="输入新密码或留空">
+                        </div>
+                        <div class="config-item">
+                            <label>自动停止分钟数</label>
+                            <input id="cfgTimeout" type="number" min="0" max="1440" placeholder="0">
+                        </div>
+                        <div class="config-item">
+                            <label>本地网络服务开关（true/false）</label>
+                            <input id="cfgLocalService" type="text" placeholder="true">
+                        </div>
+                        <div class="config-item">
+                            <label>显示过滤栏（true/false）</label>
+                            <input id="cfgFilterVisible" type="text" placeholder="true">
+                        </div>
+                        <div class="config-item">
+                            <label>隐藏点文件（true/false）</label>
+                            <input id="cfgHideDot" type="text" placeholder="false">
+                        </div>
+                    </div>
+                    <div class="row"><span class="small">导入导出 JSON（支持完整配置）</span></div>
+                    <textarea id="configJsonEditor" class="config-json" placeholder="配置 JSON 会显示在这里"></textarea>
+                </div>
       </div>
     </div>
 
     <script>
-            const state = { token: '', currentPath: '/' };
+            const state = { token: '', currentPath: '/', activeTab: 'files' };
       const loginBox = document.getElementById('loginBox');
       const appBox = document.getElementById('appBox');
       const currentPathEl = document.getElementById('currentPath');
       const entriesEl = document.getElementById('entries');
             const accessCodeEl = document.getElementById('accessCode');
-    const uploadFileInput = document.getElementById('uploadFileInput');
-    const uploadDirInput = document.getElementById('uploadDirInput');
+            const uploadFileInput = document.getElementById('uploadFileInput');
+            const uploadDirInput = document.getElementById('uploadDirInput');
             const pickFilesBtn = document.getElementById('pickFilesBtn');
             const pickDirBtn = document.getElementById('pickDirBtn');
             const statusText = document.getElementById('statusText');
             const progressWrap = document.getElementById('progressWrap');
             const progressBar = document.getElementById('progressBar');
+            const tabFilesBtn = document.getElementById('tab-files');
+            const tabNoteBtn = document.getElementById('tab-note');
+            const tabConfigBtn = document.getElementById('tab-config');
+            const panelFiles = document.getElementById('panel-files');
+            const panelNote = document.getElementById('panel-note');
+            const panelConfig = document.getElementById('panel-config');
+            const noteEditor = document.getElementById('noteEditor');
+            const noteStatus = document.getElementById('noteStatus');
+            const configStatus = document.getElementById('configStatus');
+            const cfgFtpPort = document.getElementById('cfgFtpPort');
+            const cfgFtpPassword = document.getElementById('cfgFtpPassword');
+            const cfgTimeout = document.getElementById('cfgTimeout');
+            const cfgLocalService = document.getElementById('cfgLocalService');
+            const cfgFilterVisible = document.getElementById('cfgFilterVisible');
+            const cfgHideDot = document.getElementById('cfgHideDot');
+            const configJsonEditor = document.getElementById('configJsonEditor');
             let busy = false;
             let pendingOverwriteMode = false;
+            let noteLoadedOnce = false;
+            let configLoadedOnce = false;
 
             function setBusy(isBusy) {
                 busy = isBusy;
@@ -628,6 +888,25 @@ class LocalWebServer(
 
             function normalizeErrorText(error) {
                 return (error && error.message) ? error.message : 'unknown';
+            }
+
+            function switchTab(tabName) {
+                state.activeTab = tabName;
+                const isFiles = tabName === 'files';
+                const isNote = tabName === 'note';
+                const isConfig = tabName === 'config';
+                tabFilesBtn.classList.toggle('active', isFiles);
+                tabNoteBtn.classList.toggle('active', isNote);
+                tabConfigBtn.classList.toggle('active', isConfig);
+                panelFiles.classList.toggle('active', isFiles);
+                panelNote.classList.toggle('active', isNote);
+                panelConfig.classList.toggle('active', isConfig);
+                if (isNote && !noteLoadedOnce) {
+                    loadQuickNote();
+                }
+                if (isConfig && !configLoadedOnce) {
+                    loadConfig();
+                }
             }
 
             function authHeaders(extra = {}) {
@@ -663,7 +942,7 @@ class LocalWebServer(
       function loadList() {
                 if (busy) return;
                 setBusy(true);
-                setStatus('正在加载目录...');
+            setStatus('正在加载目录...');
                 showProgress(10);
         requestJson('/api/list?path=' + encodeURIComponent(state.currentPath), { method: 'GET' })
           .then((data) => {
@@ -786,9 +1065,9 @@ class LocalWebServer(
                         setTimeout(() => hideProgress(), 150);
                         setBusy(false);
           })
-                    .catch((error) => {
-                        setBusy(false);
-                        hideProgress();
+                  .catch((error) => {
+                    setBusy(false);
+                    hideProgress();
                         if (error && error.message === 'unauthorized') {
                             alert('认证已失效，请重新输入密码登录。');
                             appBox.style.display = 'none';
@@ -805,6 +1084,124 @@ class LocalWebServer(
                         setStatus('目录加载失败');
                     });
       }
+
+            function loadQuickNote() {
+                noteStatus.textContent = '正在读取 .lm.note.md ...';
+                requestJson('/api/quick-note/load', { method: 'GET' })
+                    .then((data) => {
+                        noteEditor.value = data.text || '';
+                        noteStatus.textContent = '读取完成';
+                        noteLoadedOnce = true;
+                    })
+                    .catch((error) => {
+                        noteStatus.textContent = '读取失败: ' + normalizeErrorText(error);
+                    });
+            }
+
+            function saveQuickNote() {
+                noteStatus.textContent = '保存中...';
+                const form = new URLSearchParams();
+                form.set('text', noteEditor.value || '');
+                fetch('/api/quick-note/save', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+                    body: form.toString()
+                }).then(async (response) => {
+                    const text = await response.text();
+                    const payload = text ? JSON.parse(text) : {};
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || 'save_failed');
+                    }
+                    noteStatus.textContent = '保存成功，长度 ' + (payload.length || 0);
+                }).catch((error) => {
+                    noteStatus.textContent = '保存失败: ' + normalizeErrorText(error);
+                });
+            }
+
+            function loadConfig() {
+                configStatus.textContent = '正在读取配置...';
+                requestJson('/api/config/get', { method: 'GET' })
+                    .then((data) => {
+                        const cfg = data.config || {};
+                        cfgFtpPort.value = (cfg.ftp_port ?? '').toString();
+                        cfgFtpPassword.value = '';
+                        cfgTimeout.value = (cfg.ftp_timeout_minutes ?? '').toString();
+                        cfgLocalService.value = String(!!cfg.local_network_service_enabled);
+                        cfgFilterVisible.value = String(!!cfg.filter_visible);
+                        cfgHideDot.value = String(!!cfg.hide_dot_files);
+                        configStatus.textContent = '配置读取完成';
+                        configLoadedOnce = true;
+                    })
+                    .catch((error) => {
+                        configStatus.textContent = '读取失败: ' + normalizeErrorText(error);
+                    });
+            }
+
+            function saveConfig() {
+                configStatus.textContent = '正在保存配置...';
+                const form = new URLSearchParams();
+                if (cfgFtpPort.value.trim()) form.set('ftp_port', cfgFtpPort.value.trim());
+                form.set('ftp_password', cfgFtpPassword.value || '');
+                if (cfgTimeout.value.trim()) form.set('ftp_timeout_minutes', cfgTimeout.value.trim());
+                if (cfgLocalService.value.trim()) form.set('local_network_service_enabled', cfgLocalService.value.trim());
+                if (cfgFilterVisible.value.trim()) form.set('filter_visible', cfgFilterVisible.value.trim());
+                if (cfgHideDot.value.trim()) form.set('hide_dot_files', cfgHideDot.value.trim());
+                fetch('/api/config/set', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+                    body: form.toString()
+                }).then(async (response) => {
+                    const text = await response.text();
+                    const payload = text ? JSON.parse(text) : {};
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || 'config_set_failed');
+                    }
+                    cfgFtpPassword.value = '';
+                    configStatus.textContent = '配置保存成功';
+                }).catch((error) => {
+                    configStatus.textContent = '保存失败: ' + normalizeErrorText(error);
+                });
+            }
+
+            function exportConfigJson() {
+                configStatus.textContent = '正在导出配置...';
+                requestJson('/api/config/export', { method: 'GET' })
+                    .then((data) => {
+                        configJsonEditor.value = data.json || '';
+                        configStatus.textContent = '配置已导出到下方 JSON 编辑框';
+                    })
+                    .catch((error) => {
+                        configStatus.textContent = '导出失败: ' + normalizeErrorText(error);
+                    });
+            }
+
+            function importConfigJson() {
+                const jsonText = configJsonEditor.value || '';
+                if (!jsonText.trim()) {
+                    alert('请先粘贴配置 JSON');
+                    return;
+                }
+                const importKeys = confirm('是否同时导入 GPG 密钥数据？\n选择“取消”将跳过密钥，仅导入其余配置。');
+                configStatus.textContent = '正在导入配置...';
+                const form = new URLSearchParams();
+                form.set('json', jsonText);
+                form.set('import_keys', importKeys ? '1' : '0');
+                fetch('/api/config/import', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+                    body: form.toString()
+                }).then(async (response) => {
+                    const text = await response.text();
+                    const payload = text ? JSON.parse(text) : {};
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || 'config_import_failed');
+                    }
+                    configStatus.textContent = '配置导入成功';
+                    loadConfig();
+                }).catch((error) => {
+                    configStatus.textContent = '导入失败: ' + normalizeErrorText(error);
+                });
+            }
 
             function requestDelete(path, name) {
                 if (busy) return;
@@ -824,7 +1221,7 @@ class LocalWebServer(
                     });
             }
 
-            document.getElementById('connectBtn').onclick = () => {
+        document.getElementById('connectBtn').onclick = () => {
                 if (busy) return;
                 const secret = accessCodeEl.value || '';
                 setBusy(true);
@@ -847,6 +1244,7 @@ class LocalWebServer(
                     accessCodeEl.value = '';
                     loginBox.style.display = 'none';
                     appBox.style.display = 'block';
+                    switchTab('files');
                     setStatus('登录成功，正在读取目录...');
                     setBusy(false);
                     loadList();
@@ -864,6 +1262,35 @@ class LocalWebServer(
                     document.getElementById('connectBtn').click();
                 }
             });
+
+            tabFilesBtn.onclick = () => switchTab('files');
+            tabNoteBtn.onclick = () => switchTab('note');
+            tabConfigBtn.onclick = () => switchTab('config');
+            document.getElementById('noteReloadBtn').onclick = loadQuickNote;
+            document.getElementById('noteSaveBtn').onclick = saveQuickNote;
+            document.getElementById('configLoadBtn').onclick = loadConfig;
+            document.getElementById('configSaveBtn').onclick = saveConfig;
+            document.getElementById('configExportBtn').onclick = exportConfigJson;
+            document.getElementById('configImportBtn').onclick = importConfigJson;
+
+            document.getElementById('logoutBtn').onclick = () => {
+                fetch('/api/logout', {
+                    method: 'POST',
+                    headers: authHeaders()
+                }).finally(() => {
+                    state.token = '';
+                    noteLoadedOnce = false;
+                    configLoadedOnce = false;
+                    noteEditor.value = '';
+                    noteStatus.textContent = '未加载';
+                    configStatus.textContent = '未加载';
+                    configJsonEditor.value = '';
+                    appBox.style.display = 'none';
+                    loginBox.style.display = 'block';
+                    hideProgress();
+                    setStatus('已退出登录');
+                });
+            };
 
       document.getElementById('refreshBtn').onclick = loadList;
       document.getElementById('backBtn').onclick = () => {
