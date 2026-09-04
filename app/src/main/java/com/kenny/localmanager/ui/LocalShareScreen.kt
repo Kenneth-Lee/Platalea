@@ -91,6 +91,7 @@ fun LocalShareScreen(
     var logLines by remember { mutableStateOf(emptyList<String>()) }
     var isRunning by remember { mutableStateOf(false) }
     var localIp by remember { mutableStateOf<String?>(null) }
+    var webUrl by remember { mutableStateOf<String?>(null) }
     var connectionCount by remember { mutableStateOf(0) }
     var remainingMinutes by remember(timeoutMinutes) { mutableStateOf(if (timeoutMinutes > 0) timeoutMinutes else null) }
 
@@ -106,6 +107,7 @@ fun LocalShareScreen(
         logLines = manager.getLogLines()
         isRunning = manager.isRunning()
         connectionCount = manager.getConnectionCount()
+        webUrl = manager.getWebUiUrl(ip)
         if (!ok) logLines = manager.getLogLines()
     }
 
@@ -141,6 +143,7 @@ fun LocalShareScreen(
         try {
             val ip = withContext(Dispatchers.IO) { getLocalIpAddress() }
             localIp = ip
+            webUrl = manager.getWebUiUrl(ip)
             startServer(ip)
         } catch (e: Throwable) {
             Log.e("LocalShareScreen", "LaunchedEffect init failed", e)
@@ -155,6 +158,7 @@ fun LocalShareScreen(
                 logLines = manager.getLogLines()
                 isRunning = manager.isRunning()
                 connectionCount = manager.getConnectionCount()
+                webUrl = manager.getWebUiUrl(localIp)
             }
         } catch (e: Throwable) {
             Log.e("LocalShareScreen", "polling failed", e)
@@ -302,6 +306,25 @@ fun LocalShareScreen(
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (webUrl != null) {
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    stringResource(R.string.local_share_web_ui_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    webUrl ?: "",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    stringResource(R.string.local_share_web_ui_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Spacer(Modifier.height(16.dp))
             Row(
                 Modifier.fillMaxWidth(),

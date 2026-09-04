@@ -844,10 +844,13 @@
     <string name="local_share_stop_action">停止服务</string>
     <string name="local_share_start_action">启动服务</string>
     <string name="local_share_connection_help">连接说明</string>
-    <string name="local_share_credentials_hint">用户名 lm，密码沿用配置中的 FTP/管理员密码。建议在电脑端使用 platalea：</string>
+    <string name="local_share_credentials_hint">密码沿用配置中的 FTP/管理员密码。建议在电脑端使用 platalea：</string>
     <string name="local_share_client_examples">示例命令：</string>
     <string name="local_share_example_command">platalea share-cmd ls %1$s --port %2$d --password &lt;password&gt;</string>
     <string name="local_share_port">端口：%1$d</string>
+    <string name="local_share_web_ui_label">Web 界面</string>
+    <string name="local_share_web_ui_hint">在浏览器中打开上面的 HTTPS 地址，输入密码即可上传、下载文件或整目录。</string>
+    <string name="local_share_web_started">Web HTTPS 界面已启动 端口=%1$d 指纹=%2$s</string>
     <string name="local_share_work_log">共享日志</string>
     <string name="local_share_log_clip_label">本地共享日志</string>
     <string name="local_share_copy_log">复制日志</string>

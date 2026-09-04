@@ -7,6 +7,7 @@ import android.provider.DocumentsContract
 import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
+import com.kenny.localmanager.family.FamilyTlsManager
 import com.kenny.localmanager.file.listFilesSafe
 import org.apache.ftpserver.FtpServer
 import org.apache.ftpserver.FtpServerFactory
@@ -33,6 +34,8 @@ import java.util.concurrent.atomic.AtomicInteger
 class FtpServerManager(private val context: Context) {
 
     private var server: FtpServer? = null
+    private var webServer: LocalWebServer? = null
+    private val tlsManager by lazy { FamilyTlsManager(context.applicationContext) }
     private val connectionCount = AtomicInteger(0)
     private val logLines = CopyOnWriteArrayList<String>()
 
@@ -75,6 +78,11 @@ class FtpServerManager(private val context: Context) {
             val ftpServer = factory.createServer()
             ftpServer.start()
             server = ftpServer
+            val webPort = port + 1
+            val localTls = tlsManager.localIdentity()
+            webServer = LocalWebServer(context.applicationContext, root, pwd, webPort, localTls.sslContext, this::addLog)
+            webServer?.start()
+            addLog(context.getString(R.string.local_share_web_started, webPort, localTls.fingerprintSha256))
             addLog(ctx.getString(R.string.ftp_started, port))
             true
         } catch (e: Throwable) {
@@ -200,12 +208,24 @@ class FtpServerManager(private val context: Context) {
             server?.stop()
         } catch (_: Exception) {}
         server = null
+        try {
+            webServer?.stop()
+        } catch (_: Exception) {}
+        webServer = null
         addLog(context.getString(R.string.ftp_stopped_log))
     }
 
     fun isRunning(): Boolean = server != null
 
     fun getConnectionCount(): Int = connectionCount.get()
+
+    fun getWebUiPort(): Int = webServer?.port ?: 0
+
+    fun getWebUiUrl(ip: String?): String? {
+        val port = getWebUiPort()
+        if (port <= 0 || ip.isNullOrBlank()) return null
+        return "https://$ip:$port"
+    }
 
     fun addLog(line: String) {
         val ts = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
