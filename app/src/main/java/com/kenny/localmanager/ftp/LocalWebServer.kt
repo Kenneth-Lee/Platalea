@@ -33,19 +33,216 @@ import org.json.JSONObject
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
+private const val MAX_IN_MEMORY_BODY_BYTES = 8L * 1024L * 1024L
+
 private data class HttpRequest(
     val method: String,
     val path: String,
     val query: Map<String, String>,
     val headers: Map<String, String>,
-    val body: ByteArray
+    val body: ByteArray,
+    val bodyFile: File? = null
 )
 
-private data class UploadedFile(
+internal data class UploadedFile(
     val fileName: String,
     val relativePath: String,
-    val bytes: ByteArray
+    val bytes: ByteArray = byteArrayOf(),
+    val tempFile: File? = null
 )
+
+internal fun normalizeUploadRelativePath(rawPath: String): String {
+    val value = rawPath.replace('\\', '/').trim()
+    if (value.isEmpty()) return ""
+    val cleaned = value.replace(Regex("^([A-Za-z]:)?/+"), "")
+    val segments = mutableListOf<String>()
+    for (segment in cleaned.split('/')) {
+        when {
+            segment.isEmpty() || segment == "." -> Unit
+            segment == ".." -> if (segments.isNotEmpty()) segments.removeAt(segments.lastIndex)
+            else -> segments.add(segment)
+        }
+    }
+    return segments.joinToString("/")
+}
+
+internal fun parseMultipartUploads(body: ByteArray, contentType: String): List<UploadedFile> {
+    val boundary = contentType.substringAfter("boundary=", "").trim().removePrefix("\"").removeSuffix("\"")
+    if (boundary.isBlank()) return emptyList()
+    val marker = "--$boundary"
+    val chunks = String(body, StandardCharsets.ISO_8859_1).split(marker)
+    val result = mutableListOf<UploadedFile>()
+    for (chunk in chunks) {
+        if (chunk.isBlank() || chunk.startsWith("--")) continue
+        val headerEnd = chunk.indexOf("\r\n\r\n")
+        if (headerEnd < 0) continue
+        val headers = chunk.substring(0, headerEnd)
+        val payload = chunk.substring(headerEnd + 4)
+        val rawFilename = parseMultipartFilename(headers) ?: continue
+        val relativePath = normalizeUploadRelativePath(rawFilename)
+        if (relativePath.isBlank()) continue
+        val fileName = relativePath.substringAfterLast('/')
+        if (fileName.isBlank()) continue
+        val normalizedPayload = if (payload.endsWith("\r\n")) payload.dropLast(2) else payload
+        result.add(UploadedFile(fileName, relativePath, normalizedPayload.toByteArray(StandardCharsets.ISO_8859_1)))
+    }
+    return result
+}
+
+internal fun parseMultipartUploadsFromFile(file: File, contentType: String): List<UploadedFile> {
+    val boundary = contentType.substringAfter("boundary=", "").trim().removePrefix("\"").removeSuffix("\"")
+    if (boundary.isBlank()) return emptyList()
+    val boundaryLine = "--$boundary"
+    val boundaryMarker = "\r\n$boundaryLine".toByteArray(StandardCharsets.ISO_8859_1)
+    val input = file.inputStream().buffered()
+    val result = mutableListOf<UploadedFile>()
+    val firstLine = readMultipartLine(input) ?: return emptyList()
+    if (firstLine != boundaryLine && !firstLine.startsWith(boundaryLine)) return emptyList()
+    outerLoop@ while (true) {
+        val headers = readMultipartHeaders(input) ?: break
+        val rawFilename = parseMultipartFilename(headers)
+        if (rawFilename == null) {
+            skipMultipartPayload(input, boundaryMarker)
+            val next = readMultipartLine(input)
+            if (next == "--$boundary--" || next == boundaryLine) break
+            continue@outerLoop
+        }
+        val relativePath = normalizeUploadRelativePath(rawFilename)
+        if (relativePath.isBlank()) {
+            skipMultipartPayload(input, boundaryMarker)
+            val next = readMultipartLine(input)
+            if (next == "--$boundary--" || next == boundaryLine) break
+            continue@outerLoop
+        }
+        val fileName = relativePath.substringAfterLast('/')
+        if (fileName.isBlank()) {
+            skipMultipartPayload(input, boundaryMarker)
+            val next = readMultipartLine(input)
+            if (next == "--$boundary--" || next == boundaryLine) break
+            continue@outerLoop
+        }
+        val tempFile = File.createTempFile("platalea-upload-part-", ".bin")
+        if (!copyMultipartPayloadToFile(input, tempFile, boundaryMarker)) {
+            tempFile.delete()
+            break
+        }
+        val trimmedBytes = tempFile.readBytes()
+        val boundaryTail = "\r\n".toByteArray(StandardCharsets.ISO_8859_1)
+        val payloadBytes = if (trimmedBytes.size >= boundaryTail.size && trimmedBytes.copyOfRange(trimmedBytes.size - boundaryTail.size, trimmedBytes.size).contentEquals(boundaryTail)) {
+            trimmedBytes.copyOf(trimmedBytes.size - boundaryTail.size)
+        } else {
+            trimmedBytes
+        }
+        if (payloadBytes != trimmedBytes) {
+            tempFile.writeBytes(payloadBytes)
+        }
+        val bytes = if (payloadBytes.size <= MAX_IN_MEMORY_BODY_BYTES) payloadBytes else byteArrayOf()
+        result.add(UploadedFile(fileName, relativePath, bytes = bytes, tempFile = tempFile))
+        val next = readMultipartLine(input)
+        if (next == null) break
+        if (next == "--$boundary--") break
+        if (next == boundaryLine || next.isBlank()) continue@outerLoop
+    }
+    return result
+}
+
+private fun parseMultipartFilename(headers: String): String? {
+    val encoded = Regex("filename\\*=(?:UTF-8'')?([^;\\r\\n]+)", RegexOption.IGNORE_CASE)
+        .find(headers)?.groupValues?.getOrNull(1)
+    if (encoded != null) {
+        return URLDecoder.decode(encoded.trim().trim('"'), StandardCharsets.UTF_8.name())
+    }
+    return Regex("filename=\"([^\"]+)\"", RegexOption.IGNORE_CASE)
+        .find(headers)?.groupValues?.getOrNull(1)
+        ?: Regex("filename=([^;\\r\\n]+)", RegexOption.IGNORE_CASE)
+            .find(headers)?.groupValues?.getOrNull(1)?.trim()?.trim('"')
+}
+
+internal fun readMultipartHeaders(input: InputStream): String? {
+    val lines = mutableListOf<String>()
+    while (true) {
+        val line = readMultipartLine(input) ?: return if (lines.isEmpty()) null else lines.joinToString("\r\n")
+        if (line.isEmpty()) return lines.joinToString("\r\n")
+        lines.add(line)
+    }
+}
+
+internal fun copyMultipartPayloadToFile(input: InputStream, outputFile: File, boundaryBytes: ByteArray): Boolean {
+    val output = outputFile.outputStream().buffered()
+    val tail = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    try {
+        while (true) {
+            val read = input.read(buffer)
+            if (read <= 0) break
+            for (index in 0 until read) {
+                val value = buffer[index].toInt() and 0xFF
+                tail.write(value)
+                if (tail.size() > boundaryBytes.size) {
+                    val snapshot = tail.toByteArray()
+                    val flushLength = snapshot.size - boundaryBytes.size
+                    if (flushLength > 0) {
+                        output.write(snapshot, 0, flushLength)
+                    }
+                    val retained = snapshot.copyOfRange(flushLength, snapshot.size)
+                    tail.reset()
+                    tail.write(retained)
+                }
+                if (tail.size() == boundaryBytes.size && tail.toByteArray().contentEquals(boundaryBytes)) {
+                    output.flush()
+                    return true
+                }
+            }
+        }
+        output.flush()
+        return false
+    } finally {
+        output.close()
+    }
+}
+
+internal fun skipMultipartPayload(input: InputStream, boundaryBytes: ByteArray) {
+    val tail = ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (true) {
+        val read = input.read(buffer)
+        if (read <= 0) break
+        for (index in 0 until read) {
+            val value = buffer[index].toInt() and 0xFF
+            tail.write(value)
+            if (tail.size() > boundaryBytes.size) {
+                val snapshot = tail.toByteArray()
+                val keepCount = boundaryBytes.size
+                val trimStart = snapshot.size - keepCount
+                tail.reset()
+                tail.write(snapshot.copyOfRange(trimStart, snapshot.size))
+            }
+            if (tail.size() == boundaryBytes.size && tail.toByteArray().contentEquals(boundaryBytes)) {
+                return
+            }
+        }
+    }
+}
+
+internal fun readMultipartLine(input: InputStream): String? {
+    val builder = StringBuilder()
+    while (true) {
+        val value = input.read()
+        if (value < 0) {
+            return if (builder.isEmpty()) null else builder.toString()
+        }
+        when (value.toChar()) {
+            '\r' -> {
+                val next = input.read()
+                if (next == '\n'.code) return builder.toString()
+                if (next >= 0) builder.append(next.toChar())
+                return builder.toString()
+            }
+            '\n' -> return builder.toString()
+            else -> builder.append(value.toChar())
+        }
+    }
+}
 
 private const val WEBUI_QUICK_NOTE_FILE = ".lm.note.md"
 
@@ -118,6 +315,7 @@ class LocalWebServer(
                 val input = BufferedInputStream(client.getInputStream())
                 val output = client.getOutputStream()
                 val request = readRequest(input) ?: return
+                val requestBodyFile = request.bodyFile
 
                 if (request.method == "GET" && request.path == "/") {
                     writeResponse(output, 200, "text/html; charset=utf-8", buildIndexPage().toByteArray(StandardCharsets.UTF_8), emptyMap())
@@ -174,27 +372,37 @@ class LocalWebServer(
                     request.method == "POST" && request.path == "/api/upload" -> {
                         val startedAt = System.currentTimeMillis()
                         val parent = resolveDocument(request.query["path"] ?: "/") ?: rootDoc
-                        val files = parseMultipartUploads(request.body, request.headers["content-type"] ?: "")
+                        val files = when {
+                            requestBodyFile != null -> parseMultipartUploadsFromFile(requestBodyFile, request.headers["content-type"] ?: "")
+                            else -> parseMultipartUploads(request.body, request.headers["content-type"] ?: "")
+                        }
                         val overwrite = request.query["overwrite"] == "1"
                         val result = mutableListOf<Map<String, String>>()
                         for (file in files) {
                             val destination = createUploadTarget(parent, file.relativePath, overwrite)
-                            if (destination != null) {
-                                writeBytesToDocument(destination, file.bytes)
-                                result.add(mapOf("name" to file.fileName, "path" to file.relativePath, "status" to "ok"))
-                            } else {
+                            if (destination == null) {
                                 val status = if (!overwrite) "conflict" else "failed"
                                 result.add(mapOf("name" to file.fileName, "path" to file.relativePath, "status" to status))
+                                continue
                             }
+                            val wrote = writeUploadedFileToDocument(destination, file)
+                            result.add(mapOf(
+                                "name" to file.fileName,
+                                "path" to file.relativePath,
+                                "status" to if (wrote) "ok" else "failed"
+                            ))
                         }
                         val okCount = result.count { it["status"] == "ok" }
                         val conflictCount = result.count { it["status"] == "conflict" }
+                        val failedCount = result.count { it["status"] == "failed" }
                         val tookMs = System.currentTimeMillis() - startedAt
+                        val allSucceeded = result.isNotEmpty() && failedCount == 0 && conflictCount == 0
                         writeJson(output, 200, mapOf(
-                            "ok" to true,
+                            "ok" to allSucceeded,
                             "files" to result,
                             "okCount" to okCount,
                             "conflictCount" to conflictCount,
+                            "failedCount" to failedCount,
                             "tookMs" to tookMs
                         ))
                     }
@@ -364,21 +572,32 @@ class LocalWebServer(
         }
 
         val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
-        val body = if (contentLength > 0) {
-            val buffer = ByteArrayOutputStream()
-            val chunk = ByteArray(4096)
-            var remaining = contentLength.toLong()
-            while (remaining > 0) {
-                val read = input.read(chunk, 0, minOf(chunk.size.toLong(), remaining).toInt())
-                if (read <= 0) break
-                buffer.write(chunk, 0, read)
-                remaining -= read.toLong()
+        val bodyFile = if (contentLength > 0L) {
+            val tempFile = File.createTempFile("platalea-web-body-", ".bin")
+            val output = FileOutputStream(tempFile)
+            output.use { stream ->
+                val chunk = ByteArray(4096)
+                var remaining = contentLength
+                while (remaining > 0L) {
+                    val read = input.read(chunk, 0, minOf(chunk.size.toLong(), remaining).toInt())
+                    if (read <= 0) break
+                    stream.write(chunk, 0, read)
+                    remaining -= read.toLong()
+                }
             }
-            buffer.toByteArray()
+            tempFile
+        } else {
+            null
+        }
+
+        val body = if (bodyFile != null && bodyFile.length() <= MAX_IN_MEMORY_BODY_BYTES) {
+            bodyFile.readBytes()
+        } else if (bodyFile != null) {
+            byteArrayOf()
         } else {
             byteArrayOf()
         }
-        return HttpRequest(method, path, query, headers, body)
+        return HttpRequest(method, path, query, headers, body, bodyFile)
     }
 
     private fun readHeaderBytes(input: InputStream): ByteArray? {
@@ -449,9 +668,30 @@ class LocalWebServer(
         }
     }
 
-    private fun writeBytesToDocument(doc: DocumentFile, bytes: ByteArray) {
-        val output = context.contentResolver.openOutputStream(doc.uri, "wt") ?: return
-        output.use { it.write(bytes) }
+    private fun writeBytesToDocument(doc: DocumentFile, bytes: ByteArray): Boolean {
+        return try {
+            val output = context.contentResolver.openOutputStream(doc.uri, "wt") ?: return false
+            output.use { it.write(bytes) }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun writeUploadedFileToDocument(doc: DocumentFile, uploadedFile: UploadedFile): Boolean {
+        return try {
+            val output = context.contentResolver.openOutputStream(doc.uri, "wt") ?: return false
+            output.use { stream ->
+                if (uploadedFile.tempFile != null) {
+                    uploadedFile.tempFile.inputStream().buffered().use { it.copyTo(stream) }
+                } else {
+                    stream.write(uploadedFile.bytes)
+                }
+            }
+            true
+        } catch (_: Throwable) {
+            false
+        }
     }
 
     private fun loadQuickNoteText(): Result<String> {
@@ -554,41 +794,31 @@ class LocalWebServer(
     }
 
     private fun createUploadTarget(parentDoc: DocumentFile, relativePath: String, overwrite: Boolean): DocumentFile? {
-        val fileName = relativePath.substringAfterLast('/')
-        val dirSegments = relativePath.substringBeforeLast('/', missingDelimiterValue = "").split("/").filter { it.isNotEmpty() }
+        val sanitized = normalizeUploadRelativePath(relativePath)
+        if (sanitized.isBlank()) return null
+        val fileName = sanitized.substringAfterLast('/')
+        if (fileName.isBlank()) return null
+        val dirSegments = sanitized.substringBeforeLast('/', missingDelimiterValue = "").split("/").filter { it.isNotEmpty() }
         var cursor = parentDoc
         for (segment in dirSegments) {
-            val next = cursor.listFilesSafe().find { it.name == segment } ?: cursor.createDirectory(segment) ?: return null
-            cursor = next
+            val next = cursor.listFilesSafe().find { it.name == segment }
+            if (next != null) {
+                if (!next.isDirectory) return null
+                cursor = next
+                continue
+            }
+            val created = cursor.createDirectory(segment) ?: return null
+            cursor = created
         }
         val existing = cursor.listFilesSafe().find { it.name == fileName }
-        if (existing != null && existing.isFile) {
+        if (existing != null) {
+            if (existing.isDirectory) return null
             if (!overwrite) return null
-            existing.delete()
+            if (!existing.delete()) return null
         }
         return cursor.createFile("application/octet-stream", fileName)
     }
 
-    private fun parseMultipartUploads(body: ByteArray, contentType: String): List<UploadedFile> {
-        val boundary = contentType.substringAfter("boundary=", "").trim().removePrefix("\"").removeSuffix("\"")
-        if (boundary.isBlank()) return emptyList()
-        val text = String(body, StandardCharsets.ISO_8859_1)
-        val marker = "--$boundary"
-        val chunks = text.split(marker)
-        val result = mutableListOf<UploadedFile>()
-        for (chunk in chunks) {
-            if (chunk.isBlank() || chunk.contains("--")) continue
-            val headerEnd = chunk.indexOf("\r\n\r\n")
-            if (headerEnd < 0) continue
-            val headers = chunk.substring(0, headerEnd)
-            val payload = chunk.substring(headerEnd + 4).removeSuffix("\r\n")
-            val filename = Regex("filename=\"([^\"]+)\"").find(headers)?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() } ?: continue
-            val field = Regex("name=\"([^\"]+)\"").find(headers)?.groupValues?.getOrNull(1) ?: "file"
-            if (field != "file") continue
-            result.add(UploadedFile(filename, filename, payload.toByteArray(StandardCharsets.ISO_8859_1)))
-        }
-        return result
-    }
 
     private fun zipDirectory(dir: DocumentFile): File {
         val tempRoot = File.createTempFile("platalea-web-", "")
@@ -884,6 +1114,19 @@ class LocalWebServer(
             function hideProgress() {
                 progressWrap.style.display = 'none';
                 progressBar.style.width = '0%';
+            }
+
+            function formatDuration(ms) {
+                const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+                const minutes = Math.floor(totalSeconds / 60);
+                const seconds = totalSeconds % 60;
+                return minutes > 0 ? minutes + 'm ' + seconds + 's' : seconds + 's';
+            }
+
+            function timeDrivenPercent(startTimeMs, maxPercent = 98) {
+                const elapsed = Math.max(0, performance.now() - startTimeMs);
+                const ratio = elapsed / 15000;
+                return Math.min(maxPercent, ratio * 100);
             }
 
             function normalizeErrorText(error) {
@@ -1339,7 +1582,9 @@ class LocalWebServer(
 
                 setBusy(true);
                 pendingOverwriteMode = overwriteMode;
-                setStatus((sourceType === 'dir' ? '目录' : '文件') + '上传中（传输阶段）...');
+                const uploadStartedAt = performance.now();
+                let lastPublishedPercent = 0;
+                setStatus((sourceType === 'dir' ? '目录' : '文件') + '上传中（按传输时间推进）...');
                 showProgress(0);
 
                 const xhr = new XMLHttpRequest();
@@ -1351,13 +1596,14 @@ class LocalWebServer(
                 }
 
                 xhr.upload.onprogress = (event) => {
-                    if (!event.lengthComputable) return;
-                    const percent = (event.loaded / event.total) * 100;
+                    const elapsedMs = performance.now() - uploadStartedAt;
+                    const percent = Math.max(lastPublishedPercent, timeDrivenPercent(uploadStartedAt));
+                    lastPublishedPercent = percent;
                     showProgress(percent);
-                    setStatus('上传中 ' + percent.toFixed(1) + '%');
+                    setStatus('上传中 ' + percent.toFixed(1) + '%，已用时 ' + formatDuration(elapsedMs));
                 };
 
-                xhr.onload = () => {
+                                xhr.onload = () => {
                     if (xhr.status >= 200 && xhr.status < 300) {
                         showProgress(100);
                         setStatus('上传传输完成，正在处理服务器写入...');
@@ -1368,8 +1614,9 @@ class LocalWebServer(
                             payload = {};
                         }
                         const conflictCount = payload.conflictCount || 0;
+                        const failedCount = payload.failedCount || 0;
+                        const okCount = payload.okCount || 0;
                         if (conflictCount > 0 && !pendingOverwriteMode) {
-                            const okCount = payload.okCount || 0;
                             const answer = confirm('检测到 ' + conflictCount + ' 个同名文件。\n已上传成功 ' + okCount + ' 个。\n是否覆盖冲突文件后重试上传冲突项？');
                             if (answer) {
                                 pendingOverwriteMode = true;
@@ -1381,6 +1628,13 @@ class LocalWebServer(
                                     return;
                                 }
                             }
+                        }
+                        if (failedCount > 0 || !payload.ok || okCount === 0) {
+                            setBusy(false);
+                            hideProgress();
+                            setStatus('上传失败');
+                            alert('上传失败: 服务器写入失败，已写入 ' + okCount + ' 个文件。');
+                            return;
                         }
                         const tookMs = payload.tookMs || 0;
                         setStatus('服务器处理完成，用时 ' + tookMs + ' ms，正在刷新目录...');
@@ -1394,7 +1648,6 @@ class LocalWebServer(
                         alert('上传失败: ' + xhr.status);
                     }
                 };
-
                 xhr.onerror = () => {
                     setBusy(false);
                     hideProgress();
