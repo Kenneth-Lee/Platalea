@@ -342,7 +342,7 @@ fun WebUiScreen(
                 Text(stringResource(R.string.local_share_work_log), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 IconButton(
                     onClick = {
-                        val text = logLines.joinToString("\n")
+                        val text = logLines.joinToString("\n") { toWebUiLogLine(it) }
                         if (text.isNotEmpty()) {
                             val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
                             cm?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.local_share_log_clip_label), text))

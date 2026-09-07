@@ -1,6 +1,8 @@
 package com.kenny.localmanager.webui
 
 import android.content.Context
+import android.content.ClipData
+import android.content.ClipboardManager
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigExportCategory
@@ -529,6 +531,22 @@ class LocalWebServer(
                             writeJson(output, 500, mapOf("ok" to false, "error" to "load_failed", "message" to (error.message ?: "unknown")))
                         }
                     }
+                    request.method == "GET" && request.path == "/api/clipboard/text" -> {
+                        val result = readClipboardText()
+                        result.onSuccess { clipboard ->
+                            writeJson(output, 200, mapOf(
+                                "ok" to true,
+                                "text" to clipboard.text,
+                                "mimeType" to clipboard.mimeType,
+                                "label" to clipboard.label,
+                                "hasText" to clipboard.hasText,
+                                "hasImage" to clipboard.hasImage,
+                                "updatedAtMs" to clipboard.updatedAtMs
+                            ))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "clipboard_load_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
                     request.method == "POST" && request.path == "/api/quick-note/save" -> {
                         val fields = parseFormUrlEncoded(request.body)
                         val text = fields["text"] ?: ""
@@ -799,6 +817,39 @@ class LocalWebServer(
             val input = context.contentResolver.openInputStream(noteDoc.uri)
                 ?: throw IllegalStateException("open quick note failed")
             input.use { String(it.readBytes(), Charsets.UTF_8) }
+        }
+    }
+
+    private data class ClipboardSnapshot(
+        val text: String?,
+        val mimeType: String?,
+        val label: String?,
+        val hasText: Boolean,
+        val hasImage: Boolean,
+        val updatedAtMs: Long
+    )
+
+    private fun readClipboardText(): Result<ClipboardSnapshot> {
+        return runCatching {
+            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                ?: throw IllegalStateException("clipboard unavailable")
+            val clip = clipboardManager.primaryClip ?: throw IllegalStateException("clipboard empty")
+            if (clip.itemCount <= 0) throw IllegalStateException("clipboard empty")
+            val firstItem = clip.getItemAt(0)
+            val text = firstItem.coerceToText(context)?.toString()
+            val description = clip.description
+            val hasImage = (0 until description.mimeTypeCount).any { index ->
+                val mimeType = description.getMimeType(index)
+                mimeType != null && mimeType.startsWith("image/", ignoreCase = true)
+            }
+            ClipboardSnapshot(
+                text = text?.takeIf { it.isNotBlank() },
+                mimeType = if (description.mimeTypeCount > 0) description.getMimeType(0) else null,
+                label = description.label?.toString(),
+                hasText = !text.isNullOrBlank(),
+                hasImage = hasImage,
+                updatedAtMs = System.currentTimeMillis()
+            )
         }
     }
 
@@ -1134,6 +1185,7 @@ class LocalWebServer(
                 <div class="app-header">
                     <div class="tabbar">
                         <button id="tab-files" class="tab-button active" type="button">文件共享</button>
+                        <button id="tab-clipboard" class="tab-button" type="button">剪贴板</button>
                         <button id="tab-note" class="tab-button" type="button">.lm.note.md 编辑</button>
                         <button id="tab-config" class="tab-button" type="button">配置</button>
                     </div>
@@ -1161,6 +1213,15 @@ class LocalWebServer(
                         <tbody id="entries"></tbody>
                     </table>
         </div>
+
+                <div id="panel-clipboard" class="panel">
+                    <div class="note-toolbar">
+                        <button id="clipboardReloadBtn" type="button">重新读取</button>
+                        <span id="clipboardStatus" class="small">未加载</span>
+                    </div>
+                    <div id="clipboardMeta" class="small muted">等待读取剪贴板内容</div>
+                    <textarea id="clipboardText" class="note-editor" readonly placeholder="这里显示手机当前剪贴板中的文本内容"></textarea>
+                </div>
 
                 <div id="panel-note" class="panel">
                     <div class="note-toolbar">
@@ -1226,13 +1287,18 @@ class LocalWebServer(
             const progressWrap = document.getElementById('progressWrap');
             const progressBar = document.getElementById('progressBar');
             const tabFilesBtn = document.getElementById('tab-files');
+            const tabClipboardBtn = document.getElementById('tab-clipboard');
             const tabNoteBtn = document.getElementById('tab-note');
             const tabConfigBtn = document.getElementById('tab-config');
             const panelFiles = document.getElementById('panel-files');
+            const panelClipboard = document.getElementById('panel-clipboard');
             const panelNote = document.getElementById('panel-note');
             const panelConfig = document.getElementById('panel-config');
             const noteEditor = document.getElementById('noteEditor');
             const noteStatus = document.getElementById('noteStatus');
+            const clipboardText = document.getElementById('clipboardText');
+            const clipboardMeta = document.getElementById('clipboardMeta');
+            const clipboardStatus = document.getElementById('clipboardStatus');
             const configStatus = document.getElementById('configStatus');
             const cfgFtpPort = document.getElementById('cfgFtpPort');
             const cfgFtpPassword = document.getElementById('cfgFtpPassword');
@@ -1311,14 +1377,20 @@ class LocalWebServer(
             function switchTab(tabName) {
                 state.activeTab = tabName;
                 const isFiles = tabName === 'files';
+                const isClipboard = tabName === 'clipboard';
                 const isNote = tabName === 'note';
                 const isConfig = tabName === 'config';
                 tabFilesBtn.classList.toggle('active', isFiles);
+                tabClipboardBtn.classList.toggle('active', isClipboard);
                 tabNoteBtn.classList.toggle('active', isNote);
                 tabConfigBtn.classList.toggle('active', isConfig);
                 panelFiles.classList.toggle('active', isFiles);
+                panelClipboard.classList.toggle('active', isClipboard);
                 panelNote.classList.toggle('active', isNote);
                 panelConfig.classList.toggle('active', isConfig);
+                if (isClipboard) {
+                    loadClipboardText();
+                }
                 if (isNote && !noteLoadedOnce) {
                     loadQuickNote();
                 }
@@ -1515,6 +1587,23 @@ class LocalWebServer(
                     });
             }
 
+            function loadClipboardText() {
+                clipboardStatus.textContent = '正在读取手机剪贴板...';
+                requestJson('/api/clipboard/text', { method: 'GET' })
+                    .then((data) => {
+                        clipboardText.value = data.text || '';
+                        const parts = [];
+                        parts.push(data.hasText ? '文本' : '非文本');
+                        if (data.mimeType) parts.push(data.mimeType);
+                        if (data.hasImage) parts.push('包含图片');
+                        clipboardMeta.textContent = parts.join(' · ');
+                        clipboardStatus.textContent = '读取完成';
+                    })
+                    .catch((error) => {
+                        clipboardStatus.textContent = '读取失败: ' + normalizeErrorText(error);
+                    });
+            }
+
             function saveQuickNote() {
                 noteStatus.textContent = '保存中...';
                 const form = new URLSearchParams();
@@ -1681,8 +1770,10 @@ class LocalWebServer(
             });
 
             tabFilesBtn.onclick = () => switchTab('files');
+            tabClipboardBtn.onclick = () => switchTab('clipboard');
             tabNoteBtn.onclick = () => switchTab('note');
             tabConfigBtn.onclick = () => switchTab('config');
+            document.getElementById('clipboardReloadBtn').onclick = loadClipboardText;
             document.getElementById('noteReloadBtn').onclick = loadQuickNote;
             document.getElementById('noteSaveBtn').onclick = saveQuickNote;
             document.getElementById('configLoadBtn').onclick = loadConfig;
