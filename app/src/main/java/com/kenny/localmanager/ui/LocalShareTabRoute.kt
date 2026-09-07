@@ -11,7 +11,7 @@ import androidx.compose.ui.res.stringResource
 import com.kenny.localmanager.R
 import com.kenny.localmanager.ftp.FtpServerManager
 
-data class LocalShareTabRouteState(
+data class WebUiTabRouteState(
     val rootUri: String?,
     val displayUri: String,
     val manager: FtpServerManager,
@@ -22,10 +22,10 @@ data class LocalShareTabRouteState(
 )
 
 @Composable
-fun LocalShareTabRoute(state: LocalShareTabRouteState) {
+fun WebUiTabRoute(state: WebUiTabRouteState) {
     val rootUri = state.rootUri
     if (rootUri != null) {
-        LocalShareScreen(
+        WebUiScreen(
             manager = state.manager,
             treeRootUri = rootUri,
             currentDirUri = state.displayUri,

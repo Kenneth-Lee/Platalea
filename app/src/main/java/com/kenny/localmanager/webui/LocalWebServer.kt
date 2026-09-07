@@ -1,4 +1,4 @@
-package com.kenny.localmanager.ftp
+package com.kenny.localmanager.webui
 
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
@@ -15,6 +15,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PushbackInputStream
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
@@ -34,6 +35,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 private const val MAX_IN_MEMORY_BODY_BYTES = 8L * 1024L * 1024L
+private const val WEBUI_HEADER_READ_TIMEOUT_MS = 3000L
+private const val WEBUI_BODY_READ_TIMEOUT_MS = 3000L
+private const val WEBUI_UPLOAD_BODY_READ_TIMEOUT_MS = 0L
 
 private data class HttpRequest(
     val method: String,
@@ -94,7 +98,7 @@ internal fun parseMultipartUploadsFromFile(file: File, contentType: String): Lis
     if (boundary.isBlank()) return emptyList()
     val boundaryLine = "--$boundary"
     val boundaryMarker = "\r\n$boundaryLine".toByteArray(StandardCharsets.ISO_8859_1)
-    val input = file.inputStream().buffered()
+    val input = PushbackInputStream(file.inputStream().buffered(), 16 * 1024)
     val result = mutableListOf<UploadedFile>()
     val firstLine = readMultipartLine(input) ?: return emptyList()
     if (firstLine != boundaryLine && !firstLine.startsWith(boundaryLine)) return emptyList()
@@ -102,29 +106,38 @@ internal fun parseMultipartUploadsFromFile(file: File, contentType: String): Lis
         val headers = readMultipartHeaders(input) ?: break
         val rawFilename = parseMultipartFilename(headers)
         if (rawFilename == null) {
-            skipMultipartPayload(input, boundaryMarker)
-            val next = readMultipartLine(input)
-            if (next == "--$boundary--" || next == boundaryLine) break
+            when (skipMultipartPayload(input, boundaryMarker, boundaryLine)) {
+                MultipartBoundaryState.FINAL -> break
+                MultipartBoundaryState.NEXT_PART -> continue@outerLoop
+                MultipartBoundaryState.END_OF_STREAM -> break
+            }
             continue@outerLoop
         }
         val relativePath = normalizeUploadRelativePath(rawFilename)
         if (relativePath.isBlank()) {
-            skipMultipartPayload(input, boundaryMarker)
-            val next = readMultipartLine(input)
-            if (next == "--$boundary--" || next == boundaryLine) break
+            when (skipMultipartPayload(input, boundaryMarker, boundaryLine)) {
+                MultipartBoundaryState.FINAL -> break
+                MultipartBoundaryState.NEXT_PART -> continue@outerLoop
+                MultipartBoundaryState.END_OF_STREAM -> break
+            }
             continue@outerLoop
         }
         val fileName = relativePath.substringAfterLast('/')
         if (fileName.isBlank()) {
-            skipMultipartPayload(input, boundaryMarker)
-            val next = readMultipartLine(input)
-            if (next == "--$boundary--" || next == boundaryLine) break
+            when (skipMultipartPayload(input, boundaryMarker, boundaryLine)) {
+                MultipartBoundaryState.FINAL -> break
+                MultipartBoundaryState.NEXT_PART -> continue@outerLoop
+                MultipartBoundaryState.END_OF_STREAM -> break
+            }
             continue@outerLoop
         }
         val tempFile = File.createTempFile("platalea-upload-part-", ".bin")
-        if (!copyMultipartPayloadToFile(input, tempFile, boundaryMarker)) {
-            tempFile.delete()
-            break
+        when (copyMultipartPayloadToFile(input, tempFile, boundaryMarker, boundaryLine)) {
+            MultipartBoundaryState.END_OF_STREAM -> {
+                tempFile.delete()
+                break
+            }
+            MultipartBoundaryState.FINAL, MultipartBoundaryState.NEXT_PART -> Unit
         }
         val trimmedBytes = tempFile.readBytes()
         val boundaryTail = "\r\n".toByteArray(StandardCharsets.ISO_8859_1)
@@ -138,10 +151,6 @@ internal fun parseMultipartUploadsFromFile(file: File, contentType: String): Lis
         }
         val bytes = if (payloadBytes.size <= MAX_IN_MEMORY_BODY_BYTES) payloadBytes else byteArrayOf()
         result.add(UploadedFile(fileName, relativePath, bytes = bytes, tempFile = tempFile))
-        val next = readMultipartLine(input)
-        if (next == null) break
-        if (next == "--$boundary--") break
-        if (next == boundaryLine || next.isBlank()) continue@outerLoop
     }
     return result
 }
@@ -167,60 +176,105 @@ internal fun readMultipartHeaders(input: InputStream): String? {
     }
 }
 
-internal fun copyMultipartPayloadToFile(input: InputStream, outputFile: File, boundaryBytes: ByteArray): Boolean {
+internal enum class MultipartBoundaryState {
+    NEXT_PART,
+    FINAL,
+    END_OF_STREAM
+}
+
+internal fun copyMultipartPayloadToFile(input: PushbackInputStream, outputFile: File, boundaryBytes: ByteArray, boundaryLine: String): MultipartBoundaryState {
     val output = outputFile.outputStream().buffered()
-    val tail = ByteArrayOutputStream()
     val buffer = ByteArray(8192)
+    var carry = ByteArray(0)
     try {
         while (true) {
             val read = input.read(buffer)
-            if (read <= 0) break
-            for (index in 0 until read) {
-                val value = buffer[index].toInt() and 0xFF
-                tail.write(value)
-                if (tail.size() > boundaryBytes.size) {
-                    val snapshot = tail.toByteArray()
-                    val flushLength = snapshot.size - boundaryBytes.size
-                    if (flushLength > 0) {
-                        output.write(snapshot, 0, flushLength)
-                    }
-                    val retained = snapshot.copyOfRange(flushLength, snapshot.size)
-                    tail.reset()
-                    tail.write(retained)
+            if (read <= 0) return MultipartBoundaryState.END_OF_STREAM
+            val chunk = if (carry.isEmpty()) buffer.copyOf(read) else carry + buffer.copyOf(read)
+            val boundaryIndex = indexOfBytes(chunk, boundaryBytes)
+            if (boundaryIndex >= 0) {
+                if (boundaryIndex > 0) {
+                    output.write(chunk, 0, boundaryIndex)
                 }
-                if (tail.size() == boundaryBytes.size && tail.toByteArray().contentEquals(boundaryBytes)) {
-                    output.flush()
-                    return true
+                val remaining = chunk.copyOfRange(boundaryIndex + boundaryBytes.size, chunk.size)
+                if (remaining.isNotEmpty()) {
+                    input.unread(remaining)
                 }
+                output.flush()
+                return consumeMultipartBoundarySuffix(input, boundaryLine)
             }
+            val flushLength = maxOf(0, chunk.size - boundaryBytes.size + 1)
+            if (flushLength > 0) {
+                output.write(chunk, 0, flushLength)
+            }
+            carry = if (flushLength < chunk.size) chunk.copyOfRange(flushLength, chunk.size) else ByteArray(0)
         }
         output.flush()
-        return false
+        return MultipartBoundaryState.END_OF_STREAM
     } finally {
         output.close()
     }
 }
 
-internal fun skipMultipartPayload(input: InputStream, boundaryBytes: ByteArray) {
-    val tail = ByteArrayOutputStream()
+private fun skipMultipartPayload(input: PushbackInputStream, boundaryBytes: ByteArray, boundaryLine: String): MultipartBoundaryState {
     val buffer = ByteArray(8192)
+    var carry = ByteArray(0)
     while (true) {
         val read = input.read(buffer)
-        if (read <= 0) break
-        for (index in 0 until read) {
-            val value = buffer[index].toInt() and 0xFF
-            tail.write(value)
-            if (tail.size() > boundaryBytes.size) {
-                val snapshot = tail.toByteArray()
-                val keepCount = boundaryBytes.size
-                val trimStart = snapshot.size - keepCount
-                tail.reset()
-                tail.write(snapshot.copyOfRange(trimStart, snapshot.size))
+        if (read <= 0) return MultipartBoundaryState.END_OF_STREAM
+        val chunk = if (carry.isEmpty()) buffer.copyOf(read) else carry + buffer.copyOf(read)
+        val boundaryIndex = indexOfBytes(chunk, boundaryBytes)
+        if (boundaryIndex >= 0) {
+            val remaining = chunk.copyOfRange(boundaryIndex + boundaryBytes.size, chunk.size)
+            if (remaining.isNotEmpty()) {
+                input.unread(remaining)
             }
-            if (tail.size() == boundaryBytes.size && tail.toByteArray().contentEquals(boundaryBytes)) {
-                return
+            return consumeMultipartBoundarySuffix(input, boundaryLine)
+        }
+        val flushLength = maxOf(0, chunk.size - boundaryBytes.size + 1)
+        carry = if (flushLength < chunk.size) chunk.copyOfRange(flushLength, chunk.size) else ByteArray(0)
+    }
+    return MultipartBoundaryState.END_OF_STREAM
+}
+
+private fun indexOfBytes(haystack: ByteArray, needle: ByteArray): Int {
+    if (needle.isEmpty() || haystack.size < needle.size) return -1
+    val limit = haystack.size - needle.size
+    for (start in 0..limit) {
+        var matched = true
+        for (offset in needle.indices) {
+            if (haystack[start + offset] != needle[offset]) {
+                matched = false
+                break
             }
         }
+        if (matched) return start
+    }
+    return -1
+}
+
+private fun consumeMultipartBoundarySuffix(input: InputStream, boundaryLine: String): MultipartBoundaryState {
+    val next1 = input.read()
+    val next2 = input.read()
+    return when {
+        next1 == '-'.code && next2 == '-'.code -> {
+            drainMultipartLineEnding(input)
+            MultipartBoundaryState.FINAL
+        }
+        next1 == '\r'.code && next2 == '\n'.code -> MultipartBoundaryState.NEXT_PART
+        next1 == '\n'.code -> MultipartBoundaryState.NEXT_PART
+        next1 < 0 || next2 < 0 -> MultipartBoundaryState.END_OF_STREAM
+        else -> {
+            drainMultipartLineEnding(input)
+            MultipartBoundaryState.NEXT_PART
+        }
+    }
+}
+
+private fun drainMultipartLineEnding(input: InputStream) {
+    val first = input.read()
+    if (first == '\r'.code) {
+        input.read()
     }
 }
 
@@ -307,14 +361,14 @@ class LocalWebServer(
     private fun handleSocket(socket: Socket) {
         socket.use { client ->
             try {
-                client.soTimeout = 3000
+                client.soTimeout = WEBUI_HEADER_READ_TIMEOUT_MS.toInt()
                 if (client is SSLSocket) {
                     client.useClientMode = false
                     client.startHandshake()
                 }
                 val input = BufferedInputStream(client.getInputStream())
                 val output = client.getOutputStream()
-                val request = readRequest(input) ?: return
+                val request = readRequest(client, input) ?: return
                 val requestBodyFile = request.bodyFile
 
                 if (request.method == "GET" && request.path == "/") {
@@ -377,6 +431,32 @@ class LocalWebServer(
                             else -> parseMultipartUploads(request.body, request.headers["content-type"] ?: "")
                         }
                         val overwrite = request.query["overwrite"] == "1"
+                        val uploadType = request.query["type"] ?: "file"
+                        if (!overwrite && uploadType == "dir") {
+                            val rootDirectoryNames = files.mapNotNull { uploadRootDirectoryName(it.relativePath) }.distinct()
+                            val existingDirectoryNames = rootDirectoryNames.filter { rootName ->
+                                parent.listFilesSafe().any { child -> child.isDirectory && child.name == rootName }
+                            }
+                            if (existingDirectoryNames.isNotEmpty()) {
+                                val conflictFiles = files.map { file ->
+                                    mapOf(
+                                        "name" to file.fileName,
+                                        "path" to file.relativePath,
+                                        "status" to "conflict"
+                                    )
+                                }
+                                writeJson(output, 200, mapOf(
+                                    "ok" to false,
+                                    "files" to conflictFiles,
+                                    "okCount" to 0,
+                                    "conflictCount" to conflictFiles.size,
+                                    "failedCount" to 0,
+                                    "tookMs" to (System.currentTimeMillis() - startedAt),
+                                    "error" to "directory_exists"
+                                ))
+                                return
+                            }
+                        }
                         val result = mutableListOf<Map<String, String>>()
                         for (file in files) {
                             val destination = createUploadTarget(parent, file.relativePath, overwrite)
@@ -404,6 +484,19 @@ class LocalWebServer(
                             "conflictCount" to conflictCount,
                             "failedCount" to failedCount,
                             "tookMs" to tookMs
+                        ))
+                    }
+                    request.method == "POST" && request.path == "/api/upload/precheck" -> {
+                        val parent = resolveDocument(request.query["path"] ?: "/") ?: rootDoc
+                        val uploadType = request.query["type"] ?: "file"
+                        val overwrite = request.query["overwrite"] == "1"
+                        val fields = parseFormUrlEncoded(request.body)
+                        val paths = parseUploadPaths(fields["paths"] ?: "[]")
+                        val conflictPaths = findUploadConflictPaths(parent, paths, uploadType, overwrite)
+                        writeJson(output, 200, mapOf(
+                            "ok" to conflictPaths.isEmpty(),
+                            "conflictCount" to conflictPaths.size,
+                            "conflictPaths" to conflictPaths
                         ))
                     }
                     request.method == "POST" && request.path == "/api/mkdir" -> {
@@ -541,7 +634,7 @@ class LocalWebServer(
         return result
     }
 
-    private fun readRequest(input: InputStream): HttpRequest? {
+    private fun readRequest(socket: Socket, input: InputStream): HttpRequest? {
         val headerBytes = readHeaderBytes(input) ?: return null
         val headerText = String(headerBytes, StandardCharsets.ISO_8859_1)
         val lines = headerText.split("\r\n")
@@ -572,6 +665,11 @@ class LocalWebServer(
         }
 
         val contentLength = headers["content-length"]?.toLongOrNull() ?: 0L
+        socket.soTimeout = when {
+            contentLength <= 0L -> WEBUI_HEADER_READ_TIMEOUT_MS.toInt()
+            method == "POST" && path == "/api/upload" -> WEBUI_UPLOAD_BODY_READ_TIMEOUT_MS.toInt()
+            else -> WEBUI_BODY_READ_TIMEOUT_MS.toInt()
+        }
         val bodyFile = if (contentLength > 0L) {
             val tempFile = File.createTempFile("platalea-web-body-", ".bin")
             val output = FileOutputStream(tempFile)
@@ -791,6 +889,62 @@ class LocalWebServer(
             }
         }
         return if (picked.isEmpty()) ConfigExportCategory.entries.toSet() else picked
+    }
+
+    private fun parseUploadPaths(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return runCatching {
+            val arr = JSONArray(raw)
+            buildList {
+                for (index in 0 until arr.length()) {
+                    val value = arr.optString(index, "")
+                    if (value.isNotBlank()) add(value)
+                }
+            }
+        }.getOrElse { emptyList() }
+    }
+
+    private fun findUploadConflictPaths(parentDoc: DocumentFile, relativePaths: List<String>, uploadType: String, overwrite: Boolean): List<String> {
+        if (overwrite) return emptyList()
+        val result = mutableListOf<String>()
+        for (relativePath in relativePaths) {
+            val sanitized = normalizeUploadRelativePath(relativePath)
+            if (sanitized.isBlank()) continue
+            val segments = sanitized.split('/').filter { it.isNotBlank() }
+            if (segments.isEmpty()) continue
+            val conflictPath = if (uploadType == "dir" && segments.size > 1) {
+                segments.first()
+            } else {
+                sanitized
+            }
+            if (hasExistingTarget(parentDoc, conflictPath)) {
+                result.add(conflictPath)
+            }
+        }
+        return result.distinct()
+    }
+
+    private fun hasExistingTarget(parentDoc: DocumentFile, relativePath: String): Boolean {
+        val sanitized = normalizeUploadRelativePath(relativePath)
+        if (sanitized.isBlank()) return false
+        val segments = sanitized.split('/').filter { it.isNotBlank() }
+        if (segments.isEmpty()) return false
+        var cursor = parentDoc
+        for ((index, segment) in segments.withIndex()) {
+            val child = cursor.listFilesSafe().find { it.name == segment } ?: return false
+            if (index == segments.lastIndex) return true
+            if (!child.isDirectory) return false
+            cursor = child
+        }
+        return false
+    }
+
+    private fun uploadRootDirectoryName(relativePath: String): String? {
+        val sanitized = normalizeUploadRelativePath(relativePath)
+        if (sanitized.isBlank()) return null
+        val segments = sanitized.split('/').filter { it.isNotBlank() }
+        if (segments.size < 2) return null
+        return segments.first()
     }
 
     private fun createUploadTarget(parentDoc: DocumentFile, relativePath: String, overwrite: Boolean): DocumentFile? {
@@ -1133,6 +1287,27 @@ class LocalWebServer(
                 return (error && error.message) ? error.message : 'unknown';
             }
 
+            function extractUploadPaths(files) {
+                return files.map((file) => file.webkitRelativePath || file.name).filter((path) => !!path);
+            }
+
+            function precheckUploadConflict(paths, sourceType, overwriteMode) {
+                const form = new URLSearchParams();
+                form.set('paths', JSON.stringify(paths));
+                return fetch('/api/upload/precheck?path=' + encodeURIComponent(state.currentPath) + '&type=' + encodeURIComponent(sourceType) + (overwriteMode ? '&overwrite=1' : ''), {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+                    body: form.toString()
+                }).then(async (response) => {
+                    const text = await response.text();
+                    const payload = text ? JSON.parse(text) : {};
+                    if (!response.ok) {
+                        throw new Error(payload.error || 'precheck_failed');
+                    }
+                    return payload;
+                });
+            }
+
             function switchTab(tabName) {
                 state.activeTab = tabName;
                 const isFiles = tabName === 'files';
@@ -1169,7 +1344,6 @@ class LocalWebServer(
           return payload;
         });
       }
-
       function formatSize(size) {
         if (size <= 0) return '0 B';
         const units = ['B', 'KB', 'MB', 'GB'];
@@ -1575,87 +1749,109 @@ class LocalWebServer(
             function uploadSelected(files, sourceType, overwriteMode = false) {
                 if (busy) return;
                 if (!files.length) return;
-        const formData = new FormData();
-        for (const file of files) {
-                    formData.append('file', file, file.webkitRelativePath || file.name);
-                }
-
                 setBusy(true);
-                pendingOverwriteMode = overwriteMode;
+                const uploadPaths = extractUploadPaths(files);
                 const uploadStartedAt = performance.now();
+                let transferCompletedAt = 0;
                 let lastPublishedPercent = 0;
-                setStatus((sourceType === 'dir' ? '目录' : '文件') + '上传中（按传输时间推进）...');
-                showProgress(0);
+                setStatus('正在检查是否会覆盖已有内容...');
+                showProgress(3);
 
-                const xhr = new XMLHttpRequest();
-                const overwriteQuery = pendingOverwriteMode ? '&overwrite=1' : '';
-                xhr.open('POST', '/api/upload?path=' + encodeURIComponent(state.currentPath) + overwriteQuery, true);
-                const headers = authHeaders();
-                for (const key in headers) {
-                    xhr.setRequestHeader(key, headers[key]);
-                }
-
-                xhr.upload.onprogress = (event) => {
-                    const elapsedMs = performance.now() - uploadStartedAt;
-                    const percent = Math.max(lastPublishedPercent, timeDrivenPercent(uploadStartedAt));
-                    lastPublishedPercent = percent;
-                    showProgress(percent);
-                    setStatus('上传中 ' + percent.toFixed(1) + '%，已用时 ' + formatDuration(elapsedMs));
-                };
-
-                                xhr.onload = () => {
-                    if (xhr.status >= 200 && xhr.status < 300) {
-                        showProgress(100);
-                        setStatus('上传传输完成，正在处理服务器写入...');
-                        let payload = {};
-                        try {
-                            payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
-                        } catch (_) {
-                            payload = {};
+                precheckUploadConflict(uploadPaths, sourceType, overwriteMode).then((precheck) => {
+                    const conflictCount = precheck.conflictCount || 0;
+                    const conflictPaths = precheck.conflictPaths || [];
+                    if (conflictCount > 0 && !overwriteMode) {
+                        setBusy(false);
+                        hideProgress();
+                        const summary = conflictPaths.length > 0 ? ('\n冲突项：' + conflictPaths.join('\n')) : '';
+                        const answer = confirm('检测到 ' + conflictCount + ' 个同名项，上传会覆盖它们。\n是否继续？' + summary);
+                        if (answer) {
+                            uploadSelected(files, sourceType, true);
                         }
-                        const conflictCount = payload.conflictCount || 0;
-                        const failedCount = payload.failedCount || 0;
-                        const okCount = payload.okCount || 0;
-                        if (conflictCount > 0 && !pendingOverwriteMode) {
-                            const answer = confirm('检测到 ' + conflictCount + ' 个同名文件。\n已上传成功 ' + okCount + ' 个。\n是否覆盖冲突文件后重试上传冲突项？');
-                            if (answer) {
-                                pendingOverwriteMode = true;
-                                const conflictPathSet = new Set((payload.files || []).filter((x) => x.status === 'conflict').map((x) => x.path));
-                                const retryFiles = files.filter((f) => conflictPathSet.has(f.webkitRelativePath || f.name));
-                                if (retryFiles.length > 0) {
-                                    setBusy(false);
-                                    uploadSelected(retryFiles, sourceType, true);
-                                    return;
-                                }
+                        return;
+                    }
+
+                    pendingOverwriteMode = overwriteMode;
+                    const formData = new FormData();
+                    for (const file of files) {
+                        formData.append('file', file, file.webkitRelativePath || file.name);
+                    }
+
+                    setStatus((sourceType === 'dir' ? '目录' : '文件') + '上传中（按传输时间推进）...');
+                    showProgress(0);
+
+                    const xhr = new XMLHttpRequest();
+                    const overwriteQuery = pendingOverwriteMode ? '&overwrite=1' : '';
+                    const typeQuery = '&type=' + encodeURIComponent(sourceType);
+                    xhr.open('POST', '/api/upload?path=' + encodeURIComponent(state.currentPath) + overwriteQuery + typeQuery, true);
+                    const headers = authHeaders();
+                    for (const key in headers) {
+                        xhr.setRequestHeader(key, headers[key]);
+                    }
+
+                    xhr.upload.onprogress = (event) => {
+                        const elapsedMs = performance.now() - uploadStartedAt;
+                        const actualPercent = event.lengthComputable && event.total > 0
+                            ? (event.loaded / event.total) * 100
+                            : timeDrivenPercent(uploadStartedAt, 90);
+                        const percent = Math.max(lastPublishedPercent, Math.min(99, actualPercent));
+                        lastPublishedPercent = percent;
+                        showProgress(percent);
+                        setStatus('上传中 ' + percent.toFixed(1) + '%，已用时 ' + formatDuration(elapsedMs));
+                    };
+
+                    xhr.upload.onloadend = () => {
+                        transferCompletedAt = performance.now();
+                        showProgress(99);
+                        setStatus('上传已发送完毕，服务器正在写入保存...');
+                    };
+
+                    xhr.onload = () => {
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            showProgress(100);
+                            const serverWaitMs = transferCompletedAt > 0 ? Math.max(0, performance.now() - transferCompletedAt) : 0;
+                            setStatus('服务器写入完成，用时 ' + formatDuration(serverWaitMs) + '，正在刷新目录...');
+                            let payload = {};
+                            try {
+                                payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+                            } catch (_) {
+                                payload = {};
                             }
-                        }
-                        if (failedCount > 0 || !payload.ok || okCount === 0) {
+                            const failedCount = payload.failedCount || 0;
+                            const okCount = payload.okCount || 0;
+                            if (failedCount > 0 || !payload.ok || okCount === 0) {
+                                setBusy(false);
+                                hideProgress();
+                                setStatus('上传失败');
+                                alert('上传失败: 服务器写入失败，已写入 ' + okCount + ' 个文件。');
+                                return;
+                            }
+                            const tookMs = payload.tookMs || 0;
+                            setStatus('服务器处理完成，用时 ' + tookMs + ' ms，正在刷新目录...');
+                            setTimeout(() => hideProgress(), 350);
+                            setBusy(false);
+                            loadList();
+                        } else {
                             setBusy(false);
                             hideProgress();
                             setStatus('上传失败');
-                            alert('上传失败: 服务器写入失败，已写入 ' + okCount + ' 个文件。');
-                            return;
+                            alert('上传失败: ' + xhr.status);
                         }
-                        const tookMs = payload.tookMs || 0;
-                        setStatus('服务器处理完成，用时 ' + tookMs + ' ms，正在刷新目录...');
-                        setTimeout(() => hideProgress(), 350);
-                        setBusy(false);
-                        loadList();
-                    } else {
+                    };
+                    xhr.onerror = () => {
                         setBusy(false);
                         hideProgress();
                         setStatus('上传失败');
-                        alert('上传失败: ' + xhr.status);
-                    }
-                };
-                xhr.onerror = () => {
+                        alert('上传失败: 网络异常');
+                    };
+
+                    xhr.send(formData);
+                }).catch((error) => {
                     setBusy(false);
                     hideProgress();
                     setStatus('上传失败');
-                    alert('上传失败: 网络异常');
-                };
-
-                xhr.send(formData);
+                    alert('上传前检查失败: ' + normalizeErrorText(error));
+                });
             }
 
             pickFilesBtn.onclick = () => {

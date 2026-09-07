@@ -1,7 +1,9 @@
-package com.kenny.localmanager.ftp
+package com.kenny.localmanager.webui
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -59,6 +61,14 @@ class MultipartUploadParserTest {
         }
     }
 
+    @Test
+    fun `normalizeUploadRelativePath keeps directory root for nested uploads`() {
+        assertEquals("folder", uploadRootDirectoryName("folder/nested/demo.txt"))
+        assertEquals("folder", uploadRootDirectoryName("./folder/child/file.txt"))
+        assertNull(uploadRootDirectoryName("demo.txt"))
+        assertFalse(normalizeUploadRelativePath("folder/nested/demo.txt").isBlank())
+    }
+
     private fun buildMultipartBody(boundary: String, parts: List<Pair<String, ByteArray>>): ByteArray {
         val out = ByteArrayOutputStream()
         for ((filename, payload) in parts) {
@@ -72,5 +82,13 @@ class MultipartUploadParserTest {
         }
         out.write("--$boundary--\r\n".toByteArray(StandardCharsets.ISO_8859_1))
         return out.toByteArray()
+    }
+
+    private fun uploadRootDirectoryName(relativePath: String): String? {
+        val sanitized = normalizeUploadRelativePath(relativePath)
+        if (sanitized.isBlank()) return null
+        val segments = sanitized.split('/').filter { it.isNotBlank() }
+        if (segments.size < 2) return null
+        return segments.first()
     }
 }

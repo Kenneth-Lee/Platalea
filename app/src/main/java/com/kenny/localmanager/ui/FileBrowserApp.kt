@@ -4770,8 +4770,8 @@ private fun FileBrowserAppScreen(
                         )
                     },
                     localShareContent = {
-                        LocalShareTabRoute(
-                            LocalShareTabRouteState(
+                        WebUiTabRoute(
+                            WebUiTabRouteState(
                                 rootUri = ftpRootUri,
                                 displayUri = displayUri,
                                 manager = localShareManager,

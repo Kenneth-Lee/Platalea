@@ -65,17 +65,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private fun toLocalShareLogLine(line: String): String {
+private fun toWebUiLogLine(line: String): String {
     return line
-        .replace("FTP 服务器", "本地共享服务")
-        .replace("FTP server", "Local share service")
-        .replace("FTP", "本地共享")
-        .replace("ftp", "local-share")
+        .replace("FTP 服务器", "WebUI 服务")
+        .replace("FTP server", "WebUI service")
+        .replace("FTP", "WebUI")
+        .replace("ftp", "webui")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LocalShareScreen(
+fun WebUiScreen(
     manager: FtpServerManager,
     treeRootUri: String,
     currentDirUri: String,
@@ -368,7 +368,7 @@ fun LocalShareScreen(
                 ) {
                     logLines.forEach { line ->
                         Text(
-                            toLocalShareLogLine(line),
+                            toWebUiLogLine(line),
                             style = MaterialTheme.typography.bodySmall,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurface
