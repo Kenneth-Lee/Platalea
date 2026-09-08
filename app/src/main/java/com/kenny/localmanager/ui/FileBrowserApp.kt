@@ -4054,11 +4054,13 @@ private fun FileBrowserAppScreen(
             prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
-            if (activeMainTab != MainTab.FTP) {
-                ftpManager.stop()
-            }
-            if (activeMainTab != MainTab.LOCAL_SHARE) {
-                localShareManager.stop()
+            withContext(Dispatchers.IO) {
+                if (activeMainTab != MainTab.FTP) {
+                    ftpManager.stop()
+                }
+                if (activeMainTab != MainTab.LOCAL_SHARE) {
+                    localShareManager.stop()
+                }
             }
         }
         LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {

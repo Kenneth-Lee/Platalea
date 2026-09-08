@@ -7,9 +7,6 @@ import android.app.Activity
 import android.util.Log
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -45,6 +42,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
@@ -57,6 +55,7 @@ import com.kenny.localmanager.R
 import com.kenny.localmanager.ftp.FtpServerManager
 import com.kenny.localmanager.util.getLocalIpAddress
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -72,6 +71,7 @@ fun FtpScreen(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val activity = context as? Activity
     var logLines by remember { mutableStateOf(emptyList<String>()) }
     var isRunning by remember { mutableStateOf(false) }
@@ -87,22 +87,14 @@ fun FtpScreen(
         onDispose {
             try {
                 activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                manager.stop()
-                manager.clearLog()
+                scope.launch(Dispatchers.IO) {
+                    manager.stop()
+                    manager.clearLog()
+                }
             } catch (e: Throwable) {
                 Log.e("FtpScreen", "DisposableEffect onDispose", e)
             }
         }
-    }
-
-    DisposableEffect(context) {
-        val owner = context as? LifecycleOwner
-        if (owner == null) return@DisposableEffect onDispose { }
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) onDismiss()
-        }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(Unit) {

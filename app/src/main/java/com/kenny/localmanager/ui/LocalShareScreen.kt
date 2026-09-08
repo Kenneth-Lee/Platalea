@@ -34,10 +34,14 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -54,9 +58,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
 import com.kenny.localmanager.R
 import com.kenny.localmanager.ftp.FtpServerManager
 import com.kenny.localmanager.util.getLocalIpAddress
@@ -71,6 +72,15 @@ private fun toWebUiLogLine(line: String): String {
         .replace("FTP server", "WebUI service")
         .replace("FTP", "WebUI")
         .replace("ftp", "webui")
+}
+
+private fun previewClipboardText(context: Context): String {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return "读取失败：剪贴板服务不可用"
+    val clip = clipboard.primaryClip ?: return "当前手机剪贴板为空"
+    if (clip.itemCount <= 0) return "当前手机剪贴板为空"
+    val text = clip.getItemAt(0).coerceToText(context)?.toString()?.trim().orEmpty()
+    if (text.isEmpty()) return "当前手机剪贴板为空"
+    return text
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,6 +103,9 @@ fun WebUiScreen(
     var localIp by remember { mutableStateOf<String?>(null) }
     var webUrl by remember { mutableStateOf<String?>(null) }
     var connectionCount by remember { mutableStateOf(0) }
+    var clipboardPreview by remember { mutableStateOf("未读取") }
+    var showClipboardDialog by remember { mutableStateOf(false) }
+    var showTopMenu by remember { mutableStateOf(false) }
     var remainingMinutes by remember(timeoutMinutes) { mutableStateOf(if (timeoutMinutes > 0) timeoutMinutes else null) }
 
     suspend fun startServer(ip: String?) {
@@ -120,22 +133,14 @@ fun WebUiScreen(
         onDispose {
             try {
                 activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                manager.stop()
-                manager.clearLog()
+                scope.launch(Dispatchers.IO) {
+                    manager.stop()
+                    manager.clearLog()
+                }
             } catch (e: Throwable) {
                 Log.e("LocalShareScreen", "DisposableEffect onDispose", e)
             }
         }
-    }
-
-    DisposableEffect(context) {
-        val owner = context as? LifecycleOwner
-        if (owner == null) return@DisposableEffect onDispose { }
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) onDismiss()
-        }
-        owner.lifecycle.addObserver(observer)
-        onDispose { owner.lifecycle.removeObserver(observer) }
     }
 
     LaunchedEffect(Unit) {
@@ -180,6 +185,32 @@ fun WebUiScreen(
 
     BackHandler { onDismiss() }
 
+    if (showClipboardDialog) {
+        AlertDialog(
+            onDismissRequest = { showClipboardDialog = false },
+            title = { Text("当前手机剪贴板") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp)
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    Text(
+                        clipboardPreview,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showClipboardDialog = false }) {
+                    Text(stringResource(R.string.common_close))
+                }
+            }
+        )
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -192,6 +223,26 @@ fun WebUiScreen(
                     }
                 } else {
                     { }
+                },
+                actions = {
+                    Box {
+                        TextButton(onClick = { showTopMenu = true }) {
+                            Text("菜单")
+                        }
+                        DropdownMenu(
+                            expanded = showTopMenu,
+                            onDismissRequest = { showTopMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("查看当前手机剪贴板") },
+                                onClick = {
+                                    showTopMenu = false
+                                    clipboardPreview = previewClipboardText(context)
+                                    showClipboardDialog = true
+                                }
+                            )
+                        }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
@@ -243,10 +294,14 @@ fun WebUiScreen(
                 )
                 OutlinedButton(
                     onClick = {
-                        manager.stop()
-                        isRunning = manager.isRunning()
-                        connectionCount = manager.getConnectionCount()
-                        logLines = manager.getLogLines()
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                manager.stop()
+                            }
+                            isRunning = manager.isRunning()
+                            connectionCount = manager.getConnectionCount()
+                            logLines = manager.getLogLines()
+                        }
                     },
                     enabled = isRunning
                 ) {

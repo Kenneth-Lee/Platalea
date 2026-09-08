@@ -540,11 +540,20 @@ class LocalWebServer(
                                 "mimeType" to clipboard.mimeType,
                                 "label" to clipboard.label,
                                 "hasText" to clipboard.hasText,
-                                "hasImage" to clipboard.hasImage,
                                 "updatedAtMs" to clipboard.updatedAtMs
                             ))
                         }.onFailure { error ->
                             writeJson(output, 500, mapOf("ok" to false, "error" to "clipboard_load_failed", "message" to (error.message ?: "unknown")))
+                        }
+                    }
+                    request.method == "POST" && request.path == "/api/clipboard/text" -> {
+                        val fields = parseFormUrlEncoded(request.body)
+                        val text = fields["text"] ?: ""
+                        val result = writeClipboardText(text)
+                        result.onSuccess {
+                            writeJson(output, 200, mapOf("ok" to true, "length" to text.length))
+                        }.onFailure { error ->
+                            writeJson(output, 500, mapOf("ok" to false, "error" to "clipboard_save_failed", "message" to (error.message ?: "unknown")))
                         }
                     }
                     request.method == "POST" && request.path == "/api/quick-note/save" -> {
@@ -825,7 +834,6 @@ class LocalWebServer(
         val mimeType: String?,
         val label: String?,
         val hasText: Boolean,
-        val hasImage: Boolean,
         val updatedAtMs: Long
     )
 
@@ -835,21 +843,23 @@ class LocalWebServer(
                 ?: throw IllegalStateException("clipboard unavailable")
             val clip = clipboardManager.primaryClip ?: throw IllegalStateException("clipboard empty")
             if (clip.itemCount <= 0) throw IllegalStateException("clipboard empty")
-            val firstItem = clip.getItemAt(0)
-            val text = firstItem.coerceToText(context)?.toString()
             val description = clip.description
-            val hasImage = (0 until description.mimeTypeCount).any { index ->
-                val mimeType = description.getMimeType(index)
-                mimeType != null && mimeType.startsWith("image/", ignoreCase = true)
-            }
+            val text = clip.getItemAt(0).coerceToText(context)?.toString()
             ClipboardSnapshot(
                 text = text?.takeIf { it.isNotBlank() },
                 mimeType = if (description.mimeTypeCount > 0) description.getMimeType(0) else null,
                 label = description.label?.toString(),
                 hasText = !text.isNullOrBlank(),
-                hasImage = hasImage,
                 updatedAtMs = System.currentTimeMillis()
             )
+        }
+    }
+
+    private fun writeClipboardText(text: String): Result<Unit> {
+        return runCatching {
+            val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                ?: throw IllegalStateException("clipboard unavailable")
+            clipboardManager.setPrimaryClip(ClipData.newPlainText("WebUI Clipboard", text))
         }
     }
 
@@ -1159,7 +1169,7 @@ class LocalWebServer(
             .panel { display: none; }
             .panel.active { display: block; }
             .note-editor { width: 100%; min-height: 360px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-            .note-toolbar { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
+            .note-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
             .small { font-size: 12px; opacity: 0.85; }
             .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
             .config-item { display: flex; flex-direction: column; gap: 6px; }
@@ -1167,6 +1177,8 @@ class LocalWebServer(
             .config-json { width: 100%; min-height: 220px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
             @media (max-width: 768px) {
                 .config-grid { grid-template-columns: 1fr; }
+                .note-toolbar button { flex: 1 1 auto; }
+                .note-toolbar .small { width: 100%; }
             }
     </style>
   </head>
@@ -1217,10 +1229,11 @@ class LocalWebServer(
                 <div id="panel-clipboard" class="panel">
                     <div class="note-toolbar">
                         <button id="clipboardReloadBtn" type="button">重新读取</button>
+                        <button id="clipboardSaveBtn" type="button">写回手机</button>
                         <span id="clipboardStatus" class="small">未加载</span>
                     </div>
                     <div id="clipboardMeta" class="small muted">等待读取剪贴板内容</div>
-                    <textarea id="clipboardText" class="note-editor" readonly placeholder="这里显示手机当前剪贴板中的文本内容"></textarea>
+                    <textarea id="clipboardText" class="note-editor" placeholder="可编辑：粘贴或输入后，点击“写回手机”同步到手机剪贴板"></textarea>
                 </div>
 
                 <div id="panel-note" class="panel">
@@ -1457,21 +1470,7 @@ class LocalWebServer(
                                 nameLink.onclick = async (event) => {
                                     event.preventDefault();
                                     const path = entry.path || (state.currentPath === '/' ? '/' + entry.name : state.currentPath + '/' + entry.name);
-                                    const response = await fetch('/api/download?path=' + encodeURIComponent(path), {
-                                        method: 'GET',
-                                        headers: authHeaders()
-                                    });
-                                    if (!response.ok) {
-                                        alert('下载失败');
-                                        return;
-                                    }
-                                    const blob = await response.blob();
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = entry.name;
-                                    a.click();
-                                    URL.revokeObjectURL(url);
+                                    downloadFromWebUi(path, entry.name);
                                 };
               }
                             nameCell.appendChild(nameLink);
@@ -1501,21 +1500,7 @@ class LocalWebServer(
                                 zipLink.onclick = async (event) => {
                                     event.preventDefault();
                                     const path = entry.path || (state.currentPath === '/' ? '/' + entry.name : state.currentPath + '/' + entry.name);
-                                    const response = await fetch('/api/download?path=' + encodeURIComponent(path), {
-                                        method: 'GET',
-                                        headers: authHeaders()
-                                    });
-                                    if (!response.ok) {
-                                        alert('下载失败');
-                                        return;
-                                    }
-                                    const blob = await response.blob();
-                                    const url = URL.createObjectURL(blob);
-                                    const a = document.createElement('a');
-                                    a.href = url;
-                                    a.download = entry.name + '.zip';
-                                    a.click();
-                                    URL.revokeObjectURL(url);
+                                    downloadFromWebUi(path, entry.name + '.zip');
                                 };
                                 const deleteLink = document.createElement('a');
                                 deleteLink.className = 'op-link';
@@ -1587,21 +1572,99 @@ class LocalWebServer(
                     });
             }
 
+            function downloadFromWebUi(path, filename) {
+                if (busy) return;
+                setBusy(true);
+                const startedAt = performance.now();
+                let lastPublishedPercent = 0;
+                setStatus('正在下载 ' + filename + ' ...');
+                showProgress(0);
+
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', '/api/download?path=' + encodeURIComponent(path), true);
+                xhr.responseType = 'blob';
+                const headers = authHeaders();
+                for (const key in headers) {
+                    xhr.setRequestHeader(key, headers[key]);
+                }
+
+                xhr.onprogress = (event) => {
+                    const elapsedMs = performance.now() - startedAt;
+                    const actualPercent = event.lengthComputable && event.total > 0
+                        ? (event.loaded / event.total) * 100
+                        : timeDrivenPercent(startedAt, 95);
+                    const percent = Math.max(lastPublishedPercent, Math.min(99, actualPercent));
+                    lastPublishedPercent = percent;
+                    showProgress(percent);
+                    setStatus('下载中 ' + percent.toFixed(1) + '%，已用时 ' + formatDuration(elapsedMs));
+                };
+
+                xhr.onload = () => {
+                    setBusy(false);
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        showProgress(100);
+                        const blob = xhr.response;
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                        setStatus('下载完成');
+                        setTimeout(() => hideProgress(), 250);
+                    } else {
+                        hideProgress();
+                        setStatus('下载失败');
+                        alert('下载失败: ' + xhr.status);
+                    }
+                };
+
+                xhr.onerror = () => {
+                    setBusy(false);
+                    hideProgress();
+                    setStatus('下载失败');
+                    alert('下载失败: 网络异常');
+                };
+
+                xhr.send();
+            }
+
             function loadClipboardText() {
                 clipboardStatus.textContent = '正在读取手机剪贴板...';
                 requestJson('/api/clipboard/text', { method: 'GET' })
                     .then((data) => {
-                        clipboardText.value = data.text || '';
+                        clipboardText.value = data.hasText ? (data.text || '') : '';
                         const parts = [];
-                        parts.push(data.hasText ? '文本' : '非文本');
+                        parts.push(data.hasText ? '文本' : '空剪贴板');
                         if (data.mimeType) parts.push(data.mimeType);
-                        if (data.hasImage) parts.push('包含图片');
+                        if (data.label) parts.push(data.label);
                         clipboardMeta.textContent = parts.join(' · ');
                         clipboardStatus.textContent = '读取完成';
                     })
                     .catch((error) => {
                         clipboardStatus.textContent = '读取失败: ' + normalizeErrorText(error);
                     });
+            }
+
+            function saveClipboardText() {
+                const text = clipboardText.value || '';
+                clipboardStatus.textContent = '正在写回手机剪贴板...';
+                const form = new URLSearchParams();
+                form.set('text', text);
+                fetch('/api/clipboard/text', {
+                    method: 'POST',
+                    headers: authHeaders({ 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' }),
+                    body: form.toString()
+                }).then(async (response) => {
+                    const bodyText = await response.text();
+                    const payload = bodyText ? JSON.parse(bodyText) : {};
+                    if (!response.ok || !payload.ok) {
+                        throw new Error(payload.error || 'clipboard_save_failed');
+                    }
+                    clipboardStatus.textContent = '写回完成，长度 ' + (payload.length || 0);
+                }).catch((error) => {
+                    clipboardStatus.textContent = '写回失败: ' + normalizeErrorText(error);
+                });
             }
 
             function saveQuickNote() {
@@ -1774,6 +1837,7 @@ class LocalWebServer(
             tabNoteBtn.onclick = () => switchTab('note');
             tabConfigBtn.onclick = () => switchTab('config');
             document.getElementById('clipboardReloadBtn').onclick = loadClipboardText;
+            document.getElementById('clipboardSaveBtn').onclick = saveClipboardText;
             document.getElementById('noteReloadBtn').onclick = loadQuickNote;
             document.getElementById('noteSaveBtn').onclick = saveQuickNote;
             document.getElementById('configLoadBtn').onclick = loadConfig;

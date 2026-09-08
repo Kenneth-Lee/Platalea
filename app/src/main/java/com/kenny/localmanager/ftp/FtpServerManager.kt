@@ -34,7 +34,9 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class FtpServerManager(private val context: Context) {
 
+    @Volatile
     private var server: FtpServer? = null
+    @Volatile
     private var webServer: LocalWebServer? = null
     private val tlsManager by lazy { FamilyTlsManager(context.applicationContext) }
     private val connectionCount = AtomicInteger(0)
@@ -46,6 +48,7 @@ class FtpServerManager(private val context: Context) {
      * @param passiveExternalIp 被动模式时向客户端宣告的 IP（如本机 LAN IP），若为空则使用默认；LIST/ls 常用被动模式，不设可能导致无响应。
      */
     @Suppress("UNUSED_PARAMETER")
+    @Synchronized
     fun start(port: Int, treeRootUri: String?, currentDirUri: String?, password: String?, passiveExternalIp: String?, onLog: (String) -> Unit): Boolean {
         if (treeRootUri.isNullOrBlank()) return false
         val treeUri = Uri.parse(treeRootUri)
@@ -204,6 +207,7 @@ class FtpServerManager(private val context: Context) {
         }
     }
 
+    @Synchronized
     fun stop() {
         try {
             server?.stop()
@@ -216,10 +220,12 @@ class FtpServerManager(private val context: Context) {
         addLog(context.getString(R.string.ftp_stopped_log))
     }
 
+    @Synchronized
     fun isRunning(): Boolean = server != null
 
     fun getConnectionCount(): Int = connectionCount.get()
 
+    @Synchronized
     fun getWebUiPort(): Int = webServer?.port ?: 0
 
     fun getWebUiUrl(ip: String?): String? {
