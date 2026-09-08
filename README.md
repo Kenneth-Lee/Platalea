@@ -26,7 +26,7 @@
 本，没有国内版本。
 
 最新一个发布版本在这里：
-[LocalManager-V0.29](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.29/app-release.apk)
+[LocalManager-V0.30](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.30/app-release.apk)
 
 ## 设计思路
 
@@ -561,7 +561,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.27 留言板支持AI管理员（仿标准的AI对话），程序崩溃手机崩溃记录，家庭网络支持大部分功能可以远程配置，文件详细信息增强，支持.tar.gz/bzip等压缩格式。
 * V0.28 远程关机后对方断开手机不再报连接错误，第一次进入应用一定不进入ftp和家庭网络这种带服务的页面，支持.vid.zip格式（打包视频），epub支持在原位置显示章末注释，留言板支持多条目合并，支持.pic.zip分目录浏览
 * V0.29 支持7z多卷解压，文件格式匹配方法优化，pc_tools 留言板post支持多附件，支持文件共享，可以用pc_tools share命令put/get文件，支持webui，首先支持文件share。
-* V0.30 开发中
+* V0.30 完善webui，支持读取手机配置，剪贴板等功能，图片增加多svg的支持，修正一组bug。
+* V0.31 开发中
 
 ### 已知问题
 
