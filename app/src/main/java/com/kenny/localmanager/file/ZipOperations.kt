@@ -261,6 +261,64 @@ private fun isTarName(name: String?): Boolean {
         lower.endsWith(".txz", ignoreCase = true)
 }
 
+private enum class SingleCompressedFormat(val suffix: String) {
+    GZ(".gz"),
+    BZ2(".bz2"),
+    XZ(".xz")
+}
+
+private fun detectSingleCompressedFormat(name: String?): SingleCompressedFormat? {
+    val lower = name?.lowercase(Locale.ROOT) ?: return null
+    return when {
+        lower.endsWith(".gz") && !lower.endsWith(".tar.gz") && !lower.endsWith(".tgz") -> SingleCompressedFormat.GZ
+        lower.endsWith(".bz2") && !lower.endsWith(".tar.bz2") && !lower.endsWith(".tbz2") -> SingleCompressedFormat.BZ2
+        lower.endsWith(".xz") && !lower.endsWith(".tar.xz") && !lower.endsWith(".txz") -> SingleCompressedFormat.XZ
+        else -> null
+    }
+}
+
+private fun buildSingleCompressedOutputName(archiveName: String, format: SingleCompressedFormat): String {
+    val fallback = "extracted"
+    val trimmed = archiveName.trim().ifBlank { fallback }
+    val lower = trimmed.lowercase(Locale.ROOT)
+    if (!lower.endsWith(format.suffix)) return trimmed
+    val output = trimmed.dropLast(format.suffix.length).trimEnd('.')
+    return output.ifBlank { fallback }
+}
+
+private fun uncompressSingleToParent(
+    context: Context,
+    compressedFile: File,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    archiveName: String?,
+    format: SingleCompressedFormat,
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean
+): UnzipResult {
+    val displayName = archiveName ?: compressedFile.name
+    val outputName = buildSingleCompressedOutputName(displayName, format)
+    val writer = try {
+        ArchiveDocumentWriter(context, parentDirUri, treeUri)
+    } catch (e: Exception) {
+        return UnzipResult.IOError("解压失败：${e.message ?: "无法定位目标目录"}")
+    }
+    setProgress(0, 1)
+    val writeResult = writer.writeFile(outputName, shouldCancel) { output ->
+        val source = when (format) {
+            SingleCompressedFormat.GZ -> GzipCompressorInputStream(compressedFile.inputStream())
+            SingleCompressedFormat.BZ2 -> BZip2CompressorInputStream(compressedFile.inputStream())
+            SingleCompressedFormat.XZ -> XZCompressorInputStream(compressedFile.inputStream())
+        }
+        source.use { input ->
+            copyStreamCancellable(input, output, shouldCancel)
+        }
+    }
+    if (writeResult != null) return writeResult
+    setProgress(1, 1)
+    return UnzipResult.Success
+}
+
 private fun openTarArchiveInputStream(file: File, archiveName: String?): TarArchiveInputStream {
     val lower = (archiveName ?: file.name).lowercase(Locale.ROOT)
     val raw = file.inputStream()
@@ -396,6 +454,9 @@ fun unzipToParent(
         }
         if (isTarName(archiveName)) {
             return untarToParent(context, zipFile, parentDirUri, treeUri, archiveName, setProgress, shouldCancel)
+        }
+        detectSingleCompressedFormat(archiveName)?.let { format ->
+            return uncompressSingleToParent(context, zipFile, parentDirUri, treeUri, archiveName, format, setProgress, shouldCancel)
         }
 
         val zip = ZipFile(zipFile)

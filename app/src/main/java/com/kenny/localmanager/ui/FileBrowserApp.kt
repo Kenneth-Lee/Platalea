@@ -8408,7 +8408,7 @@ private fun isPicZip(name: String): Boolean =
 internal fun isVidZip(name: String): Boolean =
     name.endsWith(".vid.zip", ignoreCase = true)
 
-/** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩 tar 变体）。 */
+/** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩格式）。 */
 internal fun isExtractableArchive(name: String): Boolean =
     (name.endsWith(".zip", ignoreCase = true) && !isPicZip(name) && !isVidZip(name)) ||
         name.endsWith(".rar", ignoreCase = true) ||
@@ -8420,7 +8420,16 @@ internal fun isExtractableArchive(name: String): Boolean =
         name.endsWith(".tar.bz2", ignoreCase = true) ||
         name.endsWith(".tbz2", ignoreCase = true) ||
         name.endsWith(".tar.xz", ignoreCase = true) ||
-        name.endsWith(".txz", ignoreCase = true)
+        name.endsWith(".txz", ignoreCase = true) ||
+        (name.endsWith(".gz", ignoreCase = true) &&
+            !name.endsWith(".tar.gz", ignoreCase = true) &&
+            !name.endsWith(".tgz", ignoreCase = true)) ||
+        (name.endsWith(".bz2", ignoreCase = true) &&
+            !name.endsWith(".tar.bz2", ignoreCase = true) &&
+            !name.endsWith(".tbz2", ignoreCase = true)) ||
+        (name.endsWith(".xz", ignoreCase = true) &&
+            !name.endsWith(".tar.xz", ignoreCase = true) &&
+            !name.endsWith(".txz", ignoreCase = true))
 
 /** 判断文件名是否为 EPUB 文件。 */
 private fun isEpubFile(name: String): Boolean =
