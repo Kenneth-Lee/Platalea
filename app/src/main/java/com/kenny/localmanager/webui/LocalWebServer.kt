@@ -1164,13 +1164,18 @@ class LocalWebServer(
             .progress-wrap { margin-top: 8px; width: 100%; height: 8px; background: rgba(148, 163, 184, 0.2); border-radius: 999px; overflow: hidden; display: none; }
             .progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, #38bdf8, #22d3ee); transition: width 0.12s linear; }
             .app-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-            .tabbar { display: flex; gap: 8px; }
-            .tab-button.active { border-color: #38bdf8; color: #7dd3fc; }
+            .tabbar { display: flex; gap: 6px; padding: 6px; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 12px; background: rgba(15, 23, 42, 0.45); }
+            .tab-button { border-radius: 10px 10px 6px 6px; border-color: transparent; background: transparent; color: #cbd5e1; font-weight: 600; }
+            .tab-button:hover { border-color: rgba(125, 211, 252, 0.35); color: #e2e8f0; }
+            .tab-button.active { border-color: #38bdf8; background: rgba(56, 189, 248, 0.18); color: #7dd3fc; box-shadow: inset 0 -2px 0 rgba(34, 211, 238, 0.75); }
             .panel { display: none; }
             .panel.active { display: block; }
             .note-editor { width: 100%; min-height: 360px; resize: vertical; line-height: 1.5; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
             .note-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
             .small { font-size: 12px; opacity: 0.85; }
+            .overview-list { margin: 10px 0; padding-left: 18px; color: #cbd5e1; line-height: 1.6; }
+            .overview-list li { margin-bottom: 4px; }
+            .overview-meta { margin-top: 8px; font-size: 12px; color: #94a3b8; }
             .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
             .config-item { display: flex; flex-direction: column; gap: 6px; }
             .config-item label { font-size: 12px; opacity: 0.85; }
@@ -1179,6 +1184,7 @@ class LocalWebServer(
                 .config-grid { grid-template-columns: 1fr; }
                 .note-toolbar button { flex: 1 1 auto; }
                 .note-toolbar .small { width: 100%; }
+                .tabbar { width: 100%; overflow-x: auto; }
             }
     </style>
   </head>
@@ -1196,7 +1202,8 @@ class LocalWebServer(
       <div id="appBox" class="card" style="display:none;">
                 <div class="app-header">
                     <div class="tabbar">
-                        <button id="tab-files" class="tab-button active" type="button">文件共享</button>
+                        <button id="tab-overview" class="tab-button active" type="button">概览</button>
+                        <button id="tab-files" class="tab-button" type="button">文件共享</button>
                         <button id="tab-clipboard" class="tab-button" type="button">剪贴板</button>
                         <button id="tab-note" class="tab-button" type="button">.lm.note.md 编辑</button>
                         <button id="tab-config" class="tab-button" type="button">配置</button>
@@ -1204,7 +1211,22 @@ class LocalWebServer(
                     <button id="logoutBtn" type="button">退出登录</button>
         </div>
 
-                <div id="panel-files" class="panel active">
+                <div id="panel-overview" class="panel active">
+                    <h3 style="margin: 4px 0 6px;">欢迎使用 Platalea WebUI</h3>
+                    <ul class="overview-list">
+                        <li>点击“文件共享”进入目录浏览并按需加载。</li>
+                        <li>点击“剪贴板”可读取或写回手机剪贴板文本。</li>
+                        <li>点击“.lm.note.md 编辑”可管理根目录快速笔记。</li>
+                        <li>点击“配置”可读取、保存、导入导出服务设置。</li>
+                    </ul>
+                    <div class="row">
+                        <button id="overviewOpenFilesBtn" type="button">进入文件共享</button>
+                        <button id="overviewOpenClipboardBtn" type="button">进入剪贴板</button>
+                    </div>
+                    <div id="overviewEndpoint" class="overview-meta"></div>
+                </div>
+
+                <div id="panel-files" class="panel">
                     <div class="row">
                         <button id="backBtn">返回上级</button>
                         <button id="refreshBtn">刷新</button>
@@ -1286,7 +1308,7 @@ class LocalWebServer(
     </div>
 
     <script>
-            const state = { token: '', currentPath: '/', activeTab: 'files' };
+            const state = { token: '', currentPath: '/', activeTab: 'overview' };
       const loginBox = document.getElementById('loginBox');
       const appBox = document.getElementById('appBox');
       const currentPathEl = document.getElementById('currentPath');
@@ -1299,14 +1321,17 @@ class LocalWebServer(
             const statusText = document.getElementById('statusText');
             const progressWrap = document.getElementById('progressWrap');
             const progressBar = document.getElementById('progressBar');
+            const tabOverviewBtn = document.getElementById('tab-overview');
             const tabFilesBtn = document.getElementById('tab-files');
             const tabClipboardBtn = document.getElementById('tab-clipboard');
             const tabNoteBtn = document.getElementById('tab-note');
             const tabConfigBtn = document.getElementById('tab-config');
+            const panelOverview = document.getElementById('panel-overview');
             const panelFiles = document.getElementById('panel-files');
             const panelClipboard = document.getElementById('panel-clipboard');
             const panelNote = document.getElementById('panel-note');
             const panelConfig = document.getElementById('panel-config');
+            const overviewEndpoint = document.getElementById('overviewEndpoint');
             const noteEditor = document.getElementById('noteEditor');
             const noteStatus = document.getElementById('noteStatus');
             const clipboardText = document.getElementById('clipboardText');
@@ -1324,6 +1349,9 @@ class LocalWebServer(
             let pendingOverwriteMode = false;
             let noteLoadedOnce = false;
             let configLoadedOnce = false;
+            let filesLoadedOnce = false;
+
+            overviewEndpoint.textContent = '当前访问地址: ' + window.location.origin;
 
             function setBusy(isBusy) {
                 busy = isBusy;
@@ -1388,19 +1416,27 @@ class LocalWebServer(
             }
 
             function switchTab(tabName) {
+                const previousTab = state.activeTab;
                 state.activeTab = tabName;
+                const isOverview = tabName === 'overview';
                 const isFiles = tabName === 'files';
                 const isClipboard = tabName === 'clipboard';
                 const isNote = tabName === 'note';
                 const isConfig = tabName === 'config';
+                tabOverviewBtn.classList.toggle('active', isOverview);
                 tabFilesBtn.classList.toggle('active', isFiles);
                 tabClipboardBtn.classList.toggle('active', isClipboard);
                 tabNoteBtn.classList.toggle('active', isNote);
                 tabConfigBtn.classList.toggle('active', isConfig);
+                panelOverview.classList.toggle('active', isOverview);
                 panelFiles.classList.toggle('active', isFiles);
                 panelClipboard.classList.toggle('active', isClipboard);
                 panelNote.classList.toggle('active', isNote);
                 panelConfig.classList.toggle('active', isConfig);
+                if (isFiles && (previousTab !== 'files' || !filesLoadedOnce)) {
+                    filesLoadedOnce = true;
+                    loadList();
+                }
                 if (isClipboard) {
                     loadClipboardText();
                 }
@@ -1813,10 +1849,9 @@ class LocalWebServer(
                     accessCodeEl.value = '';
                     loginBox.style.display = 'none';
                     appBox.style.display = 'block';
-                    switchTab('files');
-                    setStatus('登录成功，正在读取目录...');
+                    switchTab('overview');
+                    setStatus('登录成功，请选择页面');
                     setBusy(false);
-                    loadList();
                 }).catch(() => {
                     setBusy(false);
                     hideProgress();
@@ -1832,10 +1867,13 @@ class LocalWebServer(
                 }
             });
 
+            tabOverviewBtn.onclick = () => switchTab('overview');
             tabFilesBtn.onclick = () => switchTab('files');
             tabClipboardBtn.onclick = () => switchTab('clipboard');
             tabNoteBtn.onclick = () => switchTab('note');
             tabConfigBtn.onclick = () => switchTab('config');
+            document.getElementById('overviewOpenFilesBtn').onclick = () => switchTab('files');
+            document.getElementById('overviewOpenClipboardBtn').onclick = () => switchTab('clipboard');
             document.getElementById('clipboardReloadBtn').onclick = loadClipboardText;
             document.getElementById('clipboardSaveBtn').onclick = saveClipboardText;
             document.getElementById('noteReloadBtn').onclick = loadQuickNote;
@@ -1853,6 +1891,7 @@ class LocalWebServer(
                     state.token = '';
                     noteLoadedOnce = false;
                     configLoadedOnce = false;
+                    filesLoadedOnce = false;
                     noteEditor.value = '';
                     noteStatus.textContent = '未加载';
                     configStatus.textContent = '未加载';
