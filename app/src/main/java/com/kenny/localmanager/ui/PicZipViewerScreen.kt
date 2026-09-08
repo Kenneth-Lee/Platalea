@@ -1,6 +1,8 @@
 package com.kenny.localmanager.ui
 
 import android.graphics.BitmapFactory
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -58,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import com.kenny.localmanager.R
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.activity.compose.BackHandler
@@ -71,6 +74,8 @@ private const val BATCH_SIZE = 10
 private const val SWIPE_THRESHOLD_DP = 50f
 private const val MIN_SCALE = 0.5f
 private const val MAX_SCALE = 5f
+
+private fun isSvgImagePath(path: String): Boolean = path.endsWith(".svg", ignoreCase = true)
 
 private data class PicZipDirectoryOption(
     val key: String,
@@ -132,6 +137,7 @@ fun PicZipViewerScreen(
 
     var currentIndex by remember { mutableStateOf(initialIndex.coerceIn(0, (activeImagePaths.size - 1).coerceAtLeast(0))) }
     var currentBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var currentSvgFile by remember { mutableStateOf<File?>(null) }
     var loading by remember { mutableStateOf(true) }
     var scale by remember { mutableFloatStateOf(1f) }
     var offset by remember { mutableStateOf(Offset.Zero) }
@@ -156,14 +162,17 @@ fun PicZipViewerScreen(
     fun loadBitmapForIndex(index: Int, onLoaded: (() -> Unit)? = null) {
         if (index < 0 || index >= activeImagePaths.size) {
             currentBitmap = null
+            currentSvgFile = null
             onLoaded?.invoke()
             return
         }
         val path = activeImagePaths[index]
         val file = File(contentDir, path)
+        val isSvg = isSvgImagePath(path)
         scope.launch {
             val bitmap = withContext(Dispatchers.IO) {
                 if (!file.exists()) null
+                else if (isSvg) null
                 else {
                     val opts = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                     BitmapFactory.decodeFile(file.absolutePath, opts)
@@ -176,7 +185,10 @@ fun PicZipViewerScreen(
                 }
             }
             withContext(Dispatchers.Main.immediate) {
-                if (currentIndex == index) currentBitmap = bitmap
+                if (currentIndex == index) {
+                    currentBitmap = bitmap
+                    currentSvgFile = if (isSvg && file.exists()) file else null
+                }
                 onLoaded?.invoke()
             }
         }
@@ -366,6 +378,7 @@ fun PicZipViewerScreen(
                 Box(
                     Modifier.fillMaxSize()
                 ) {
+                    val hasDisplayContent = currentBitmap != null || currentSvgFile != null
                     currentBitmap?.let { bmp ->
                         // 图片层：transformable 先接收（双指缩放、单指平移），再双击；放大时无 overlay，手势直接到此处
                         Box(
@@ -476,12 +489,62 @@ fun PicZipViewerScreen(
                                 CircularProgressIndicator()
                             }
                         }
+                    } ?: currentSvgFile?.let { svgFile ->
+                        AndroidView(
+                            modifier = Modifier.fillMaxSize(),
+                            factory = { ctx ->
+                                WebView(ctx).apply {
+                                    settings.javaScriptEnabled = false
+                                    settings.allowFileAccess = true
+                                    webViewClient = WebViewClient()
+                                }
+                            },
+                            update = { webView ->
+                                val baseUrl = svgFile.parentFile?.toURI()?.toString() ?: "file:///"
+                                val svgText = runCatching { svgFile.readText() }.getOrDefault("")
+                                webView.loadDataWithBaseURL(baseUrl, svgText, "image/svg+xml", "utf-8", null)
+                            }
+                        )
+                        if (loading) {
+                            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
                     } ?: run {
                         if (loading) {
                             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator()
                             }
                         }
+                    }
+
+                    if (!isZoomed && hasDisplayContent && currentBitmap == null) {
+                        val dragHolder = remember { object { var total = 0f } }
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .pointerInput(Unit) {
+                                    detectHorizontalDragGestures(
+                                        onHorizontalDrag = { _, dragAmount ->
+                                            dragHolder.total += dragAmount
+                                        },
+                                        onDragEnd = {
+                                            val t = dragHolder.total
+                                            dragHolder.total = 0f
+                                            if (t > swipeThresholdPx && currentIndex > 0) {
+                                                currentIndex = currentIndex - 1
+                                                scale = 1f
+                                                offset = Offset.Zero
+                                            } else if (t < -swipeThresholdPx && currentIndex < activeImagePaths.size - 1) {
+                                                currentIndex = currentIndex + 1
+                                                scale = 1f
+                                                offset = Offset.Zero
+                                            }
+                                        },
+                                        onDragCancel = { dragHolder.total = 0f }
+                                    )
+                                }
+                        )
                     }
                 }
                 if (!isZoomed) {

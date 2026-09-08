@@ -8455,14 +8455,15 @@ private fun getCompressedPayloadExtension(name: String): String? {
     return withoutZip.substring(dotIndex + 1)
 }
 
-/** 判断文件名是否为图片文件（目录图库查看用；不含 SVG）。 */
+/** 判断文件名是否为图片文件（目录图库查看用，包含 SVG）。 */
 private fun isGalleryImageFile(name: String): Boolean =
     name.endsWith(".jpg", ignoreCase = true) ||
         name.endsWith(".jpeg", ignoreCase = true) ||
         name.endsWith(".png", ignoreCase = true) ||
         name.endsWith(".gif", ignoreCase = true) ||
         name.endsWith(".webp", ignoreCase = true) ||
-        name.endsWith(".bmp", ignoreCase = true)
+        name.endsWith(".bmp", ignoreCase = true) ||
+        name.endsWith(".svg", ignoreCase = true)
 
 /** 判断文件名是否为 HTML 文件。 */
 private fun isHtmlFile(name: String): Boolean =

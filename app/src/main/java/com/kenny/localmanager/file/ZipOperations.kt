@@ -2277,7 +2277,7 @@ fun listHtmlZipContentFiles(contentDir: File): List<String> = listMdZipContentFi
 
 // ---- .pic.zip 图片压缩包查看 ----
 
-private val PIC_IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp")
+private val PIC_IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg")
 
 /** .pic.zip 解压结果：缓存目录、内容目录、zip 内图片路径列表（已排序）、是否加密。 */
 data class PicZipExtractResult(
