@@ -198,6 +198,13 @@
     <string name="fab_new">新建</string>
     <string name="context_open_with_other_app">用其他应用打开</string>
     <string name="context_open_with_internal_viewer">用内置查看器打开</string>
+    <string name="context_default_enter_directory">进入目录</string>
+    <string name="context_default_open_html">打开 HTML</string>
+    <string name="context_default_open_epub">阅读 EPUB</string>
+    <string name="context_default_open_txt">阅读 TXT</string>
+    <string name="context_default_open_llm">阅读 LLM</string>
+    <string name="context_default_open_pdf">阅读 PDF</string>
+    <string name="context_default_open_with_preferred">用记住的应用打开</string>
     <string name="context_render_markdown">渲染 (Markdown/RST)</string>
     <string name="context_view_zip_markdown">查看压缩 Markdown</string>
     <string name="context_view_zip_html">查看压缩 HTML</string>
@@ -208,6 +215,7 @@
     <string name="open_url_confirm">打开</string>
     <string name="context_view_zip_llm">查看压缩 LLM</string>
     <string name="context_view_images">查看图片</string>
+    <string name="context_view_compressed_images">查看压缩图片</string>
     <string name="context_view_videos">查看视频</string>
     <string name="context_gpg_encrypt">GnuPG 加密</string>
     <string name="context_pass_protect">密码保护</string>

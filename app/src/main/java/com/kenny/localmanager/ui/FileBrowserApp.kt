@@ -9073,6 +9073,80 @@ internal fun FileBrowserScreen(
         }
     }
 
+    fun defaultOpenMenuLabel(target: DocumentFileModel): String {
+        if (target.isDirectory) return context.getString(R.string.context_default_enter_directory)
+        return when {
+            isCompressedMarkdown(target.name) -> context.getString(R.string.context_view_zip_markdown)
+            isHtmlFile(target.name) -> context.getString(R.string.context_default_open_html)
+            isCompressedHtml(target.name) -> context.getString(R.string.context_view_zip_html)
+            isCompressedLlmZip(target.name) -> context.getString(R.string.context_view_zip_llm)
+            isEpubFile(target.name) -> context.getString(R.string.context_default_open_epub)
+            isTxtFile(target.name) -> context.getString(R.string.context_default_open_txt)
+            isLlmFile(target.name) -> context.getString(R.string.context_default_open_llm)
+            isGalleryImageFile(target.name) -> context.getString(R.string.context_view_images)
+            isPicZip(target.name) -> context.getString(R.string.context_view_compressed_images)
+            isVidZip(target.name) -> context.getString(R.string.context_view_videos)
+            isPdfFile(target.name) -> context.getString(R.string.context_default_open_pdf)
+            isExtractableArchive(target.name) -> context.getString(R.string.browser_extract_action)
+            target.name.endsWith(".gpg", ignoreCase = true) -> context.getString(R.string.context_gpg_decrypt)
+            target.name.endsWith(".pass", ignoreCase = true) -> context.getString(R.string.context_view_password)
+            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) -> context.getString(R.string.context_render_markdown)
+            else -> {
+                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
+                if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
+                else context.getString(R.string.context_open_with_internal_viewer)
+            }
+        }
+    }
+
+    fun openItemByDefault(target: DocumentFileModel) {
+        if (target.isDirectory) {
+            onNavigate(target.uri.toString())
+            return
+        }
+        when {
+            isCompressedMarkdown(target.name) ->
+                onRequestMdZipView(target)
+            isHtmlFile(target.name) ->
+                onRequestHtmlView(target)
+            isCompressedHtml(target.name) ->
+                onRequestHtmlZipView(target)
+            isCompressedLlmZip(target.name) ->
+                onRequestLlmZipView(target)
+            isEpubFile(target.name) ->
+                onRequestEpubView(target)
+            isTxtFile(target.name) ->
+                onRequestTxtView(target)
+            isLlmFile(target.name) ->
+                onRequestLlmView(target)
+            isGalleryImageFile(target.name) ->
+                onRequestDirectoryImageView(target, currentUri, galleryImageItems)
+            isPicZip(target.name) ->
+                onRequestPicZipView(target)
+            isVidZip(target.name) ->
+                onRequestVidZipView(target)
+            isPdfFile(target.name) ->
+                onRequestPdfView(target)
+            isExtractableArchive(target.name) ->
+                onUnzipRequest(target)
+            target.name.endsWith(".gpg", ignoreCase = true) ->
+                onRequestGpgDecrypt(target, currentUri)
+            target.name.endsWith(".pass", ignoreCase = true) ->
+                onRequestPassView(target)
+            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) ->
+                onOpenMarkdownView(target.uri.toString(), target.name, false)
+            else -> {
+                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
+                if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {
+                    Unit
+                } else {
+                    val encrypted = target.name.endsWith(".gpg", ignoreCase = true)
+                    onOpenFile(target.uri.toString(), target.name, encrypted)
+                }
+            }
+        }
+    }
+
     fun buildDirectoryHeadFingerprint(list: List<DocumentFileModel>): String {
         if (list.isEmpty()) return "0"
         val head = list.asSequence()
@@ -9432,53 +9506,7 @@ internal fun FileBrowserScreen(
                                 model = item,
                                 hasPreferredExternalApp = fileExtensionKey(item.name)?.let { preferredExternalPackages.containsKey(it) } == true,
                                 isInPendingList = pendingList.any { it.uri == item.uri },
-                                onClick = {
-                                    if (item.isDirectory) {
-                                        onNavigate(item.uri.toString())
-                                    } else {
-                                        when {
-                                            isCompressedMarkdown(item.name) ->
-                                                onRequestMdZipView(item)
-                                            isHtmlFile(item.name) ->
-                                                onRequestHtmlView(item)
-                                            isCompressedHtml(item.name) ->
-                                                onRequestHtmlZipView(item)
-                                            isCompressedLlmZip(item.name) ->
-                                                onRequestLlmZipView(item)
-                                            isEpubFile(item.name) ->
-                                                onRequestEpubView(item)
-                                            isTxtFile(item.name) ->
-                                                onRequestTxtView(item)
-                                            isLlmFile(item.name) ->
-                                                onRequestLlmView(item)
-                                            isGalleryImageFile(item.name) ->
-                                                onRequestDirectoryImageView(item, currentUri, galleryImageItems)
-                                            isPicZip(item.name) ->
-                                                onRequestPicZipView(item)
-                                            isVidZip(item.name) ->
-                                                onRequestVidZipView(item)
-                                            isPdfFile(item.name) ->
-                                                onRequestPdfView(item)
-                                            isExtractableArchive(item.name) ->
-                                                onUnzipRequest(item)
-                                            item.name.endsWith(".gpg", ignoreCase = true) ->
-                                                onRequestGpgDecrypt(item, currentUri)
-                                            item.name.endsWith(".pass", ignoreCase = true) ->
-                                                onRequestPassView(item)
-                                            item.name.endsWith(".md", ignoreCase = true) || item.name.endsWith(".rst", ignoreCase = true) ->
-                                                onOpenMarkdownView(item.uri.toString(), item.name, false)
-                                            else -> {
-                                                val preferredPackage = fileExtensionKey(item.name)?.let { preferredExternalPackages[it] }
-                                                if (preferredPackage != null && onOpenWithOtherApp(item.uri.toString(), item.name, preferredPackage, false, null)) {
-                                                    Unit
-                                                } else {
-                                                    val encrypted = item.name.endsWith(".gpg", ignoreCase = true)
-                                                    onOpenFile(item.uri.toString(), item.name, encrypted)
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
+                                onClick = { openItemByDefault(item) },
                                 onLongClick = {
                                     contextMenuTarget = item
                                     showContextMenu = true
@@ -9623,6 +9651,19 @@ internal fun FileBrowserScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(16.dp))
+                    TextButton(
+                        onClick = {
+                            showContextMenu = false
+                            openItemByDefault(menuTarget)
+                            contextMenuTarget = null
+                        }
+                    ) {
+                        Text(
+                            defaultOpenMenuLabel(menuTarget),
+                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     if (!menuTarget.isDirectory) {
                         TextButton(
                             onClick = {
@@ -9683,7 +9724,7 @@ internal fun FileBrowserScreen(
                                         onRequestPicZipView(menuTarget)
                                         contextMenuTarget = null
                                     }
-                                ) { Text(context.getString(R.string.context_view_images), color = MaterialTheme.colorScheme.onSurface) }
+                                ) { Text(context.getString(R.string.context_view_compressed_images), color = MaterialTheme.colorScheme.onSurface) }
                             }
                             if (isVidZip(menuTarget.name)) {
                                 TextButton(
