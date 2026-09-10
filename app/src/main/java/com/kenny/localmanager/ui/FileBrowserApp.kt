@@ -3032,18 +3032,6 @@ fun FileBrowserApp(
     initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
     initialLaunchTarget: String? = null
 ) {
-    FileBrowserAppScreen(
-        initialFileUri = initialFileUri,
-        initialLaunchTarget = initialLaunchTarget
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FileBrowserAppScreen(
-    initialFileUri: androidx.compose.runtime.MutableState<String?>?,
-    initialLaunchTarget: String?
-) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
     var rootUri by remember { mutableStateOf<String?>(null) }
