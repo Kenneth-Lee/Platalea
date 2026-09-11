@@ -168,8 +168,6 @@ import com.kenny.localmanager.MainActivity
 import com.kenny.localmanager.R
 import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
-import com.kenny.localmanager.data.ConfigExportCategory
-import com.kenny.localmanager.data.ConfigPlaylistImportMode
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
@@ -182,11 +180,6 @@ import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_VOCAL
 import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
-import com.kenny.localmanager.data.configJsonCategories
-import com.kenny.localmanager.data.configJsonContainsKeys
-import com.kenny.localmanager.data.configJsonPlaylistCount
-import com.kenny.localmanager.data.exportConfig
-import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportSnapshot
@@ -356,9 +349,9 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
-private const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
+internal const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
 
-private enum class ConfigExportResult {
+internal enum class ConfigExportResult {
     SUCCESS,
     FILE_EXISTS,
     FAILED
@@ -3034,15 +3027,20 @@ fun FileBrowserApp(
 ) {
     val context = LocalContext.current
     val prefs = remember { Preferences(context) }
+
+    // AppShell + DirectoryRoot state (long-lived while the app shell is active)
     var rootUri by remember { mutableStateOf<String?>(null) }
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
+    var currentUri by remember { mutableStateOf<String?>(null) }
+    var refreshTrigger by remember { mutableStateOf(0) }
+
+    // Transient viewer / editor routes (short-lived feature flows)
     var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
     var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
     var saveInProgress by remember { mutableStateOf(false) }
-    var viewingFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
-    var markdownViewFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
-    var htmlViewState by remember { mutableStateOf<HtmlViewState?>(null) }
+    // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
+    var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
     var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
     var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
@@ -3050,25 +3048,34 @@ fun FileBrowserApp(
     var passEditInProgress by remember { mutableStateOf(false) }
     var passEditTriedCache by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
-    var refreshTrigger by remember { mutableStateOf(0) }
     var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
     var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
     var vidZipViewState by remember { mutableStateOf<VidZipViewState?>(null) }
     var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
     var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
-    var pdfViewState by remember { mutableStateOf<Pair<String, String>?>(null) } // (uri, fileName)
+
+    // AppShell navigation + shared UI surfaces
     var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
-    var currentUri by remember { mutableStateOf<String?>(null) }
     var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
     var pendingBatchDetails by remember { mutableStateOf<List<DocumentFileModel>?>(null) }
     val fileBrowserBackStack = remember { mutableStateListOf<String>() }
     val fileListLazyState = rememberLazyListState()
+
+    // Cross-tab preferences snapshots
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
+
+    // App shell commands / helpers
     val scope = rememberCoroutineScope()
+    val networkServiceTabs = remember {
+        setOf(MainTab.FTP, MainTab.FAMILY_NETWORK, MainTab.LOCAL_SHARE)
+    }
+    fun isNetworkServiceTab(tab: MainTab?): Boolean = tab in networkServiceTabs
+
+    // Startup behavior
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
     var playerShortcutAutoplayPending by remember(initialLaunchTarget) {
@@ -3123,34 +3130,12 @@ fun FileBrowserApp(
         pendingSaveFileUri = uriStr
     }
 
-    LaunchedEffect(prefs, initialLaunchTarget) {
-        if (CrashReportStore.hasUnseenCrash(context)) {
-            Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
-            withContext(Dispatchers.IO) {
-                CrashReportStore.exportLatestToRootAndClear(context)
-            }
-            currentMainTab = MainTab.ABOUT
-            CrashReportStore.markLatestSeen(context)
-            return@LaunchedEffect
-        }
-        val launchTab = MainTab.fromLaunchTarget(initialLaunchTarget)
-        val savedTab = MainTab.fromKey(prefs.lastMainTab.first())
-        val savedNonServerTab = MainTab.fromKey(prefs.lastNonServerMainTab.first())
-        val restoreTab = if (launchTab != null) {
-            launchTab
-        } else if (savedTab in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK, MainTab.LOCAL_SHARE)) {
-            savedNonServerTab
-        } else {
-            savedTab
-        }
-        currentMainTab = restoreTab
-    }
-
+    // App 级 Tab 命令入口：所有跨域"切到某 Tab"的请求统一走这里，避免各处直接改 currentMainTab
     fun persistTabChoice(tab: MainTab, previousTab: MainTab?) {
         scope.launch {
             val previousNonServer = previousTab
-            if (tab in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK, MainTab.LOCAL_SHARE)) {
-                if (previousNonServer != null && previousNonServer !in setOf(MainTab.FTP, MainTab.FAMILY_NETWORK, MainTab.LOCAL_SHARE)) {
+            if (isNetworkServiceTab(tab)) {
+                if (previousNonServer != null && !isNetworkServiceTab(previousNonServer)) {
                     prefs.setLastNonServerMainTab(previousNonServer.key)
                 }
             } else {
@@ -3165,6 +3150,41 @@ fun FileBrowserApp(
         val previousTab = currentMainTab
         currentMainTab = tab
         persistTabChoice(tab, previousTab)
+    }
+
+    fun requestOpenMainTab(tab: MainTab) {
+        switchMainTab(tab)
+    }
+
+    fun requestOpenPlayerTab() {
+        requestOpenMainTab(MainTab.PLAYER)
+    }
+
+    fun requestOpenAboutTab() {
+        requestOpenMainTab(MainTab.ABOUT)
+    }
+
+    LaunchedEffect(prefs, initialLaunchTarget) {
+        if (CrashReportStore.hasUnseenCrash(context)) {
+            Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
+            withContext(Dispatchers.IO) {
+                CrashReportStore.exportLatestToRootAndClear(context)
+            }
+            requestOpenAboutTab()
+            CrashReportStore.markLatestSeen(context)
+            return@LaunchedEffect
+        }
+        val launchTab = MainTab.fromLaunchTarget(initialLaunchTarget)
+        val savedTab = MainTab.fromKey(prefs.lastMainTab.first())
+        val savedNonServerTab = MainTab.fromKey(prefs.lastNonServerMainTab.first())
+        val restoreTab = if (launchTab != null) {
+            launchTab
+        } else if (isNetworkServiceTab(savedTab)) {
+            savedNonServerTab
+        } else {
+            savedTab
+        }
+        currentMainTab = restoreTab
     }
 
     fun recordRecentOpen(
@@ -3283,6 +3303,13 @@ fun FileBrowserApp(
         markdownViewerSessionCache = markdownViewerSessionCache
     )
 
+    // Config 域：配置导入 / 导出工作流（独立状态持有者，写盘后通过回调刷新目录）
+    val configImportExportWorkflow = rememberConfigImportExportWorkflow(
+        prefs = prefs,
+        rootUriProvider = { rootUri },
+        onConfigFileWritten = { refreshTrigger++ }
+    )
+
     val treeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
@@ -3348,20 +3375,20 @@ fun FileBrowserApp(
     fun MainTabsRootContent() {
         val displayUri = currentUri ?: initialDirUri ?: rootUri!!
         val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
+
+        fun requestOpenQuickNoteTabFromDirectory() {
+            requestOpenMainTab(MainTab.QUICK_NOTE)
+            quickNoteController.requestOpenWithCachedPassword(true)
+        }
+
+        // DirectoryRoot domain state (kept across tab switches)
         val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
         var showPendingList by remember { mutableStateOf(false) }
         var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
+        // App-level transient dialogs / playback-target workflow
         var showPendingDeleteConfirm by remember { mutableStateOf(false) }
         var showPlaybackTargetDialog by remember { mutableStateOf(false) }
-        var showImportCategoryDialog by remember { mutableStateOf(false) }
-        var showImportKeyConfirmDialog by remember { mutableStateOf(false) }
-        var showImportPlaylistConfirmDialog by remember { mutableStateOf(false) }
-        var pendingImportJson by remember { mutableStateOf<String?>(null) }
-        var pendingImportAvailableCategories by remember { mutableStateOf<Set<ConfigExportCategory>>(emptySet()) }
-        var pendingImportSelectedCategories by remember { mutableStateOf<Set<ConfigExportCategory>>(emptySet()) }
-        var pendingImportPlaylistCount by remember { mutableStateOf(0) }
-        var pendingImportPlaylistMode by remember { mutableStateOf(ConfigPlaylistImportMode.OVERWRITE) }
         var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
         var showCacheManagementDialog by remember { mutableStateOf(false) }
         var showKeyManagementDialog by remember { mutableStateOf(false) }
@@ -3395,6 +3422,8 @@ fun FileBrowserApp(
                 }
             }
         }
+
+        // Crypto and protection transient routes
         var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
         var gpgPassword by remember { mutableStateOf("") }
         var gpgPasswordConfirm by remember { mutableStateOf("") }
@@ -3418,8 +3447,12 @@ fun FileBrowserApp(
         var passViewPassword by remember { mutableStateOf("") }
         var passViewInProgress by remember { mutableStateOf(false) }
         var passViewTriedCache by remember { mutableStateOf(false) }
+
+        // Long-running operation status
         var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
         var progressCancelAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+
+        // DirectoryRoot derived UI state
         var currentDirPath by remember { mutableStateOf("") }
         LaunchedEffect(displayUri, rootUri) {
             currentDirPath = withContext(Dispatchers.IO) {
@@ -3439,31 +3472,23 @@ fun FileBrowserApp(
         LaunchedEffect(rootUri) {
             dirCache = emptyMap()
         }
+
+        // Tab domain services
         val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
         val localShareManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
         val familyNetworkManager = remember { com.kenny.localmanager.family.FamilyNetworkManager(context) }
-        var ftpPort by remember { mutableStateOf(2121) }
-        var ftpPassword by remember { mutableStateOf<String?>(null) }
-        var networkServiceTimeoutMinutes by remember { mutableStateOf(0) }
-        var localNetworkServiceEnabled by remember { mutableStateOf(true) }
-        var familyNetworkUserName by remember { mutableStateOf("") }
-        var familyNetworkAvatarId by remember { mutableStateOf("") }
-        var familyNetworkHostName by remember { mutableStateOf("") }
+        // 网络服务域共享配置（FTP / WebUI / 家庭网络）：状态所有权在 NetworkServiceConfigState
+        val networkServiceConfig = rememberNetworkServiceConfigState(prefs)
         var filterVisible by remember { mutableStateOf(true) }
         var showGitConfigDialog by remember { mutableStateOf(false) }
-        var showExportConfigDialog by remember { mutableStateOf(false) }
-        var exportConfigFileName by remember { mutableStateOf(CONFIG_EXPORT_FILE_NAME) }
-        var exportGitCategory by remember { mutableStateOf(true) }
-        var exportMusicCategory by remember { mutableStateOf(true) }
-        var exportRecentCategory by remember { mutableStateOf(true) }
-        var exportEpubCategory by remember { mutableStateOf(true) }
-        var exportGpgCategory by remember { mutableStateOf(true) }
-        var exportOtherCategory by remember { mutableStateOf(true) }
         var showPubkeyShareScreen by remember { mutableStateOf(false) }
+        // Git 分享临时流程（目录文件共享到 Git 仓库）
         var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         val shareGitLogs = remember { mutableStateListOf<String>() }
         var shareGitInProgress by remember { mutableStateOf(false) }
         var shareGitDone by remember { mutableStateOf(false) }
+
+        // Archive 临时 Route 域：解压 / 压缩向导（zip / 7z / tar 及带密码变体）
         var zipUnzipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var zipCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var sevenZCompressTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
@@ -3478,6 +3503,8 @@ fun FileBrowserApp(
         var zipCompressPasswordConfirm by remember { mutableStateOf("") }
         var sevenZCompressPassword by remember { mutableStateOf("") }
         var sevenZCompressPasswordConfirm by remember { mutableStateOf("") }
+
+        // Archive 临时 Route 域：压缩包阅读器（md / html / llm.zip / epub / txt / llm / pic / vid）
         var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var mdZipPassword by remember { mutableStateOf("") }
@@ -3512,6 +3539,8 @@ fun FileBrowserApp(
         var vidZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
         var vidZipPassword by remember { mutableStateOf("") }
         var vidZipInProgress by remember { mutableStateOf(false) }
+
+        // PendingList 临时 Route 域：待处理列表的批量压缩向导
         var showPendingCompressToZip by remember { mutableStateOf(false) }
         var showPendingCompressTo7z by remember { mutableStateOf(false) }
         var showPendingCompressArchive by remember { mutableStateOf(false) }
@@ -3525,6 +3554,8 @@ fun FileBrowserApp(
         var pendingCompressArchiveFormat by remember { mutableStateOf(ArchiveCompressionFormat.ZIP) }
         var pendingCompressArchivePassword by remember { mutableStateOf("") }
         var pendingCompressArchivePasswordConfirm by remember { mutableStateOf("") }
+
+        // PlayerTab 域：播放状态与播放列表快照（由播放器 Tab 消费，目录根只读展示）
         var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
         var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
         var playlistsLoaded by remember { mutableStateOf(false) }
@@ -3585,6 +3616,8 @@ fun FileBrowserApp(
             }
             playerShortcutAutoplayPending = false
         }
+
+        // Archive 临时 Route 副作用：目标设定后检查加密状态并自动解压进入查看器
         LaunchedEffect(zipUnzipTarget) {
             zipUnzipEncrypted = null
             zipUnzipPassword = ""
@@ -4011,27 +4044,6 @@ fun FileBrowserApp(
             }
         }
         LaunchedEffect(prefs) {
-            prefs.ftpPort.collect { ftpPort = it }
-        }
-        LaunchedEffect(prefs) {
-            prefs.ftpPassword.collect { ftpPassword = it }
-        }
-        LaunchedEffect(prefs) {
-            prefs.networkServiceTimeoutMinutes.collect { networkServiceTimeoutMinutes = it }
-        }
-        LaunchedEffect(prefs) {
-            prefs.localNetworkServiceEnabled.collect { localNetworkServiceEnabled = it }
-        }
-        LaunchedEffect(prefs) {
-            prefs.familyNetworkUserName.collect { familyNetworkUserName = it.orEmpty() }
-        }
-        LaunchedEffect(prefs) {
-            prefs.familyNetworkAvatarId.collect { familyNetworkAvatarId = it.orEmpty() }
-        }
-        LaunchedEffect(prefs) {
-            prefs.familyNetworkHostName.collect { familyNetworkHostName = it.orEmpty() }
-        }
-        LaunchedEffect(prefs) {
             val legacyExtra = prefs.familyNetworkExtraRoles.first()
             if (!legacyExtra.isNullOrBlank()) {
                 familyNetworkManager.migrateUserRolesFromLegacyConfig(legacyExtra)
@@ -4051,13 +4063,20 @@ fun FileBrowserApp(
                 }
             }
         }
-        LaunchedEffect(ftpPassword, localNetworkServiceEnabled, familyNetworkUserName, familyNetworkAvatarId, familyNetworkHostName) {
+        // AppShell 编排：网络服务配置变化时同步到家庭网络服务
+        LaunchedEffect(
+            networkServiceConfig.ftpPassword,
+            networkServiceConfig.localNetworkServiceEnabled,
+            networkServiceConfig.familyNetworkUserName,
+            networkServiceConfig.familyNetworkAvatarId,
+            networkServiceConfig.familyNetworkHostName
+        ) {
             familyNetworkManager.configure(
-                ftpPassword,
-                localNetworkServiceEnabled,
-                familyNetworkUserName.ifBlank { null },
-                familyNetworkAvatarId.ifBlank { null },
-                familyNetworkHostName.ifBlank { null }
+                networkServiceConfig.ftpPassword,
+                networkServiceConfig.localNetworkServiceEnabled,
+                networkServiceConfig.familyNetworkUserName.ifBlank { null },
+                networkServiceConfig.familyNetworkAvatarId.ifBlank { null },
+                networkServiceConfig.familyNetworkHostName.ifBlank { null }
             )
         }
         LaunchedEffect(activeMainTab) {
@@ -4101,7 +4120,7 @@ fun FileBrowserApp(
                 llmZipTarget != null -> { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
                 epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
                 picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
-                pdfViewState != null -> pdfViewState = null
+                transientRoute is TransientRoute.PdfViewer -> transientRoute = null
                 zipCompressTarget != null -> zipCompressTarget = null
                 sevenZCompressTarget != null -> sevenZCompressTarget = null
                 archiveCompressTarget != null -> archiveCompressTarget = null
@@ -4139,17 +4158,6 @@ fun FileBrowserApp(
             } finally {
                 progressCancelAction = null
             }
-        }
-
-        fun clearPendingConfigImportState() {
-            pendingImportJson = null
-            pendingImportAvailableCategories = emptySet()
-            pendingImportSelectedCategories = emptySet()
-            pendingImportPlaylistCount = 0
-            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-            showImportCategoryDialog = false
-            showImportKeyConfirmDialog = false
-            showImportPlaylistConfirmDialog = false
         }
 
         fun clearPendingPlaybackTargetState() {
@@ -4206,7 +4214,7 @@ fun FileBrowserApp(
                 playlistId = playlist.id
             )
             pendingList.clear()
-            switchMainTab(MainTab.PLAYER)
+            requestOpenPlayerTab()
             showPendingList = false
             clearPendingPlaybackTargetState()
             Toast.makeText(context, context.getString(R.string.browser_playlist_created, audioList.size), Toast.LENGTH_SHORT).show()
@@ -4225,133 +4233,10 @@ fun FileBrowserApp(
                 playlistId = target.id
             )
             pendingList.clear()
-            switchMainTab(MainTab.PLAYER)
+            requestOpenPlayerTab()
             showPendingList = false
             clearPendingPlaybackTargetState()
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        }
-
-        suspend fun exportConfigToRoot(): ConfigExportResult {
-            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
-            val targetUri = Uri.parse(targetRoot)
-            val jsonBytes = exportConfig(context, prefs).toByteArray(Charsets.UTF_8)
-            val existing = findChildByName(context, targetUri, CONFIG_EXPORT_FILE_NAME)
-            if (existing != null) return ConfigExportResult.FILE_EXISTS
-            return if (createFileWithBytes(
-                context,
-                targetUri,
-                targetUri,
-                CONFIG_EXPORT_FILE_NAME,
-                "application/json",
-                jsonBytes
-            )) ConfigExportResult.SUCCESS else ConfigExportResult.FAILED
-        }
-
-        fun openExportConfigDialog() {
-            exportConfigFileName = CONFIG_EXPORT_FILE_NAME
-            exportGitCategory = true
-            exportMusicCategory = true
-            exportRecentCategory = true
-            exportEpubCategory = true
-            exportGpgCategory = true
-            exportOtherCategory = true
-            showExportConfigDialog = true
-        }
-
-        fun normalizeExportFileName(input: String): String? {
-            val trimmed = input.trim()
-            if (trimmed.isBlank() || trimmed.contains('/') || trimmed.contains('\\')) return null
-            return if (trimmed.endsWith(".json", ignoreCase = true)) trimmed else "$trimmed.json"
-        }
-
-        suspend fun exportConfigToRoot(fileName: String, categories: Set<ConfigExportCategory>): ConfigExportResult {
-            if (categories.isEmpty()) return ConfigExportResult.FAILED
-            val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
-            val targetUri = Uri.parse(targetRoot)
-            val jsonBytes = exportConfig(context, prefs, categories).toByteArray(Charsets.UTF_8)
-            val existing = findChildByName(context, targetUri, fileName)
-            if (existing != null) return ConfigExportResult.FILE_EXISTS
-            return if (createFileWithBytes(
-                context,
-                targetUri,
-                targetUri,
-                fileName,
-                "application/json",
-                jsonBytes
-            )) ConfigExportResult.SUCCESS else ConfigExportResult.FAILED
-        }
-
-        suspend fun performConfigImport(
-            jsonString: String,
-            importKeys: Boolean,
-            categories: Set<ConfigExportCategory>
-        ) {
-            val ok = importConfig(
-                context,
-                prefs,
-                jsonString,
-                importKeys = importKeys,
-                playlistImportMode = pendingImportPlaylistMode,
-                categories = categories
-            )
-            refreshTrigger++
-            val msg = when {
-                !ok -> context.getString(R.string.browser_config_import_json_failed)
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND && importKeys -> context.getString(R.string.browser_config_imported_music_append_keys)
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> context.getString(R.string.browser_config_imported_music_append)
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 && importKeys -> context.getString(R.string.browser_config_imported_music_replace_keys)
-                ConfigExportCategory.MUSIC in categories && pendingImportPlaylistCount > 0 -> context.getString(R.string.browser_config_imported_music_replace)
-                ConfigExportCategory.GPG in categories && importKeys -> context.getString(R.string.browser_config_imported_with_keys)
-                pendingImportPlaylistCount > 0 && pendingImportPlaylistMode == ConfigPlaylistImportMode.APPEND -> context.getString(R.string.browser_config_imported_playlist_append)
-                else -> context.getString(R.string.browser_config_imported)
-            }
-            clearPendingConfigImportState()
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        }
-
-        fun continueConfigImportAfterPlaylistChoice() {
-            val jsonString = pendingImportJson ?: return
-            val selectedCategories = pendingImportSelectedCategories
-            if (ConfigExportCategory.GPG in selectedCategories && configJsonContainsKeys(jsonString)) {
-                showImportKeyConfirmDialog = true
-            } else {
-                scope.launch { performConfigImport(jsonString, importKeys = false, categories = selectedCategories) }
-            }
-        }
-
-        fun continueConfigImportAfterCategoryChoice() {
-            val jsonString = pendingImportJson ?: return
-            val selectedCategories = pendingImportSelectedCategories
-            scope.launch {
-                val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
-                val playlistCount = if (ConfigExportCategory.MUSIC in selectedCategories) configJsonPlaylistCount(jsonString) else 0
-                pendingImportPlaylistCount = playlistCount
-                if (playlistCount > 0 && hasExistingPlaylists) {
-                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                    showImportPlaylistConfirmDialog = true
-                } else {
-                    pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                    continueConfigImportAfterPlaylistChoice()
-                }
-            }
-        }
-
-        fun startConfigImport(jsonString: String) {
-            if (jsonString.isBlank()) {
-                Toast.makeText(context, context.getString(R.string.browser_config_import_read_failed), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val categories = configJsonCategories(jsonString)
-            if (categories.isEmpty()) {
-                Toast.makeText(context, context.getString(R.string.browser_config_import_no_category), Toast.LENGTH_SHORT).show()
-                return
-            }
-            pendingImportJson = jsonString
-            pendingImportAvailableCategories = categories
-            pendingImportSelectedCategories = categories
-            pendingImportPlaylistCount = 0
-            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-            showImportCategoryDialog = true
         }
 
         val doCopyHere: () -> Unit = {
@@ -4434,32 +4319,12 @@ fun FileBrowserApp(
                                     playlistId = playlistId
                                 )
                             },
-                            switchMainTab = { switchMainTab(it) },
+                            switchMainTab = { requestOpenMainTab(it) },
                             onMdZipTarget = { mdZipTarget = it },
                             onHtmlZipTarget = { htmlZipTarget = it },
-                            onHtmlTarget = {
-                                htmlViewState = HtmlViewState(
-                                    location = HtmlViewerLocation(
-                                        initialUrl = it.uri.toString(),
-                                        title = it.name,
-                                        localFileUri = it.uri.toString()
-                                    ),
-                                    recentKey = it.uri.toString(),
-                                    recentUri = it.uri.toString(),
-                                    recentTitle = it.name
-                                )
-                            },
+                            onHtmlTarget = { transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name) },
                             onHtmlUrlTarget = { url ->
-                                htmlViewState = HtmlViewState(
-                                    location = HtmlViewerLocation(
-                                        initialUrl = url,
-                                        title = url,
-                                        localFileUri = null
-                                    ),
-                                    recentKey = url,
-                                    recentUri = url,
-                                    recentTitle = url
-                                )
+                                transientRoute = htmlViewerRouteFromUrl(url)
                             },
                             onPicZipTarget = { picZipTarget = it },
                             onVidZipTarget = { vidZipTarget = it },
@@ -4467,7 +4332,7 @@ fun FileBrowserApp(
                             onTxtTarget = { txtTarget = it },
                             onLlmTarget = { llmTarget = it },
                             onEpubTarget = { epubTarget = it },
-                            onPdfTarget = { pdfViewState = Pair(it.uri.toString(), it.name) }
+                            onPdfTarget = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) }
                         )
                     },
                     onDeleteRecentItem = { item ->
@@ -4539,7 +4404,7 @@ fun FileBrowserApp(
                                 isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
                                 preferredExternalPackages = preferredExternalPackages,
                                 onOpenFile = { uri, name, _ ->
-                                    viewingFile = Triple(uri, name, false)
+                                    transientRoute = TransientRoute.Viewer(uri, name, false)
                                 },
                                 onOpenWithOtherApp = { uri, name, packageName, rememberChoice, forcedMimeType ->
                                     val opened = launchExternalOpen(context, uri, packageName, name, forcedMimeType)
@@ -4574,7 +4439,7 @@ fun FileBrowserApp(
                                     }
                                 },
                                 onOpenMarkdownView = { uri, name, encrypted ->
-                                    markdownViewFile = Triple(uri, name, encrypted)
+                                    transientRoute = TransientRoute.MarkdownViewer(uri, name, encrypted)
                                 },
                                 onAddToPendingList = { item -> pendingList.add(item) },
                                 onRemoveFromPendingList = { item -> pendingList.remove(item) },
@@ -4583,8 +4448,7 @@ fun FileBrowserApp(
                                 onShowPendingList = { show -> showPendingList = show },
                                 onRefresh = { refreshTrigger++ },
                                 onCreateQuickNote = {
-                                    switchMainTab(MainTab.QUICK_NOTE)
-                                    quickNoteController.requestOpenWithCachedPassword(true)
+                                    requestOpenQuickNoteTabFromDirectory()
                                 },
                                 onCreateMusicPlaylist = { uri, name ->
                                     scope.launch {
@@ -4600,7 +4464,7 @@ fun FileBrowserApp(
                                                 title = playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
                                                 playlistId = playlist.id
                                             )
-                                            switchMainTab(MainTab.PLAYER)
+                                            requestOpenPlayerTab()
                                             Toast.makeText(context, context.getString(R.string.browser_playlist_from_dir_started), Toast.LENGTH_SHORT).show()
                                         }
                                     }
@@ -4655,29 +4519,11 @@ fun FileBrowserApp(
                                 onUnzipRequest = { zipUnzipTarget = it },
                                 onRequestMdZipView = { mdZipTarget = it },
                                 onRequestHtmlView = {
-                                    htmlViewState = HtmlViewState(
-                                        location = HtmlViewerLocation(
-                                            initialUrl = it.uri.toString(),
-                                            title = it.name,
-                                            localFileUri = it.uri.toString()
-                                        ),
-                                        recentKey = it.uri.toString(),
-                                        recentUri = it.uri.toString(),
-                                        recentTitle = it.name
-                                    )
+                                    transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name)
                                 },
                                 onRequestHtmlZipView = { htmlZipTarget = it },
                                 onRequestOpenUrl = { url ->
-                                    htmlViewState = HtmlViewState(
-                                        location = HtmlViewerLocation(
-                                            initialUrl = url,
-                                            title = url,
-                                            localFileUri = null
-                                        ),
-                                        recentKey = url,
-                                        recentUri = url,
-                                        recentTitle = url
-                                    )
+                                    transientRoute = htmlViewerRouteFromUrl(url)
                                 },
                                 onRequestLlmZipView = { llmZipTarget = it },
                                 onRequestEpubView = { epubTarget = it },
@@ -4698,7 +4544,7 @@ fun FileBrowserApp(
                                         }
                                     }
                                 },
-                                onRequestPdfView = { pdfViewState = Pair(it.uri.toString(), it.name) },
+                                onRequestPdfView = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) },
                                 onCompressArchiveRequest = { archiveCompressTarget = it },
                                 onCompressToZipRequest = { zipCompressTarget = it },
                                 onCompressTo7zRequest = { sevenZCompressTarget = it },
@@ -4721,7 +4567,7 @@ fun FileBrowserApp(
                                                 ""
                                             }
                                         }
-                                        startConfigImport(jsonString)
+                                        configImportExportWorkflow.startImportFromJson(jsonString)
                                     }
                                 },
                                 onRequestImportStarDict = { model ->
@@ -4742,7 +4588,7 @@ fun FileBrowserApp(
                                     }
                                 },
                                 playbackState = playbackState,
-                                onOpenPlaybackScreen = { switchMainTab(MainTab.PLAYER) }
+                                onOpenPlaybackScreen = { requestOpenPlayerTab() }
                             )
                         )
                     },
@@ -4752,9 +4598,9 @@ fun FileBrowserApp(
                                 rootUri = ftpRootUri,
                                 displayUri = displayUri,
                                 ftpManager = ftpManager,
-                                ftpPort = ftpPort,
-                                ftpPassword = ftpPassword,
-                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
+                                ftpPort = networkServiceConfig.ftpPort,
+                                ftpPassword = networkServiceConfig.ftpPassword,
+                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
@@ -4765,9 +4611,9 @@ fun FileBrowserApp(
                                 rootUri = ftpRootUri,
                                 displayUri = displayUri,
                                 manager = localShareManager,
-                                port = ftpPort,
-                                password = ftpPassword,
-                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
+                                port = networkServiceConfig.ftpPort,
+                                password = networkServiceConfig.ftpPassword,
+                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
@@ -4775,12 +4621,12 @@ fun FileBrowserApp(
                     familyNetworkContent = {
                         FamilyNetworkScreen(
                             manager = familyNetworkManager,
-                            networkPassword = ftpPassword,
-                            localServiceEnabled = localNetworkServiceEnabled,
-                            familyNetworkUserName = familyNetworkUserName,
-                            familyNetworkAvatarId = familyNetworkAvatarId,
-                            familyNetworkHostName = familyNetworkHostName,
-                            timeoutMinutes = networkServiceTimeoutMinutes,
+                            networkPassword = networkServiceConfig.ftpPassword,
+                            localServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
+                            familyNetworkUserName = networkServiceConfig.familyNetworkUserName,
+                            familyNetworkAvatarId = networkServiceConfig.familyNetworkAvatarId,
+                            familyNetworkHostName = networkServiceConfig.familyNetworkHostName,
+                            timeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
                             rootUri = rootUri ?: initialDirUri,
                             hideDotFiles = hideDotFiles,
                             onDismiss = { requestExitApp() }
@@ -4800,72 +4646,22 @@ fun FileBrowserApp(
                                 },
                                 viewerPreviewBytes = viewerPreviewBytes,
                                 onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
-                                ftpPassword = ftpPassword ?: "",
-                                onFtpPasswordChange = { s ->
-                                    ftpPassword = s.ifBlank { null }
-                                    scope.launch { prefs.setFtpPassword(s.ifBlank { null }) }
-                                    familyNetworkManager.configure(
-                                        s.ifBlank { null },
-                                        localNetworkServiceEnabled,
-                                        familyNetworkUserName.ifBlank { null },
-                                        familyNetworkAvatarId.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
-                                    )
-                                },
-                                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
-                                onNetworkServiceTimeoutMinutesChange = { scope.launch { prefs.setNetworkServiceTimeoutMinutes(it) } },
-                                localNetworkServiceEnabled = localNetworkServiceEnabled,
-                                onLocalNetworkServiceEnabledChange = { enabled ->
-                                    localNetworkServiceEnabled = enabled
-                                    scope.launch { prefs.setLocalNetworkServiceEnabled(enabled) }
-                                    familyNetworkManager.configure(
-                                        ftpPassword,
-                                        enabled,
-                                        familyNetworkUserName.ifBlank { null },
-                                        familyNetworkAvatarId.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
-                                    )
-                                },
-                                familyNetworkUserName = familyNetworkUserName,
-                                onFamilyNetworkUserNameChange = { name ->
-                                    familyNetworkUserName = name
-                                    scope.launch { prefs.setFamilyNetworkUserName(name.ifBlank { null }) }
-                                    familyNetworkManager.configure(
-                                        ftpPassword,
-                                        localNetworkServiceEnabled,
-                                        name.ifBlank { null },
-                                        familyNetworkAvatarId.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
-                                    )
-                                },
-                                familyNetworkAvatarId = familyNetworkAvatarId,
-                                onFamilyNetworkAvatarIdChange = { avatarId ->
-                                    familyNetworkAvatarId = avatarId
-                                    scope.launch { prefs.setFamilyNetworkAvatarId(avatarId.ifBlank { null }) }
-                                    familyNetworkManager.configure(
-                                        ftpPassword,
-                                        localNetworkServiceEnabled,
-                                        familyNetworkUserName.ifBlank { null },
-                                        avatarId.ifBlank { null },
-                                        familyNetworkHostName.ifBlank { null }
-                                    )
-                                },
-                                familyNetworkHostName = familyNetworkHostName,
-                                onFamilyNetworkHostNameChange = { name ->
-                                    familyNetworkHostName = name
-                                    scope.launch { prefs.setFamilyNetworkHostName(name.ifBlank { null }) }
-                                    familyNetworkManager.configure(
-                                        ftpPassword,
-                                        localNetworkServiceEnabled,
-                                        familyNetworkUserName.ifBlank { null },
-                                        familyNetworkAvatarId.ifBlank { null },
-                                        name.ifBlank { null }
-                                    )
-                                },
+                                ftpPassword = networkServiceConfig.ftpPassword ?: "",
+                                onFtpPasswordChange = { s -> networkServiceConfig.setFtpPassword(s.ifBlank { null }) },
+                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
+                                onNetworkServiceTimeoutMinutesChange = { networkServiceConfig.setNetworkServiceTimeoutMinutes(it) },
+                                localNetworkServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
+                                onLocalNetworkServiceEnabledChange = { enabled -> networkServiceConfig.setLocalNetworkServiceEnabled(enabled) },
+                                familyNetworkUserName = networkServiceConfig.familyNetworkUserName,
+                                onFamilyNetworkUserNameChange = { name -> networkServiceConfig.setFamilyNetworkUserName(name) },
+                                familyNetworkAvatarId = networkServiceConfig.familyNetworkAvatarId,
+                                onFamilyNetworkAvatarIdChange = { avatarId -> networkServiceConfig.setFamilyNetworkAvatarId(avatarId) },
+                                familyNetworkHostName = networkServiceConfig.familyNetworkHostName,
+                                onFamilyNetworkHostNameChange = { name -> networkServiceConfig.setFamilyNetworkHostName(name) },
                                 onOpenGitConfig = { showGitConfigDialog = true },
                                 onManageKeys = { showKeyManagementDialog = true },
                                 onOpenCacheManagement = { showCacheManagementDialog = true },
-                                onExportConfig = { openExportConfigDialog() },
+                                onExportConfig = { configImportExportWorkflow.openExportDialog() },
                                 onCreatePlayerShortcut = {
                                     val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
                                     if (playerErr == null) {
@@ -4936,7 +4732,7 @@ fun FileBrowserApp(
 
             ScrollableMainTabBar(
                 activeMainTab = activeMainTab,
-                onSwitchMainTab = { switchMainTab(it) }
+                onSwitchMainTab = { requestOpenMainTab(it) }
             )
         }
         if (showPendingList) {
@@ -5054,7 +4850,7 @@ fun FileBrowserApp(
             BulletinForwardTargetFlow(
                 manager = familyNetworkManager,
                 payload = payload,
-                localServiceEnabled = localNetworkServiceEnabled,
+                localServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
                 keepEphemeralSession = activeMainTab != MainTab.FAMILY_NETWORK,
                 onDismiss = { bulletinForwardPayload = null },
                 onComplete = {
@@ -5193,163 +4989,8 @@ fun FileBrowserApp(
                 dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text(stringResource(R.string.common_cancel)) } }
             )
         }
-        if (showImportCategoryDialog && pendingImportJson != null) {
-            AlertDialog(
-                onDismissRequest = { clearPendingConfigImportState() },
-                title = { Text(context.getString(R.string.config_import_category_title)) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(
-                            text = context.getString(R.string.config_import_category_hint),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        if (ConfigExportCategory.GIT in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.GIT in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.GIT else pendingImportSelectedCategories - ConfigExportCategory.GIT
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_git))
-                            }
-                        }
-                        if (ConfigExportCategory.MUSIC in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.MUSIC in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.MUSIC else pendingImportSelectedCategories - ConfigExportCategory.MUSIC
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_music))
-                            }
-                        }
-                        if (ConfigExportCategory.RECENT in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.RECENT in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.RECENT else pendingImportSelectedCategories - ConfigExportCategory.RECENT
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_recent))
-                            }
-                        }
-                        if (ConfigExportCategory.EPUB in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.EPUB in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.EPUB else pendingImportSelectedCategories - ConfigExportCategory.EPUB
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_epub))
-                            }
-                        }
-                        if (ConfigExportCategory.GPG in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.GPG in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.GPG else pendingImportSelectedCategories - ConfigExportCategory.GPG
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_gpg))
-                            }
-                        }
-                        if (ConfigExportCategory.OTHER in pendingImportAvailableCategories) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Checkbox(
-                                    checked = ConfigExportCategory.OTHER in pendingImportSelectedCategories,
-                                    onCheckedChange = { checked ->
-                                        pendingImportSelectedCategories = if (checked) pendingImportSelectedCategories + ConfigExportCategory.OTHER else pendingImportSelectedCategories - ConfigExportCategory.OTHER
-                                    }
-                                )
-                                Text(context.getString(R.string.config_export_category_other))
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        if (pendingImportSelectedCategories.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.config_import_select_one_category), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        showImportCategoryDialog = false
-                        continueConfigImportAfterCategoryChoice()
-                    }) { Text(context.getString(R.string.common_continue)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { clearPendingConfigImportState() }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showImportPlaylistConfirmDialog && pendingImportJson != null) {
-            AlertDialog(
-                onDismissRequest = { clearPendingConfigImportState() },
-                title = { Text(stringResource(R.string.browser_import_playlist_title)) },
-                text = {
-                    Text(
-                        stringResource(R.string.browser_import_playlist_prompt, pendingImportPlaylistCount),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        showImportPlaylistConfirmDialog = false
-                        pendingImportPlaylistMode = ConfigPlaylistImportMode.APPEND
-                        continueConfigImportAfterPlaylistChoice()
-                    }) { Text(stringResource(R.string.browser_append)) }
-                },
-                dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            showImportPlaylistConfirmDialog = false
-                            pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
-                            continueConfigImportAfterPlaylistChoice()
-                        }) { Text(stringResource(R.string.file_share_overwrite_action)) }
-                        TextButton(onClick = { clearPendingConfigImportState() }) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                }
-            )
-        }
-        if (showImportKeyConfirmDialog && pendingImportJson != null) {
-            val jsonToImport = pendingImportJson!!
-            AlertDialog(
-                onDismissRequest = {
-                    clearPendingConfigImportState()
-                },
-                title = { Text(stringResource(R.string.config_import_category_title)) },
-                text = {
-                    Text(
-                        stringResource(R.string.browser_import_config_keys_prompt),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            showImportKeyConfirmDialog = false
-                            scope.launch {
-                                performConfigImport(jsonToImport, importKeys = true, categories = pendingImportSelectedCategories)
-                            }
-                        }
-                    ) { Text(stringResource(R.string.browser_replace_all)) }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = {
-                            showImportKeyConfirmDialog = false
-                            scope.launch {
-                                performConfigImport(jsonToImport, importKeys = false, categories = pendingImportSelectedCategories)
-                            }
-                        }
-                    ) { Text(stringResource(R.string.browser_skip_keys)) }
-                }
-            )
-        }
+        // Config 域：配置导入 / 导出工作流对话框（状态与逻辑在 ConfigImportExportWorkflowState 中）
+        ConfigImportExportDialogs(state = configImportExportWorkflow)
         if (showCacheManagementDialog) {
             CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
         }
@@ -5420,96 +5061,6 @@ fun FileBrowserApp(
                 },
                 dismissButton = {
                     TextButton(onClick = { showRootSwitchDialog = false }) { Text(stringResource(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showExportConfigDialog) {
-            AlertDialog(
-                onDismissRequest = { showExportConfigDialog = false },
-                title = { Text(context.getString(R.string.config_export_dialog_title)) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(
-                            value = exportConfigFileName,
-                            onValueChange = { exportConfigFileName = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            label = { Text(context.getString(R.string.config_export_file_name_label)) },
-                            placeholder = { Text(CONFIG_EXPORT_FILE_NAME) }
-                        )
-                        Text(
-                            text = context.getString(R.string.config_export_category_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportGitCategory, onCheckedChange = { exportGitCategory = it })
-                            Text(context.getString(R.string.config_export_category_git))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportMusicCategory, onCheckedChange = { exportMusicCategory = it })
-                            Text(context.getString(R.string.config_export_category_music))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportRecentCategory, onCheckedChange = { exportRecentCategory = it })
-                            Text(context.getString(R.string.config_export_category_recent))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportEpubCategory, onCheckedChange = { exportEpubCategory = it })
-                            Text(context.getString(R.string.config_export_category_epub))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportGpgCategory, onCheckedChange = { exportGpgCategory = it })
-                            Text(context.getString(R.string.config_export_category_gpg))
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = exportOtherCategory, onCheckedChange = { exportOtherCategory = it })
-                            Text(context.getString(R.string.config_export_category_other))
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val normalizedFileName = normalizeExportFileName(exportConfigFileName)
-                        if (normalizedFileName == null) {
-                            Toast.makeText(context, context.getString(R.string.config_export_invalid_file_name), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        val categories = buildSet {
-                            if (exportGitCategory) add(ConfigExportCategory.GIT)
-                            if (exportMusicCategory) add(ConfigExportCategory.MUSIC)
-                            if (exportRecentCategory) add(ConfigExportCategory.RECENT)
-                            if (exportEpubCategory) add(ConfigExportCategory.EPUB)
-                            if (exportGpgCategory) add(ConfigExportCategory.GPG)
-                            if (exportOtherCategory) add(ConfigExportCategory.OTHER)
-                        }
-                        if (categories.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.config_export_select_one_category), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        showExportConfigDialog = false
-                        scope.launch {
-                            when (exportConfigToRoot(normalizedFileName, categories)) {
-                                ConfigExportResult.SUCCESS -> {
-                                    Toast.makeText(context, context.getString(R.string.config_export_success), Toast.LENGTH_SHORT).show()
-                                    refreshTrigger++
-                                }
-                                ConfigExportResult.FILE_EXISTS -> {
-                                    Toast.makeText(context, context.getString(R.string.config_export_file_exists, normalizedFileName), Toast.LENGTH_LONG).show()
-                                }
-                                ConfigExportResult.FAILED -> {
-                                    Toast.makeText(context, context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        }
-                    }) {
-                        Text(context.getString(R.string.config_export))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showExportConfigDialog = false }) {
-                        Text(context.getString(R.string.common_cancel))
-                    }
                 }
             )
         }
@@ -7725,55 +7276,22 @@ fun FileBrowserApp(
                 }
             }
         }
-        markdownViewFile != null -> {
-            val (uri, name, isEncrypted) = markdownViewFile!!
-            BackHandler { markdownViewFile = null }
-            MarkdownViewerScreen(
-                initialFileUri = uri,
-                initialFileName = name,
-                isEncrypted = isEncrypted,
-                sessionCache = markdownViewerSessionCache,
-                onBack = { markdownViewFile = null },
-                onOpenFile = { openUri, openName, openEncrypted ->
-                    when {
-                        openName.endsWith(".md", ignoreCase = true) || openName.endsWith(".rst", ignoreCase = true) -> {
-                            markdownViewFile = Triple(openUri, openName, openEncrypted)
-                        }
-                        isHtmlFile(openName) -> {
-                            htmlViewState = HtmlViewState(
-                                location = HtmlViewerLocation(
-                                    initialUrl = openUri,
-                                    title = openName,
-                                    localFileUri = openUri
-                                ),
-                                recentKey = openUri,
-                                recentUri = openUri,
-                                recentTitle = openName
-                            )
-                            markdownViewFile = null
-                        }
-                        else -> {
-                            viewingFile = Triple(openUri, openName, openEncrypted)
-                            markdownViewFile = null
-                        }
-                    }
-                }
-            )
-        }
-        htmlViewState != null -> {
-            val state = htmlViewState!!
-            LaunchedEffect(state.recentKey) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_HTML_VIEWER,
-                    key = state.recentKey,
-                    title = state.recentTitle,
-                    uri = state.recentUri
-                )
-            }
-            BackHandler { htmlViewState = null }
-            HtmlViewerScreen(
-                initialLocation = state.location,
-                onBack = { htmlViewState = null }
+        transientRoute != null -> {
+            TransientViewerRouteHost(
+                route = transientRoute!!,
+                prefs = prefs,
+                markdownViewerSessionCache = markdownViewerSessionCache,
+                bookNoteController = bookNoteController,
+                recordRecentOpen = { type, key, title, uri, playlistId ->
+                    recordRecentOpen(
+                        type = type,
+                        key = key,
+                        title = title,
+                        uri = uri,
+                        playlistId = playlistId
+                    )
+                },
+                onRouteChange = { transientRoute = it }
             )
         }
         mdZipViewState != null -> {
@@ -8191,29 +7709,6 @@ fun FileBrowserApp(
                 }
             }
         }
-        pdfViewState != null -> {
-            val (pdfUri, pdfName) = pdfViewState!!
-            LaunchedEffect(pdfUri) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_PDF_VIEWER,
-                    key = pdfUri,
-                    title = pdfName,
-                    uri = pdfUri
-                )
-            }
-            BackHandler { pdfViewState = null }
-            PdfViewerScreen(
-                uri = pdfUri,
-                fileName = pdfName,
-                prefs = prefs,
-                bookNoteLoadedData = bookNoteController.data,
-                bookNoteEntries = bookNoteController.entriesSnapshot,
-                bookNoteInProgress = bookNoteController.inProgress,
-                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
-                onBookNoteEntriesChanged = bookNoteController.updateEntries,
-                onBack = { pdfViewState = null }
-            )
-        }
         passContentView != null -> {
             val content = passContentView!!
             BackHandler { passContentView = null }
@@ -8250,19 +7745,6 @@ fun FileBrowserApp(
                     }
                 },
                 onBack = { passEditState = null }
-            )
-        }
-        viewingFile != null -> {
-            val (uri, name, isEncrypted) = viewingFile!!
-            BackHandler { viewingFile = null }
-            ViewerScreen(
-                fileUri = uri,
-                fileName = name,
-                isEncrypted = isEncrypted,
-                onBack = { viewingFile = null },
-                onOpenMarkdownView = if (name.endsWith(".md", ignoreCase = true) || name.endsWith(".rst", ignoreCase = true)) {
-                    { markdownViewFile = viewingFile; viewingFile = null }
-                } else null
             )
         }
         else -> MainTabsRootContent()
@@ -8454,7 +7936,7 @@ private fun isGalleryImageFile(name: String): Boolean =
         name.endsWith(".svg", ignoreCase = true)
 
 /** 判断文件名是否为 HTML 文件。 */
-private fun isHtmlFile(name: String): Boolean =
+internal fun isHtmlFile(name: String): Boolean =
     name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
 
 /** .html.zip 查看器状态。 */
@@ -8464,14 +7946,6 @@ private data class HtmlZipViewState(
     val zipFileName: String,
     val zipUri: Uri,
     val isEncrypted: Boolean
-)
-
-/** 通用 HTML 查看器状态：支持本地 HTML 文件或远程 URL。 */
-private data class HtmlViewState(
-    val location: HtmlViewerLocation,
-    val recentKey: String,
-    val recentUri: String,
-    val recentTitle: String
 )
 
 /** EPUB 查看器状态。 */
