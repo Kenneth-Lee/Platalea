@@ -23,9 +23,7 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
-import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.background
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -35,7 +33,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -208,7 +205,6 @@ import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
-import com.kenny.localmanager.file.isMusicFileName
 import com.kenny.localmanager.file.formatSize
 import com.kenny.localmanager.file.collectMusicFilesRecursively
 import com.kenny.localmanager.file.RecursiveFileSearchCriteria
@@ -229,10 +225,8 @@ import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
 import com.kenny.localmanager.player.EXTRA_START_INDEX
 import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
 import com.kenny.localmanager.gpg.GpgHelper
-import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
 import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.generateDefaultKey
-import com.kenny.localmanager.gpg.listEncryptionPublicKeyRings
 import com.kenny.localmanager.gpg.KeyInfo
 import com.kenny.localmanager.gpg.listGpgKeyFiles
 import com.kenny.localmanager.gpg.listPublicKeyInfos
@@ -1042,87 +1036,6 @@ private suspend fun appendToPlaybackPlaylistAndStart(
     }
 }
 
-private suspend fun detectGpgDecryptModeForOp(context: Context, op: GpgOpState): GpgDecryptUiMode = withContext(Dispatchers.IO) {
-    val files = when (op) {
-        is GpgOpState.Decrypt -> listOf(op.fileModel)
-        is GpgOpState.BatchDecrypt -> op.list
-        else -> emptyList()
-    }
-    var hasSymmetric = false
-    var hasPublicKey = false
-    files.forEach { fileModel ->
-        val kind = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { input ->
-            GpgHelper.detectEncryptedKind(input)
-        } ?: GpgEncryptedKind.UNKNOWN
-        when (kind) {
-            GpgEncryptedKind.PUBLIC_KEY -> hasPublicKey = true
-            GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> hasSymmetric = true
-        }
-    }
-    when {
-        hasSymmetric && hasPublicKey -> GpgDecryptUiMode.MIXED
-        hasPublicKey -> GpgDecryptUiMode.SECRET_KEY
-        else -> GpgDecryptUiMode.SYMMETRIC
-    }
-}
-
-private suspend fun decryptGpgFileToDir(
-    context: Context,
-    fileModel: DocumentFileModel,
-    targetDirUri: String,
-    treeUri: Uri?,
-    symmetricPassword: CharArray?,
-    keyPassphrase: CharArray?
-): Boolean = withContext(Dispatchers.IO) {
-    val encBytes = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
-    val kind = GpgHelper.detectEncryptedKind(java.io.ByteArrayInputStream(encBytes))
-    val decrypted = when (kind) {
-        GpgEncryptedKind.PUBLIC_KEY -> {
-            val secretRings = loadSecretKeyRings(context) ?: return@withContext false
-            val effectiveKeyPass = keyPassphrase ?: SecretKeyPasswordCache.get() ?: CharArray(0)
-            GpgHelper.decryptWithSecretKey(
-                java.io.ByteArrayInputStream(encBytes),
-                secretRings,
-                effectiveKeyPass
-            ) { }
-        }
-        GpgEncryptedKind.SYMMETRIC, GpgEncryptedKind.UNKNOWN -> {
-            val pwd = symmetricPassword ?: return@withContext false
-            GpgHelper.decryptSymmetric(
-                java.io.ByteArrayInputStream(encBytes),
-                pwd
-            ) { }
-        }
-    } ?: return@withContext false
-    val outName = fileModel.name.removeSuffix(".gpg").ifEmpty { fileModel.name + ".dec" }
-    createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", decrypted)
-}
-
-private suspend fun encryptGpgFileToDir(
-    context: Context,
-    fileModel: DocumentFileModel,
-    targetDirUri: String,
-    treeUri: Uri?,
-    symmetricPassword: CharArray?,
-    publicKeyId: Long?
-): Boolean = withContext(Dispatchers.IO) {
-    val plain = context.contentResolver.openInputStreamSafe(fileModel.uri)?.use { it.readBytes() } ?: return@withContext false
-    if (publicKeyId != null) {
-        val pubRings = loadPublicKeyRings(context) ?: return@withContext false
-        val pubKeyRing = findPublicKeyRing(pubRings, publicKeyId) ?: return@withContext false
-        val keyDesc = listEncryptionPublicKeyRings(pubRings).find { it.first == publicKeyId }?.second.orEmpty()
-        val safeName = keyDesc.replace(Regex("[\\\\/:*?\"<>|]"), "_").take(40).trim()
-        val baseName = fileModel.name.removeSuffix(".gpg")
-        val outName = if (safeName.isNotEmpty()) "${baseName}_${safeName}.gpg" else "${baseName}.gpg"
-        val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, fileModel.name) ?: return@withContext false
-        createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, outName, "application/octet-stream", encrypted)
-    } else {
-        val pwd = symmetricPassword ?: return@withContext false
-        val encrypted = GpgHelper.encryptSymmetric(plain, pwd, fileModel.name) { } ?: return@withContext false
-        createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, fileModel.name + ".gpg", "application/octet-stream", encrypted)
-    }
-}
-
 @Composable
 private fun ScrollableMainTabBar(
     activeMainTab: MainTab,
@@ -1575,7 +1488,7 @@ private fun readTrackMetadata(context: Context, uriString: String): TrackMetadat
     }.getOrElse { TrackMetadata() }
 }
 
-private enum class DetailMetadataKind {
+internal enum class DetailMetadataKind {
     AUDIO,
     VIDEO,
     IMAGE,
@@ -1646,7 +1559,7 @@ private data class EditableAudioAnnotationValidation(
 
 private const val EDITABLE_EXIF_TEXT_MAX_LENGTH = 512
 
-private fun inferDetailMetadataKind(
+internal fun inferDetailMetadataKind(
     fileName: String,
     mimeType: String,
     isDirectory: Boolean
@@ -1945,17 +1858,6 @@ internal fun mergeEditableAudioAnnotationForBatch(current: EditableAudioAnnotati
     )
 }
 
-private fun pendingBatchMetadataKind(items: List<DocumentFileModel>): DetailMetadataKind? {
-    if (items.isEmpty()) return null
-    val nonDir = items.filterNot { it.isDirectory }
-    if (nonDir.isEmpty() || nonDir.size != items.size) return null
-    val kinds = nonDir.map { inferDetailMetadataKind(it.name, "", false) }.distinct()
-    return if (kinds.size == 1 && kinds[0] in setOf(DetailMetadataKind.IMAGE, DetailMetadataKind.AUDIO)) {
-        kinds[0]
-    } else {
-        null
-    }
-}
 
 private fun saveBatchEditableImageExif(
     context: Context,
@@ -2908,7 +2810,7 @@ internal fun launchExternalOpen(
     }.getOrElse { false }
 }
 
-private fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
+internal fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
     if (rootUri == null) return currentUri
     val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(normalizeContentUriString(rootUri))) ?: return currentUri
     val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
@@ -2972,12 +2874,8 @@ fun FileBrowserApp(
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
-    var passContentView by remember { mutableStateOf<PassDecryptedContent?>(null) }
-    var passEditRequest by remember { mutableStateOf<Pair<DocumentFileModel, String>?>(null) }
-    var passEditPassword by remember { mutableStateOf("") }
-    var passEditInProgress by remember { mutableStateOf(false) }
-    var passEditTriedCache by remember { mutableStateOf(false) }
-    var passEditState by remember { mutableStateOf<PassEditState?>(null) }
+    // Crypto 域（GPG 加解密 / .pass 保护查看编辑）单槽工作流状态
+    val crypto = rememberCryptoWorkflow()
     var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
 
     // AppShell navigation + shared UI surfaces
@@ -3353,14 +3251,6 @@ fun FileBrowserApp(
             }
         }
 
-        // Crypto and protection transient routes
-        var gpgState by remember { mutableStateOf<GpgOpState?>(null) }
-        var gpgPassword by remember { mutableStateOf("") }
-        var gpgPasswordConfirm by remember { mutableStateOf("") }
-        var gpgDecryptMode by remember { mutableStateOf<GpgDecryptUiMode?>(null) }
-        var gpgDecryptAutoTried by remember { mutableStateOf(false) }
-        var gpgEncryptSelectedKeyId by remember { mutableStateOf<Long?>(null) }
-        var gpgPubEncryptInProgress by remember { mutableStateOf(false) }
         var showChangeRootConfirm by remember { mutableStateOf(false) }
         var showRootSwitchDialog by remember { mutableStateOf(false) }
         var quickMaskOp by remember { mutableStateOf<DocumentFileModel?>(null) }
@@ -3371,12 +3261,6 @@ fun FileBrowserApp(
         var batchObfuscatePassword by remember { mutableStateOf("") }
         var batchObfuscatePasswordConfirm by remember { mutableStateOf("") }
         var batchObfuscateInProgress by remember { mutableStateOf(false) }
-        var passProtectTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var passProtectInProgress by remember { mutableStateOf(false) }
-        var passViewTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var passViewPassword by remember { mutableStateOf("") }
-        var passViewInProgress by remember { mutableStateOf(false) }
-        var passViewTriedCache by remember { mutableStateOf(false) }
 
         // Long-running operation status
         var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
@@ -3534,19 +3418,12 @@ fun FileBrowserApp(
                 }
                 batchMaskOp != null -> { batchMaskOp = null; batchObfuscatePassword = ""; batchObfuscatePasswordConfirm = "" }
                 quickMaskOp != null -> { quickMaskOp = null; quickObfuscatePassword = ""; quickObfuscatePasswordConfirm = "" }
-                passProtectTarget != null -> { passProtectTarget = null }
-                passViewTarget != null -> { if (!passViewInProgress) { passViewTarget = null; passViewPassword = "" } }
-                passEditRequest != null -> { if (!passEditInProgress) { passEditRequest = null; passEditPassword = "" } }
-                passEditState != null -> passEditState = null
-                showChangeRootConfirm -> showChangeRootConfirm = false
-                gpgState != null -> {
-                    gpgState = null
-                    gpgPassword = ""
-                    gpgPasswordConfirm = ""
-                    gpgDecryptMode = null
-                    gpgDecryptAutoTried = false
-                    gpgEncryptSelectedKeyId = null
+                crypto.passEdit != null -> crypto.closePassEdit()
+                crypto.request != null -> {
+                    val guarded = crypto.request is CryptoRequest.PassView || crypto.request is CryptoRequest.PassEdit
+                    if (!guarded || !crypto.inProgress) crypto.close()
                 }
+                showChangeRootConfirm -> showChangeRootConfirm = false
                 showKeyManagementDialog -> showKeyManagementDialog = false
                 showCacheManagementDialog -> showCacheManagementDialog = false
                 showGitConfigDialog -> showGitConfigDialog = false
@@ -3988,7 +3865,7 @@ fun FileBrowserApp(
 
         val ftpRootUri = rootUri
         Column(Modifier.fillMaxSize()) {
-            if (gpgPubEncryptInProgress || saveInProgress) {
+            if (crypto.pubEncryptInProgress || saveInProgress) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(stringResource(R.string.viewer_saving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
             }
@@ -4162,18 +4039,10 @@ fun FileBrowserApp(
                                     }
                                 },
                                 onRequestGpgDecrypt = { fileModel, dirUri ->
-                                    gpgPassword = ""
-                                    gpgDecryptMode = null
-                                    gpgDecryptAutoTried = false
-                                    gpgEncryptSelectedKeyId = null
-                                    gpgState = GpgOpState.Decrypt(fileModel, dirUri)
+                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
                                 },
                                 onRequestGpgEncrypt = { fileModel, dirUri ->
-                                    gpgPassword = ""
-                                    gpgDecryptMode = null
-                                    gpgDecryptAutoTried = false
-                                    gpgEncryptSelectedKeyId = null
-                                    gpgState = GpgOpState.Encrypt(fileModel, dirUri)
+                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
                                 },
                                 onRequestQuickMask = { model ->
                                     quickMaskOp = model
@@ -4238,16 +4107,9 @@ fun FileBrowserApp(
                                 },
                                 onRequestPdfView = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) },
                                 onCompressArchiveRequest = { archiveOps.open(ArchiveOperationRequest.CompressFile(it)) },
-                                onRequestPassProtect = { model -> passProtectTarget = model },
-                                onRequestPassView = { model ->
-                                    passViewTarget = model
-                                    passViewPassword = ""
-                                    passViewTriedCache = false
-                                },
-                                onRequestPassEdit = { model, dirUri ->
-                                    passEditRequest = Pair(model, dirUri)
-                                    passEditTriedCache = false
-                                },
+                                onRequestPassProtect = { model -> crypto.open(CryptoRequest.PassProtect(model)) },
+                                onRequestPassView = { model -> crypto.open(CryptoRequest.PassView(model)) },
+                                onRequestPassEdit = { model, dirUri -> crypto.open(CryptoRequest.PassEdit(model, dirUri)) },
                                 onRequestImportConfig = { model ->
                                     scope.launch {
                                         val jsonString = withContext(Dispatchers.IO) {
@@ -4456,11 +4318,7 @@ fun FileBrowserApp(
                         val list = pendingList.filter { !it.isDirectory }
                         if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_encrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
-                            gpgPassword = ""
-                            gpgDecryptMode = null
-                            gpgDecryptAutoTried = false
-                            gpgEncryptSelectedKeyId = null
-                            gpgState = GpgOpState.BatchEncrypt(list, displayUri)
+                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchEncrypt(list, displayUri)))
                         }
                     }
                 },
@@ -4471,11 +4329,7 @@ fun FileBrowserApp(
                         val list = pendingList.filter { !it.isDirectory }
                         if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_decrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
-                            gpgPassword = ""
-                            gpgDecryptMode = null
-                            gpgDecryptAutoTried = false
-                            gpgEncryptSelectedKeyId = null
-                            gpgState = GpgOpState.BatchDecrypt(list, displayUri)
+                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchDecrypt(list, displayUri)))
                         }
                     }
                 },
@@ -4595,79 +4449,32 @@ fun FileBrowserApp(
         }
         if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
             val toDelete = pendingList.toList()
-            var deletePermanently by remember { mutableStateOf(false) }
-            val hasRoot = rootUri != null
-            AlertDialog(
-                onDismissRequest = { showPendingDeleteConfirm = false },
-                title = { Text(stringResource(R.string.browser_confirm_delete_title)) },
-                text = {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        Text(stringResource(R.string.browser_confirm_delete_count, toDelete.size), color = MaterialTheme.colorScheme.onSurface)
-                        if (hasRoot) {
-                            Spacer(Modifier.height(12.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                androidx.compose.material3.RadioButton(
-                                    selected = !deletePermanently,
-                                    onClick = { deletePermanently = false }
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                Text(stringResource(R.string.browser_move_to_trash_recoverable), style = MaterialTheme.typography.bodyMedium)
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                androidx.compose.material3.RadioButton(
-                                    selected = deletePermanently,
-                                    onClick = { deletePermanently = true }
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                Text(stringResource(R.string.browser_delete_permanently), style = MaterialTheme.typography.bodyMedium)
-                            }
-                        } else {
-                            Spacer(Modifier.height(8.dp))
-                            Text(stringResource(R.string.browser_no_trash_permanent_delete), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        toDelete.forEach { item ->
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                                    contentDescription = null,
-                                    Modifier.size(20.dp),
-                                    tint = if (item.isDirectory) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.size(8.dp))
-                                Text(item.name, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
-                                val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                runWithProgress(label, toDelete.size) { setProgress ->
-                                    withContext(Dispatchers.IO) {
-                                        toDelete.forEachIndexed { index, model ->
-                                            if (deletePermanently) {
-                                                context.contentResolver.deleteDocument(model.uri)
-                                            } else {
-                                                if (root != null) moveToTrash(context, model.uri, root, root)
-                                            }
-                                            withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                        }
+            PendingDeleteConfirmDialog(
+                items = toDelete,
+                hasRoot = rootUri != null,
+                onDismiss = { showPendingDeleteConfirm = false },
+                onConfirm = { deletePermanently ->
+                    scope.launch {
+                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
+                        val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                        runWithProgress(label, toDelete.size) { setProgress ->
+                            withContext(Dispatchers.IO) {
+                                toDelete.forEachIndexed { index, model ->
+                                    if (deletePermanently) {
+                                        context.contentResolver.deleteDocument(model.uri)
+                                    } else {
+                                        if (root != null) moveToTrash(context, model.uri, root, root)
                                     }
+                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
                                 }
-                                refreshTrigger++
-                                showPendingDeleteConfirm = false
-                                finishPendingListAndReturn()
-                                Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted_count, toDelete.size) else context.getString(R.string.browser_moved_to_trash_count, toDelete.size), Toast.LENGTH_SHORT).show()
                             }
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                    ) { Text(if (hasRoot && !deletePermanently) stringResource(R.string.browser_moved_to_trash) else stringResource(R.string.browser_confirm_delete_action)) }
-                },
-                dismissButton = { TextButton(onClick = { showPendingDeleteConfirm = false }) { Text(stringResource(R.string.common_cancel)) } }
+                        }
+                        refreshTrigger++
+                        showPendingDeleteConfirm = false
+                        finishPendingListAndReturn()
+                        Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted_count, toDelete.size) else context.getString(R.string.browser_moved_to_trash_count, toDelete.size), Toast.LENGTH_SHORT).show()
+                    }
+                }
             )
         }
         // Config 域：配置导入 / 导出工作流对话框（状态与逻辑在 ConfigImportExportWorkflowState 中）
@@ -4961,226 +4768,17 @@ fun FileBrowserApp(
                 }
             )
         }
-        // ---- 密码保护：加密 md/rst -> .pass ----
-        passProtectTarget?.let { model ->
-            AlertDialog(
-                onDismissRequest = { if (!passProtectInProgress) passProtectTarget = null },
-                title = { Text(stringResource(R.string.context_pass_protect)) },
-                text = { Text(stringResource(R.string.browser_pass_protect_confirm, model.name, model.name)) },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            passProtectInProgress = true
-                            val ctx = context
-                            val dirUri = normalizeContentUriString(displayUri)
-                            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                            scope.launch {
-                                val ok = withContext(Dispatchers.IO) {
-                                    val secRings = loadSecretKeyRings(ctx)
-                                    if (secRings == null) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_key_generate), Toast.LENGTH_LONG).show()
-                                        }
-                                        return@withContext false
-                                    }
-                                    val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID
-                                    if (defaultKeyId == null) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_key), Toast.LENGTH_LONG).show()
-                                        }
-                                        return@withContext false
-                                    }
-                                    val pubRings = loadPublicKeyRings(ctx)
-                                    val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId)
-                                    if (pubKeyRing == null) {
-                                        withContext(Dispatchers.Main) {
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_no_default_public_key), Toast.LENGTH_LONG).show()
-                                        }
-                                        return@withContext false
-                                    }
-                                    val plain = ctx.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
-                                        ?: return@withContext false
-                                    val encrypted = GpgHelper.encryptWithPublicKey(plain, pubKeyRing, model.name)
-                                        ?: return@withContext false
-                                    val outName = model.name + ".pass"
-                                    val created = createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, outName, "application/octet-stream", encrypted)
-                                    if (created) {
-                                        ctx.contentResolver.deleteDocument(model.uri)
-                                    }
-                                    created
-                                }
-                                passProtectInProgress = false
-                                passProtectTarget = null
-                                if (ok) {
-                                    Toast.makeText(ctx, ctx.getString(R.string.browser_encrypted_as_pass, model.name), Toast.LENGTH_SHORT).show()
-                                    refreshTrigger++
-                                } else {
-                                    Toast.makeText(ctx, ctx.getString(R.string.browser_pass_protect_failed), Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        },
-                        enabled = !passProtectInProgress
-                    ) { Text(if (passProtectInProgress) stringResource(R.string.browser_encrypting) else stringResource(R.string.common_ok)) }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { passProtectTarget = null },
-                        enabled = !passProtectInProgress
-                    ) { Text(stringResource(R.string.common_cancel)) }
-                }
-            )
-        }
-        // ---- 密码保护：查看 .pass 文件 ----
-        passViewTarget?.let { model ->
-            val secRings = loadSecretKeyRings(context)
-            if (secRings == null) {
-                AlertDialog(
-                    onDismissRequest = { passViewTarget = null },
-                    title = { Text(stringResource(R.string.context_view_password)) },
-                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
-                    confirmButton = {
-                        Button(onClick = { passViewTarget = null }) { Text(stringResource(R.string.common_ok)) }
-                    }
-                )
-            } else {
-                LaunchedEffect(model) {
-                    if (passViewTriedCache) return@LaunchedEffect
-                    val cached = SecretKeyPasswordCache.get() ?: run { passViewTriedCache = true; return@LaunchedEffect }
-                    passViewTriedCache = true
-                    passViewInProgress = true
-                    val decrypted = withContext(Dispatchers.IO) {
-                        val rings = loadSecretKeyRings(context) ?: return@withContext null
-                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                        }
-                    }
-                    passViewInProgress = false
-                    if (decrypted != null) {
-                        passViewTarget = null
-                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                        passContentView = PassDecryptedContent(innerName, decrypted)
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                    }
-                }
-                if (SecretKeyPasswordCache.get() == null || passViewTriedCache) {
-                GpgPasswordDialog(
-                    isDecrypt = true,
-                    fileName = model.name,
-                    password = passViewPassword,
-                    passwordLabel = context.getString(R.string.browser_key_password_label),
-                    inProgress = passViewInProgress,
-                    onPasswordChange = { if (!passViewInProgress) passViewPassword = it },
-                    onConfirm = { pwd ->
-                        if (passViewInProgress) return@GpgPasswordDialog
-                        passViewInProgress = true
-                        val ctx = context
-                        scope.launch {
-                            val decrypted = withContext(Dispatchers.IO) {
-                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                    GpgHelper.decryptWithSecretKey(
-                                        input, rings, pwd.toCharArray()
-                                    ) { _ -> }
-                                }
-                            }
-                            passViewInProgress = false
-                            if (decrypted != null) {
-                                passViewTarget = null
-                                passViewPassword = ""
-                                // 根据内层扩展名确定渲染方式
-                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                passContentView = PassDecryptedContent(innerName, decrypted)
-                            } else {
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onDismiss = {
-                        if (!passViewInProgress) {
-                            passViewTarget = null
-                            passViewPassword = ""
-                        }
-                    }
-                )
-                }
-            }
-        }
-        // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
-        passEditRequest?.let { (model, dirUri) ->
-            val secRings = loadSecretKeyRings(context)
-            if (secRings == null) {
-                AlertDialog(
-                    onDismissRequest = { passEditRequest = null },
-                    title = { Text(stringResource(R.string.context_edit_directly)) },
-                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
-                    confirmButton = {
-                        Button(onClick = { passEditRequest = null }) { Text(stringResource(R.string.common_ok)) }
-                    }
-                )
-            } else {
-                LaunchedEffect(model) {
-                    if (passEditTriedCache) return@LaunchedEffect
-                    val cached = SecretKeyPasswordCache.get() ?: run { passEditTriedCache = true; return@LaunchedEffect }
-                    passEditTriedCache = true
-                    passEditInProgress = true
-                    val decrypted = withContext(Dispatchers.IO) {
-                        val rings = loadSecretKeyRings(context) ?: return@withContext null
-                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                        }
-                    }
-                    passEditInProgress = false
-                    if (decrypted != null) {
-                        passEditRequest = null
-                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                        val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                    }
-                }
-                if (SecretKeyPasswordCache.get() == null || passEditTriedCache) {
-                GpgPasswordDialog(
-                    isDecrypt = true,
-                    fileName = model.name,
-                    password = passEditPassword,
-                    passwordLabel = context.getString(R.string.browser_key_password_label),
-                    inProgress = passEditInProgress,
-                    onPasswordChange = { if (!passEditInProgress) passEditPassword = it },
-                    onConfirm = { pwd ->
-                        if (passEditInProgress) return@GpgPasswordDialog
-                        passEditInProgress = true
-                        val ctx = context
-                        scope.launch {
-                            val decrypted = withContext(Dispatchers.IO) {
-                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                    GpgHelper.decryptWithSecretKey(
-                                        input, rings, pwd.toCharArray()
-                                    ) { _ -> }
-                                }
-                            }
-                            passEditInProgress = false
-                            if (decrypted != null) {
-                                passEditRequest = null
-                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                passEditState = PassEditState(model, dirUri, tree, innerName, decrypted)
-                            } else {
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onDismiss = {
-                        if (!passEditInProgress) {
-                            passEditRequest = null
-                        }
-                    }
-                )
-                }
-            }
-        }
+        // Crypto 域对话框：.pass 保护/查看/编辑与 GPG 加解密向导（状态在 CryptoWorkflowState，执行编排经宿主注入）
+        CryptoDialogs(
+            workflow = crypto,
+            scope = scope,
+            rootUri = rootUri,
+            currentDirUri = displayUri,
+            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            onRefresh = { refreshTrigger++ },
+            onBatchFinished = { finishPendingListAndReturn() }
+        )
+
         TabPasswordPromptDialog(
             state = quickNoteController.passwordPromptState,
             fileName = QUICK_NOTE_GPG_FILE_NAME
@@ -5228,234 +4826,7 @@ fun FileBrowserApp(
                 }
             )
         }
-        var gpgInProgress by remember { mutableStateOf(false) }
-        gpgState?.let { op ->
-            val ctx = context
-            val dirUri = normalizeContentUriString(op.dirUri)
-            val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-
-            fun resetGpgUiState() {
-                gpgState = null
-                gpgPassword = ""
-                gpgPasswordConfirm = ""
-                gpgDecryptMode = null
-                gpgDecryptAutoTried = false
-                gpgEncryptSelectedKeyId = null
-            }
-
-            if (op.isDecrypt) {
-                LaunchedEffect(op) {
-                    gpgDecryptMode = detectGpgDecryptModeForOp(context, op)
-                    gpgDecryptAutoTried = SecretKeyPasswordCache.get() == null
-                }
-
-                if (gpgDecryptMode == GpgDecryptUiMode.SECRET_KEY && !gpgDecryptAutoTried && SecretKeyPasswordCache.get() != null) {
-                    LaunchedEffect(op, gpgDecryptMode) {
-                        gpgDecryptAutoTried = true
-                        gpgInProgress = true
-                        val autoKeyPass = SecretKeyPasswordCache.get() ?: return@LaunchedEffect
-                        val ok = when (op) {
-                            is GpgOpState.BatchDecrypt -> {
-                                var allOk = true
-                                runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
-                                    op.list.forEachIndexed { index, fileModel ->
-                                        if (!decryptGpgFileToDir(context, fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
-                                            allOk = false
-                                        }
-                                        setProgress(index + 1)
-                                    }
-                                }
-                                allOk
-                            }
-                            is GpgOpState.Decrypt -> decryptGpgFileToDir(context, op.fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)
-                            else -> false
-                        }
-                        gpgInProgress = false
-                        if (ok) {
-                            resetGpgUiState()
-                            refreshTrigger++
-                            if (op is GpgOpState.BatchDecrypt) {
-                                pendingList.clear()
-                                showPendingList = false
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    }
-                }
-
-                val decryptMode = gpgDecryptMode
-                if (decryptMode != null && (decryptMode != GpgDecryptUiMode.SECRET_KEY || gpgDecryptAutoTried)) {
-                    GpgPasswordDialog(
-                        isDecrypt = true,
-                        fileName = op.displayName,
-                        password = gpgPassword,
-                        passwordLabel = when (decryptMode) {
-                            GpgDecryptUiMode.SECRET_KEY -> context.getString(R.string.browser_key_password_label)
-                            GpgDecryptUiMode.MIXED -> context.getString(R.string.browser_password_gpg_auto)
-                            GpgDecryptUiMode.SYMMETRIC -> context.getString(R.string.browser_enter_password)
-                        },
-                        inProgress = gpgInProgress,
-                        onPasswordChange = { if (!gpgInProgress) gpgPassword = it },
-                        onConfirm = { pwd ->
-                            if (gpgInProgress) return@GpgPasswordDialog
-                            gpgInProgress = true
-                            scope.launch {
-                                try {
-                                    val pwdChars = pwd.toCharArray()
-                                    val ok = when (op) {
-                                        is GpgOpState.BatchDecrypt -> {
-                                            runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
-                                                op.list.forEachIndexed { index, fileModel ->
-                                                    decryptGpgFileToDir(
-                                                        context,
-                                                        fileModel,
-                                                        dirUri,
-                                                        treeUri,
-                                                        symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
-                                                        keyPassphrase = when (decryptMode) {
-                                                            GpgDecryptUiMode.SYMMETRIC -> null
-                                                            GpgDecryptUiMode.SECRET_KEY -> pwdChars
-                                                            GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
-                                                        }
-                                                    )
-                                                    setProgress(index + 1)
-                                                }
-                                            }
-                                            true
-                                        }
-                                        is GpgOpState.Decrypt -> decryptGpgFileToDir(
-                                            context,
-                                            op.fileModel,
-                                            dirUri,
-                                            treeUri,
-                                            symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
-                                            keyPassphrase = when (decryptMode) {
-                                                GpgDecryptUiMode.SYMMETRIC -> null
-                                                GpgDecryptUiMode.SECRET_KEY -> pwdChars
-                                                GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
-                                            }
-                                        )
-                                        else -> false
-                                    }
-                                    if (ok) {
-                                        if (op is GpgOpState.BatchDecrypt) {
-                                            pendingList.clear()
-                                            showPendingList = false
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
-                                        }
-                                        resetGpgUiState()
-                                        refreshTrigger++
-                                    } else {
-                                        Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_failed), Toast.LENGTH_LONG).show()
-                                    }
-                                } finally {
-                                    gpgInProgress = false
-                                }
-                            }
-                        },
-                        onDismiss = { if (!gpgInProgress) resetGpgUiState() }
-                    )
-                }
-            } else {
-                val pubRings = loadPublicKeyRings(context)
-                val keys = listEncryptionPublicKeyRings(pubRings)
-                GpgEncryptDialog(
-                    fileName = op.displayName,
-                    keys = keys,
-                    selectedKeyId = gpgEncryptSelectedKeyId,
-                    password = gpgPassword,
-                    confirmPassword = gpgPasswordConfirm,
-                    inProgress = gpgInProgress || gpgPubEncryptInProgress,
-                    onSelectPassword = {
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
-                            gpgEncryptSelectedKeyId = null
-                            gpgPasswordConfirm = ""
-                        }
-                    },
-                    onSelectKey = { keyId ->
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
-                            gpgEncryptSelectedKeyId = keyId
-                            gpgPasswordConfirm = ""
-                        }
-                    },
-                    onPasswordChange = {
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
-                            gpgPassword = it
-                            gpgPasswordConfirm = ""
-                            if (it.isNotEmpty()) gpgEncryptSelectedKeyId = null
-                        }
-                    },
-                    onConfirmPasswordChange = {
-                        if (!gpgInProgress && !gpgPubEncryptInProgress) {
-                            gpgPasswordConfirm = it
-                        }
-                    },
-                    onConfirm = { password, keyId ->
-                        if (gpgInProgress || gpgPubEncryptInProgress) return@GpgEncryptDialog
-                        if (keyId == null && password.isBlank()) return@GpgEncryptDialog
-                        gpgInProgress = keyId == null
-                        gpgPubEncryptInProgress = keyId != null
-                        scope.launch {
-                            try {
-                                val pwdChars = password.toCharArray()
-                                val ok = when (op) {
-                                    is GpgOpState.BatchEncrypt -> {
-                                        runWithProgress(if (keyId != null) context.getString(R.string.browser_op_public_key_encrypt) else context.getString(R.string.quick_crypto_action_encrypt_short), op.list.size) { setProgress ->
-                                            op.list.forEachIndexed { index, fileModel ->
-                                                encryptGpgFileToDir(
-                                                    context,
-                                                    fileModel,
-                                                    dirUri,
-                                                    treeUri,
-                                                    symmetricPassword = if (keyId == null) pwdChars else null,
-                                                    publicKeyId = keyId
-                                                )
-                                                setProgress(index + 1)
-                                            }
-                                        }
-                                        true
-                                    }
-                                    is GpgOpState.Encrypt -> encryptGpgFileToDir(
-                                        context,
-                                        op.fileModel,
-                                        dirUri,
-                                        treeUri,
-                                        symmetricPassword = if (keyId == null) pwdChars else null,
-                                        publicKeyId = keyId
-                                    )
-                                    else -> false
-                                }
-                                if (ok) {
-                                    if (op is GpgOpState.BatchEncrypt) {
-                                        pendingList.clear()
-                                        showPendingList = false
-                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_public_key_encrypted_count, op.list.size) else ctx.getString(R.string.browser_encrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_op_public_key_encrypt) else ctx.getString(R.string.browser_encrypt_complete), Toast.LENGTH_SHORT).show()
-                                    }
-                                    resetGpgUiState()
-                                    gpgPasswordConfirm = ""
-                                    refreshTrigger++
-                                } else {
-                                    Toast.makeText(ctx, ctx.getString(R.string.browser_encrypt_failed), Toast.LENGTH_LONG).show()
-                                }
-                            } finally {
-                                gpgInProgress = false
-                                gpgPubEncryptInProgress = false
-                            }
-                        }
-                    },
-                    onDismiss = { if (!gpgInProgress && !gpgPubEncryptInProgress) resetGpgUiState() }
-                )
-            }
-        }
     }
-
-
     when {
         showUnlockGate -> {
             BackHandler { (context as? Activity)?.finish() }
@@ -5590,18 +4961,18 @@ fun FileBrowserApp(
                 onEncryptedExitRequest = { encryptedCacheExitDialog = it }
             )
         }
-        passContentView != null -> {
-            val content = passContentView!!
-            BackHandler { passContentView = null }
+        crypto.passContent != null -> {
+            val content = crypto.passContent!!
+            BackHandler { crypto.closePassContent() }
             PassContentViewerScreen(
                 innerFileName = content.innerFileName,
                 decryptedBytes = content.decryptedBytes,
-                onBack = { passContentView = null }
+                onBack = { crypto.closePassContent() }
             )
         }
-        passEditState != null -> {
-            val state = passEditState!!
-            BackHandler { passEditState = null }
+        crypto.passEdit != null -> {
+            val state = crypto.passEdit!!
+            BackHandler { crypto.closePassEdit() }
             PassEditScreen(
                 fileName = state.innerName,
                 initialDecryptedBytes = state.decryptedBytes,
@@ -5620,12 +4991,12 @@ fun FileBrowserApp(
                             try { ctx.contentResolver.deleteDocument(fileModel.uri) } catch (_: Exception) { }
                             createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, fileModel.name, "application/octet-stream", encrypted)
                         }
-                        passEditState = null
+                        crypto.closePassEdit()
                         refreshTrigger++
                         Toast.makeText(ctx, if (ok) ctx.getString(R.string.browser_saved_and_reencrypted) else ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
                     }
                 },
-                onBack = { passEditState = null }
+                onBack = { crypto.closePassEdit() }
             )
         }
         else -> MainTabsRootContent()
@@ -5753,8 +5124,6 @@ private fun OperationProgressDialog(progress: OperationProgress, onCancel: (() -
 }
 
 /** 密码保护解密后的内容，暂存于内存中供渲染。 */
-private data class PassDecryptedContent(val innerFileName: String, val decryptedBytes: ByteArray)
-
 /** 判断文件名是否为压缩 Markdown/RST 文件（.md.zip 或 .rst.zip）。 */
 private fun isCompressedMarkdown(name: String): Boolean =
     name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
@@ -5838,46 +5207,6 @@ internal fun isHtmlFile(name: String): Boolean =
     name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
 
 /** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */
-private data class PassEditState(
-    val fileModel: DocumentFileModel,
-    val dirUri: String,
-    val treeUri: Uri?,
-    val innerName: String,
-    val decryptedBytes: ByteArray
-) {
-    override fun equals(other: Any?) = (other is PassEditState) && fileModel == other.fileModel && dirUri == other.dirUri && innerName == other.innerName && decryptedBytes.contentEquals(other.decryptedBytes)
-    override fun hashCode() = 31 * (31 * fileModel.hashCode() + dirUri.hashCode()) + innerName.hashCode()
-}
-
-private sealed class GpgOpState {
-    abstract val isDecrypt: Boolean
-    abstract val dirUri: String
-    abstract val displayName: String
-    data class Decrypt(val fileModel: DocumentFileModel, override val dirUri: String) : GpgOpState() {
-        override val isDecrypt = true
-        override val displayName get() = fileModel.name
-    }
-    data class Encrypt(val fileModel: DocumentFileModel, override val dirUri: String) : GpgOpState() {
-        override val isDecrypt = false
-        override val displayName get() = fileModel.name
-    }
-    data class BatchDecrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
-        override val isDecrypt = true
-        override val displayName get() = list.size.toString()
-    }
-    data class BatchEncrypt(val list: List<DocumentFileModel>, override val dirUri: String) : GpgOpState() {
-        override val isDecrypt = false
-        override val displayName get() = list.size.toString()
-    }
-}
-
-private enum class GpgDecryptUiMode {
-    SYMMETRIC,
-    SECRET_KEY,
-    MIXED
-}
-
-/** 加密/解密方式：对称(密码)、公钥加密、私钥解密 */
 private sealed class GpgMethod {
     object Symmetric : GpgMethod()
     object SecretKeyDec : GpgMethod()
@@ -8693,247 +8022,6 @@ private fun BatchPendingMetadataDialog(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PendingListScreen(
-    pendingList: List<DocumentFileModel>,
-    currentDirPath: String = "",
-    rootUri: String? = null,
-    mode: PendingListMode = PendingListMode.NORMAL,
-    title: String? = null,
-    confirmLabel: String? = null,
-    onConfirm: (() -> Unit)? = null,
-    onShowFileDetails: (DocumentFileModel) -> Unit = {},
-    onShowBatchDetails: () -> Unit = {},
-    onRemove: (DocumentFileModel) -> Unit,
-    onCopyHere: () -> Unit = {},
-    onMoveHere: () -> Unit = {},
-    onExtractArchivesHere: () -> Unit = {},
-    onRequestDelete: () -> Unit = {},
-    onRequestBatchMask: () -> Unit = {},
-    onRequestBatchGpgEncrypt: () -> Unit = {},
-    onRequestBatchGpgDecrypt: () -> Unit = {},
-    onRequestCompressArchive: () -> Unit = {},
-    onRequestCompressToZip: () -> Unit = {},
-    onRequestCompressTo7z: () -> Unit = {},
-    onRequestForwardToBulletin: () -> Unit = {},
-    onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
-    onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val isPickMode = mode == PendingListMode.DIRECTORY_PICK
-    var filterText by remember { mutableStateOf("") }
-    val filteredPendingItems = if (filterText.isBlank()) pendingList
-    else runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
-        pendingList.filter { regex.containsMatchIn(it.name) }
-    } ?: pendingList
-    val screenTitle = title ?: if (isPickMode) {
-        context.getString(R.string.directory_pick_list_title, pendingList.size)
-    } else {
-        stringResource(R.string.browser_pending_list_title, pendingList.size)
-    }
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text(screenTitle) },
-                navigationIcon = {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        },
-        floatingActionButton = {}
-    ) { padding ->
-        if (pendingList.isEmpty()) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(padding),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(stringResource(R.string.browser_list_empty), style = MaterialTheme.typography.bodyLarge)
-            }
-        } else {
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                if (!isPickMode) {
-                Text(
-                    stringResource(R.string.browser_current_dir, currentDirPath),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 4,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                )
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = filterText,
-                        onValueChange = { filterText = it },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        placeholder = { Text(stringResource(R.string.browser_filename_regex_hint)) },
-                        label = null
-                    )
-                    if (filterText.isNotEmpty()) {
-                        IconButton(onClick = { filterText = "" }) {
-                            Icon(Icons.Default.RemoveCircle, contentDescription = stringResource(R.string.pending_list_action_clear_filter), Modifier.size(20.dp))
-                        }
-                    }
-                }
-                if (!isPickMode) {
-                val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
-                val batchDetailKind = pendingBatchMetadataKind(filteredPendingItems)
-                val pendingActions = mutableListOf(
-                    context.getString(R.string.pending_list_action_copy) to onCopyHere,
-                    context.getString(R.string.pending_list_action_move) to onMoveHere,
-                    context.getString(R.string.pending_list_action_extract) to onExtractArchivesHere,
-                    context.getString(R.string.pending_list_action_delete) to onRequestDelete,
-                    context.getString(R.string.pending_list_action_clear_filter) to {
-                        onClearFilteredList(filteredPendingItems)
-                    },
-                    context.getString(R.string.pending_list_action_playback) to {
-                        if (audioFromFiltered.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.browser_no_audio_in_list), Toast.LENGTH_SHORT).show()
-                        } else {
-                            onAddToPlayback(audioFromFiltered)
-                        }
-                    },
-                    context.getString(R.string.pending_list_action_mask) to onRequestBatchMask,
-                    context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
-                    context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
-                    context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive,
-                    context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
-                )
-                if (batchDetailKind != null) {
-                    pendingActions.add(context.getString(R.string.context_details) to onShowBatchDetails)
-                }
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    pendingActions.chunked(5).forEach { rowActions ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            rowActions.forEach { (label, action) ->
-                                TextButton(
-                                    onClick = action,
-                                    shape = RectangleShape,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                    colors = ButtonDefaults.textButtonColors(),
-                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .defaultMinSize(minWidth = 0.dp, minHeight = 30.dp)
-                                ) {
-                                    Text(
-                                        label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                            repeat(5 - rowActions.size) {
-                                Spacer(Modifier.weight(1f))
-                            }
-                        }
-                    }
-                }
-                }
-            LazyColumn(
-                Modifier.weight(1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                items(filteredPendingItems) { item ->
-                    val relativePath = remember(item.uri, rootUri) {
-                        pathFromRoot(context, rootUri, normalizeContentUriString(item.uri.toString()))
-                    }
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (item.isDirectory) Icons.Default.Folder else Icons.AutoMirrored.Filled.InsertDriveFile,
-                            contentDescription = null,
-                            Modifier.size(24.dp),
-                            tint = if (item.isDirectory) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.size(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                item.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                relativePath,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        IconButton(onClick = { onShowFileDetails(item) }) {
-                            Icon(
-                                Icons.Default.Info,
-                                contentDescription = stringResource(R.string.context_details),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        IconButton(onClick = { onRemove(item) }) {
-                            Icon(
-                                Icons.Default.RemoveCircle,
-                                contentDescription = stringResource(R.string.browser_remove_from_list),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-            }
-            if (isPickMode && onConfirm != null) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text(context.getString(R.string.directory_pick_cancel))
-                    }
-                    Button(
-                        onClick = onConfirm,
-                        modifier = Modifier.weight(1f),
-                        enabled = pendingList.isNotEmpty()
-                    ) {
-                        Text(confirmLabel ?: context.getString(R.string.directory_pick_confirm_generic))
-                    }
-                }
-            }
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
