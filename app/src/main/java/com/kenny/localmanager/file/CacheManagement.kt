@@ -8,7 +8,8 @@ private val BROWSABLE_CACHE_DIRS = listOf(
     "md_zip_cache",
     "html_zip_cache",
     "epub_cache",
-    "pic_zip_cache"
+    "pic_zip_cache",
+    "vid_zip_cache"
 )
 
 /** 缓存项：显示名、当前大小、清空时的回调。 */

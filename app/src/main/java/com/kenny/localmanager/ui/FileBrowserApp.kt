@@ -219,52 +219,10 @@ import com.kenny.localmanager.file.isArchiveEncrypted
 import com.kenny.localmanager.file.getArchiveFirstLevelEntries
 import com.kenny.localmanager.file.isRarV5Archive
 import com.kenny.localmanager.file.ZipFirstLevelResult
-import com.kenny.localmanager.file.extractMdZipToCache
-import com.kenny.localmanager.file.getMdZipCacheDir
-import com.kenny.localmanager.file.getMdZipCacheTimestamp
-import com.kenny.localmanager.file.findMdZipCacheTarget
-import com.kenny.localmanager.file.MdZipExtractResult
-import com.kenny.localmanager.file.isMdZipCacheEncrypted
-import com.kenny.localmanager.file.cleanMdZipCache
-import com.kenny.localmanager.file.cleanHtmlZipCache
-import com.kenny.localmanager.file.getHtmlZipCacheDir
-import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
-import com.kenny.localmanager.file.findHtmlZipIndexFile
-import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
-import com.kenny.localmanager.file.HtmlZipExtractResult
-import com.kenny.localmanager.file.extractHtmlZipToCache
-import com.kenny.localmanager.file.extractHtmlZipToCacheWithProgress
-import com.kenny.localmanager.file.HtmlZipParseResult
-import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
-import com.kenny.localmanager.file.extractLlmZipToCache
-import com.kenny.localmanager.file.prepareTxtAsEpub
-import com.kenny.localmanager.file.prepareLlmAsEpub
 import com.kenny.localmanager.file.loadEpubFromCache
-import com.kenny.localmanager.file.getEpubChapterFile
 import com.kenny.localmanager.file.getEpubCacheDir
-import com.kenny.localmanager.file.getEpubCacheTimestamp
-import com.kenny.localmanager.file.isEpubCacheEncrypted
-import com.kenny.localmanager.file.cleanEpubCache
-import com.kenny.localmanager.file.PicZipExtractResult
-import com.kenny.localmanager.file.extractPicZipToCache
-import com.kenny.localmanager.file.getPicZipCacheDir
-import com.kenny.localmanager.file.tryPicZipPassword
-import com.kenny.localmanager.file.tryArchivePassword
-import com.kenny.localmanager.file.getPicZipCacheTimestamp
-import com.kenny.localmanager.file.isPicZipCacheEncrypted
-import com.kenny.localmanager.file.cleanPicZipCache
-import com.kenny.localmanager.file.VidZipExtractResult
-import com.kenny.localmanager.file.extractVidZipToCache
-import com.kenny.localmanager.file.extractVidZipVideoRange
-import com.kenny.localmanager.file.getVidZipCacheDir
-import com.kenny.localmanager.file.getVidZipEntrySize
-import com.kenny.localmanager.file.getVidZipCacheTimestamp
-import com.kenny.localmanager.file.isVidZipCacheEncrypted
-import com.kenny.localmanager.file.readVidZipVideoPaths
-import com.kenny.localmanager.file.tryVidZipPassword
-import com.kenny.localmanager.file.cleanVidZipCache
 import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
@@ -2965,7 +2923,7 @@ private fun queryExternalOpenTargets(
         .toList()
 }
 
-private fun launchExternalOpen(
+internal fun launchExternalOpen(
     context: Context,
     uriString: String,
     packageName: String?,
@@ -3048,11 +3006,6 @@ fun FileBrowserApp(
     var passEditInProgress by remember { mutableStateOf(false) }
     var passEditTriedCache by remember { mutableStateOf(false) }
     var passEditState by remember { mutableStateOf<PassEditState?>(null) }
-    var mdZipViewState by remember { mutableStateOf<MdZipViewState?>(null) }
-    var picZipViewState by remember { mutableStateOf<PicZipViewState?>(null) }
-    var vidZipViewState by remember { mutableStateOf<VidZipViewState?>(null) }
-    var htmlZipViewState by remember { mutableStateOf<HtmlZipViewState?>(null) }
-    var epubViewState by remember { mutableStateOf<EpubViewState?>(null) }
     var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
 
     // AppShell navigation + shared UI surfaces
@@ -3205,6 +3158,9 @@ fun FileBrowserApp(
         }
     }
 
+    // Archive 阅读器域：压缩包 / 文档阅读的临时 Route（请求 -> 密码 -> 解压 -> 查看器）
+    val archiveReader = rememberArchiveReaderWorkflow(context, scope)
+
     suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
         val targetRoot = rootUri?.let { normalizeContentUriString(it) }
         if (targetRoot == null) {
@@ -3279,16 +3235,18 @@ fun FileBrowserApp(
         val dirTitle = DocumentFile.fromTreeUri(context, Uri.parse(currentDirUri))?.name
             ?: DocumentFile.fromSingleUri(context, Uri.parse(currentDirUri))?.name
             ?: currentItem.name
-        picZipViewState = PicZipViewState(
-            contentDir = contentDir,
-            imagePaths = normalizedImages.map { it.name },
-            zipFileName = dirTitle,
-            zipUri = currentItem.uri,
-            isEncrypted = false,
-            password = null,
-            initialIndex = initialIndex,
-            recordRecent = false,
-            cleanupCacheDir = cacheDir
+        archiveReader.openViewer(
+            PicZipViewState(
+                contentDir = contentDir,
+                imagePaths = normalizedImages.map { it.name },
+                zipFileName = dirTitle,
+                zipUri = currentItem.uri,
+                isEncrypted = false,
+                password = null,
+                initialIndex = initialIndex,
+                recordRecent = false,
+                cleanupCacheDir = cacheDir
+            )
         )
     }
 
@@ -3504,41 +3462,6 @@ fun FileBrowserApp(
         var sevenZCompressPassword by remember { mutableStateOf("") }
         var sevenZCompressPasswordConfirm by remember { mutableStateOf("") }
 
-        // Archive 临时 Route 域：压缩包阅读器（md / html / llm.zip / epub / txt / llm / pic / vid）
-        var mdZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var mdZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var mdZipPassword by remember { mutableStateOf("") }
-        var mdZipInProgress by remember { mutableStateOf(false) }
-        var htmlZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var htmlZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var htmlZipPassword by remember { mutableStateOf("") }
-        var htmlZipInProgress by remember { mutableStateOf(false) }
-        var htmlZipLog by remember { mutableStateOf("") }
-        var htmlZipLoadError by remember { mutableStateOf<String?>(null) }
-        var llmZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var llmZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var llmZipPassword by remember { mutableStateOf("") }
-        var llmZipInProgress by remember { mutableStateOf(false) }
-        var epubTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var epubEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var epubPassword by remember { mutableStateOf("") }
-        var epubInProgress by remember { mutableStateOf(false) }
-        var epubLog by remember { mutableStateOf("") }
-        var epubLoadError by remember { mutableStateOf<String?>(null) }
-        var txtTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var txtInProgress by remember { mutableStateOf(false) }
-        var txtLoadError by remember { mutableStateOf<String?>(null) }
-        var llmTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var llmInProgress by remember { mutableStateOf(false) }
-        var llmLoadError by remember { mutableStateOf<String?>(null) }
-        var picZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var picZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var picZipPassword by remember { mutableStateOf("") }
-        var picZipInProgress by remember { mutableStateOf(false) }
-        var vidZipTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var vidZipEncrypted by remember { mutableStateOf<Boolean?>(null) }
-        var vidZipPassword by remember { mutableStateOf("") }
-        var vidZipInProgress by remember { mutableStateOf(false) }
 
         // PendingList 临时 Route 域：待处理列表的批量压缩向导
         var showPendingCompressToZip by remember { mutableStateOf(false) }
@@ -3632,417 +3555,6 @@ fun FileBrowserApp(
             }
             zipUnzipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
         }
-        LaunchedEffect(mdZipTarget) {
-            mdZipEncrypted = null
-            mdZipPassword = ""
-            mdZipInProgress = false
-            val target = mdZipTarget ?: return@LaunchedEffect
-            // 先检查是否有有效缓存（非加密时）
-            val cacheDir = getMdZipCacheDir(context, target.uri)
-            val cacheTs = getMdZipCacheTimestamp(cacheDir)
-            if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val contentDir = java.io.File(cacheDir, "content")
-                val hasContent = contentDir.exists() &&
-                    (contentDir.listFiles()?.isNotEmpty() == true)
-                if (hasContent) {
-                    val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
-                    val cachedTarget = findMdZipCacheTarget(context, cacheDir, isRstZip)
-                    mdZipTarget = null
-                    mdZipViewState = MdZipViewState(
-                        targetFile = cachedTarget,
-                        contentDir = contentDir,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false
-                    )
-                    return@LaunchedEffect
-                }
-                // 缓存内容为空，废弃并重新解压
-                cacheDir.deleteRecursively()
-            }
-            mdZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            // 非加密的直接解压
-            if (mdZipEncrypted == false) {
-                mdZipInProgress = true
-                val result = withContext(Dispatchers.IO) { extractMdZipToCache(context, target.uri, null, target.name) }
-                mdZipInProgress = false
-                mdZipTarget = null
-                if (result != null) {
-                    mdZipViewState = MdZipViewState(
-                        targetFile = result.targetFile,  // 可能为 null
-                        contentDir = result.contentDir,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false
-                    )
-                } else {
-                    Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-        LaunchedEffect(htmlZipTarget) {
-            htmlZipEncrypted = null
-            htmlZipPassword = ""
-            htmlZipInProgress = false
-            htmlZipLog = context.getString(R.string.browser_html_zip_preparing, htmlZipTarget?.name ?: "")
-            htmlZipLoadError = null
-            val target = htmlZipTarget ?: return@LaunchedEffect
-            val cacheDir = getHtmlZipCacheDir(context, target.uri)
-            val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
-            if (cacheTs > 0 && !isHtmlZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val contentDir = java.io.File(cacheDir, "content")
-                if (contentDir.exists() && contentDir.listFiles()?.isNotEmpty() == true) {
-                    val cachedIndex = findHtmlZipIndexFile(contentDir)
-                    htmlZipTarget = null
-                    htmlZipViewState = HtmlZipViewState(
-                        indexFile = cachedIndex,
-                        contentDir = contentDir,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false
-                    )
-                    return@LaunchedEffect
-                }
-                cacheDir.deleteRecursively()
-            }
-            htmlZipLog += context.getString(R.string.browser_checking_encryption)
-            htmlZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            htmlZipLog += context.getString(R.string.browser_encryption_status, htmlZipEncrypted.toString())
-            if (htmlZipEncrypted == false) {
-                htmlZipInProgress = true
-                val result = withContext(Dispatchers.IO) {
-                    extractHtmlZipToCacheWithProgress(context, target.uri, null, target.name) { log ->
-                        htmlZipLog += "$log\n"
-                    }
-                }
-                htmlZipInProgress = false
-                htmlZipTarget = null
-                when (result) {
-                    is HtmlZipParseResult.Success -> {
-                        htmlZipViewState = HtmlZipViewState(
-                            indexFile = result.result.indexFile,
-                            contentDir = result.result.contentDir,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false
-                        )
-                    }
-                    is HtmlZipParseResult.Error -> {
-                        val detail = result.detail?.let { "\n$it" } ?: ""
-                        htmlZipLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
-                        htmlZipLoadError = "${result.message}$detail"
-                    }
-                }
-            } else if (htmlZipEncrypted == true) {
-                htmlZipLog += context.getString(R.string.browser_file_encrypted_need_password)
-            }
-        }
-        LaunchedEffect(llmZipTarget) {
-            llmZipEncrypted = null
-            llmZipPassword = ""
-            llmZipInProgress = false
-            val target = llmZipTarget ?: return@LaunchedEffect
-            val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
-            if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val cached = loadEpubFromCache(context, cacheDir)
-                if (cached != null) {
-                    llmZipTarget = null
-                    epubViewState = EpubViewState(
-                        extractResult = cached,
-                        zipFileName = target.name,
-                        epubUri = target.uri,
-                        isEncrypted = false
-                    )
-                    return@LaunchedEffect
-                }
-                cacheDir.deleteRecursively()
-            }
-            llmZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            if (llmZipEncrypted == false) {
-                llmZipInProgress = true
-                val result = withContext(Dispatchers.IO) {
-                    extractLlmZipToCache(context, target.uri, null, target.name)
-                }
-                llmZipInProgress = false
-                llmZipTarget = null
-                if (result != null) {
-                    epubViewState = EpubViewState(
-                        extractResult = result,
-                        zipFileName = target.name,
-                        epubUri = target.uri,
-                        isEncrypted = false
-                    )
-                } else {
-                    Toast.makeText(context, context.getString(R.string.browser_no_txt_llm_found), Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-        LaunchedEffect(epubTarget) {
-            val target = epubTarget ?: return@LaunchedEffect
-            epubEncrypted = null
-            epubPassword = ""
-            epubInProgress = true
-            epubLog = context.getString(R.string.browser_html_zip_preparing, target.name)
-            epubLoadError = null
-            try {
-                var cachedResult: EpubExtractResult? = null
-                var encrypted: Boolean? = null
-                withContext(Dispatchers.IO) {
-                    epubLog += context.getString(R.string.browser_checking_cache)
-                    val cacheDir = getEpubCacheDir(context, target.uri)
-                    val cacheTs = getEpubCacheTimestamp(cacheDir)
-                    if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                        cachedResult = loadEpubFromCache(context, cacheDir)
-                        if (cachedResult != null) {
-                            epubLog += context.getString(R.string.browser_using_cache)
-                            return@withContext
-                        }
-                        cacheDir.deleteRecursively()
-                    }
-                    epubLog += context.getString(R.string.browser_checking_encryption)
-                    encrypted = isArchiveEncrypted(context, target.uri, target.name)
-                }
-                val cached = cachedResult
-                if (cached != null) {
-                    epubViewState = EpubViewState(
-                        extractResult = cached,
-                        zipFileName = target.name,
-                        epubUri = target.uri,
-                        isEncrypted = false
-                    )
-                    epubTarget = null
-                    epubInProgress = false
-                    return@LaunchedEffect
-                }
-                epubEncrypted = encrypted
-                if (encrypted == false) {
-                    val result = withContext(Dispatchers.IO) {
-                        extractEpubToCache(context, target.uri, null, target.name) { log ->
-                            epubLog += "$log\n"
-                        }
-                    }
-                    when (result) {
-                        is EpubParseResult.Success -> {
-                            epubViewState = EpubViewState(
-                                extractResult = result.result,
-                                zipFileName = target.name,
-                                epubUri = target.uri,
-                                isEncrypted = false
-                            )
-                            epubTarget = null
-                            epubInProgress = false
-                        }
-                        is EpubParseResult.Error -> {
-                            val detail = result.detail?.let { "\n$it" } ?: ""
-                            epubLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
-                            epubLoadError = "${result.message}$detail"
-                            epubInProgress = false
-                            // 保留 epubTarget 以便显示错误对话框
-                        }
-                    }
-                } else {
-                    epubLog += context.getString(R.string.browser_file_encrypted_need_password)
-                    epubInProgress = false
-                }
-            } catch (e: Exception) {
-                epubLog += context.getString(R.string.browser_log_exception, e.javaClass.simpleName, e.message ?: "")
-                epubLoadError = "${e.javaClass.simpleName}: ${e.message}"
-                epubInProgress = false
-            }
-        }
-        // 处理 TXT 文件，转换为 EPUB 格式查看
-        LaunchedEffect(txtTarget) {
-            val target = txtTarget ?: return@LaunchedEffect
-            txtInProgress = true
-            txtLoadError = null
-            try {
-                val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-
-                var result: EpubExtractResult? = null
-
-                // 检查是否有有效缓存
-                if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                    result = loadEpubFromCache(context, cacheDir)
-                    // 如果缓存加载失败，清除旧缓存
-                    if (result == null) {
-                        Log.w("FileBrowserApp", "TXT cache load failed, clearing old cache")
-                        cacheDir.deleteRecursively()
-                    }
-                }
-
-                // 如果没有有效缓存，重新生成
-                if (result == null) {
-                    // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
-                    result = prepareTxtAsEpub(context, target.uri, target.name)
-                }
-
-                if (result != null) {
-                    epubViewState = EpubViewState(
-                        extractResult = result,
-                        zipFileName = target.name,
-                        epubUri = target.uri,
-                        isEncrypted = false
-                    )
-                    txtTarget = null
-                } else {
-                    txtLoadError = context.getString(R.string.browser_txt_parse_failed)
-                }
-            } catch (e: Exception) {
-                Log.e("FileBrowserApp", "TXT processing failed", e)
-                txtLoadError = "${e.javaClass.simpleName}: ${e.message}"
-            }
-            txtInProgress = false
-        }
-        // 处理 LLM 对话文件，转换为 EPUB 格式查看
-        LaunchedEffect(llmTarget) {
-            val target = llmTarget ?: return@LaunchedEffect
-            llmInProgress = true
-            llmLoadError = null
-            try {
-                val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-
-                var result: EpubExtractResult? = null
-
-                // 检查是否有有效缓存
-                if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                    result = loadEpubFromCache(context, cacheDir)
-                    // 如果缓存加载失败，清除旧缓存
-                    if (result == null) {
-                        Log.w("FileBrowserApp", "LLM cache load failed, clearing old cache")
-                        cacheDir.deleteRecursively()
-                    }
-                }
-
-                // 如果没有有效缓存，重新生成
-                if (result == null) {
-                    // 直接由 URI 生成统一书本缓存（epub_cache/<key>）
-                    result = prepareLlmAsEpub(context, target.uri, target.name)
-                }
-
-                val finalResult = result
-                if (finalResult != null) {
-                    epubViewState = EpubViewState(
-                        extractResult = finalResult,
-                        zipFileName = target.name,
-                        epubUri = target.uri,
-                        isEncrypted = false
-                    )
-                    llmTarget = null
-                } else {
-                    llmLoadError = context.getString(R.string.browser_llm_parse_failed)
-                }
-            } catch (e: Exception) {
-                Log.e("FileBrowserApp", "LLM processing failed", e)
-                llmLoadError = "${e.javaClass.simpleName}: ${e.message}"
-            }
-            llmInProgress = false
-        }
-        LaunchedEffect(picZipTarget) {
-            picZipEncrypted = null
-            picZipPassword = ""
-            picZipInProgress = false
-            val target = picZipTarget ?: return@LaunchedEffect
-            val cacheDir = getPicZipCacheDir(context, target.uri)
-            val cacheTs = getPicZipCacheTimestamp(cacheDir)
-            if (cacheTs > 0 && !isPicZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val contentDir = java.io.File(cacheDir, "content")
-                val listFile = java.io.File(cacheDir, ".image_list")
-                if (contentDir.exists() && listFile.exists()) {
-                    val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
-                    val lastIndexFile = java.io.File(cacheDir, ".last_index")
-                    val initialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, paths.size - 1) ?: 0
-                    picZipTarget = null
-                    picZipViewState = PicZipViewState(
-                        contentDir = contentDir,
-                        imagePaths = paths,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false,
-                        password = null,
-                        initialIndex = initialIndex
-                    )
-                    return@LaunchedEffect
-                }
-                cacheDir.deleteRecursively()
-            }
-            picZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            if (picZipEncrypted == false) {
-                picZipInProgress = true
-                val result = withContext(Dispatchers.IO) { extractPicZipToCache(context, target.uri, null, target.name) }
-                if (result != null) {
-                    picZipTarget = null
-                    picZipViewState = PicZipViewState(
-                        contentDir = result.contentDir,
-                        imagePaths = result.imagePaths,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false,
-                        password = null,
-                        initialIndex = 0
-                    )
-                } else {
-                    picZipTarget = null
-                    Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
-                }
-                picZipInProgress = false
-            }
-        }
-        LaunchedEffect(vidZipTarget) {
-            vidZipEncrypted = null
-            vidZipPassword = ""
-            vidZipInProgress = false
-            val target = vidZipTarget ?: return@LaunchedEffect
-            val cacheDir = getVidZipCacheDir(context, target.uri)
-            val cacheTs = getVidZipCacheTimestamp(cacheDir)
-            if (cacheTs > 0 && !isVidZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                val contentDir = java.io.File(cacheDir, "content")
-                val listFile = java.io.File(cacheDir, ".video_list")
-                if (contentDir.exists() && listFile.exists()) {
-                    val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
-                    if (paths.isNotEmpty()) {
-                        vidZipTarget = null
-                        vidZipViewState = VidZipViewState(
-                            contentDir = contentDir,
-                            videoPaths = paths,
-                            zipFileName = target.name,
-                            zipUri = target.uri,
-                            isEncrypted = false,
-                            password = null,
-                            cleanupCacheDir = cacheDir
-                        )
-                        return@LaunchedEffect
-                    }
-                }
-                cacheDir.deleteRecursively()
-            }
-            vidZipEncrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-            if (vidZipEncrypted == false) {
-                vidZipInProgress = true
-                val paths = withContext(Dispatchers.IO) {
-                    readVidZipVideoPaths(context, target.uri, null, target.name)
-                }
-                vidZipInProgress = false
-                if (paths != null && paths.isNotEmpty()) {
-                    val contentDir = java.io.File(cacheDir, "content")
-                    vidZipTarget = null
-                    vidZipViewState = VidZipViewState(
-                        contentDir = contentDir,
-                        videoPaths = paths,
-                        zipFileName = target.name,
-                        zipUri = target.uri,
-                        isEncrypted = false,
-                        password = null,
-                        cleanupCacheDir = cacheDir
-                    )
-                } else {
-                    vidZipTarget = null
-                    Toast.makeText(context, context.getString(R.string.browser_no_video_in_archive), Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
         LaunchedEffect(prefs) {
             val legacyExtra = prefs.familyNetworkExtraRoles.first()
             if (!legacyExtra.isNullOrBlank()) {
@@ -4115,11 +3627,7 @@ fun FileBrowserApp(
                 familyNetworkManager.state.value.openBoardSession != null -> familyNetworkManager.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 zipUnzipTarget != null -> zipUnzipTarget = null
-                mdZipTarget != null -> { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
-                htmlZipTarget != null -> { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
-                llmZipTarget != null -> { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
-                epubTarget != null -> { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
-                picZipTarget != null -> { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
+                archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
                 transientRoute is TransientRoute.PdfViewer -> transientRoute = null
                 zipCompressTarget != null -> zipCompressTarget = null
                 sevenZCompressTarget != null -> sevenZCompressTarget = null
@@ -4320,18 +3828,18 @@ fun FileBrowserApp(
                                 )
                             },
                             switchMainTab = { requestOpenMainTab(it) },
-                            onMdZipTarget = { mdZipTarget = it },
-                            onHtmlZipTarget = { htmlZipTarget = it },
+                            onMdZipTarget = { archiveReader.open(ArchiveReaderKind.MD_ZIP, it) },
+                            onHtmlZipTarget = { archiveReader.open(ArchiveReaderKind.HTML_ZIP, it) },
                             onHtmlTarget = { transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name) },
                             onHtmlUrlTarget = { url ->
                                 transientRoute = htmlViewerRouteFromUrl(url)
                             },
-                            onPicZipTarget = { picZipTarget = it },
-                            onVidZipTarget = { vidZipTarget = it },
-                            onLlmZipTarget = { llmZipTarget = it },
-                            onTxtTarget = { txtTarget = it },
-                            onLlmTarget = { llmTarget = it },
-                            onEpubTarget = { epubTarget = it },
+                            onPicZipTarget = { archiveReader.open(ArchiveReaderKind.PIC_ZIP, it) },
+                            onVidZipTarget = { archiveReader.open(ArchiveReaderKind.VID_ZIP, it) },
+                            onLlmZipTarget = { archiveReader.open(ArchiveReaderKind.LLM_ZIP, it) },
+                            onTxtTarget = { archiveReader.open(ArchiveReaderKind.TXT, it) },
+                            onLlmTarget = { archiveReader.open(ArchiveReaderKind.LLM, it) },
+                            onEpubTarget = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
                             onPdfTarget = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) }
                         )
                     },
@@ -4517,20 +4025,20 @@ fun FileBrowserApp(
                                     bulletinForwardPayload = BulletinForwardPayload.Files(items)
                                 },
                                 onUnzipRequest = { zipUnzipTarget = it },
-                                onRequestMdZipView = { mdZipTarget = it },
+                                onRequestMdZipView = { archiveReader.open(ArchiveReaderKind.MD_ZIP, it) },
                                 onRequestHtmlView = {
                                     transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name)
                                 },
-                                onRequestHtmlZipView = { htmlZipTarget = it },
+                                onRequestHtmlZipView = { archiveReader.open(ArchiveReaderKind.HTML_ZIP, it) },
                                 onRequestOpenUrl = { url ->
                                     transientRoute = htmlViewerRouteFromUrl(url)
                                 },
-                                onRequestLlmZipView = { llmZipTarget = it },
-                                onRequestEpubView = { epubTarget = it },
-                                onRequestTxtView = { txtTarget = it },
-                                onRequestLlmView = { llmTarget = it },
-                                onRequestPicZipView = { picZipTarget = it },
-                                onRequestVidZipView = { vidZipTarget = it },
+                                onRequestLlmZipView = { archiveReader.open(ArchiveReaderKind.LLM_ZIP, it) },
+                                onRequestEpubView = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
+                                onRequestTxtView = { archiveReader.open(ArchiveReaderKind.TXT, it) },
+                                onRequestLlmView = { archiveReader.open(ArchiveReaderKind.LLM, it) },
+                                onRequestPicZipView = { archiveReader.open(ArchiveReaderKind.PIC_ZIP, it) },
+                                onRequestVidZipView = { archiveReader.open(ArchiveReaderKind.VID_ZIP, it) },
                                 onRequestDirectoryImageView = { item, dirUri, siblings ->
                                     scope.launch {
                                         runCatching {
@@ -5626,675 +5134,8 @@ fun FileBrowserApp(
                 dismissButton = { TextButton(onClick = { zipUnzipTarget = null; zipUnzipPassword = "" }) { Text(stringResource(R.string.common_cancel)) } }
             )
         }
-        // ---- .md.zip 密码输入对话框（仅加密 zip 时弹出） ----
-        mdZipTarget?.let { target ->
-            val encrypted = mdZipEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } },
-                    title = { Text(stringResource(R.string.context_view_zip_markdown)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = mdZipPassword,
-                                onValueChange = { if (!mdZipInProgress) mdZipPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !mdZipInProgress
-                            )
-                            if (mdZipInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (mdZipInProgress || mdZipPassword.isBlank()) return@Button
-                                mdZipInProgress = true
-                                val pwd = mdZipPassword.toCharArray()
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        val cacheDir = getMdZipCacheDir(context, target.uri)
-                                        val cacheTs = getMdZipCacheTimestamp(cacheDir)
-                                        val contentDir = java.io.File(cacheDir, "content")
-                                        val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
-                                        if (
-                                            cacheTs > 0 &&
-                                            isMdZipCacheEncrypted(cacheDir) &&
-                                            cacheTs >= target.lastModified &&
-                                            contentDir.exists() &&
-                                            contentDir.listFiles()?.isNotEmpty() == true &&
-                                            tryArchivePassword(context, target.uri, pwd)
-                                        ) {
-                                            MdZipExtractResult(
-                                                cacheDir = cacheDir,
-                                                contentDir = contentDir,
-                                                targetFile = findMdZipCacheTarget(context, cacheDir, isRstZip),
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            extractMdZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                    }
-                                    mdZipInProgress = false
-                                    if (result != null) {
-                                        mdZipTarget = null
-                                        mdZipPassword = ""
-                                        mdZipViewState = MdZipViewState(
-                                            targetFile = result.targetFile,  // 可能为 null
-                                            contentDir = result.contentDir,
-                                            zipFileName = target.name,
-                                            zipUri = target.uri,
-                                            isEncrypted = true
-                                        )
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!mdZipInProgress) { mdZipTarget = null; mdZipPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else if (encrypted == null) {
-                // 正在检测加密状态或正在解压非加密 zip
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.context_view_zip_markdown)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            }
-        }
-        // ---- .html.zip 密码输入对话框 ----
-        htmlZipTarget?.let { target ->
-            val encrypted = htmlZipEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } },
-                    title = { Text(stringResource(R.string.context_view_zip_html)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = htmlZipPassword,
-                                onValueChange = { if (!htmlZipInProgress) htmlZipPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !htmlZipInProgress
-                            )
-                            if (htmlZipInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (htmlZipInProgress || htmlZipPassword.isBlank()) return@Button
-                                htmlZipInProgress = true
-                                val pwd = htmlZipPassword.toCharArray()
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        val cacheDir = getHtmlZipCacheDir(context, target.uri)
-                                        val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
-                                        val contentDir = java.io.File(cacheDir, "content")
-                                        if (
-                                            cacheTs > 0 &&
-                                            isHtmlZipCacheEncrypted(cacheDir) &&
-                                            cacheTs >= target.lastModified &&
-                                            contentDir.exists() &&
-                                            contentDir.listFiles()?.isNotEmpty() == true &&
-                                            tryArchivePassword(context, target.uri, pwd)
-                                        ) {
-                                            HtmlZipExtractResult(
-                                                cacheDir = cacheDir,
-                                                contentDir = contentDir,
-                                                indexFile = findHtmlZipIndexFile(contentDir),
-                                                isEncrypted = true
-                                            )
-                                        } else {
-                                            extractHtmlZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                    }
-                                    htmlZipInProgress = false
-                                    if (result != null) {
-                                        htmlZipTarget = null
-                                        htmlZipPassword = ""
-                                        htmlZipViewState = HtmlZipViewState(
-                                            indexFile = result.indexFile,
-                                            contentDir = result.contentDir,
-                                            zipFileName = target.name,
-                                            zipUri = target.uri,
-                                            isEncrypted = true
-                                        )
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!htmlZipInProgress) { htmlZipTarget = null; htmlZipPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else if (encrypted == null) {
-                // 加载中或显示错误
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.context_view_zip_html)) },
-                    text = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 100.dp, max = 400.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            if (htmlZipInProgress) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(stringResource(R.string.browser_loading_dots), style = MaterialTheme.typography.bodyMedium)
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                htmlZipLog,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        if (htmlZipLoadError != null) {
-                            TextButton(onClick = { htmlZipTarget = null; htmlZipLoadError = null; htmlZipLog = "" }) {
-                                Text(stringResource(R.string.common_close))
-                            }
-                        }
-                    }
-                )
-            }
-        }
-        // ---- .llm.zip 密码输入对话框 ----
-        llmZipTarget?.let { target ->
-            val encrypted = llmZipEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } },
-                    title = { Text(stringResource(R.string.context_view_zip_llm)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = llmZipPassword,
-                                onValueChange = { if (!llmZipInProgress) llmZipPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !llmZipInProgress
-                            )
-                            if (llmZipInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (llmZipInProgress || llmZipPassword.isBlank()) return@Button
-                                llmZipInProgress = true
-                                val pwd = llmZipPassword.toCharArray()
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        val cacheDir = getEpubCacheDir(context, target.uri)
-                                        val cacheTs = getEpubCacheTimestamp(cacheDir)
-                                        if (
-                                            cacheTs > 0 &&
-                                            isEpubCacheEncrypted(cacheDir) &&
-                                            cacheTs >= target.lastModified &&
-                                            tryArchivePassword(context, target.uri, pwd)
-                                        ) {
-                                            loadEpubFromCache(context, cacheDir)
-                                        } else {
-                                            extractLlmZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                    }
-                                    llmZipInProgress = false
-                                    if (result != null) {
-                                        llmZipTarget = null
-                                        llmZipPassword = ""
-                                        epubViewState = EpubViewState(
-                                            extractResult = result,
-                                            zipFileName = target.name,
-                                            epubUri = target.uri,
-                                            isEncrypted = true
-                                        )
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password_content), Toast.LENGTH_SHORT).show()
-                                    }
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!llmZipInProgress) { llmZipTarget = null; llmZipPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else if (encrypted == null) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.context_view_zip_llm)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            }
-        }
-        // ---- .epub 密码输入对话框 ----
-        epubTarget?.let { target ->
-            val encrypted = epubEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } },
-                    title = { Text(stringResource(R.string.browser_view_epub_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = epubPassword,
-                                onValueChange = { if (!epubInProgress) epubPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !epubInProgress
-                            )
-                            if (epubInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (epubInProgress || epubPassword.isBlank()) return@Button
-                                epubInProgress = true
-                                epubLog = context.getString(R.string.browser_epub_decrypt_start)
-                                val pwd = epubPassword.toCharArray()
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        val cacheDir = getEpubCacheDir(context, target.uri)
-                                        val cacheTs = getEpubCacheTimestamp(cacheDir)
-                                        if (
-                                            cacheTs > 0 &&
-                                            isEpubCacheEncrypted(cacheDir) &&
-                                            cacheTs >= target.lastModified &&
-                                            tryArchivePassword(context, target.uri, pwd)
-                                        ) {
-                                            loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
-                                                ?: extractEpubToCache(context, target.uri, pwd, target.name) { log ->
-                                                    epubLog += "$log\n"
-                                                }
-                                        } else {
-                                            extractEpubToCache(context, target.uri, pwd, target.name) { log ->
-                                                epubLog += "$log\n"
-                                            }
-                                        }
-                                    }
-                                    epubInProgress = false
-                                    when (result) {
-                                        is EpubParseResult.Success -> {
-                                            epubTarget = null
-                                            epubPassword = ""
-                                            epubViewState = EpubViewState(
-                                                extractResult = result.result,
-                                                zipFileName = target.name,
-                                                epubUri = target.uri,
-                                                isEncrypted = true
-                                            )
-                                        }
-                                        is EpubParseResult.Error -> {
-                                            val detail = result.detail?.let { "\n$it" } ?: ""
-                                            epubLog += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
-                                            epubLoadError = "${result.message}$detail"
-                                        }
-                                    }
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!epubInProgress) { epubTarget = null; epubPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else {
-                // encrypted == null 或 encrypted == false，都显示加载对话框
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.browser_open_epub_title)) },
-                    text = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(min = 100.dp, max = 400.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            if (epubInProgress) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(modifier = Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(stringResource(R.string.browser_loading_dots), style = MaterialTheme.typography.bodyMedium)
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Text(
-                                epubLog,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        if (epubLoadError != null) {
-                            TextButton(onClick = { epubTarget = null; epubLoadError = null; epubLog = "" }) {
-                                Text(stringResource(R.string.common_close))
-                            }
-                        }
-                    }
-                )
-            }
-        }
-        // ---- EPUB 错误对话框（独立于epubTarget） ----
-        epubLoadError?.let { _ ->
-            if (epubTarget == null) {
-                AlertDialog(
-                    onDismissRequest = { epubLoadError = null; epubLog = "" },
-                    title = { Text(stringResource(R.string.browser_epub_parse_failed_title)) },
-                    text = {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 400.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            Text(
-                                epubLog,
-                                style = MaterialTheme.typography.bodySmall,
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            )
-                        }
-                    },
-                    confirmButton = {
-                        TextButton(onClick = { epubLoadError = null; epubLog = "" }) { Text(stringResource(R.string.common_ok)) }
-                    }
-                )
-            }
-        }
-        // ---- TXT 错误对话框 ----
-        txtLoadError?.let { error ->
-            AlertDialog(
-                onDismissRequest = { txtLoadError = null; txtTarget = null },
-                title = { Text(stringResource(R.string.browser_txt_parse_failed_title)) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 300.dp)
-                    ) {
-                        Text(
-                            error,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { txtLoadError = null; txtTarget = null }) { Text(stringResource(R.string.common_ok)) }
-                }
-            )
-        }
-        // ---- LLM 错误对话框 ----
-        llmLoadError?.let { error ->
-            AlertDialog(
-                onDismissRequest = { llmLoadError = null; llmTarget = null },
-                title = { Text(stringResource(R.string.browser_llm_parse_failed_title)) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 300.dp)
-                    ) {
-                        Text(
-                            error,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { llmLoadError = null; llmTarget = null }) { Text(stringResource(R.string.common_ok)) }
-                }
-            )
-        }
-        // ---- .pic.zip 密码输入对话框 ----
-        picZipTarget?.let { target ->
-            val encrypted = picZipEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } },
-                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = picZipPassword,
-                                onValueChange = { if (!picZipInProgress) picZipPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !picZipInProgress
-                            )
-                            if (picZipInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (picZipInProgress || picZipPassword.isBlank()) return@Button
-                                picZipInProgress = true
-                                val pwd = picZipPassword.toCharArray()
-                                scope.launch {
-                                    var result: PicZipExtractResult? = null
-                                    var cachedInitialIndex = 0
-                                    withContext(Dispatchers.IO) {
-                                        val cacheDir = getPicZipCacheDir(context, target.uri)
-                                        val contentDir = java.io.File(cacheDir, "content")
-                                        val listFile = java.io.File(cacheDir, ".image_list")
-                                        if (contentDir.exists() && listFile.exists() && tryPicZipPassword(context, target.uri, pwd)) {
-                                            val paths = listFile.readText().lineSequence().filter { it.isNotBlank() }.toList()
-                                            val lastIndexFile = java.io.File(cacheDir, ".last_index")
-                                            cachedInitialIndex = lastIndexFile.takeIf { it.exists() }?.readText()?.toIntOrNull()?.coerceIn(0, (paths.size - 1).coerceAtLeast(0)) ?: 0
-                                            result = PicZipExtractResult(cacheDir, contentDir, paths, true)
-                                        }
-                                        if (result == null) {
-                                            result = extractPicZipToCache(context, target.uri, pwd, target.name)
-                                        }
-                                    }
-                                    val res = result
-                                    if (res != null) {
-                                        picZipTarget = null
-                                        picZipPassword = ""
-                                        picZipViewState = PicZipViewState(
-                                            contentDir = res.contentDir,
-                                            imagePaths = res.imagePaths,
-                                            zipFileName = target.name,
-                                            zipUri = target.uri,
-                                            isEncrypted = true,
-                                            password = pwd,
-                                            initialIndex = cachedInitialIndex
-                                        )
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
-                                    }
-                                    picZipInProgress = false
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!picZipInProgress) { picZipTarget = null; picZipPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else if (encrypted == null) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            } else if (encrypted == false && picZipInProgress) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.browser_view_pic_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_extracting_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            }
-        }
-        vidZipTarget?.let { target ->
-            val encrypted = vidZipEncrypted
-            if (encrypted == true) {
-                AlertDialog(
-                    onDismissRequest = { if (!vidZipInProgress) { vidZipTarget = null; vidZipPassword = "" } },
-                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_zip_encrypted_prompt, target.name), color = MaterialTheme.colorScheme.onSurface)
-                            Spacer(Modifier.height(12.dp))
-                            ReliablePasswordInputField(
-                                value = vidZipPassword,
-                                onValueChange = { if (!vidZipInProgress) vidZipPassword = it },
-                                label = { Text(stringResource(R.string.browser_zip_password_label)) },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !vidZipInProgress
-                            )
-                            if (vidZipInProgress) {
-                                Spacer(Modifier.height(8.dp))
-                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        Button(
-                            onClick = {
-                                if (vidZipInProgress || vidZipPassword.isBlank()) return@Button
-                                vidZipInProgress = true
-                                val pwd = vidZipPassword.toCharArray()
-                                scope.launch {
-                                    val result = withContext(Dispatchers.IO) {
-                                        readVidZipVideoPaths(context, target.uri, pwd, target.name)
-                                    }
-                                    if (result != null && result.isNotEmpty()) {
-                                        val cacheDir = getVidZipCacheDir(context, target.uri)
-                                        vidZipTarget = null
-                                        vidZipPassword = ""
-                                        vidZipViewState = VidZipViewState(
-                                            contentDir = java.io.File(cacheDir, "content"),
-                                            videoPaths = result,
-                                            zipFileName = target.name,
-                                            zipUri = target.uri,
-                                            isEncrypted = true,
-                                            password = pwd,
-                                            cleanupCacheDir = cacheDir
-                                        )
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed_password), Toast.LENGTH_SHORT).show()
-                                    }
-                                    vidZipInProgress = false
-                                }
-                            }
-                        ) { Text(stringResource(R.string.common_ok)) }
-                    },
-                    dismissButton = {
-                        TextButton(
-                            onClick = { if (!vidZipInProgress) { vidZipTarget = null; vidZipPassword = "" } }
-                        ) { Text(stringResource(R.string.common_cancel)) }
-                    }
-                )
-            } else if (encrypted == null) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_processing_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            } else if (encrypted == false && vidZipInProgress) {
-                AlertDialog(
-                    onDismissRequest = {},
-                    title = { Text(stringResource(R.string.browser_view_vid_zip_title)) },
-                    text = {
-                        Column {
-                            Text(stringResource(R.string.browser_extracting_file, target.name), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(8.dp))
-                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        }
-                    },
-                    confirmButton = {}
-                )
-            }
-        }
+        // Archive 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 ArchiveReaderWorkflowState）
+        ArchiveReaderDialogs(archiveReader)
         archiveCompressTarget?.let { target ->
             val parentDirUri = Uri.parse(displayUri)
             val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
@@ -7162,24 +6003,6 @@ fun FileBrowserApp(
         }
     }
 
-    encryptedCacheExitDialog?.let { dialog ->
-        AlertDialog(
-            onDismissRequest = { encryptedCacheExitDialog = null },
-            title = { Text(dialog.title) },
-            text = {
-                Text(
-                    stringResource(R.string.browser_delete_cache_exit_prompt),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            },
-            confirmButton = {
-                Button(onClick = dialog.onDelete) { Text(stringResource(R.string.browser_delete_cache_and_exit)) }
-            },
-            dismissButton = {
-                TextButton(onClick = dialog.onKeep) { Text(stringResource(R.string.browser_keep_cache_and_exit)) }
-            }
-        )
-    }
 
     when {
         showUnlockGate -> {
@@ -7294,420 +6117,26 @@ fun FileBrowserApp(
                 onRouteChange = { transientRoute = it }
             )
         }
-        mdZipViewState != null -> {
-            val state = mdZipViewState!!
-            LaunchedEffect(state.zipUri) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_ZIP_VIEWER,
-                    key = state.zipUri.toString(),
-                    title = state.zipFileName,
-                    uri = state.zipUri.toString()
-                )
-            }
-            BackHandler {
-                if (state.isEncrypted) {
-                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = context.getString(R.string.browser_exit_encrypted_md),
-                        onDelete = {
-                            cleanMdZipCache(context, state.zipUri)
-                            mdZipViewState = null
-                            encryptedCacheExitDialog = null
-                        },
-                        onKeep = {
-                            mdZipViewState = null
-                            encryptedCacheExitDialog = null
-                        }
-                    )
-                } else {
-                    mdZipViewState = null
-                }
-            }
-            MdZipViewerScreen(
-                initialTargetFile = state.targetFile,
-                contentDir = state.contentDir,
-                zipFileName = state.zipFileName,
-                sessionCache = markdownViewerSessionCache,
-                onBack = {
-                    if (state.isEncrypted) {
-                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = context.getString(R.string.browser_exit_encrypted_md),
-                            onDelete = {
-                                cleanMdZipCache(context, state.zipUri)
-                                mdZipViewState = null
-                                encryptedCacheExitDialog = null
-                            },
-                            onKeep = {
-                                mdZipViewState = null
-                                encryptedCacheExitDialog = null
-                            }
-                        )
-                    } else {
-                        mdZipViewState = null
-                    }
-                },
-                logDebug = null
-            )
-        }
-        htmlZipViewState != null -> {
-            val state = htmlZipViewState!!
-            LaunchedEffect(state.zipUri) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_ZIP_VIEWER,
-                    key = state.zipUri.toString(),
-                    title = state.zipFileName,
-                    uri = state.zipUri.toString()
-                )
-            }
-            BackHandler {
-                if (state.isEncrypted) {
-                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = context.getString(R.string.browser_exit_encrypted_html),
-                        onDelete = {
-                            cleanHtmlZipCache(context, state.zipUri)
-                            htmlZipViewState = null
-                            encryptedCacheExitDialog = null
-                        },
-                        onKeep = {
-                            htmlZipViewState = null
-                            encryptedCacheExitDialog = null
-                        }
-                    )
-                } else {
-                    htmlZipViewState = null
-                }
-            }
-            HtmlZipViewerScreen(
-                initialIndexFile = state.indexFile,
-                contentDir = state.contentDir,
-                zipFileName = state.zipFileName,
-                onBack = {
-                    if (state.isEncrypted) {
-                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = context.getString(R.string.browser_exit_encrypted_html),
-                            onDelete = {
-                                cleanHtmlZipCache(context, state.zipUri)
-                                htmlZipViewState = null
-                                encryptedCacheExitDialog = null
-                            },
-                            onKeep = {
-                                htmlZipViewState = null
-                                encryptedCacheExitDialog = null
-                            }
-                        )
-                    } else {
-                        htmlZipViewState = null
-                    }
-                },
-                logDebug = null
-            )
-        }
-        epubViewState != null -> {
-            val state = epubViewState!!
-            LaunchedEffect(state.epubUri) {
-                recordRecentOpen(
-                    type = RECENT_TYPE_EPUB_RENDERER,
-                    key = state.epubUri.toString(),
-                    title = state.zipFileName,
-                    uri = state.epubUri.toString()
-                )
-            }
-            BackHandler {
-                if (state.isEncrypted) {
-                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = context.getString(R.string.browser_exit_encrypted_book),
-                        onDelete = {
-                            cleanEpubCache(context, state.epubUri)
-                            epubViewState = null
-                            encryptedCacheExitDialog = null
-                        },
-                        onKeep = {
-                            epubViewState = null
-                            encryptedCacheExitDialog = null
-                        }
-                    )
-                } else {
-                    epubViewState = null
-                }
-            }
-            EpubViewerScreen(
-                extractResult = state.extractResult,
-                zipFileName = state.zipFileName,
-                epubUri = state.epubUri,
-                bookNoteLoadedData = bookNoteController.data,
-                bookNoteEntries = bookNoteController.entriesSnapshot,
-                bookNoteInProgress = bookNoteController.inProgress,
-                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
-                onBookNoteEntriesChanged = bookNoteController.updateEntries,
-                onBack = {
-                    if (state.isEncrypted) {
-                        encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                            title = context.getString(R.string.browser_exit_encrypted_book),
-                            onDelete = {
-                                cleanEpubCache(context, state.epubUri)
-                                epubViewState = null
-                                encryptedCacheExitDialog = null
-                            },
-                            onKeep = {
-                                epubViewState = null
-                                encryptedCacheExitDialog = null
-                            }
-                        )
-                    } else {
-                        epubViewState = null
-                    }
-                },
-                logDebug = null
-            )
-        }
-        picZipViewState != null -> {
-            val state = picZipViewState!!
-            LaunchedEffect(state.zipUri, state.recordRecent) {
-                if (state.recordRecent) {
+        archiveReader.viewer != null -> {
+            // Archive 阅读器域：解压完成后的全屏查看器（渲染与退出善后在 ArchiveViewerRouteHost）
+            ArchiveViewerRouteHost(
+                workflow = archiveReader,
+                markdownViewerSessionCache = markdownViewerSessionCache,
+                bookNoteController = bookNoteController,
+                recordRecentOpen = { type, key, title, uri, playlistId ->
                     recordRecentOpen(
-                        type = RECENT_TYPE_ZIP_VIEWER,
-                        key = state.zipUri.toString(),
-                        title = state.zipFileName,
-                        uri = state.zipUri.toString()
+                        type = type,
+                        key = key,
+                        title = title,
+                        uri = uri,
+                        playlistId = playlistId
                     )
-                }
-            }
-            BackHandler {
-                state.cleanupCacheDir?.deleteRecursively()
-                picZipViewState = null
-            }
-            PicZipViewerScreen(
-                contentDir = state.contentDir,
-                imagePaths = state.imagePaths,
-                zipFileName = state.zipFileName,
-                isEncrypted = state.isEncrypted,
-                password = state.password,
-                initialIndex = state.initialIndex,
-                onSaveCurrentImage = { sourceFile, fileName ->
+                },
+                onSavePicZipImage = { sourceFile, fileName ->
                     savePicZipImageToRoot(sourceFile, fileName)
                 },
-                onBack = { doDelete ->
-                    if (doDelete == true) cleanPicZipCache(context, state.zipUri)
-                    state.cleanupCacheDir?.deleteRecursively()
-                    picZipViewState = null
-                }
+                onEncryptedExitRequest = { encryptedCacheExitDialog = it }
             )
-        }
-        vidZipViewState != null -> {
-            val state = vidZipViewState!!
-            LaunchedEffect(state.zipUri, state.recordRecent) {
-                if (state.recordRecent) {
-                    recordRecentOpen(
-                        type = RECENT_TYPE_ZIP_VIEWER,
-                        key = state.zipUri.toString(),
-                        title = state.zipFileName,
-                        uri = state.zipUri.toString()
-                    )
-                }
-            }
-            BackHandler {
-                if (state.isEncrypted) {
-                    encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                        title = context.getString(R.string.browser_exit_encrypted_vid),
-                        onDelete = {
-                            state.cleanupCacheDir?.deleteRecursively()
-                            vidZipViewState = null
-                            encryptedCacheExitDialog = null
-                        },
-                        onKeep = {
-                            vidZipViewState = null
-                            encryptedCacheExitDialog = null
-                        }
-                    )
-                } else {
-                    vidZipViewState = null
-                }
-            }
-            Surface(
-                modifier = Modifier.fillMaxSize(),
-                color = MaterialTheme.colorScheme.background
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            stringResource(R.string.browser_view_vid_zip_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            modifier = Modifier.weight(1f)
-                        )
-                        TextButton(onClick = {
-                            if (state.isEncrypted) {
-                                encryptedCacheExitDialog = EncryptedCacheExitDialogState(
-                                    title = context.getString(R.string.browser_exit_encrypted_vid),
-                                    onDelete = {
-                                        state.cleanupCacheDir?.deleteRecursively()
-                                        vidZipViewState = null
-                                        encryptedCacheExitDialog = null
-                                    },
-                                    onKeep = {
-                                        vidZipViewState = null
-                                        encryptedCacheExitDialog = null
-                                    }
-                                )
-                            } else {
-                                vidZipViewState = null
-                            }
-                        }) {
-                            Text(stringResource(R.string.common_close))
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    if (state.videoPaths.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = stringResource(R.string.browser_no_video_in_archive),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(state.videoPaths.size) { index ->
-                                val path = state.videoPaths[index]
-                                val file = java.io.File(state.contentDir, path)
-                                val isReady = file.exists()
-                                var extracting by remember(path, state.zipUri) { mutableStateOf(false) }
-                                var itemProgress by remember(path, state.zipUri) { mutableIntStateOf(0) }
-                                val entrySize = remember(path, state.zipUri, state.isEncrypted, state.password) {
-                                    getVidZipEntrySize(context, state.zipUri, path, if (state.isEncrypted) state.password else null)
-                                }
-                                Column(
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    TextButton(
-                                        onClick = {
-                                            if (extracting || isReady) {
-                                                if (!isReady) return@TextButton
-                                            }
-                                            scope.launch {
-                                                if (!isReady) {
-                                                    extracting = true
-                                                    itemProgress = 0
-                                                    val ok = withContext(Dispatchers.IO) {
-                                                        extractVidZipVideoRange(
-                                                            context,
-                                                            state.contentDir.parentFile ?: return@withContext false,
-                                                            state.contentDir,
-                                                            state.videoPaths,
-                                                            index,
-                                                            index + 1,
-                                                            if (state.isEncrypted) state.password else null,
-                                                            state.zipUri,
-                                                            onProgress = { copied, total ->
-                                                                if (total > 0L) {
-                                                                    val percent = ((copied.toFloat() / total.toFloat()) * 100f).toInt().coerceIn(0, 100)
-                                                                    scope.launch(Dispatchers.Main.immediate) {
-                                                                        itemProgress = percent
-                                                                    }
-                                                                }
-                                                            }
-                                                        )
-                                                    }
-                                                    extracting = false
-                                                    itemProgress = 100
-                                                    if (!ok) {
-                                                        Toast.makeText(context, context.getString(R.string.browser_extract_failed), Toast.LENGTH_SHORT).show()
-                                                        return@launch
-                                                    }
-                                                }
-                                                val targetFile = java.io.File(state.contentDir, path)
-                                                val opened = launchExternalOpen(context, android.net.Uri.fromFile(targetFile).toString(), null, targetFile.name)
-                                                if (!opened) {
-                                                    Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        },
-                                        modifier = Modifier.fillMaxWidth(),
-                                        enabled = !extracting
-                                    ) {
-                                        Column(modifier = Modifier.fillMaxWidth()) {
-                                            Text(
-                                                path,
-                                                color = MaterialTheme.colorScheme.onSurface,
-                                                maxLines = 2,
-                                                overflow = TextOverflow.Ellipsis,
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                            Spacer(Modifier.height(2.dp))
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                            ) {
-                                                Text(
-                                                    text = if (isReady) {
-                                                        stringResource(R.string.browser_vid_zip_cached)
-                                                    } else {
-                                                        stringResource(R.string.browser_vid_zip_not_cached)
-                                                    },
-                                                    color = if (isReady) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
-                                                if (entrySize > 0L) {
-                                                    Text(
-                                                        text = stringResource(R.string.browser_vid_zip_size, formatSize(entrySize)),
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                        style = MaterialTheme.typography.bodySmall
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (extracting) {
-                                        Spacer(Modifier.height(4.dp))
-                                        Column(modifier = Modifier.fillMaxWidth()) {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                CircularProgressIndicator(
-                                                    modifier = Modifier.size(18.dp),
-                                                    strokeWidth = 2.dp
-                                                )
-                                                Spacer(Modifier.width(8.dp))
-                                                Text(
-                                                    text = stringResource(R.string.browser_extracting_file, path.substringAfterLast('/')),
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                Text(
-                                                    text = "$itemProgress%",
-                                                    color = MaterialTheme.colorScheme.primary,
-                                                    style = MaterialTheme.typography.bodySmall
-                                                )
-                                            }
-                                            Spacer(Modifier.height(4.dp))
-                                            LinearProgressIndicator(
-                                                progress = { itemProgress / 100f },
-                                                modifier = Modifier.fillMaxWidth()
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
         passContentView != null -> {
             val content = passContentView!!
@@ -7748,6 +6177,31 @@ fun FileBrowserApp(
             )
         }
         else -> MainTabsRootContent()
+    }
+    // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
+    encryptedCacheExitDialog?.let { dialog ->
+        AlertDialog(
+            onDismissRequest = { encryptedCacheExitDialog = null },
+            title = { Text(dialog.title) },
+            text = {
+                Text(
+                    stringResource(R.string.browser_delete_cache_exit_prompt),
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    dialog.onDelete()
+                    encryptedCacheExitDialog = null
+                }) { Text(stringResource(R.string.browser_delete_cache_and_exit)) }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    dialog.onKeep()
+                    encryptedCacheExitDialog = null
+                }) { Text(stringResource(R.string.browser_keep_cache_and_exit)) }
+            }
+        )
     }
     showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
         val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@let
@@ -7853,14 +6307,6 @@ private data class PassDecryptedContent(val innerFileName: String, val decrypted
 private fun isCompressedMarkdown(name: String): Boolean =
     name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
 
-/** .md.zip / .rst.zip 查看器状态。 */
-private data class MdZipViewState(
-    val targetFile: java.io.File?,  // null 表示未找到可渲染文件，此时显示目录内容
-    val contentDir: java.io.File,
-    val zipFileName: String,
-    val zipUri: Uri,
-    val isEncrypted: Boolean
-)
 
 /** 判断文件名是否为压缩 HTML 文件（.html.zip）。 */
 private fun isCompressedHtml(name: String): Boolean =
@@ -7938,53 +6384,6 @@ private fun isGalleryImageFile(name: String): Boolean =
 /** 判断文件名是否为 HTML 文件。 */
 internal fun isHtmlFile(name: String): Boolean =
     name.endsWith(".html", ignoreCase = true) || name.endsWith(".htm", ignoreCase = true)
-
-/** .html.zip 查看器状态。 */
-private data class HtmlZipViewState(
-    val indexFile: java.io.File?,
-    val contentDir: java.io.File,
-    val zipFileName: String,
-    val zipUri: Uri,
-    val isEncrypted: Boolean
-)
-
-/** EPUB 查看器状态。 */
-private data class EpubViewState(
-    val extractResult: EpubExtractResult,
-    val zipFileName: String,
-    val epubUri: Uri,
-    val isEncrypted: Boolean
-)
-
-/** .pic.zip 查看器状态。 */
-private data class PicZipViewState(
-    val contentDir: java.io.File,
-    val imagePaths: List<String>,
-    val zipFileName: String,
-    val zipUri: Uri,
-    val isEncrypted: Boolean,
-    val password: CharArray? = null,
-    val initialIndex: Int = 0,
-    val recordRecent: Boolean = true,
-    val cleanupCacheDir: File? = null
-)
-
-private data class VidZipViewState(
-    val contentDir: java.io.File,
-    val videoPaths: List<String>,
-    val zipFileName: String,
-    val zipUri: Uri,
-    val isEncrypted: Boolean,
-    val password: CharArray? = null,
-    val recordRecent: Boolean = true,
-    val cleanupCacheDir: File? = null
-)
-
-private data class EncryptedCacheExitDialogState(
-    val title: String,
-    val onDelete: () -> Unit,
-    val onKeep: () -> Unit
-)
 
 /** 直接编辑 .pass 时的状态：解密后的文件信息，用于编辑界面和存盘时重加密。 */
 private data class PassEditState(
@@ -13354,7 +11753,7 @@ private fun PasswordGridPage(
 }
 
 @Composable
-private fun ReliablePasswordInputField(
+internal fun ReliablePasswordInputField(
     value: String,
     onValueChange: (String) -> Unit,
     label: @Composable (() -> Unit),

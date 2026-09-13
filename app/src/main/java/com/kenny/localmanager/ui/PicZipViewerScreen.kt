@@ -108,7 +108,7 @@ fun PicZipViewerScreen(
     password: CharArray?,
     initialIndex: Int = 0,
     onSaveCurrentImage: suspend (File, String) -> Boolean = { _, _ -> false },
-    onBack: (deleteCache: Boolean?) -> Unit
+    onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -145,7 +145,6 @@ fun PicZipViewerScreen(
     var showDirectory by remember { mutableStateOf(false) }
     var showJumpToDialog by remember { mutableStateOf(false) }
     var jumpToInput by remember { mutableStateOf("") }
-    var showExitCacheDialog by remember { mutableStateOf(false) }
     var rotationDegrees by remember { mutableFloatStateOf(0f) }
     var saveInProgress by remember { mutableStateOf(false) }
 
@@ -306,7 +305,7 @@ fun PicZipViewerScreen(
         isMaximized = false
     }
     BackHandler(enabled = !isZoomed) {
-        if (isEncrypted) showExitCacheDialog = true else onBack(null)
+        onBack()
     }
 
     Scaffold(
@@ -322,7 +321,7 @@ fun PicZipViewerScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = {
-                        if (isEncrypted) showExitCacheDialog = true else onBack(null)
+                        onBack()
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                     }
@@ -690,28 +689,6 @@ fun PicZipViewerScreen(
                 ) { Text(stringResource(R.string.common_ok)) }
             },
             dismissButton = { TextButton(onClick = { showJumpToDialog = false }) { Text(stringResource(R.string.common_cancel)) } }
-        )
-    }
-
-    // 加密包退出时是否删除缓存
-    if (showExitCacheDialog) {
-        AlertDialog(
-            onDismissRequest = { showExitCacheDialog = false },
-            title = { Text(stringResource(R.string.pic_zip_exit_encrypted_title)) },
-            text = { Text(stringResource(R.string.pic_zip_exit_encrypted_message), color = MaterialTheme.colorScheme.onSurface) },
-            confirmButton = {
-                Button(onClick = {
-                    showExitCacheDialog = false
-                    try { cacheDir.deleteRecursively() } catch (_: Exception) {}
-                    onBack(true)
-                }) { Text(stringResource(R.string.pic_zip_delete_cache_exit)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showExitCacheDialog = false
-                    onBack(false)
-                }) { Text(stringResource(R.string.pic_zip_keep_cache_exit)) }
-            }
         )
     }
 }

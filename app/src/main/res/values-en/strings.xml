@@ -1591,6 +1591,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_exit_encrypted_html">Exit encrypted HTML archive</string>
     <string name="browser_exit_encrypted_md">Exit encrypted Markdown archive</string>
     <string name="browser_exit_encrypted_vid">Exit encrypted video archive</string>
+    <string name="browser_exit_encrypted_pic">Leave encrypted image archive</string>
     <string name="browser_delete_cache_exit_prompt">Delete extracted cache? If not, you will need the password next time but can reuse cache and reading progress.</string>
     <string name="browser_delete_cache_and_exit">Delete cache and exit</string>
     <string name="browser_keep_cache_and_exit">Keep cache and exit</string>

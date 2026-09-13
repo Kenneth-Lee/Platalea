@@ -1669,6 +1669,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_exit_encrypted_html">退出加密压缩 HTML</string>
     <string name="browser_exit_encrypted_md">退出加密压缩 Markdown</string>
     <string name="browser_exit_encrypted_vid">退出加密视频压缩包</string>
+    <string name="browser_exit_encrypted_pic">退出加密图片压缩包</string>
     <string name="browser_delete_cache_exit_prompt">是否删除本次解压的缓存？不删除则下次打开仍需输入密码，但可复用已有缓存并保留阅读进度。</string>
     <string name="browser_delete_cache_and_exit">删除缓存并退出</string>
     <string name="browser_keep_cache_and_exit">保留缓存并退出</string>
