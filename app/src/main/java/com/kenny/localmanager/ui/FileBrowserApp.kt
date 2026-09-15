@@ -12,11 +12,8 @@ import android.icu.text.Transliterator
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
-import android.util.Log
 import android.util.Base64
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
@@ -48,7 +45,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
@@ -70,15 +66,10 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.ArrowDownward
-import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.Article
@@ -102,8 +93,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -112,7 +101,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Switch
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -123,7 +111,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -157,15 +144,6 @@ import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
-import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_EXO_PLAYER
-import com.kenny.localmanager.data.PLAYER_AUDIO_ENGINE_MEDIA_PLAYER
-import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_BASS
-import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_CAR
-import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_FLAT
-import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_HEADPHONE
-import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_VOCAL
-import com.kenny.localmanager.data.PlayerAudioSettings
-import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.RecentOpenItem
@@ -178,15 +156,10 @@ import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDisplayName
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.getTrashUriIfExists
-import com.kenny.localmanager.file.isInsideDirectory
-import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.quickToggleObfuscation
 import com.kenny.localmanager.file.isQuickObfuscatedFileName
-import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.listFilesSafe
-import com.kenny.localmanager.file.openInputStreamSafe
-import com.kenny.localmanager.file.moveDocumentTo
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
@@ -210,17 +183,12 @@ import com.kenny.localmanager.file.collectMusicFilesRecursively
 import com.kenny.localmanager.file.RecursiveFileSearchCriteria
 import com.kenny.localmanager.file.RecursiveFileSearchHit
 import com.kenny.localmanager.file.searchFilesRecursively
-import com.kenny.localmanager.player.PlaylistSortOrder
-import com.kenny.localmanager.player.PlaylistTrackSortField
-import com.kenny.localmanager.player.PlaylistTrackSorter
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
-import com.kenny.localmanager.player.PlaybackTimeFormat
 import com.kenny.localmanager.player.TrackMetadata
 import com.kenny.localmanager.player.ACTION_PLAY
 import com.kenny.localmanager.player.ACTION_REMOVE_PLAYLIST_TRACK
 import com.kenny.localmanager.player.ACTION_RELOAD_PLAYLIST
-import com.kenny.localmanager.player.ACTION_RESUME
 import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
 import com.kenny.localmanager.player.EXTRA_START_INDEX
 import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
@@ -245,7 +213,6 @@ import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import com.kenny.localmanager.dict.importStarDict
 import com.kenny.localmanager.dict.isStarDictImportCandidate
 import com.kenny.localmanager.requestPinnedTabShortcut
 import com.kenny.localmanager.git.cloneToTree
@@ -304,7 +271,7 @@ internal const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
 internal const val RECENT_TYPE_PDF_VIEWER = "pdf_viewer"
 internal const val RECENT_TYPE_PLAYLIST = "playlist"
 internal const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
-private typealias RunProgressBlock = suspend (
+internal typealias RunProgressBlock = suspend (
     label: String,
     total: Int?,
     block: suspend ((Int) -> Unit) -> Unit
@@ -367,66 +334,8 @@ private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
     )
 }
 
-private fun AudioDeviceInfo.isPrivatePlaybackCandidate(): Boolean {
-    return when (type) {
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
-        AudioDeviceInfo.TYPE_BLE_HEADSET,
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
-        AudioDeviceInfo.TYPE_WIRED_HEADSET,
-        AudioDeviceInfo.TYPE_USB_HEADSET,
-        AudioDeviceInfo.TYPE_HEARING_AID -> true
-        else -> false
-    }
-}
 
-private fun AudioDeviceInfo.debugLabel(): String {
-    val typeName = when (type) {
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "BLUETOOTH_A2DP"
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "BLUETOOTH_SCO"
-        AudioDeviceInfo.TYPE_BLE_BROADCAST -> "BLE_BROADCAST"
-        AudioDeviceInfo.TYPE_BLE_HEADSET -> "BLE_HEADSET"
-        AudioDeviceInfo.TYPE_BLE_SPEAKER -> "BLE_SPEAKER"
-        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "BUILTIN_EARPIECE"
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "BUILTIN_SPEAKER"
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "BUILTIN_SPEAKER_SAFE"
-        AudioDeviceInfo.TYPE_DOCK -> "DOCK"
-        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
-        AudioDeviceInfo.TYPE_HDMI_ARC -> "HDMI_ARC"
-        AudioDeviceInfo.TYPE_HDMI_EARC -> "HDMI_EARC"
-        AudioDeviceInfo.TYPE_HEARING_AID -> "HEARING_AID"
-        AudioDeviceInfo.TYPE_LINE_ANALOG -> "LINE_ANALOG"
-        AudioDeviceInfo.TYPE_LINE_DIGITAL -> "LINE_DIGITAL"
-        AudioDeviceInfo.TYPE_AUX_LINE -> "AUX_LINE"
-        AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB_ACCESSORY"
-        AudioDeviceInfo.TYPE_USB_DEVICE -> "USB_DEVICE"
-        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB_HEADSET"
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "WIRED_HEADPHONES"
-        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "WIRED_HEADSET"
-        else -> "TYPE_$type"
-    }
-    return "$typeName(id=$id,name=${getProductName()})"
-}
 
-private fun Context.hasPrivatePlaybackOutput(): Boolean {
-    val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
-    return try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-            val privateOutputs = outputs.filter { it.isPrivatePlaybackCandidate() }
-            Log.i(
-                "FileBrowserApp",
-                "Shortcut autoplay route check: private=${privateOutputs.map { it.debugLabel() }}, all=${outputs.map { it.debugLabel() }}"
-            )
-            privateOutputs.isNotEmpty()
-        } else {
-            @Suppress("DEPRECATION")
-            (audioManager.isBluetoothA2dpOn || audioManager.isBluetoothScoOn || audioManager.isWiredHeadsetOn)
-        }
-    } catch (_: Exception) {
-        false
-    }
-}
 
 private fun openRecentItemByType(
     context: Context,
@@ -554,244 +463,6 @@ private fun openRecentItemByType(
     }
 }
 
-private fun doCopyPendingToCurrentDir(
-    context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
-    displayUri: String,
-    pendingList: List<DocumentFileModel>,
-    rootUri: String?,
-    copyMoveLog: ((String) -> Unit)?,
-    runWithProgress: RunProgressBlock,
-    onSuccessAll: () -> Unit,
-    onRefreshDone: () -> Unit
-) {
-    val targetDirUri = normalizeContentUriString(displayUri)
-    copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_target, targetDirUri))
-    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        runWithProgress(context.getString(R.string.pending_list_action_copy), pendingList.size) { setProgress ->
-            val (ok, fail) = withContext(Dispatchers.IO) {
-                var o = 0
-                var f = 0
-                pendingList.forEachIndexed { index, model ->
-                    if (copyDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
-                    else f++
-                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                }
-                Pair(o, f)
-            }
-            copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_result, ok, fail))
-            if (fail == 0 && ok > 0) {
-                onSuccessAll()
-                Toast.makeText(context, context.getString(R.string.browser_copy_all_ok, ok), Toast.LENGTH_SHORT).show()
-            } else if (ok > 0) {
-                Toast.makeText(context, context.getString(R.string.browser_copy_partial, ok, fail), Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, context.getString(R.string.browser_copy_failed), Toast.LENGTH_SHORT).show()
-            }
-            onRefreshDone()
-        }
-    }
-}
-
-private fun doMovePendingToCurrentDir(
-    context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
-    displayUri: String,
-    pendingList: List<DocumentFileModel>,
-    rootUri: String?,
-    copyMoveLog: ((String) -> Unit)?,
-    runWithProgress: RunProgressBlock,
-    onSuccessAll: () -> Unit,
-    onRefreshDone: () -> Unit
-) {
-    val targetDirUri = normalizeContentUriString(displayUri)
-    copyMoveLog?.invoke(context.getString(R.string.browser_log_move_target, targetDirUri))
-    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        runWithProgress(context.getString(R.string.pending_list_action_move), pendingList.size) { setProgress ->
-            val (ok, fail) = withContext(Dispatchers.IO) {
-                var o = 0
-                var f = 0
-                pendingList.forEachIndexed { index, model ->
-                    if (moveDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
-                    else f++
-                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                }
-                Pair(o, f)
-            }
-            copyMoveLog?.invoke(context.getString(R.string.browser_log_move_result, ok, fail))
-            if (fail == 0 && ok > 0) {
-                onSuccessAll()
-                Toast.makeText(context, context.getString(R.string.browser_move_all_ok, ok), Toast.LENGTH_SHORT).show()
-            } else if (ok > 0) {
-                Toast.makeText(context, context.getString(R.string.browser_move_partial, ok, fail), Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, context.getString(R.string.browser_move_failed), Toast.LENGTH_SHORT).show()
-            }
-            onRefreshDone()
-        }
-    }
-}
-
-private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
-
-private data class SevenZSplitPendingRef(
-    val baseName: String,
-    val partIndex: Int
-)
-
-private data class PendingArchiveExtractTarget(
-    val model: DocumentFileModel
-)
-
-private fun parseSevenZSplitPendingRef(fileName: String): SevenZSplitPendingRef? {
-    val trimmed = fileName.trim()
-    val match = sevenZSplitPartRegex.matchEntire(trimmed) ?: return null
-    val baseName = match.groupValues[1]
-    val partIndex = match.groupValues[2].toIntOrNull() ?: return null
-    return SevenZSplitPendingRef(baseName = baseName, partIndex = partIndex)
-}
-
-private fun pendingUriParentKey(uri: Uri): String {
-    val raw = uri.toString()
-    return raw.substringBeforeLast('/', raw)
-}
-
-private fun buildPendingArchiveExtractTargets(pendingList: List<DocumentFileModel>): List<PendingArchiveExtractTarget> {
-    val archives = pendingList.filter { !it.isDirectory && isExtractableArchive(it.name) }
-    if (archives.isEmpty()) return emptyList()
-
-    val grouped = LinkedHashMap<String, MutableList<DocumentFileModel>>()
-    archives.forEach { item ->
-        val splitRef = parseSevenZSplitPendingRef(item.name)
-        val key = if (splitRef != null) {
-            "${pendingUriParentKey(item.uri)}|${splitRef.baseName.lowercase(Locale.ROOT)}"
-        } else {
-            item.uri.toString()
-        }
-        grouped.getOrPut(key) { mutableListOf() }.add(item)
-    }
-
-    return grouped.entries.map { (key, values) ->
-        val representative = values.minWithOrNull(
-            compareBy<DocumentFileModel> {
-                parseSevenZSplitPendingRef(it.name)?.partIndex ?: Int.MAX_VALUE
-            }.thenBy { it.name.lowercase(Locale.ROOT) }
-        ) ?: values.first()
-        PendingArchiveExtractTarget(model = representative)
-    }
-}
-
-private fun doExtractPendingArchivesToCurrentDir(
-    context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
-    displayUri: String,
-    pendingListSnapshot: List<DocumentFileModel>,
-    rootUri: String?,
-    runWithProgress: RunProgressBlock,
-    setCancelAction: (((() -> Unit)?) -> Unit)? = null,
-    onAllSuccess: () -> Unit,
-    onRefreshDone: () -> Unit
-) {
-    val extractTargets = buildPendingArchiveExtractTargets(pendingListSnapshot)
-    if (extractTargets.isEmpty()) {
-        Toast.makeText(context, context.getString(R.string.browser_no_extract_candidates), Toast.LENGTH_SHORT).show()
-        return
-    }
-
-    val targetDirUri = Uri.parse(normalizeContentUriString(displayUri))
-    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        val cancelFlag = OperationCancelFlag()
-        setCancelAction?.invoke { cancelFlag.requestCancel() }
-        try {
-            runWithProgress(context.getString(R.string.browser_op_extract), extractTargets.size) { setProgress ->
-                var successCount = 0
-                var failedCount = 0
-                val failedDetails = mutableListOf<String>()
-                val passwordRequiredNames = mutableListOf<String>()
-
-                extractTargets.forEachIndexed { index, target ->
-                    val result = withContext(Dispatchers.IO) {
-                        unzipToParent(
-                            context = context,
-                            zipUri = target.model.uri,
-                            parentDirUri = targetDirUri,
-                            treeUri = treeUri,
-                            archiveName = target.model.name,
-                            password = null,
-                            setProgress = { _, _ -> },
-                            shouldCancel = { cancelFlag.isCancelled() }
-                        )
-                    }
-                    when (result) {
-                        is UnzipResult.Success -> successCount++
-                        is UnzipResult.Cancelled -> {
-                            Toast.makeText(context, context.getString(R.string.browser_operation_cancelled), Toast.LENGTH_SHORT).show()
-                            onRefreshDone()
-                            return@runWithProgress
-                        }
-                        is UnzipResult.PasswordRequired,
-                        is UnzipResult.WrongPassword -> {
-                            failedCount++
-                            passwordRequiredNames += target.model.name
-                        }
-                        is UnzipResult.CorruptedFile -> {
-                            failedCount++
-                            failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_corrupt)}"
-                        }
-                        is UnzipResult.UnsupportedFormat -> {
-                            failedCount++
-                            failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_format)}"
-                        }
-                        is UnzipResult.IOError -> {
-                            failedCount++
-                            val msg = result.message ?: context.getString(R.string.common_unknown_error)
-                            failedDetails += "${target.model.name}: $msg"
-                        }
-                    }
-                    setProgress(index + 1)
-                }
-
-                if (passwordRequiredNames.isNotEmpty()) {
-                    failedDetails += context.getString(
-                        R.string.browser_extract_batch_password_required,
-                        passwordRequiredNames.joinToString(",")
-                    )
-                }
-
-                if (failedCount == 0 && successCount > 0) {
-                    onAllSuccess()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_batch_done, successCount),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else if (successCount > 0) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_batch_partial, successCount, failedCount),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    Toast.makeText(context, context.getString(R.string.browser_extract_batch_failed), Toast.LENGTH_SHORT).show()
-                }
-
-                if (failedDetails.isNotEmpty()) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_failed_detail, failedDetails.joinToString("; ")),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                onRefreshDone()
-            }
-        } finally {
-            setCancelAction?.invoke(null)
-        }
-    }
-}
 
 private suspend fun runWithUiProgress(
     setProgressState: (OperationProgress?) -> Unit,
@@ -809,7 +480,7 @@ private suspend fun runWithUiProgress(
     }
 }
 
-private fun dedupeAudioList(audioList: List<DocumentFileModel>): List<DocumentFileModel> {
+internal fun dedupeAudioList(audioList: List<DocumentFileModel>): List<DocumentFileModel> {
     val seen = LinkedHashSet<String>()
     return audioList.filter { seen.add(it.uri.toString()) }
 }
@@ -838,7 +509,7 @@ private fun notifyPlaybackPlaylistReloaded(
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
 }
 
-private suspend fun removePlaylistTrackAt(
+internal suspend fun removePlaylistTrackAt(
     context: Context,
     prefs: Preferences,
     pl: Playlist,
@@ -869,22 +540,7 @@ private suspend fun removePlaylistTrackAt(
     }
 }
 
-private suspend fun refreshDirectoryPlaylistFromSource(
-    context: Context,
-    pl: Playlist
-): Playlist? {
-    val sourceUri = pl.sourceUri ?: return null
-    val audioList = withContext(Dispatchers.IO) {
-        collectMusicFilesRecursively(context, sourceUri).map { it.model }
-    }
-    val deduped = dedupeAudioList(audioList)
-    return pl.copy(
-        uris = deduped.map { it.uri.toString() },
-        names = deduped.map { it.name }
-    )
-}
-
-private fun syncPlaybackAfterPlaylistUpdate(
+internal fun syncPlaybackAfterPlaylistUpdate(
     context: Context,
     playlistId: String,
     previousUris: List<String>,
@@ -909,78 +565,7 @@ private fun syncPlaybackAfterPlaylistUpdate(
     }
 }
 
-private suspend fun resortPlaylistTracks(
-    context: Context,
-    prefs: Preferences,
-    pl: Playlist,
-    field: PlaylistTrackSortField,
-    order: PlaylistSortOrder,
-    playbackState: PlaybackState?,
-    onStopPlayback: () -> Unit
-): Playlist {
-    val previousUris = pl.uris
-    val previousTrackIndex = playbackState?.takeIf { it.playlistId == pl.id }?.trackIndex ?: 0
-    val previousPositionMs = playbackState?.takeIf { it.playlistId == pl.id }?.positionMs ?: 0
-
-    var working = pl
-    if (pl.isDirectorySource) {
-        working = refreshDirectoryPlaylistFromSource(context, pl) ?: return pl
-    } else if (pl.uris.size < 2) {
-        return pl
-    }
-
-    val updated = if (working.uris.size >= 2) {
-        withContext(Dispatchers.IO) {
-            PlaylistTrackSorter.sortTracks(context, working, field, order)
-        }
-    } else {
-        working
-    }
-    prefs.updatePlaylist(updated)
-    syncPlaybackAfterPlaylistUpdate(
-        context = context,
-        playlistId = pl.id,
-        previousUris = previousUris,
-        previousTrackIndex = previousTrackIndex,
-        previousPositionMs = previousPositionMs,
-        updated = updated,
-        playbackState = playbackState,
-        onStopPlayback = onStopPlayback
-    )
-    return updated
-}
-
-private suspend fun createNewPlaybackPlaylistAndStart(
-    context: Context,
-    prefs: Preferences,
-    audioList: List<DocumentFileModel>,
-    playlistName: String? = null,
-    sourceType: String = Playlist.SOURCE_TYPE_MANUAL,
-    sourceUri: String? = null
-): Playlist? {
-    val uniqueAudioList = dedupeAudioList(audioList)
-    if (uniqueAudioList.isEmpty()) return null
-    val playlist = Playlist(
-        id = java.util.UUID.randomUUID().toString(),
-        name = playlistName ?: context.getString(
-            R.string.player_playlist_default_name,
-            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-        ),
-        uris = uniqueAudioList.map { it.uri.toString() },
-        names = uniqueAudioList.map { it.name },
-        sourceType = sourceType,
-        sourceUri = sourceUri
-    )
-    withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
-    val intent = Intent(context, PlaybackService::class.java).apply {
-        action = ACTION_PLAY
-        putExtra(EXTRA_PLAYLIST_ID, playlist.id)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    return playlist
-}
-
-private suspend fun createDirectoryPlaybackPlaylistAndStart(
+internal suspend fun createDirectoryPlaybackPlaylistAndStart(
     context: Context,
     prefs: Preferences,
     directoryUri: String,
@@ -1003,37 +588,6 @@ private suspend fun createDirectoryPlaybackPlaylistAndStart(
         sourceType = Playlist.SOURCE_TYPE_DIRECTORY,
         sourceUri = directoryUri
     )
-}
-
-private suspend fun appendToPlaybackPlaylistAndStart(
-    context: Context,
-    prefs: Preferences,
-    target: Playlist,
-    audioList: List<DocumentFileModel>
-): String? {
-    if (audioList.isEmpty()) return null
-    val result = withContext(Dispatchers.IO) {
-        prefs.appendTracksToPlaylist(
-            target.id,
-            audioList.map { it.uri.toString() },
-            audioList.map { it.name }
-        )
-    }
-    val intent = Intent(context, PlaybackService::class.java).apply {
-        action = ACTION_PLAY
-        putExtra(EXTRA_PLAYLIST_ID, target.id)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    return when {
-        result.appendedCount > 0 && result.skippedCount > 0 ->
-            context.getString(R.string.player_append_started_with_skips, result.appendedCount, target.displayName(context.getString(R.string.player_unnamed_playlist)), result.skippedCount)
-        result.appendedCount > 0 ->
-            context.getString(R.string.player_append_started, result.appendedCount, target.displayName(context.getString(R.string.player_unnamed_playlist)))
-        result.skippedCount > 0 ->
-            context.getString(R.string.player_already_exists_started, target.displayName(context.getString(R.string.player_unnamed_playlist)))
-        else ->
-            context.getString(R.string.player_started_playlist, target.displayName(context.getString(R.string.player_unnamed_playlist)))
-    }
 }
 
 @Composable
@@ -1197,51 +751,6 @@ private fun ScrollableMainTabBar(
     }
 }
 
-@Composable
-private fun MainTabContentHost(
-    activeMainTab: MainTab,
-    recentOpenItems: List<RecentOpenItem>,
-    onOpenRecentItem: (RecentOpenItem) -> Unit,
-    onDeleteRecentItem: (RecentOpenItem) -> Unit,
-    onClearRecentItems: () -> Unit,
-    directoryContent: @Composable () -> Unit,
-    ftpContent: @Composable () -> Unit,
-    localShareContent: @Composable () -> Unit,
-    familyNetworkContent: @Composable () -> Unit,
-    configContent: @Composable () -> Unit,
-    gitShareContent: @Composable () -> Unit,
-    gitProjectsContent: @Composable () -> Unit,
-    playerContent: @Composable () -> Unit,
-    bookNoteContent: @Composable () -> Unit,
-    quickNoteContent: @Composable () -> Unit,
-    quickCryptoContent: @Composable () -> Unit,
-    dictionaryContent: @Composable () -> Unit,
-    aboutContent: @Composable () -> Unit
-) {
-    when (activeMainTab) {
-        MainTab.DIRECTORY -> directoryContent()
-        MainTab.RECENT -> RecentTabRoute(
-            RecentTabRouteState(
-                items = recentOpenItems.take(30),
-                onOpenRecentItem = onOpenRecentItem,
-                onDeleteRecentItem = onDeleteRecentItem,
-                onClearRecentItems = onClearRecentItems
-            )
-        )
-        MainTab.FTP -> ftpContent()
-        MainTab.LOCAL_SHARE -> localShareContent()
-        MainTab.FAMILY_NETWORK -> familyNetworkContent()
-        MainTab.CONFIG -> configContent()
-        MainTab.GIT_SHARE -> gitShareContent()
-        MainTab.GIT_PROJECTS -> gitProjectsContent()
-        MainTab.PLAYER -> playerContent()
-        MainTab.BOOK_NOTE -> bookNoteContent()
-        MainTab.QUICK_NOTE -> quickNoteContent()
-        MainTab.QUICK_CRYPTO -> quickCryptoContent()
-        MainTab.DICTIONARY -> dictionaryContent()
-        MainTab.ABOUT -> aboutContent()
-    }
-}
 
 @Composable
 private fun fileItemSubtitle(model: DocumentFileModel): String {
@@ -1249,7 +758,7 @@ private fun fileItemSubtitle(model: DocumentFileModel): String {
     return if (model.displaySize.isNotEmpty()) "${model.displaySize}  $dateStr" else dateStr
 }
 
-private fun formatPlaybackTime(ms: Int): String {
+internal fun formatPlaybackTime(ms: Int): String {
     val totalSeconds = (ms.coerceAtLeast(0) / 1000)
     val hours = totalSeconds / 3600
     val minutes = (totalSeconds % 3600) / 60
@@ -1261,7 +770,7 @@ private fun formatPlaybackTime(ms: Int): String {
     }
 }
 
-private fun formatTrackMetadata(context: Context, metadata: TrackMetadata): String {
+internal fun formatTrackMetadata(context: Context, metadata: TrackMetadata): String {
     val parts = buildList {
         metadata.artist?.takeIf { it.isNotBlank() }?.let { add(context.getString(R.string.browser_metadata_artist, it)) }
         metadata.album?.takeIf { it.isNotBlank() }?.let { add(context.getString(R.string.browser_metadata_album, it)) }
@@ -1274,60 +783,25 @@ private fun formatTrackMetadata(context: Context, metadata: TrackMetadata): Stri
     return parts.joinToString(" · ")
 }
 
-private enum class PlayerTrackFilterField {
+internal enum class PlayerTrackFilterField {
     FILE_NAME,
     TITLE,
     ALBUM,
     ARTIST
 }
 
-private data class PlayerTrackEntry(
+internal data class PlayerTrackEntry(
     val originalIndex: Int,
     val uri: String,
     val name: String,
     val metadata: TrackMetadata?
 )
 
-private data class DuplicateSongGroup(
+internal data class DuplicateSongGroup(
     val key: String,
     val displayTitle: String,
     val entries: List<PlayerTrackEntry>
 )
-
-private data class PlaylistBulkRemoveResult(
-    val removedCount: Int,
-    val failedNames: List<String>,
-    val removedIndices: Set<Int>,
-    val updatedPlaylist: Playlist
-)
-
-private fun shiftIndexAfterRemovals(index: Int, removedAsc: List<Int>): Int? {
-    var removedBefore = 0
-    for (removed in removedAsc) {
-        if (removed == index) return null
-        if (removed < index) removedBefore++
-    }
-    return index - removedBefore
-}
-
-private fun updateDuplicateGroupsAfterRemoval(
-    groups: List<DuplicateSongGroup>,
-    removedIndices: Set<Int>
-): List<DuplicateSongGroup> {
-    if (removedIndices.isEmpty()) return groups
-    val removedAsc = removedIndices.sorted()
-    return groups.mapNotNull { group ->
-        val updatedEntries = group.entries.mapNotNull { entry ->
-            val newIndex = shiftIndexAfterRemovals(entry.originalIndex, removedAsc)
-            if (newIndex == null) null else entry.copy(originalIndex = newIndex)
-        }
-        if (updatedEntries.size < 2) {
-            null
-        } else {
-            group.copy(entries = updatedEntries.sortedBy { it.originalIndex })
-        }
-    }
-}
 
 private val duplicateTraditionalToSimplified: Transliterator? = runCatching {
     Transliterator.getInstance("Traditional-Simplified")
@@ -1359,12 +833,12 @@ private fun duplicateSongKeyFromTitle(title: String?): String {
     return title?.takeIf { it.isNotBlank() }?.let { normalizeDuplicateSongTitle(it, splitOnDash = false) }.orEmpty()
 }
 
-private fun duplicateSongKeyFromFileName(name: String): String {
+internal fun duplicateSongKeyFromFileName(name: String): String {
     val baseName = name.substringBeforeLast('.')
     return normalizeDuplicateSongTitle(baseName, splitOnDash = true)
 }
 
-private suspend fun findDuplicateSongGroups(
+internal suspend fun findDuplicateSongGroups(
     context: Context,
     playlist: Playlist,
     metadataCache: Map<String, TrackMetadata>
@@ -1402,76 +876,7 @@ private suspend fun findDuplicateSongGroups(
     )
 }
 
-private suspend fun removeTracksFromPlaylistByIndices(
-    context: Context,
-    prefs: Preferences,
-    playlist: Playlist,
-    removeIndices: Set<Int>,
-    playbackState: PlaybackState?,
-    onStopPlayback: () -> Unit
-): PlaylistBulkRemoveResult = withContext(Dispatchers.IO) {
-    val validIndices = removeIndices
-        .filter { it in playlist.uris.indices }
-        .sortedDescending()
-    if (validIndices.isEmpty()) {
-        return@withContext PlaylistBulkRemoveResult(
-            removedCount = 0,
-            failedNames = emptyList(),
-            removedIndices = emptySet(),
-            updatedPlaylist = playlist
-        )
-    }
-
-    val previousUris = playlist.uris
-    val previousTrackIndex = playbackState?.takeIf { it.playlistId == playlist.id }?.trackIndex ?: 0
-    val previousPositionMs = playbackState?.takeIf { it.playlistId == playlist.id }?.positionMs ?: 0
-
-    val uris = playlist.uris.toMutableList()
-    val names = playlist.names.toMutableList()
-    val failedNames = mutableListOf<String>()
-    val removedIndices = mutableSetOf<Int>()
-    var removedCount = 0
-
-    validIndices.forEach { index ->
-        if (playlist.isDirectorySource) {
-            val deleted = context.contentResolver.deleteDocument(Uri.parse(uris[index]))
-            if (!deleted) {
-                failedNames += names.getOrNull(index) ?: uris[index].substringAfterLast('/')
-                return@forEach
-            }
-        }
-        if (index in uris.indices) {
-            uris.removeAt(index)
-            names.removeAt(index)
-            removedIndices += index
-            removedCount++
-        }
-    }
-
-    val updated = playlist.copy(uris = uris, names = names)
-    if (removedCount > 0) {
-        prefs.updatePlaylist(updated)
-        syncPlaybackAfterPlaylistUpdate(
-            context = context,
-            playlistId = playlist.id,
-            previousUris = previousUris,
-            previousTrackIndex = previousTrackIndex,
-            previousPositionMs = previousPositionMs,
-            updated = updated,
-            playbackState = playbackState,
-            onStopPlayback = onStopPlayback
-        )
-    }
-
-    PlaylistBulkRemoveResult(
-        removedCount = removedCount,
-        failedNames = failedNames,
-        removedIndices = removedIndices,
-        updatedPlaylist = updated
-    )
-}
-
-private fun readTrackMetadata(context: Context, uriString: String): TrackMetadata {
+internal fun readTrackMetadata(context: Context, uriString: String): TrackMetadata {
     return runCatching {
         val uri = Uri.parse(uriString)
         MediaMetadataRetriever().use { retriever ->
@@ -1533,7 +938,7 @@ private data class LmExifPayload(
     val copyright: String
 )
 
-private data class EditableImageExifValidation(
+internal data class EditableImageExifValidation(
     val takenTimeError: String? = null,
     val artistError: String? = null,
     val descriptionError: String? = null,
@@ -1548,7 +953,7 @@ private data class EditableImageExifValidation(
             !copyrightError.isNullOrBlank()
 }
 
-private data class EditableAudioAnnotationValidation(
+internal data class EditableAudioAnnotationValidation(
     val titleError: String? = null,
     val artistError: String? = null,
     val albumError: String? = null
@@ -1609,7 +1014,7 @@ private fun formatSampleRate(raw: String?): String? {
     return "${hz} Hz"
 }
 
-private fun formatDurationMs(raw: String?): String? {
+internal fun formatDurationMs(raw: String?): String? {
     val ms = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
     if (ms < 0) return null
     return formatPlaybackTime(ms.toInt())
@@ -1769,7 +1174,7 @@ private fun isStrictValidExifDateTime(value: String): Boolean {
     return runCatching { parser.parse(normalized) != null }.getOrElse { false }
 }
 
-private fun validateEditableImageExifForm(context: Context, data: EditableImageExif): EditableImageExifValidation {
+internal fun validateEditableImageExifForm(context: Context, data: EditableImageExif): EditableImageExifValidation {
     val takenTimeError = if (!isStrictValidExifDateTime(data.takenTime)) {
         context.getString(R.string.browser_meta_taken_time_invalid)
     } else {
@@ -1795,7 +1200,7 @@ private fun validateEditableImageExifForm(context: Context, data: EditableImageE
     )
 }
 
-private fun validateEditableAudioAnnotationForm(context: Context, data: EditableAudioAnnotation): EditableAudioAnnotationValidation {
+internal fun validateEditableAudioAnnotationForm(context: Context, data: EditableAudioAnnotation): EditableAudioAnnotationValidation {
     fun lengthError(labelRes: Int, value: String): String? {
         val trimmed = value.trim()
         if (trimmed.length <= EDITABLE_EXIF_TEXT_MAX_LENGTH) return null
@@ -1859,63 +1264,7 @@ internal fun mergeEditableAudioAnnotationForBatch(current: EditableAudioAnnotati
 }
 
 
-private fun saveBatchEditableImageExif(
-    context: Context,
-    files: List<DocumentFileModel>,
-    patch: EditableImageExif
-): List<String> {
-    if (files.isEmpty()) return emptyList()
-    val errors = mutableListOf<String>()
-    for (file in files) {
-        val current = readEditableImageExif(context, file.uri)
-        val merged = mergeEditableImageExifForBatch(current, patch)
-        val error = saveEditableImageExif(context, file.uri, merged)
-        if (error != null) {
-            errors += "${file.name}: $error"
-        }
-    }
-    return errors
-}
-
-private fun saveBatchEditableAudioAnnotation(
-    context: Context,
-    files: List<DocumentFileModel>,
-    patch: EditableAudioAnnotation,
-    prefs: Preferences
-): List<String> {
-    if (files.isEmpty()) return emptyList()
-    val errors = mutableListOf<String>()
-    for (file in files) {
-        val current = readEditableAudioAnnotation(context, file.uri)
-        val merged = mergeEditableAudioAnnotationForBatch(current, patch)
-        val error = if (isMp3AudioFile(file.name, "")) {
-            saveEditableAudioAnnotationToMp3(context, file.uri, merged)
-        } else if (supportsJaudiotaggerWrite(file.name, "")) {
-            saveEditableAudioAnnotationWithJaudiotagger(context, file.uri, merged, file.name)
-        } else {
-            runCatching {
-                runBlocking {
-                    prefs.setAudioMetaAnnotation(
-                        file.uri.toString(),
-                        AudioMetaAnnotation(
-                            title = merged.title,
-                            artist = merged.artist,
-                            album = merged.album
-                        )
-                    )
-                }
-            }.exceptionOrNull()?.let { e ->
-                "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
-            }
-        }
-        if (error != null) {
-            errors += "${file.name}: $error"
-        }
-    }
-    return errors
-}
-
-private fun readEditableAudioAnnotation(context: Context, uri: Uri): EditableAudioAnnotation {
+internal fun readEditableAudioAnnotation(context: Context, uri: Uri): EditableAudioAnnotation {
     return runCatching {
         MediaMetadataRetriever().use { retriever ->
             retriever.setDataSource(context, uri)
@@ -1928,13 +1277,13 @@ private fun readEditableAudioAnnotation(context: Context, uri: Uri): EditableAud
     }.getOrElse { EditableAudioAnnotation() }
 }
 
-private fun isMp3AudioFile(fileName: String, mimeType: String): Boolean {
+internal fun isMp3AudioFile(fileName: String, mimeType: String): Boolean {
     val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
     val mt = mimeType.trim().lowercase(Locale.ROOT)
     return ext == "mp3" || mt == "audio/mpeg" || mt == "audio/mp3"
 }
 
-private fun supportsJaudiotaggerWrite(fileName: String, mimeType: String): Boolean {
+internal fun supportsJaudiotaggerWrite(fileName: String, mimeType: String): Boolean {
     val ext = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
     val mt = mimeType.trim().lowercase(Locale.ROOT)
     return when {
@@ -1944,7 +1293,7 @@ private fun supportsJaudiotaggerWrite(fileName: String, mimeType: String): Boole
     }
 }
 
-private fun saveEditableAudioAnnotationToMp3(
+internal fun saveEditableAudioAnnotationToMp3(
     context: Context,
     uri: Uri,
     data: EditableAudioAnnotation
@@ -2001,7 +1350,7 @@ private fun saveEditableAudioAnnotationToMp3(
     }
 }
 
-private fun saveEditableAudioAnnotationWithJaudiotagger(
+internal fun saveEditableAudioAnnotationWithJaudiotagger(
     context: Context,
     uri: Uri,
     data: EditableAudioAnnotation,
@@ -2241,7 +1590,7 @@ private fun writeLmExifPayload(exif: ExifInterface, data: EditableImageExif) {
     writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, softwareWithMarker, EXIF_TAG_XP_SOFTWARE)
 }
 
-private fun readEditableImageExif(context: Context, uri: Uri): EditableImageExif {
+internal fun readEditableImageExif(context: Context, uri: Uri): EditableImageExif {
     context.contentResolver.openInputStream(uri)?.use { input ->
         val exif = ExifInterface(input)
         val lmPayload = readLmExifPayload(exif)
@@ -2260,7 +1609,7 @@ private fun readEditableImageExif(context: Context, uri: Uri): EditableImageExif
     return EditableImageExif()
 }
 
-private fun saveEditableImageExif(
+internal fun saveEditableImageExif(
     context: Context,
     uri: Uri,
     data: EditableImageExif
@@ -2613,78 +1962,18 @@ private fun loadTypeSpecificMetadataRows(
     }
 }
 
-private fun trackFilterTarget(
-    field: PlayerTrackFilterField,
-    fileName: String,
-    metadata: TrackMetadata?
-): String {
-    return when (field) {
-        PlayerTrackFilterField.FILE_NAME -> fileName
-        PlayerTrackFilterField.TITLE -> metadata?.title.orEmpty()
-        PlayerTrackFilterField.ALBUM -> metadata?.album.orEmpty()
-        PlayerTrackFilterField.ARTIST -> metadata?.artist?.ifBlank { null }
-            ?: metadata?.albumArtist.orEmpty()
-    }
-}
-
-private data class PlaylistTrackTransfer(
+internal data class PlaylistTrackTransfer(
     val source: Playlist,
     val trackIndex: Int,
     val move: Boolean
 )
 
-@Composable
-private fun PlaybackBottomControlBar(
-    isPlaying: Boolean,
-    enabled: Boolean,
-    onPrev: () -> Unit,
-    onPlayPause: () -> Unit,
-    onNext: () -> Unit
-) {
-    val context = LocalContext.current
-    Surface(tonalElevation = 3.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            OutlinedButton(
-                onClick = onPrev,
-                enabled = enabled,
-                modifier = Modifier.height(52.dp)
-            ) {
-                Icon(Icons.Default.SkipPrevious, contentDescription = context.getString(R.string.player_prev_desc))
-            }
-            Button(
-                onClick = onPlayPause,
-                enabled = enabled,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(56.dp)
-            ) {
-                Icon(
-                    if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isPlaying) context.getString(R.string.player_pause_desc) else context.getString(R.string.player_play_desc),
-                    modifier = Modifier.size(24.dp)
-                )
-            }
-            OutlinedButton(
-                onClick = onNext,
-                enabled = enabled,
-                modifier = Modifier.height(52.dp)
-            ) {
-                Icon(Icons.Default.SkipNext, contentDescription = context.getString(R.string.player_next_desc))
-            }
-        }
-    }
-}
-
 internal fun normalizeContentUriString(s: String): String =
     com.kenny.localmanager.file.normalizeContentUriString(s)
 
-private fun fileExtensionKey(name: String): String? {
+private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
+
+internal fun fileExtensionKey(name: String): String? {
     val dotIndex = name.lastIndexOf('.')
     if (dotIndex <= 0 || dotIndex >= name.lastIndex) return null
     return name.substring(dotIndex + 1).trim().lowercase().ifBlank { null }
@@ -2861,11 +2150,10 @@ fun FileBrowserApp(
     val prefs = remember { Preferences(context) }
 
     // AppShell + DirectoryRoot state (long-lived while the app shell is active)
-    var rootUri by remember { mutableStateOf<String?>(null) }
+    // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
+    val browserTab = remember { BrowserTabState(context, prefs) }
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
-    var currentUri by remember { mutableStateOf<String?>(null) }
-    var refreshTrigger by remember { mutableStateOf(0) }
 
     // Transient viewer / editor routes (short-lived feature flows)
     var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
@@ -2881,14 +2169,7 @@ fun FileBrowserApp(
     // AppShell navigation + shared UI surfaces
     var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
     var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var pendingBatchDetails by remember { mutableStateOf<List<DocumentFileModel>?>(null) }
-    val fileBrowserBackStack = remember { mutableStateListOf<String>() }
-    val fileListLazyState = rememberLazyListState()
-
-    // Cross-tab preferences snapshots
-    var viewerPreviewBytes by remember { mutableStateOf(4096) }
     var saveCompletedToken by remember { mutableStateOf(0) }
-    var preferredExternalPackages by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
 
     // App shell commands / helpers
@@ -2901,9 +2182,6 @@ fun FileBrowserApp(
     // Startup behavior
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
-    var playerShortcutAutoplayPending by remember(initialLaunchTarget) {
-        mutableStateOf(launchShortcutTarget == MainTab.PLAYER)
-    }
 
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
@@ -2918,33 +2196,32 @@ fun FileBrowserApp(
     }
     val showUnlockGate = startupDecryptKeyEnabled && hasSecretKeyFile && !unlockedByStartup
 
+    var viewerPreviewBytes by remember { mutableStateOf(4096) }
     LaunchedEffect(prefs) {
         prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.externalOpenByExtension.collect { preferredExternalPackages = it }
     }
     LaunchedEffect(prefs) {
         prefs.recentOpenItems.collect { recentOpenItems = it }
     }
     LaunchedEffect(Unit) {
-        rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+        browserTab.restoreRoot()
+    }
+    LaunchedEffect(browserTab.rootUri, initialDirUri) {
+        browserTab.ensureCurrentUri(initialDirUri)
+    }
+    LaunchedEffect(prefs) {
+        prefs.filterVisible.collect { browserTab.filterVisible = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.hideDotFiles.collect { browserTab.hideDotFiles = it }
+    }
+    LaunchedEffect(prefs) {
+        prefs.externalOpenByExtension.collect { browserTab.preferredExternalPackages = it }
     }
     LaunchedEffect(prefs) {
         prefs.recentRootUris.collect { recentRootUris = it }
     }
-    LaunchedEffect(rootUri, initialDirUri) {
-        if (rootUri != null) {
-            val normalizedRoot = normalizeContentUriString(rootUri!!)
-            val target = initialDirUri?.let { normalizeContentUriString(it) } ?: normalizedRoot
-            if (currentUri == null) {
-                currentUri = target
-            } else if (!currentUri!!.startsWith(normalizedRoot)) {
-                currentUri = target
-            }
-        }
-    }
-    LaunchedEffect(rootUri) {
+    LaunchedEffect(browserTab.rootUri) {
         markdownViewerSessionCache.clear()
     }
     LaunchedEffect(initialFileUri?.value) {
@@ -3032,7 +2309,7 @@ fun FileBrowserApp(
     val archiveReader = rememberArchiveReaderWorkflow(context, scope)
 
     suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
-        val targetRoot = rootUri?.let { normalizeContentUriString(it) }
+        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
         if (targetRoot == null) {
             Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return false
@@ -3068,65 +2345,14 @@ fun FileBrowserApp(
         return ok
     }
 
-    suspend fun openDirectoryImageGallery(
-        currentItem: DocumentFileModel,
-        currentDirUri: String,
-        siblingImages: List<DocumentFileModel>
-    ) {
-        val normalizedImages = siblingImages
-            .filter { !it.isDirectory && isGalleryImageFile(it.name) }
-            .distinctBy { it.uri.toString() }
-        if (normalizedImages.isEmpty()) {
-            Toast.makeText(context, context.getString(R.string.browser_no_images_in_dir), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val initialIndex = normalizedImages.indexOfFirst { it.uri == currentItem.uri }
-        if (initialIndex < 0) {
-            Toast.makeText(context, context.getString(R.string.browser_image_position_failed, currentItem.name), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val galleryRoot = File(context.cacheDir, "pic_dir_gallery")
-        val galleryKey = currentDirUri.hashCode().toUInt().toString(16)
-        val cacheDir = File(galleryRoot, galleryKey)
-        val contentDir = File(cacheDir, "content")
-        withContext(Dispatchers.IO) {
-            if (cacheDir.exists()) {
-                cacheDir.deleteRecursively()
-            }
-            contentDir.mkdirs()
-            normalizedImages.forEachIndexed { index, model ->
-                val targetFile = File(contentDir, model.name)
-                val bytes = context.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException(context.getString(R.string.browser_image_read_failed, index + 1, model.name, model.uri))
-                targetFile.outputStream().use { it.write(bytes) }
-            }
-            File(cacheDir, ".last_index").writeText(initialIndex.toString())
-        }
-        val dirTitle = DocumentFile.fromTreeUri(context, Uri.parse(currentDirUri))?.name
-            ?: DocumentFile.fromSingleUri(context, Uri.parse(currentDirUri))?.name
-            ?: currentItem.name
-        archiveReader.openViewer(
-            PicZipViewState(
-                contentDir = contentDir,
-                imagePaths = normalizedImages.map { it.name },
-                zipFileName = dirTitle,
-                zipUri = currentItem.uri,
-                isEncrypted = false,
-                password = null,
-                initialIndex = initialIndex,
-                recordRecent = false,
-                cleanupCacheDir = cacheDir
-            )
-        )
-    }
 
     val quickNoteController = rememberQuickNoteTabController(
-        rootUri = rootUri,
+        rootUri = browserTab.rootUri,
         isActive = currentMainTab == MainTab.QUICK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
     val bookNoteController = rememberBookNoteTabController(
-        rootUri = rootUri,
+        rootUri = browserTab.rootUri,
         isActive = currentMainTab == MainTab.BOOK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
@@ -3134,8 +2360,8 @@ fun FileBrowserApp(
     // Config 域：配置导入 / 导出工作流（独立状态持有者，写盘后通过回调刷新目录）
     val configImportExportWorkflow = rememberConfigImportExportWorkflow(
         prefs = prefs,
-        rootUriProvider = { rootUri },
-        onConfigFileWritten = { refreshTrigger++ }
+        rootUriProvider = { browserTab.rootUri },
+        onConfigFileWritten = { browserTab.refresh() }
     )
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -3147,21 +2373,20 @@ fun FileBrowserApp(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             val normalized = normalizeContentUriString(uri.toString())
-            val previousRoot = rootUri?.let { normalizeContentUriString(it) }
+            val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
             scope.launch {
                 prefs.recordRecentRootSwitch(previousRoot, normalized)
                 prefs.setRootUri(normalized)
             }
-            fileBrowserBackStack.clear()
-            rootUri = normalized
+            browserTab.backStack.clear()
+            browserTab.changeRoot(normalized, refresh = false)
             initialDirUri = normalized
-            currentUri = normalized
         }
     }
 
-    LaunchedEffect(pendingSaveFileUri, rootUri) {
+    LaunchedEffect(pendingSaveFileUri, browserTab.rootUri) {
         val sourceUriStr = pendingSaveFileUri ?: return@LaunchedEffect
-        val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@LaunchedEffect
+        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) } ?: return@LaunchedEffect
         if (showOverwriteConfirm != null || saveInProgress) return@LaunchedEffect
         val ctx = context
         val sourceUri = Uri.parse(sourceUriStr)
@@ -3190,7 +2415,7 @@ fun FileBrowserApp(
             if (copied != null) {
                 val dir = normalizeContentUriString(targetRoot)
                 initialDirUri = dir
-                currentUri = dir
+                browserTab.navigateTo(dir)
                 saveCompletedToken++
                 Toast.makeText(ctx, ctx.getString(R.string.browser_saved_to_current_dir), Toast.LENGTH_SHORT).show()
             } else {
@@ -3201,7 +2426,7 @@ fun FileBrowserApp(
 
     @Composable
     fun MainTabsRootContent() {
-        val displayUri = currentUri ?: initialDirUri ?: rootUri!!
+        val displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!
         val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
 
         fun requestOpenQuickNoteTabFromDirectory() {
@@ -3209,18 +2434,12 @@ fun FileBrowserApp(
             quickNoteController.requestOpenWithCachedPassword(true)
         }
 
-        // DirectoryRoot domain state (kept across tab switches)
-        val pendingList = remember { mutableStateListOf<DocumentFileModel>() }
-        var showPendingList by remember { mutableStateOf(false) }
         var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
         // App-level transient dialogs / playback-target workflow
-        var showPendingDeleteConfirm by remember { mutableStateOf(false) }
-        var showPlaybackTargetDialog by remember { mutableStateOf(false) }
-        var pendingPlaybackAudioList by remember { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
         var showCacheManagementDialog by remember { mutableStateOf(false) }
         var showKeyManagementDialog by remember { mutableStateOf(false) }
-        LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) refreshTrigger++ }
+        LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) browserTab.refresh() }
         var lastBackPressTime by remember { mutableStateOf(0L) }
         fun finishCurrentActivity() {
             (context as? Activity)?.finish()
@@ -3267,24 +2486,14 @@ fun FileBrowserApp(
         var progressCancelAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
         // DirectoryRoot derived UI state
-        var currentDirPath by remember { mutableStateOf("") }
-        LaunchedEffect(displayUri, rootUri) {
-            currentDirPath = withContext(Dispatchers.IO) {
-                pathFromRoot(context, rootUri, displayUri)
-            }
-        }
         var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
-        LaunchedEffect(rootUri) {
-            cachedTrashUri = rootUri?.let { r ->
+        LaunchedEffect(browserTab.rootUri) {
+            cachedTrashUri = browserTab.rootUri?.let { r ->
                 withContext(Dispatchers.IO) {
                     val root = Uri.parse(normalizeContentUriString(r))
                     getTrashUriIfExists(context, root, root)
                 }
             }
-        }
-        var dirCache by remember { mutableStateOf<Map<String, CachedDir>>(emptyMap()) }
-        LaunchedEffect(rootUri) {
-            dirCache = emptyMap()
         }
 
         // Tab domain services
@@ -3293,8 +2502,7 @@ fun FileBrowserApp(
         val familyNetworkManager = remember { com.kenny.localmanager.family.FamilyNetworkManager(context) }
         // 网络服务域共享配置（FTP / WebUI / 家庭网络）：状态所有权在 NetworkServiceConfigState
         val networkServiceConfig = rememberNetworkServiceConfigState(prefs)
-        var filterVisible by remember { mutableStateOf(true) }
-        var showGitConfigDialog by remember { mutableStateOf(false) }
+            var showGitConfigDialog by remember { mutableStateOf(false) }
         var showPubkeyShareScreen by remember { mutableStateOf(false) }
         // Git 分享临时流程（目录文件共享到 Git 仓库）
         var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
@@ -3305,67 +2513,17 @@ fun FileBrowserApp(
         // Archive 操作向导域：解压 / 压缩向导（表单状态在 ArchiveOperationWorkflowState，执行编排留宿主）
         val archiveOps = rememberArchiveOperationWorkflow(context, scope)
 
-        // PlayerTab 域：播放状态与播放列表快照（由播放器 Tab 消费，目录根只读展示）
-        var playbackState by remember { mutableStateOf<PlaybackState?>(null) }
-        var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-        var playlistsLoaded by remember { mutableStateOf(false) }
-        var playerLastPlaylistId by remember { mutableStateOf<String?>(null) }
-        LaunchedEffect(Unit) {
-            PlaybackService.playbackState.collect { playbackState = it }
-        }
-        LaunchedEffect(prefs) {
-            prefs.playlists.collect {
-                playlists = it
-                playlistsLoaded = true
-            }
-        }
-        LaunchedEffect(prefs) {
-            prefs.playerLastPlaylistId.collect { playerLastPlaylistId = it }
-        }
-        LaunchedEffect(
-            playerShortcutAutoplayPending,
-            currentMainTab,
-            playbackState?.playlistId,
-            playbackState?.isPlaying,
-            playerLastPlaylistId,
-            playlistsLoaded,
-            playlists
-        ) {
-            if (!playerShortcutAutoplayPending) return@LaunchedEffect
-            if (currentMainTab != MainTab.PLAYER) return@LaunchedEffect
-            if (!context.hasPrivatePlaybackOutput()) {
-                playerShortcutAutoplayPending = false
-                return@LaunchedEffect
-            }
-            if (playbackState?.isPlaying == true) {
-                playerShortcutAutoplayPending = false
-                return@LaunchedEffect
-            }
-
-            val resumeIntent = when {
-                playbackState != null -> Intent(context, PlaybackService::class.java).setAction(ACTION_RESUME)
-                playerLastPlaylistId.isNullOrBlank() -> {
-                    playerShortcutAutoplayPending = false
-                    return@LaunchedEffect
-                }
-                !playlistsLoaded -> return@LaunchedEffect
-                playlists.none { it.id == playerLastPlaylistId } -> {
-                    playerShortcutAutoplayPending = false
-                    return@LaunchedEffect
-                }
-                else -> Intent(context, PlaybackService::class.java).apply {
-                    action = ACTION_PLAY
-                    putExtra(EXTRA_PLAYLIST_ID, playerLastPlaylistId)
-                }
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(resumeIntent)
-            } else {
-                context.startService(resumeIntent)
-            }
-            playerShortcutAutoplayPending = false
-        }
+        // PlayerTab 域：播放器 tab 功能对象（接口面：MainTabFeature + PlayerTabApi，实现不可见）
+        val playerTab = playerTabFeature(
+            context = context,
+            prefs = prefs,
+            scope = scope,
+            autoplayShortcut = launchShortcutTarget == MainTab.PLAYER,
+            onRequestExitApp = { requestExitApp() },
+            recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
+            onBatchFinished = { browserTab.finishPendingList() },
+            onOpenPlayerTab = { requestOpenPlayerTab() },
+        )
 
         LaunchedEffect(prefs) {
             val legacyExtra = prefs.familyNetworkExtraRoles.first()
@@ -3373,9 +2531,6 @@ fun FileBrowserApp(
                 familyNetworkManager.migrateUserRolesFromLegacyConfig(legacyExtra)
                 prefs.setFamilyNetworkExtraRoles(null)
             }
-        }
-        LaunchedEffect(prefs) {
-            prefs.filterVisible.collect { filterVisible = it }
         }
         LaunchedEffect(activeMainTab) {
             withContext(Dispatchers.IO) {
@@ -3427,24 +2582,20 @@ fun FileBrowserApp(
                 showKeyManagementDialog -> showKeyManagementDialog = false
                 showCacheManagementDialog -> showCacheManagementDialog = false
                 showGitConfigDialog -> showGitConfigDialog = false
-                showPendingDeleteConfirm -> showPendingDeleteConfirm = false
-                showPendingList -> showPendingList = false
+                browserTab.showPendingDeleteConfirm -> browserTab.showPendingDeleteConfirm = false
+                browserTab.showPendingList -> browserTab.showPendingList = false
                 familyNetworkManager.state.value.openBoardSession != null -> familyNetworkManager.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 archiveOps.request != null -> archiveOps.close()
                 archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
                 transientRoute is TransientRoute.PdfViewer -> transientRoute = null
-                fileBrowserBackStack.isNotEmpty() -> currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
+                browserTab.canGoBack -> browserTab.goBack()
                 else -> {
                     requestExitApp()
                 }
             }
         }
-        var hideDotFiles by remember { mutableStateOf(false) }
-        var startupDecryptKey by remember { mutableStateOf(false) }
-        LaunchedEffect(prefs) {
-            prefs.hideDotFiles.collect { hideDotFiles = it }
-        }
+            var startupDecryptKey by remember { mutableStateOf(false) }
         LaunchedEffect(prefs) {
             prefs.startupDecryptKey.collect { startupDecryptKey = it }
         }
@@ -3465,11 +2616,6 @@ fun FileBrowserApp(
             } finally {
                 progressCancelAction = null
             }
-        }
-
-        fun clearPendingPlaybackTargetState() {
-            pendingPlaybackAudioList = emptyList()
-            showPlaybackTargetDialog = false
         }
 
         fun compressArchiveItems(
@@ -3512,93 +2658,8 @@ fun FileBrowserApp(
             }
         }
 
-        suspend fun createNewPlaybackPlaylist(audioList: List<DocumentFileModel>) {
-            val playlist = createNewPlaybackPlaylistAndStart(context, prefs, audioList) ?: return
-            recordRecentOpen(
-                type = RECENT_TYPE_PLAYLIST,
-                key = playlist.id,
-                title = playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
-                playlistId = playlist.id
-            )
-            pendingList.clear()
-            requestOpenPlayerTab()
-            showPendingList = false
-            clearPendingPlaybackTargetState()
-            Toast.makeText(context, context.getString(R.string.browser_playlist_created, audioList.size), Toast.LENGTH_SHORT).show()
-        }
-
-        suspend fun appendToPlaybackPlaylist(target: Playlist, audioList: List<DocumentFileModel>) {
-            val msg = appendToPlaybackPlaylistAndStart(context, prefs, target, audioList)
-            if (msg == null) {
-                Toast.makeText(context, context.getString(R.string.browser_add_to_playlist_failed), Toast.LENGTH_SHORT).show()
-                return
-            }
-            recordRecentOpen(
-                type = RECENT_TYPE_PLAYLIST,
-                key = target.id,
-                title = target.name,
-                playlistId = target.id
-            )
-            pendingList.clear()
-            requestOpenPlayerTab()
-            showPendingList = false
-            clearPendingPlaybackTargetState()
-            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-        }
-
-        val doCopyHere: () -> Unit = {
-            doCopyPendingToCurrentDir(
-                context = context,
-                scope = scope,
-                displayUri = displayUri,
-                pendingList = pendingList.toList(),
-                rootUri = rootUri,
-                copyMoveLog = copyMoveLog,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-                onSuccessAll = {
-                    pendingList.clear()
-                    showPendingList = false
-                },
-                onRefreshDone = { refreshTrigger++ }
-            )
-        }
-        val doMoveHere: () -> Unit = {
-            doMovePendingToCurrentDir(
-                context = context,
-                scope = scope,
-                displayUri = displayUri,
-                pendingList = pendingList.toList(),
-                rootUri = rootUri,
-                copyMoveLog = copyMoveLog,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-                onSuccessAll = {
-                    pendingList.clear()
-                    showPendingList = false
-                },
-                onRefreshDone = { refreshTrigger++ }
-            )
-        }
-        val doExtractArchivesHere: () -> Unit = {
-            doExtractPendingArchivesToCurrentDir(
-                context = context,
-                scope = scope,
-                displayUri = displayUri,
-                pendingListSnapshot = pendingList.toList(),
-                rootUri = rootUri,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-                setCancelAction = { action -> progressCancelAction = action },
-                onAllSuccess = {
-                    pendingList.removeAll { !it.isDirectory && isExtractableArchive(it.name) }
-                    if (pendingList.isEmpty()) {
-                        showPendingList = false
-                    }
-                },
-                onRefreshDone = { refreshTrigger++ }
-            )
-        }
         val finishPendingListAndReturn: () -> Unit = {
-            pendingList.clear()
-            showPendingList = false
+            browserTab.finishPendingList()
         }
 
         // Archive 操作向导域：确认后的文件操作编排（进度、取消、目录刷新留宿主）
@@ -3607,7 +2668,7 @@ fun FileBrowserApp(
                 is ArchiveOperationRequest.Unzip -> {
                     val target = req.target
                     val parentDirUri = Uri.parse(displayUri)
-                    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                    val treeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                     scope.launch {
                         val cancelFlag = OperationCancelFlag()
                         progressCancelAction = { cancelFlag.requestCancel() }
@@ -3636,7 +2697,7 @@ fun FileBrowserApp(
                         is UnzipResult.Success -> {
                         archiveOps.close()
                         Toast.makeText(context, context.getString(R.string.browser_extract_complete), Toast.LENGTH_SHORT).show()
-                        refreshTrigger++
+                        browserTab.refresh()
                         }
                         is UnzipResult.Cancelled -> {
                         Toast.makeText(context, context.getString(R.string.browser_operation_cancelled), Toast.LENGTH_SHORT).show()
@@ -3675,7 +2736,7 @@ fun FileBrowserApp(
                     val pwd = archiveOps.password.ifBlank { null }?.toCharArray()
                     val itemUris = listOf(target.uri)
                     val parentDirUri = Uri.parse(displayUri)
-                    val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                    val treeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                     scope.launch {
                         val cancelFlag = OperationCancelFlag()
                         progressCancelAction = { cancelFlag.requestCancel() }
@@ -3698,7 +2759,7 @@ fun FileBrowserApp(
                         archiveOps.close()
                         if (ok) {
                         Toast.makeText(context, context.getString(R.string.browser_compress_complete), Toast.LENGTH_SHORT).show()
-                        refreshTrigger++
+                        browserTab.refresh()
                         } else {
                         Toast.makeText(
                         context,
@@ -3711,7 +2772,7 @@ fun FileBrowserApp(
                 is ArchiveOperationRequest.CompressPending -> {
                     val items = req.items
                     val currentDirUri = Uri.parse(displayUri)
-                    val rootTreeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                    val rootTreeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
                     when (req.fixedFormat) {
                         null -> {
                             val format = archiveOps.format
@@ -3743,7 +2804,7 @@ fun FileBrowserApp(
                         if (ok) {
                         finishPendingListAndReturn()
                         Toast.makeText(context, context.getString(R.string.browser_compress_done, generatedPendingArchiveName), Toast.LENGTH_SHORT).show()
-                        refreshTrigger++
+                        browserTab.refresh()
                         } else {
                         Toast.makeText(
                         context,
@@ -3786,7 +2847,7 @@ fun FileBrowserApp(
                         if (ok) {
                         finishPendingListAndReturn()
                         Toast.makeText(context, context.getString(R.string.browser_compress_done, zipName), Toast.LENGTH_SHORT).show()
-                        refreshTrigger++
+                        browserTab.refresh()
                         } else {
                         Toast.makeText(
                         context,
@@ -3839,10 +2900,9 @@ fun FileBrowserApp(
                         progressCancelAction = null
                         archiveOps.close()
                         if (ok) {
-                        pendingList.clear()
-                        showPendingList = false
+                        browserTab.finishPendingList()
                         Toast.makeText(context, context.getString(R.string.browser_compress_done, sevenZName), Toast.LENGTH_SHORT).show()
-                        refreshTrigger++
+                        browserTab.refresh()
                         } else {
                         val message = when {
                         cancelFlag.isCancelled() -> context.getString(R.string.browser_operation_cancelled)
@@ -3863,7 +2923,7 @@ fun FileBrowserApp(
 
 
 
-        val ftpRootUri = rootUri
+        val ftpRootUri = browserTab.rootUri
         Column(Modifier.fillMaxSize()) {
             if (crypto.pubEncryptInProgress || saveInProgress) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -3871,14 +2931,51 @@ fun FileBrowserApp(
             }
             progressOp?.let { OperationProgressDialog(it, progressCancelAction) }
             Box(Modifier.weight(1f)) {
+        val browserTabHostDependencies = BrowserTabHostDependencies(
+            scope = scope,
+            archiveReader = archiveReader,
+            archiveOps = archiveOps,
+            crypto = crypto,
+            configImportExportWorkflow = configImportExportWorkflow,
+            markdownViewerSessionCache = markdownViewerSessionCache,
+            playbackState = playerTab.playbackState,
+            initialDirUri = initialDirUri,
+            cachedTrashUri = cachedTrashUri,
+            finishPendingListAndReturn = finishPendingListAndReturn,
+            setTransientRoute = { transientRoute = it },
+            recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
+            onChangeRoot = { showRootSwitchDialog = true },
+            onShowFileDetail = { showFileDetail = it },
+            onQuickMask = { model ->
+                quickMaskOp = model
+                quickObfuscatePassword = ""
+                quickObfuscatePasswordConfirm = ""
+            },
+            onShareToGit = { model -> shareFileToGitTarget = model },
+            onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
+            onBatchMask = { list -> batchMaskOp = list },
+            onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
+            onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
+            requestOpenPlayerTab = { requestOpenPlayerTab() },
+            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            onSetProgressCancel = { action -> progressCancelAction = action },
+        )
                 MainTabContentHost(
                     activeMainTab = activeMainTab,
-                    recentOpenItems = recentOpenItems,
-                    onOpenRecentItem = { item ->
+                    features = listOf(
+            mainTabFeature(
+                MainTab.DIRECTORY,
+                { BrowserTabHost(state = browserTab, deps = browserTabHostDependencies) }
+            ),
+            mainTabFeature(MainTab.RECENT) {
+                RecentTabRoute(
+                    RecentTabRouteState(
+                        items = recentOpenItems.take(30),
+                        onOpenRecentItem = { item ->
                         openRecentItemByType(
                             context = context,
                             item = item,
-                            currentPlaybackState = playbackState,
+                            currentPlaybackState = playerTab.playbackState,
                             recordRecentOpen = { type, key, title, uri, playlistId ->
                                 recordRecentOpen(
                                     type = type,
@@ -3904,247 +3001,22 @@ fun FileBrowserApp(
                             onPdfTarget = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) }
                         )
                     },
-                    onDeleteRecentItem = { item ->
+                        onDeleteRecentItem = { item ->
                         scope.launch {
                             prefs.removeRecentOpenItem(item.type, item.key)
                         }
                     },
-                    onClearRecentItems = {
+                        onClearRecentItems = {
                         scope.launch {
                             prefs.clearRecentOpenItems()
                         }
-                    },
-                    directoryContent = {
-                        DirectoryTabRoute(
-                            DirectoryTabRouteState(
-                                modifier = Modifier.fillMaxSize(),
-                                currentUri = displayUri,
-                                refreshTrigger = refreshTrigger,
-                                dirCache = dirCache,
-                                onCacheDir = { uri, items -> dirCache = dirCache + (uri to CachedDir(items)) },
-                                pendingList = pendingList,
-                                rootUri = rootUri,
-                                listState = fileListLazyState,
-                                onNavigate = { uri ->
-                                    fileBrowserBackStack.add(displayUri)
-                                    currentUri = normalizeContentUriString(uri)
-                                },
-                                onBack = {
-                                    if (fileBrowserBackStack.isNotEmpty()) {
-                                        currentUri = fileBrowserBackStack.removeAt(fileBrowserBackStack.lastIndex)
-                                    }
-                                },
-                                canGoBack = fileBrowserBackStack.isNotEmpty(),
-                                onEmptyTrash = rootUri?.let { r ->
-                                    {
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
-                                                    refreshTrigger++
-                                                } else {
-                                                    Toast.makeText(context, context.getString(R.string.browser_empty_trash_failed), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                onChangeRoot = { showRootSwitchDialog = true },
-                                onRestoreFromTrash = rootUri?.let { r ->
-                                    { model ->
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress(context.getString(R.string.context_restore), null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, context.getString(R.string.browser_restored_to_root), Toast.LENGTH_SHORT).show()
-                                                    refreshTrigger++
-                                                } else {
-                                                    Toast.makeText(context, context.getString(R.string.browser_restore_failed), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
-                                filterVisible = filterVisible,
-                                hideDotFiles = hideDotFiles,
-                                isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
-                                preferredExternalPackages = preferredExternalPackages,
-                                onOpenFile = { uri, name, _ ->
-                                    transientRoute = TransientRoute.Viewer(uri, name, false)
-                                },
-                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice, forcedMimeType ->
-                                    val opened = launchExternalOpen(context, uri, packageName, name, forcedMimeType)
-                                    if (opened) {
-                                        recordRecentOpen(
-                                            type = RECENT_TYPE_EXTERNAL_OPEN,
-                                            key = uri,
-                                            title = name,
-                                            uri = uri
-                                        )
-                                        if (rememberChoice) {
-                                            val extension = fileExtensionKey(name)
-                                            if (extension != null && !packageName.isNullOrBlank()) {
-                                                scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
-                                            }
-                                        }
-                                    } else {
-                                        val extension = fileExtensionKey(name)
-                                        if (!packageName.isNullOrBlank() && extension != null) {
-                                            scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                            Toast.makeText(context, context.getString(R.string.browser_external_app_unavailable), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    opened
-                                },
-                                onClearExternalOpenPreference = { name ->
-                                    val extension = fileExtensionKey(name)
-                                    if (extension != null) {
-                                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
-                                    }
-                                },
-                                onOpenMarkdownView = { uri, name, encrypted ->
-                                    transientRoute = TransientRoute.MarkdownViewer(uri, name, encrypted)
-                                },
-                                onAddToPendingList = { item -> pendingList.add(item) },
-                                onRemoveFromPendingList = { item -> pendingList.remove(item) },
-                                onCopyPendingToCurrentDir = doCopyHere,
-                                onMovePendingToCurrentDir = doMoveHere,
-                                onShowPendingList = { show -> showPendingList = show },
-                                onRefresh = { refreshTrigger++ },
-                                onCreateQuickNote = {
-                                    requestOpenQuickNoteTabFromDirectory()
-                                },
-                                onCreateMusicPlaylist = { uri, name ->
-                                    scope.launch {
-                                        val playlist = withContext(Dispatchers.IO) {
-                                            createDirectoryPlaybackPlaylistAndStart(context, prefs, uri, name)
-                                        }
-                                        if (playlist == null) {
-                                            Toast.makeText(context, context.getString(R.string.browser_no_music_in_dir), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            recordRecentOpen(
-                                                type = RECENT_TYPE_PLAYLIST,
-                                                key = playlist.id,
-                                                title = playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
-                                                playlistId = playlist.id
-                                            )
-                                            requestOpenPlayerTab()
-                                            Toast.makeText(context, context.getString(R.string.browser_playlist_from_dir_started), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                onRequestGpgDecrypt = { fileModel, dirUri ->
-                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
-                                },
-                                onRequestGpgEncrypt = { fileModel, dirUri ->
-                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
-                                },
-                                onRequestQuickMask = { model ->
-                                    quickMaskOp = model
-                                    quickObfuscatePassword = ""
-                                    quickObfuscatePasswordConfirm = ""
-                                },
-                                onConfirmDelete = { model, deletePermanently ->
-                                    scope.launch {
-                                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
-                                        runWithProgress(label, null) { _ ->
-                                            val ok = withContext(Dispatchers.IO) {
-                                                if (deletePermanently) {
-                                                    context.contentResolver.deleteDocument(model.uri)
-                                                } else {
-                                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
-                                                    moveToTrash(context, model.uri, root, root)
-                                                }
-                                            }
-                                            if (ok) {
-                                                Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted) else context.getString(R.string.browser_moved_to_trash), Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(context, context.getString(R.string.browser_operation_failed), Toast.LENGTH_SHORT).show()
-                                            }
-                                            refreshTrigger++
-                                        }
-                                    }
-                                },
-                                onShareFileToGit = { model ->
-                                    shareFileToGitTarget = model
-                                },
-                                onForwardToBulletin = { items ->
-                                    if (items.isEmpty()) return@DirectoryTabRouteState
-                                    bulletinForwardPayload = BulletinForwardPayload.Files(items)
-                                },
-                                onUnzipRequest = { archiveOps.open(ArchiveOperationRequest.Unzip(it)) },
-                                onRequestMdZipView = { archiveReader.open(ArchiveReaderKind.MD_ZIP, it) },
-                                onRequestHtmlView = {
-                                    transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name)
-                                },
-                                onRequestHtmlZipView = { archiveReader.open(ArchiveReaderKind.HTML_ZIP, it) },
-                                onRequestOpenUrl = { url ->
-                                    transientRoute = htmlViewerRouteFromUrl(url)
-                                },
-                                onRequestLlmZipView = { archiveReader.open(ArchiveReaderKind.LLM_ZIP, it) },
-                                onRequestEpubView = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
-                                onRequestTxtView = { archiveReader.open(ArchiveReaderKind.TXT, it) },
-                                onRequestLlmView = { archiveReader.open(ArchiveReaderKind.LLM, it) },
-                                onRequestPicZipView = { archiveReader.open(ArchiveReaderKind.PIC_ZIP, it) },
-                                onRequestVidZipView = { archiveReader.open(ArchiveReaderKind.VID_ZIP, it) },
-                                onRequestDirectoryImageView = { item, dirUri, siblings ->
-                                    scope.launch {
-                                        runCatching {
-                                            openDirectoryImageGallery(item, dirUri, siblings)
-                                        }.onFailure { error ->
-                                            Toast.makeText(
-                                                context,
-                                                context.getString(R.string.browser_open_dir_images_failed, error.message ?: error.javaClass.simpleName),
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
-                                },
-                                onRequestPdfView = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) },
-                                onCompressArchiveRequest = { archiveOps.open(ArchiveOperationRequest.CompressFile(it)) },
-                                onRequestPassProtect = { model -> crypto.open(CryptoRequest.PassProtect(model)) },
-                                onRequestPassView = { model -> crypto.open(CryptoRequest.PassView(model)) },
-                                onRequestPassEdit = { model, dirUri -> crypto.open(CryptoRequest.PassEdit(model, dirUri)) },
-                                onRequestImportConfig = { model ->
-                                    scope.launch {
-                                        val jsonString = withContext(Dispatchers.IO) {
-                                            try {
-                                                context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
-                                            } catch (_: Exception) {
-                                                ""
-                                            }
-                                        }
-                                        configImportExportWorkflow.startImportFromJson(jsonString)
-                                    }
-                                },
-                                onRequestImportStarDict = { model ->
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            importStarDict(context, model.uri, model.name)
-                                        }
-                                        result.onSuccess {
-                                            val message = if (it.evicted != null) {
-                                                context.getString(R.string.browser_dict_imported_evicted, it.imported.name, it.imported.wordCount, it.evicted.name)
-                                            } else {
-                                                context.getString(R.string.browser_dict_imported, it.imported.name, it.imported.wordCount)
-                                            }
-                                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                        }.onFailure {
-                                            Toast.makeText(context, context.getString(R.string.browser_dict_import_failed, it.message ?: context.getString(R.string.common_unknown_error)), Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                },
-                                playbackState = playbackState,
-                                onOpenPlaybackScreen = { requestOpenPlayerTab() }
-                            )
-                        )
-                    },
-                    ftpContent = {
+                    }
+                    )
+                )
+            },
+            mainTabFeature(
+                MainTab.FTP,
+                {
                         FtpTabRoute(
                             FtpTabRouteState(
                                 rootUri = ftpRootUri,
@@ -4156,8 +3028,11 @@ fun FileBrowserApp(
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
-                    },
-                    localShareContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.LOCAL_SHARE,
+                {
                         WebUiTabRoute(
                             WebUiTabRouteState(
                                 rootUri = ftpRootUri,
@@ -4169,8 +3044,11 @@ fun FileBrowserApp(
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
-                    },
-                    familyNetworkContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.FAMILY_NETWORK,
+                {
                         FamilyNetworkScreen(
                             manager = familyNetworkManager,
                             networkPassword = networkServiceConfig.ftpPassword,
@@ -4179,17 +3057,20 @@ fun FileBrowserApp(
                             familyNetworkAvatarId = networkServiceConfig.familyNetworkAvatarId,
                             familyNetworkHostName = networkServiceConfig.familyNetworkHostName,
                             timeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
-                            rootUri = rootUri ?: initialDirUri,
-                            hideDotFiles = hideDotFiles,
+                            rootUri = browserTab.rootUri ?: initialDirUri,
+                            hideDotFiles = browserTab.hideDotFiles,
                             onDismiss = { requestExitApp() }
                         )
-                    },
-                    configContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.CONFIG,
+                {
                         ConfigTabRoute(
                             ConfigTabRouteState(
-                                filterVisible = filterVisible,
+                                filterVisible = browserTab.filterVisible,
                                 onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
-                                hideDotFiles = hideDotFiles,
+                                hideDotFiles = browserTab.hideDotFiles,
                                 onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
                                 startupDecryptKey = startupDecryptKey,
                                 onStartupDecryptKeyChange = { enabled ->
@@ -4232,153 +3113,73 @@ fun FileBrowserApp(
                                 }
                             )
                         )
-                    },
-                    gitShareContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.GIT_SHARE,
+                {
                         GitShareTabRoute(
                             GitShareTabRouteState(
                                 prefs = prefs,
-                                rootUri = rootUri,
+                                rootUri = browserTab.rootUri,
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
-                    },
-                    gitProjectsContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.GIT_PROJECTS,
+                {
                         GitProjectsTabRoute(
                             GitProjectsTabRouteState(
                                 prefs = prefs,
-                                rootUri = rootUri
+                                rootUri = browserTab.rootUri
                             )
                         )
-                    },
-                    playerContent = {
-                        PlayerTabRoute(
-                            PlayerTabRouteState(
-                                context = context,
-                                prefs = prefs,
-                                playbackState = playbackState,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        )
-                    },
-                    bookNoteContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.BOOK_NOTE,
+                {
                         BookNoteTabRoute(controller = bookNoteController)
-                    },
-                    quickNoteContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.QUICK_NOTE,
+                {
                         QuickNoteTabRoute(prefs = prefs, controller = quickNoteController)
-                    },
-                    quickCryptoContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.QUICK_CRYPTO,
+                {
                         QuickCryptoTabRoute()
-                    },
-                    dictionaryContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.DICTIONARY,
+                {
                         DictionaryTabRoute(
                             DictionaryTabRouteState(
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )
-                    },
-                    aboutContent = {
+                    }
+            ),
+            mainTabFeature(
+                MainTab.ABOUT,
+                {
                         AboutTabRoute()
                     }
+            ),
+            playerTab
+                    )
                 )
-            }
+            
 
             ScrollableMainTabBar(
                 activeMainTab = activeMainTab,
                 onSwitchMainTab = { requestOpenMainTab(it) }
-            )
-        }
-        if (showPendingList) {
-            PendingListScreen(
-                pendingList = pendingList,
-                currentDirPath = currentDirPath,
-                rootUri = rootUri,
-                onShowFileDetails = { file -> showFileDetail = file },
-                onShowBatchDetails = { pendingBatchDetails = pendingList.toList().takeIf { pendingBatchMetadataKind(it) != null } },
-                onRemove = { pendingList.remove(it) },
-                onCopyHere = doCopyHere,
-                onMoveHere = doMoveHere,
-                onExtractArchivesHere = doExtractArchivesHere,
-                onRequestDelete = { showPendingDeleteConfirm = true },
-                onRequestForwardToBulletin = {
-                    if (pendingList.isEmpty()) {
-                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
-                    } else {
-                        bulletinForwardPayload = BulletinForwardPayload.Files(pendingList.toList())
-                    }
-                },
-                onRequestBatchMask = {
-                    val list = pendingList.filter { !it.isDirectory }
-                    if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_mask_candidates), Toast.LENGTH_SHORT).show()
-                    else batchMaskOp = list
-                },
-                onRequestBatchGpgEncrypt = {
-                    if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
-                        Toast.makeText(context, context.getString(R.string.browser_batch_encrypt_has_gpg), Toast.LENGTH_SHORT).show()
-                    } else {
-                        val list = pendingList.filter { !it.isDirectory }
-                        if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_encrypt_candidates), Toast.LENGTH_SHORT).show()
-                        else {
-                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchEncrypt(list, displayUri)))
-                        }
-                    }
-                },
-                onRequestBatchGpgDecrypt = {
-                    if (pendingList.any { !it.name.endsWith(".gpg", ignoreCase = true) }) {
-                        Toast.makeText(context, context.getString(R.string.browser_batch_decrypt_has_non_gpg), Toast.LENGTH_SHORT).show()
-                    } else {
-                        val list = pendingList.filter { !it.isDirectory }
-                        if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_decrypt_candidates), Toast.LENGTH_SHORT).show()
-                        else {
-                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchDecrypt(list, displayUri)))
-                        }
-                    }
-                },
-                onRequestCompressArchive = {
-                    if (pendingList.isEmpty()) {
-                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
-                    } else {
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), null, ""))
-                    }
-                },
-                onRequestCompressToZip = {
-                    if (pendingList.isEmpty()) {
-                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
-                    } else {
-                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.ZIP, "archive_$ts.zip"))
-                    }
-                },
-                onRequestCompressTo7z = {
-                    if (pendingList.isEmpty()) {
-                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
-                    } else {
-                        val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.SEVEN_Z, "archive_$ts.7z"))
-                    }
-                },
-                onClearFilteredList = { toRemove ->
-                    val snapshot = toRemove.toList()
-                    pendingList.removeAll(snapshot)
-                },
-                onAddToPlayback = { audioList ->
-                    if (audioList.isEmpty()) return@PendingListScreen
-                    pendingPlaybackAudioList = audioList
-                    if (playlists.isEmpty()) {
-                        scope.launch { createNewPlaybackPlaylist(audioList) }
-                    } else {
-                        showPlaybackTargetDialog = true
-                    }
-                },
-                onDismiss = { showPendingList = false }
-            )
-        }
-        pendingBatchDetails?.let { files ->
-            BatchPendingMetadataDialog(
-                files = files,
-                context = context,
-                prefs = prefs,
-                onDismiss = { pendingBatchDetails = null },
-                onSaved = { pendingBatchDetails = null }
             )
         }
         bulletinForwardPayload?.let { payload ->
@@ -4391,89 +3192,6 @@ fun FileBrowserApp(
                 onComplete = {
                     finishPendingListAndReturn()
                     bulletinForwardPayload = null
-                }
-            )
-        }
-        if (showPlaybackTargetDialog && pendingPlaybackAudioList.isNotEmpty()) {
-            AlertDialog(
-                onDismissRequest = { clearPendingPlaybackTargetState() },
-                title = { Text(context.getString(R.string.player_add_to_playback_title)) },
-                text = {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        Text(
-                            context.getString(R.string.player_add_to_playback_prompt, pendingPlaybackAudioList.size),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        val manualPlaylists = playlists.filterNot { it.isDirectorySource }
-                        manualPlaylists.forEach { playlist ->
-                            OutlinedButton(
-                                onClick = {
-                                    scope.launch { appendToPlaybackPlaylist(playlist, pendingPlaybackAudioList) }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(Modifier.fillMaxWidth()) {
-                                    Text(playlist.displayName(), color = MaterialTheme.colorScheme.onSurface)
-                                    Text(
-                                        context.getString(R.string.player_track_count, playlist.trackCount),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                        }
-                        if (manualPlaylists.isEmpty()) {
-                            Text(
-                                context.getString(R.string.browser_no_normal_playlist_target),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        scope.launch { createNewPlaybackPlaylist(pendingPlaybackAudioList) }
-                    }) { Text(context.getString(R.string.player_new_list)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { clearPendingPlaybackTargetState() }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
-            val toDelete = pendingList.toList()
-            PendingDeleteConfirmDialog(
-                items = toDelete,
-                hasRoot = rootUri != null,
-                onDismiss = { showPendingDeleteConfirm = false },
-                onConfirm = { deletePermanently ->
-                    scope.launch {
-                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
-                        val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        runWithProgress(label, toDelete.size) { setProgress ->
-                            withContext(Dispatchers.IO) {
-                                toDelete.forEachIndexed { index, model ->
-                                    if (deletePermanently) {
-                                        context.contentResolver.deleteDocument(model.uri)
-                                    } else {
-                                        if (root != null) moveToTrash(context, model.uri, root, root)
-                                    }
-                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                }
-                            }
-                        }
-                        refreshTrigger++
-                        showPendingDeleteConfirm = false
-                        finishPendingListAndReturn()
-                        Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted_count, toDelete.size) else context.getString(R.string.browser_moved_to_trash_count, toDelete.size), Toast.LENGTH_SHORT).show()
-                    }
                 }
             )
         }
@@ -4497,17 +3215,15 @@ fun FileBrowserApp(
                                 OutlinedButton(
                                     onClick = {
                                         val normalized = normalizeContentUriString(recentUri)
-                                        val previousRoot = rootUri?.let { normalizeContentUriString(it) }
+                                        val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
                                         showRootSwitchDialog = false
                                         if (previousRoot == normalized) return@OutlinedButton
                                         scope.launch {
                                             prefs.recordRecentRootSwitch(previousRoot, normalized)
                                             prefs.setRootUri(normalized)
                                         }
-                                        rootUri = normalized
+                                        browserTab.changeRoot(normalized)
                                         initialDirUri = normalized
-                                        currentUri = normalized
-                                        refreshTrigger++
                                     },
                                     modifier = Modifier.fillMaxWidth()
                                 ) {
@@ -4524,7 +3240,7 @@ fun FileBrowserApp(
                 confirmButton = {
                     Button(onClick = {
                         showRootSwitchDialog = false
-                        val r = rootUri
+                        val r = browserTab.rootUri
                         if (r == null) {
                             treeLauncher.launch(null)
                             return@Button
@@ -4555,10 +3271,10 @@ fun FileBrowserApp(
         if (showGitConfigDialog) {
             GitConfigDialog(
                 prefs = prefs,
-                rootUri = rootUri?.let { normalizeContentUriString(it) },
+                rootUri = browserTab.rootUri?.let { normalizeContentUriString(it) },
                 onDismiss = {
                     showGitConfigDialog = false
-                    refreshTrigger++
+                    browserTab.refresh()
                 }
             )
         }
@@ -4566,7 +3282,7 @@ fun FileBrowserApp(
             KeyManagementDialog(
                 context = context,
                 onDismiss = { showKeyManagementDialog = false },
-                onKeysChanged = { refreshTrigger++ },
+                onKeysChanged = { browserTab.refresh() },
                 onOpenPubkeyShare = {
                     showKeyManagementDialog = false
                     showPubkeyShareScreen = true
@@ -4576,10 +3292,10 @@ fun FileBrowserApp(
         if (showPubkeyShareScreen) {
             PubkeyShareScreen(
                 prefs = prefs,
-                rootUri = rootUri?.let { normalizeContentUriString(it) },
+                rootUri = browserTab.rootUri?.let { normalizeContentUriString(it) },
                 onDismiss = {
                     showPubkeyShareScreen = false
-                    refreshTrigger++
+                    browserTab.refresh()
                 }
             )
         }
@@ -4593,7 +3309,7 @@ fun FileBrowserApp(
                     TextButton(onClick = {
                         val target = model
                         shareFileToGitTarget = null
-                        val r = rootUri?.let { normalizeContentUriString(it) }
+                        val r = browserTab.rootUri?.let { normalizeContentUriString(it) }
                         if (r == null) {
                             Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
                             return@TextButton
@@ -4719,7 +3435,7 @@ fun FileBrowserApp(
                         quickObfuscatePasswordConfirm = ""
                         if (ok) {
                             Toast.makeText(context, context.getString(R.string.browser_mask_done, model.name), Toast.LENGTH_SHORT).show()
-                            refreshTrigger++
+                            browserTab.refresh()
                         } else {
                             Toast.makeText(context, context.getString(R.string.browser_mask_failed, model.name), Toast.LENGTH_SHORT).show()
                         }
@@ -4758,7 +3474,7 @@ fun FileBrowserApp(
                         batchObfuscatePasswordConfirm = ""
                         Toast.makeText(context, context.getString(R.string.browser_masked_count, list.size), Toast.LENGTH_SHORT).show()
                         finishPendingListAndReturn()
-                        refreshTrigger++
+                        browserTab.refresh()
                     }
                 },
                 onDismiss = {
@@ -4772,10 +3488,10 @@ fun FileBrowserApp(
         CryptoDialogs(
             workflow = crypto,
             scope = scope,
-            rootUri = rootUri,
+            rootUri = browserTab.rootUri,
             currentDirUri = displayUri,
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            onRefresh = { refreshTrigger++ },
+            onRefresh = { browserTab.refresh() },
             onBatchFinished = { finishPendingListAndReturn() }
         )
 
@@ -4795,8 +3511,8 @@ fun FileBrowserApp(
             onConfirm = { executeArchiveOperation() }
         )
 
-        if (showChangeRootConfirm && rootUri != null) {
-            val r = rootUri!!
+        if (showChangeRootConfirm && browserTab.rootUri != null) {
+            val r = browserTab.rootUri!!
             val root = Uri.parse(normalizeContentUriString(r))
             AlertDialog(
                 onDismissRequest = { showChangeRootConfirm = false },
@@ -4810,7 +3526,7 @@ fun FileBrowserApp(
                                 val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
                                 if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
                                 treeLauncher.launch(null)
-                                refreshTrigger++
+                                browserTab.refresh()
                             }
                         }
                     }) { Text(stringResource(R.string.browser_empty_then_change)) }
@@ -4893,7 +3609,7 @@ fun FileBrowserApp(
                 }
             }
         }
-        rootUri == null && initialDirUri == null && showOverwriteConfirm == null -> {
+        browserTab.rootUri == null && initialDirUri == null && showOverwriteConfirm == null -> {
             var lastBackPressTime by remember { mutableStateOf(0L) }
             BackHandler {
                 val now = System.currentTimeMillis()
@@ -4992,7 +3708,7 @@ fun FileBrowserApp(
                             createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, fileModel.name, "application/octet-stream", encrypted)
                         }
                         crypto.closePassEdit()
-                        refreshTrigger++
+                        browserTab.refresh()
                         Toast.makeText(ctx, if (ok) ctx.getString(R.string.browser_saved_and_reencrypted) else ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
                     }
                 },
@@ -5027,7 +3743,7 @@ fun FileBrowserApp(
         )
     }
     showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
-        val targetRoot = rootUri?.let { normalizeContentUriString(it) } ?: return@let
+        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) } ?: return@let
         AlertDialog(
             onDismissRequest = {
                 showOverwriteConfirm = null
@@ -5053,7 +3769,7 @@ fun FileBrowserApp(
                         if (copied != null) {
                             val dir = normalizeContentUriString(targetRoot)
                             initialDirUri = dir
-                            currentUri = dir
+                            browserTab.navigateTo(dir)
                             saveCompletedToken++
                             Toast.makeText(ctx, ctx.getString(R.string.browser_overwrite_save), Toast.LENGTH_SHORT).show()
                         } else {
@@ -5073,11 +3789,12 @@ fun FileBrowserApp(
     }
 
 }
+}
 
 /** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
 private data class OperationProgress(val label: String, val current: Int = 0, val total: Int? = null)
 
-private class OperationCancelFlag {
+internal class OperationCancelFlag {
     @Volatile
     private var cancelled: Boolean = false
 
@@ -5193,7 +3910,7 @@ private fun getCompressedPayloadExtension(name: String): String? {
 }
 
 /** 判断文件名是否为图片文件（目录图库查看用，包含 SVG）。 */
-private fun isGalleryImageFile(name: String): Boolean =
+internal fun isGalleryImageFile(name: String): Boolean =
     name.endsWith(".jpg", ignoreCase = true) ||
         name.endsWith(".jpeg", ignoreCase = true) ||
         name.endsWith(".png", ignoreCase = true) ||
@@ -7826,2284 +6543,7 @@ fun FileItem(
     }
 }
 
-@Composable
-private fun BatchPendingMetadataDialog(
-    files: List<DocumentFileModel>,
-    context: Context,
-    prefs: Preferences,
-    onDismiss: () -> Unit,
-    onSaved: () -> Unit
-) {
-    val detailScope = rememberCoroutineScope()
-    val batchKind = pendingBatchMetadataKind(files) ?: return
-    val validatingFail = remember(files) { mutableStateOf<String?>(null) }
-    var batchSaving by remember(files) { mutableStateOf(false) }
-    val initialImage = remember(files) {
-        if (batchKind == DetailMetadataKind.IMAGE) runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } else null
-    }
-    val initialAudio = remember(files) {
-        if (batchKind == DetailMetadataKind.AUDIO) runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } else null
-    }
-    var imageForm by remember(files) { mutableStateOf(initialImage ?: EditableImageExif()) }
-    var imageValidation by remember(files) { mutableStateOf(EditableImageExifValidation()) }
-    var audioForm by remember(files) { mutableStateOf(initialAudio ?: EditableAudioAnnotation()) }
-    var audioValidation by remember(files) { mutableStateOf(EditableAudioAnnotationValidation()) }
-
-    LaunchedEffect(files, batchKind) {
-        if (batchKind == DetailMetadataKind.IMAGE) {
-            imageForm = withContext(Dispatchers.IO) { runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } }
-            imageValidation = EditableImageExifValidation()
-        } else if (batchKind == DetailMetadataKind.AUDIO) {
-            audioForm = withContext(Dispatchers.IO) { runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } }
-            audioValidation = EditableAudioAnnotationValidation()
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = { if (!batchSaving) onDismiss() },
-        title = {
-            Text(
-                when (batchKind) {
-                    DetailMetadataKind.IMAGE -> stringResource(R.string.browser_type_specific_edit_image_meta_title)
-                    DetailMetadataKind.AUDIO -> stringResource(R.string.browser_type_specific_edit_audio_meta_title)
-                    else -> stringResource(R.string.context_details)
-                }
-            )
-        },
-        text = {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-                Text(
-                    context.getString(R.string.browser_type_specific_empty).takeIf { false } ?: "仅修改已填写的字段，空白项保持原值；未填写项不会被覆盖。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(12.dp))
-                when (batchKind) {
-                    DetailMetadataKind.IMAGE -> {
-                        OutlinedTextField(
-                            value = imageForm.takenTime,
-                            onValueChange = { imageForm = imageForm.copy(takenTime = it); imageValidation = imageValidation.copy(takenTimeError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_taken_time_label)) },
-                            isError = !imageValidation.takenTimeError.isNullOrBlank(),
-                            supportingText = { imageValidation.takenTimeError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = imageForm.artist,
-                            onValueChange = { imageForm = imageForm.copy(artist = it); imageValidation = imageValidation.copy(artistError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_artist_label)) },
-                            isError = !imageValidation.artistError.isNullOrBlank(),
-                            supportingText = { imageValidation.artistError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = imageForm.description,
-                            onValueChange = { imageForm = imageForm.copy(description = it); imageValidation = imageValidation.copy(descriptionError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_description_label)) },
-                            isError = !imageValidation.descriptionError.isNullOrBlank(),
-                            supportingText = { imageValidation.descriptionError?.let { Text(it) } },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = imageForm.software,
-                            onValueChange = { imageForm = imageForm.copy(software = it); imageValidation = imageValidation.copy(softwareError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_software_label)) },
-                            isError = !imageValidation.softwareError.isNullOrBlank(),
-                            supportingText = { imageValidation.softwareError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = imageForm.copyright,
-                            onValueChange = { imageForm = imageForm.copy(copyright = it); imageValidation = imageValidation.copy(copyrightError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_copyright_label)) },
-                            isError = !imageValidation.copyrightError.isNullOrBlank(),
-                            supportingText = { imageValidation.copyrightError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    DetailMetadataKind.AUDIO -> {
-                        OutlinedTextField(
-                            value = audioForm.title,
-                            onValueChange = { audioForm = audioForm.copy(title = it); audioValidation = audioValidation.copy(titleError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_title_label)) },
-                            isError = !audioValidation.titleError.isNullOrBlank(),
-                            supportingText = { audioValidation.titleError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = audioForm.artist,
-                            onValueChange = { audioForm = audioForm.copy(artist = it); audioValidation = audioValidation.copy(artistError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_artist_label)) },
-                            isError = !audioValidation.artistError.isNullOrBlank(),
-                            supportingText = { audioValidation.artistError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = audioForm.album,
-                            onValueChange = { audioForm = audioForm.copy(album = it); audioValidation = audioValidation.copy(albumError = null) },
-                            label = { Text(stringResource(R.string.browser_meta_album_label)) },
-                            isError = !audioValidation.albumError.isNullOrBlank(),
-                            supportingText = { audioValidation.albumError?.let { Text(it) } },
-                            singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    }
-                    else -> {}
-                }
-                validatingFail.value?.let { error ->
-                    Spacer(Modifier.height(8.dp))
-                    Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    if (batchSaving) return@TextButton
-                    val hasError = when (batchKind) {
-                        DetailMetadataKind.IMAGE -> {
-                            val validation = validateEditableImageExifForm(context, imageForm)
-                            imageValidation = validation
-                            validation.hasError
-                        }
-                        DetailMetadataKind.AUDIO -> {
-                            val validation = validateEditableAudioAnnotationForm(context, audioForm)
-                            audioValidation = validation
-                            validation.hasError
-                        }
-                        else -> false
-                    }
-                    if (hasError) {
-                        validatingFail.value = context.getString(R.string.browser_meta_fix_form_errors)
-                        return@TextButton
-                    }
-                    validatingFail.value = null
-                    detailScope.launch {
-                        batchSaving = true
-                        val errors = withContext(Dispatchers.IO) {
-                            when (batchKind) {
-                                DetailMetadataKind.IMAGE -> saveBatchEditableImageExif(context, files, imageForm)
-                                DetailMetadataKind.AUDIO -> saveBatchEditableAudioAnnotation(context, files, audioForm, prefs)
-                                else -> emptyList()
-                            }
-                        }
-                        batchSaving = false
-                        if (errors.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
-                            onSaved()
-                            onDismiss()
-                        } else {
-                            validatingFail.value = errors.joinToString("; ")
-                        }
-                    }
-                },
-                enabled = !batchSaving
-            ) {
-                Text(if (batchSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = { if (!batchSaving) onDismiss() }, enabled = !batchSaving) {
-                Text(stringResource(R.string.common_cancel))
-            }
-        }
-    )
-}
-
-
 @OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PlaybackScreen(
-    prefs: Preferences,
-    playbackState: PlaybackState?,
-    onStopPlayback: () -> Unit,
-    onPlayPrev: () -> Unit,
-    onPlayNext: () -> Unit,
-    onPlayPause: () -> Unit,
-    onSeek: (positionMs: Int) -> Unit = {},
-    showBackButton: Boolean = true,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var playlists by remember { mutableStateOf<List<Playlist>>(emptyList()) }
-    var lastPlaylistId by remember { mutableStateOf<String?>(null) }
-    var playerBookmarks by remember { mutableStateOf<List<PlayerListBookmark>>(emptyList()) }
-    var selectedPlaylistId by remember { mutableStateOf<String?>(null) }
-    var showRenamePlaylistDialog by remember { mutableStateOf(false) }
-    var playlistRenameTarget by remember { mutableStateOf<Playlist?>(null) }
-    var playlistRenameText by remember { mutableStateOf("") }
-    var showSortPlaylistDialog by remember { mutableStateOf(false) }
-    var playlistSortTarget by remember { mutableStateOf<Playlist?>(null) }
-    var playlistSortField by remember { mutableStateOf(PlaylistTrackSortField.ARTIST) }
-    var playlistSortOrder by remember { mutableStateOf(PlaylistSortOrder.ASCENDING) }
-    var playlistSortInProgress by remember { mutableStateOf(false) }
-    var showDuplicateSongsDialog by remember { mutableStateOf(false) }
-    var duplicateSongsLoading by remember { mutableStateOf(false) }
-    var duplicateSongsMutating by remember { mutableStateOf(false) }
-    var duplicateSongGroups by remember { mutableStateOf<List<DuplicateSongGroup>>(emptyList()) }
-    var duplicateSongsTargetPlaylist by remember { mutableStateOf<Playlist?>(null) }
-    var showAddBookmarkDialog by remember { mutableStateOf(false) }
-    var showBookmarkManagerDialog by remember { mutableStateOf(false) }
-    var bookmarkNoteInput by remember { mutableStateOf("") }
-    var bookmarkPendingPlaylistId by remember { mutableStateOf<String?>(null) }
-    var bookmarkPendingDirUri by remember { mutableStateOf<String?>(null) }
-    var bookmarkPendingTrackIndex by remember { mutableIntStateOf(0) }
-    var bookmarkPendingPositionMs by remember { mutableLongStateOf(0L) }
-    var bookmarkPendingTrackName by remember { mutableStateOf("") }
-    var editingBookmarkId by remember { mutableStateOf<String?>(null) }
-    var editingBookmarkNote by remember { mutableStateOf("") }
-    var showCreatePlaylistDialog by remember { mutableStateOf(false) }
-    var newPlaylistName by remember { mutableStateOf("") }
-    var trackActionMenuIndex by remember { mutableStateOf<Int?>(null) }
-    var playlistActionMenuIndex by remember { mutableStateOf<Int?>(null) }
-    var pendingTrackTransfer by remember { mutableStateOf<PlaylistTrackTransfer?>(null) }
-    var playerAudioSettings by remember { mutableStateOf(PlayerAudioSettings()) }
-    var showPlayerAudioSettingsDialog by remember { mutableStateOf(false) }
-    var showPlaybackDiagnostics by remember { mutableStateOf(false) }
-    var showPreviewSettingsDialog by remember { mutableStateOf(false) }
-    var previewSettingsTarget by remember { mutableStateOf<Playlist?>(null) }
-    var previewEnabledInput by remember { mutableStateOf(false) }
-    var previewStartInput by remember { mutableStateOf("") }
-    var previewMaxDurationInput by remember { mutableStateOf("") }
-    var previewTimeError by remember { mutableStateOf<String?>(null) }
-    var trackFilterText by remember { mutableStateOf("") }
-    var trackFilterField by remember { mutableStateOf(PlayerTrackFilterField.FILE_NAME) }
-    var showTrackFilterFieldMenu by remember { mutableStateOf(false) }
-    var showBulkDeleteTracksDialog by remember { mutableStateOf(false) }
-    var bulkDeleteTrackIndices by remember { mutableStateOf<Set<Int>>(emptySet()) }
-    var bulkDeleteTrackCount by remember { mutableIntStateOf(0) }
-    var bulkDeleteWasFiltered by remember { mutableStateOf(false) }
-    var bulkDeleteHiddenMode by remember { mutableStateOf(false) }
-    var bulkDeleteTracksInProgress by remember { mutableStateOf(false) }
-    var trackMetadataCache by remember(selectedPlaylistId) { mutableStateOf<Map<String, TrackMetadata>>(emptyMap()) }
-    var trackMetadataLoading by remember(selectedPlaylistId) { mutableStateOf(false) }
-    LaunchedEffect(prefs) {
-        prefs.playlists.collect { playlists = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.playerLastPlaylistId.collect { lastPlaylistId = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.playerListBookmarks.collect { playerBookmarks = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.playerAudioSettings.collect { playerAudioSettings = it }
-    }
-    val playlistById = remember(playlists) { playlists.associateBy { it.id } }
-    val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
-    if (selectedPlaylist == null && selectedPlaylistId != null) selectedPlaylistId = null
-
-    LaunchedEffect(selectedPlaylist?.id, trackFilterField) {
-        val current = selectedPlaylist ?: return@LaunchedEffect
-        if (trackFilterField == PlayerTrackFilterField.FILE_NAME) {
-            trackMetadataLoading = false
-            return@LaunchedEffect
-        }
-        val missing = current.uris.filterNot { trackMetadataCache.containsKey(it) }
-        if (missing.isEmpty()) {
-            trackMetadataLoading = false
-            return@LaunchedEffect
-        }
-        trackMetadataLoading = true
-        val loaded = withContext(Dispatchers.IO) {
-            missing.associateWith { uri -> readTrackMetadata(context, uri) }
-        }
-        trackMetadataCache = trackMetadataCache + loaded
-        trackMetadataLoading = false
-    }
-
-    BackHandler(enabled = selectedPlaylistId != null) {
-        selectedPlaylistId = null
-    }
-
-    fun openRenamePlaylistDialog(pl: Playlist) {
-        playlistRenameTarget = pl
-        playlistRenameText = pl.displayName(context.getString(R.string.player_unnamed_playlist))
-        showRenamePlaylistDialog = true
-    }
-
-    fun openSortPlaylistDialog(pl: Playlist) {
-        playlistSortTarget = pl
-        playlistSortField = PlaylistTrackSortField.ARTIST
-        playlistSortOrder = PlaylistSortOrder.ASCENDING
-        showSortPlaylistDialog = true
-    }
-
-    fun openDuplicateSongsDialog(pl: Playlist) {
-        duplicateSongsTargetPlaylist = pl
-        duplicateSongGroups = emptyList()
-        duplicateSongsMutating = false
-        duplicateSongsLoading = true
-        showDuplicateSongsDialog = true
-        scope.launch {
-            val groups = runCatching {
-                findDuplicateSongGroups(context, pl, trackMetadataCache)
-            }.getOrElse { error ->
-                Log.e("FileBrowserApp", "Failed to scan duplicate songs for playlist=${pl.id}", error)
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.player_duplicate_tracks_scan_failed, error.message ?: error.javaClass.simpleName),
-                    Toast.LENGTH_SHORT
-                ).show()
-                emptyList()
-            }
-            if (duplicateSongsTargetPlaylist?.id == pl.id) {
-                duplicateSongGroups = groups
-                duplicateSongsLoading = false
-            }
-        }
-    }
-
-    fun openPreviewSettingsDialog(pl: Playlist) {
-        previewSettingsTarget = pl
-        previewEnabledInput = pl.previewEnabled
-        previewStartInput = if (pl.previewStartMs > 0L) PlaybackTimeFormat.formatMs(pl.previewStartMs) else ""
-        previewMaxDurationInput = if (pl.previewMaxDurationMs > 0L) PlaybackTimeFormat.formatMs(pl.previewMaxDurationMs) else ""
-        previewTimeError = null
-        showPreviewSettingsDialog = true
-    }
-
-    fun previewListHint(pl: Playlist): String {
-        val start = PlaybackTimeFormat.formatMs(pl.previewStartMs)
-        return if (pl.previewMaxDurationMs > 0L) {
-            context.getString(
-                R.string.player_preview_list_hint,
-                start,
-                PlaybackTimeFormat.formatMs(pl.previewMaxDurationMs)
-            )
-        } else {
-            context.getString(R.string.player_preview_list_hint_no_limit, start)
-        }
-    }
-
-    fun recordPlayedPlaylist(pl: Playlist) {
-        scope.launch {
-            prefs.addRecentOpenItem(
-                type = RECENT_TYPE_PLAYLIST,
-                key = pl.id,
-                title = pl.displayName(context.getString(R.string.player_unnamed_playlist)),
-                playlistId = pl.id
-            )
-        }
-    }
-
-    fun startPlaylist(pl: Playlist) {
-        recordPlayedPlaylist(pl)
-        val intent = Intent(context, PlaybackService::class.java).apply {
-            action = ACTION_PLAY
-            putExtra(EXTRA_PLAYLIST_ID, pl.id)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    }
-
-    fun startPlaylistFromIndex(pl: Playlist, index: Int, startPositionMs: Int = 0) {
-        recordPlayedPlaylist(pl)
-        val intent = Intent(context, PlaybackService::class.java).apply {
-            action = ACTION_PLAY
-            putExtra(EXTRA_PLAYLIST_ID, pl.id)
-            putExtra(EXTRA_START_INDEX, index)
-            putExtra(EXTRA_START_POSITION_MS, startPositionMs.coerceAtLeast(0))
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    }
-
-    fun resumeLastPlayback(playlist: Playlist?) {
-        if (playlist != null) {
-            startPlaylist(playlist)
-            return
-        }
-        val intent = Intent(context, PlaybackService::class.java).apply {
-            action = ACTION_RESUME
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-    }
-
-    suspend fun createEmptyPlaylist(name: String) {
-        val fallbackName = context.getString(
-            R.string.player_playlist_default_name,
-            java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-        )
-        val playlist = Playlist(
-            id = java.util.UUID.randomUUID().toString(),
-            name = name.trim().ifBlank { fallbackName },
-            uris = emptyList(),
-            names = emptyList()
-        )
-        prefs.addPlaylist(playlist)
-        selectedPlaylistId = playlist.id
-        showCreatePlaylistDialog = false
-        newPlaylistName = ""
-        Toast.makeText(context, context.getString(R.string.browser_empty_playlist_created), Toast.LENGTH_SHORT).show()
-    }
-
-    suspend fun removeTrackEntryAfterMove(source: Playlist, trackIndex: Int) {
-        removePlaylistTrackAt(
-            context = context,
-            prefs = prefs,
-            pl = source,
-            trackIndex = trackIndex,
-            playbackState = playbackState,
-            deleteSourceFile = false,
-            onStopPlayback = onStopPlayback
-        )
-    }
-
-    suspend fun transferTrackToPlaylist(transfer: PlaylistTrackTransfer, target: Playlist) {
-        if (target.isDirectorySource) {
-            Toast.makeText(context, context.getString(R.string.browser_playlist_dir_no_move_target), Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (target.id == transfer.source.id) return
-        val trackUri = transfer.source.uris.getOrNull(transfer.trackIndex) ?: return
-        val trackName = transfer.source.names.getOrElse(transfer.trackIndex) { trackUri.substringAfterLast('/') }
-        val result = prefs.appendTracksToPlaylist(target.id, listOf(trackUri), listOf(trackName))
-        if (!result.found) {
-            Toast.makeText(context, context.getString(R.string.browser_playlist_target_missing), Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (transfer.move) {
-            removeTrackEntryAfterMove(transfer.source, transfer.trackIndex)
-        }
-        pendingTrackTransfer = null
-        val action = if (transfer.move) context.getString(R.string.pending_list_action_move) else context.getString(R.string.pending_list_action_copy)
-        val duplicateHint = if (result.skippedCount > 0) context.getString(R.string.browser_playlist_duplicate_hint) else ""
-        Toast.makeText(context, context.getString(R.string.browser_playlist_action_result, action, target.name, duplicateHint), Toast.LENGTH_SHORT).show()
-    }
-
-    fun promptSaveCurrentBookmark() {
-        val state = playbackState
-        if (state?.playlistId == null) {
-            Toast.makeText(context, context.getString(R.string.player_bookmark_playlist_only), Toast.LENGTH_SHORT).show()
-            return
-        }
-        bookmarkPendingPlaylistId = state.playlistId
-        bookmarkPendingDirUri = null
-        bookmarkPendingTrackIndex = state.trackIndex
-        bookmarkPendingPositionMs = state.positionMs.toLong()
-        bookmarkPendingTrackName = state.trackName
-        bookmarkNoteInput = ""
-        showAddBookmarkDialog = true
-    }
-
-    if (showPlayerAudioSettingsDialog) {
-        val engines = listOf(
-            PLAYER_AUDIO_ENGINE_MEDIA_PLAYER to context.getString(R.string.browser_system_media_player),
-            PLAYER_AUDIO_ENGINE_EXO_PLAYER to "Media3 ExoPlayer"
-        )
-        val presets = listOf(
-            PLAYER_AUDIO_PRESET_FLAT to context.getString(R.string.browser_flat_preset),
-            PLAYER_AUDIO_PRESET_VOCAL to context.getString(R.string.browser_vocal_preset),
-            PLAYER_AUDIO_PRESET_BASS to context.getString(R.string.browser_bass_preset),
-            PLAYER_AUDIO_PRESET_CAR to context.getString(R.string.browser_car_preset),
-            PLAYER_AUDIO_PRESET_HEADPHONE to context.getString(R.string.browser_headphone_preset)
-        )
-        fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
-            scope.launch { prefs.updatePlayerAudioSettings(transform) }
-        }
-        AlertDialog(
-            onDismissRequest = { showPlayerAudioSettingsDialog = false },
-            title = { Text(stringResource(R.string.browser_player_config_title)) },
-            text = {
-                Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(stringResource(R.string.browser_player_settings_local_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(12.dp))
-                    Text(stringResource(R.string.browser_player_engine), style = MaterialTheme.typography.titleSmall)
-                    engines.forEach { (value, label) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { updatePlayerAudioSettings { it.copy(engine = value) } }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = playerAudioSettings.engine == value,
-                                onCheckedChange = { updatePlayerAudioSettings { it.copy(engine = value) } }
-                            )
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    Text(stringResource(R.string.browser_engine_switch_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.browser_wake_lock), style = MaterialTheme.typography.bodyLarge)
-                            Text(stringResource(R.string.browser_wake_lock_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = playerAudioSettings.keepAwake,
-                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(keepAwake = enabled) } }
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.browser_audio_effects), style = MaterialTheme.typography.bodyLarge)
-                            Text(stringResource(R.string.browser_audio_effects_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = playerAudioSettings.audioEffectsEnabled,
-                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(audioEffectsEnabled = enabled) } }
-                        )
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.browser_audio_preset), style = MaterialTheme.typography.titleSmall)
-                    presets.forEach { (value, label) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable { updatePlayerAudioSettings { it.copy(effectPreset = value, audioEffectsEnabled = true) } }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = playerAudioSettings.effectPreset == value,
-                                onCheckedChange = { updatePlayerAudioSettings { it.copy(effectPreset = value, audioEffectsEnabled = true) } }
-                            )
-                            Text(label, style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(stringResource(R.string.browser_high_quality_output), style = MaterialTheme.typography.bodyLarge)
-                            Text(stringResource(R.string.browser_high_quality_output_detail), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = playerAudioSettings.highQualityOutput,
-                            onCheckedChange = { enabled -> updatePlayerAudioSettings { it.copy(highQualityOutput = enabled) } }
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showPlayerAudioSettingsDialog = false }) { Text(stringResource(R.string.common_close)) }
-            }
-        )
-    }
-
-    val restorePlaylist = lastPlaylistId?.let { id -> playlists.find { it.id == id } }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        selectedPlaylist?.displayName(context.getString(R.string.player_unnamed_playlist))
-                            ?: context.getString(R.string.player_screen_title)
-                    )
-                },
-                actions = {
-                    if (selectedPlaylist != null) {
-                        IconButton(onClick = { startPlaylist(selectedPlaylist) }) {
-                            Icon(
-                                Icons.Default.PlayArrow,
-                                contentDescription = context.getString(R.string.player_resume_current_playlist)
-                            )
-                        }
-                    }
-                    if (playbackState?.playlistId != null) {
-                        TextButton(onClick = { promptSaveCurrentBookmark() }) {
-                            Text(context.getString(R.string.player_mark_action))
-                        }
-                    }
-                    TextButton(onClick = { showBookmarkManagerDialog = true }) {
-                        Text(context.getString(R.string.player_bookmarks_action))
-                    }
-                    IconButton(onClick = { showPlayerAudioSettingsDialog = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.browser_player_config_title))
-                    }
-                },
-                navigationIcon = if (showBackButton) {
-                    {
-                        IconButton(onClick = {
-                            if (selectedPlaylist != null) selectedPlaylistId = null
-                            else onDismiss()
-                        }) {
-                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = context.getString(R.string.common_back))
-                        }
-                    }
-                } else {
-                    { }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        }
-    ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding)) {
-            if (playbackState != null) {
-                val state = playbackState
-                var seekSliderPosition by remember(state.trackIndex, state.trackName) { mutableStateOf(state.positionMs.toFloat()) }
-                var seekDragging by remember { mutableStateOf(false) }
-                LaunchedEffect(state.positionMs, state.durationMs) {
-                    if (!seekDragging) {
-                        seekSliderPosition = state.positionMs.toFloat().coerceIn(0f, maxOf(1f, state.durationMs.toFloat()))
-                    }
-                }
-                Card(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            "${state.trackName} (${state.trackIndex + 1}/${state.totalTracks})",
-                            style = MaterialTheme.typography.bodyMedium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        val metadataText = formatTrackMetadata(context, state.metadata)
-                        if (metadataText.isNotEmpty()) {
-                            Text(
-                                metadataText,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        if (state.previewActive) {
-                            val previewPl = state.playlistId?.let { id -> playlistById[id] }
-                            val previewStartText = formatPlaybackTime((previewPl?.previewStartMs ?: 0L).toInt())
-                            val previewEndText = state.previewWindowEndMs?.let { formatPlaybackTime(it) }
-                            Text(
-                                if (previewEndText != null) {
-                                    context.getString(R.string.player_preview_playing_hint, previewStartText, previewEndText)
-                                } else {
-                                    context.getString(R.string.player_preview_playing_hint_no_end, previewStartText)
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f),
-                                maxLines = 2
-                            )
-                        }
-                        if (state.durationMs > 0) {
-                            Spacer(Modifier.height(4.dp))
-                            Slider(
-                                value = seekSliderPosition,
-                                onValueChange = {
-                                    seekDragging = true
-                                    seekSliderPosition = it
-                                },
-                                onValueChangeFinished = {
-                                    onSeek(seekSliderPosition.toInt().coerceIn(0, state.durationMs))
-                                    seekDragging = false
-                                },
-                                valueRange = 0f..maxOf(1f, state.durationMs.toFloat()),
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    activeTrackColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    inactiveTrackColor = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.3f)
-                                )
-                            )
-                        }
-                        Row(Modifier.fillMaxWidth()) {
-                            Text(
-                                formatPlaybackTime(state.positionMs),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
-                            Spacer(Modifier.weight(1f))
-                            Text(
-                                if (state.durationMs > 0) formatPlaybackTime(state.durationMs) else "--:--",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        val diagnostics = state.diagnostics
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            TextButton(
-                                onClick = { onPlayPause() }
-                            ) {
-                                Text(
-                                    if (state.isPlaying) {
-                                        stringResource(R.string.player_pause_desc)
-                                    } else {
-                                        stringResource(R.string.player_play_desc)
-                                    }
-                                )
-                            }
-                            TextButton(onClick = { showPlaybackDiagnostics = !showPlaybackDiagnostics }) {
-                                Text(
-                                    if (showPlaybackDiagnostics) {
-                                        stringResource(R.string.browser_hide_diagnostics)
-                                    } else {
-                                        stringResource(R.string.browser_playback_diagnostics)
-                                    }
-                                )
-                            }
-                        }
-                        if (showPlaybackDiagnostics) {
-                            val diagLines = listOfNotNull(
-                                context.getString(R.string.browser_engine_value, diagnostics.engine.ifBlank { context.getString(R.string.common_unknown_error) }),
-                                context.getString(R.string.browser_source_value, if (diagnostics.playbackSource == "direct") context.getString(R.string.browser_source_direct) else diagnostics.playbackSource),
-                                context.getString(R.string.browser_output_value, diagnostics.outputDevice.ifBlank { context.getString(R.string.common_unknown_error) }),
-                                diagnostics.outputDeviceSource.takeIf { it.isNotBlank() }?.let { context.getString(R.string.browser_output_based_on, it) },
-                                context.getString(R.string.browser_offload_status, if (diagnostics.exoOffloadActive) context.getString(R.string.browser_offload_active) else context.getString(R.string.browser_offload_inactive)),
-                                context.getString(R.string.browser_hq_output_value, diagnostics.highQualityOutput.ifBlank { context.getString(R.string.common_unknown_error) }),
-                                context.getString(R.string.browser_effects_value, diagnostics.audioEffects.ifBlank { context.getString(R.string.common_unknown_error) }),
-                                context.getString(R.string.browser_buffer_events, diagnostics.bufferEvents),
-                                context.getString(R.string.browser_error_count, diagnostics.playerErrors),
-                                diagnostics.lastError?.let { context.getString(R.string.browser_last_error, it) },
-                                diagnostics.mimeType?.let { context.getString(R.string.browser_type_value, it) },
-                                diagnostics.sourceQuality?.let { context.getString(R.string.browser_source_nature, it) },
-                                diagnostics.bitrate?.let { context.getString(R.string.browser_bitrate, it) },
-                                diagnostics.sampleRate?.let { context.getString(R.string.browser_sample_rate, it) },
-                                diagnostics.bitsPerSample?.let { context.getString(R.string.browser_bit_depth, it) }
-                            )
-                            Text(
-                                diagLines.joinToString("\n"),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
-                            )
-                        }
-                    }
-                }
-            } else {
-                Card(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(8.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(
-                            context.getString(R.string.player_not_playing),
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            if (restorePlaylist != null) context.getString(R.string.player_resume_hint, restorePlaylist.displayName()) else context.getString(R.string.player_select_playlist_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-            if (selectedPlaylist != null) {
-                val pl = selectedPlaylist
-                val filterText = trackFilterText
-                val trackEntries = remember(pl, trackMetadataCache) {
-                    pl.uris.mapIndexed { idx, uri ->
-                        PlayerTrackEntry(
-                            originalIndex = idx,
-                            uri = uri,
-                            name = pl.names.getOrElse(idx) { uri.substringAfterLast('/') },
-                            metadata = trackMetadataCache[uri]
-                        )
-                    }
-                }
-                val filteredTrackEntries = remember(trackEntries, filterText, trackFilterField) {
-                    if (filterText.isBlank()) {
-                        trackEntries
-                    } else {
-                        runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
-                            trackEntries.filter { entry ->
-                                regex.containsMatchIn(trackFilterTarget(trackFilterField, entry.name, entry.metadata))
-                            }
-                        } ?: trackEntries
-                    }
-                }
-                val hiddenTrackEntries = remember(trackEntries, filteredTrackEntries) {
-                    val visibleIndices = filteredTrackEntries.asSequence().map { it.originalIndex }.toHashSet()
-                    trackEntries.filterNot { it.originalIndex in visibleIndices }
-                }
-                val selectedPlaylistTrackListState = remember(pl.id) { LazyListState() }
-                LaunchedEffect(pl.id, playbackState?.playlistId, playbackState?.trackIndex, filteredTrackEntries) {
-                    val state = playbackState ?: return@LaunchedEffect
-                    if (state.playlistId != pl.id) return@LaunchedEffect
-                    val target = filteredTrackEntries.indexOfFirst { it.originalIndex == state.trackIndex }
-                        .takeIf { it >= 0 }
-                        ?: state.trackIndex.coerceIn(0, maxOf(0, filteredTrackEntries.lastIndex))
-                    selectedPlaylistTrackListState.animateScrollToItem((target - 2).coerceAtLeast(0))
-                }
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (pl.isDirectorySource) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable { openRenamePlaylistDialog(pl) }
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text(
-                            pl.displayName(context.getString(R.string.player_unnamed_playlist)),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (pl.isDirectorySource) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (pl.isDirectorySource) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                context.getString(R.string.browser_playlist_dir_list_refresh_hint),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
-                    }
-                    if (pl.isDirectorySource || pl.uris.size >= 2) {
-                        IconButton(onClick = { openSortPlaylistDialog(pl) }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.Sort,
-                                contentDescription = context.getString(R.string.player_resort_playlist),
-                                modifier = Modifier.size(20.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    Icon(
-                        Icons.Filled.Edit,
-                        contentDescription = context.getString(R.string.player_rename_playlist),
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                }
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = trackFilterText,
-                        onValueChange = { trackFilterText = it },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true,
-                        placeholder = { Text(context.getString(R.string.player_track_filter_placeholder)) },
-                        trailingIcon = {
-                            if (trackFilterText.isNotEmpty()) {
-                                IconButton(onClick = { trackFilterText = "" }) {
-                                    Icon(Icons.Default.RemoveCircle, contentDescription = context.getString(R.string.directory_filter_clear), Modifier.size(20.dp))
-                                }
-                            }
-                        }
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Box {
-                        OutlinedButton(onClick = { showTrackFilterFieldMenu = true }) {
-                            Text(
-                                when (trackFilterField) {
-                                    PlayerTrackFilterField.FILE_NAME -> context.getString(R.string.player_track_filter_field_file_name)
-                                    PlayerTrackFilterField.TITLE -> context.getString(R.string.player_track_filter_field_title)
-                                    PlayerTrackFilterField.ALBUM -> context.getString(R.string.player_track_filter_field_album)
-                                    PlayerTrackFilterField.ARTIST -> context.getString(R.string.player_track_filter_field_artist)
-                                }
-                            )
-                        }
-                        DropdownMenu(
-                            expanded = showTrackFilterFieldMenu,
-                            onDismissRequest = { showTrackFilterFieldMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.player_track_filter_field_file_name)) },
-                                onClick = {
-                                    trackFilterField = PlayerTrackFilterField.FILE_NAME
-                                    showTrackFilterFieldMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.player_track_filter_field_title)) },
-                                onClick = {
-                                    trackFilterField = PlayerTrackFilterField.TITLE
-                                    showTrackFilterFieldMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.player_track_filter_field_album)) },
-                                onClick = {
-                                    trackFilterField = PlayerTrackFilterField.ALBUM
-                                    showTrackFilterFieldMenu = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.player_track_filter_field_artist)) },
-                                onClick = {
-                                    trackFilterField = PlayerTrackFilterField.ARTIST
-                                    showTrackFilterFieldMenu = false
-                                }
-                            )
-                        }
-                    }
-                }
-                if (trackMetadataLoading && trackFilterField != PlayerTrackFilterField.FILE_NAME) {
-                    Text(
-                        context.getString(R.string.player_track_filter_loading_metadata),
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (bulkDeleteTracksInProgress) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            context.getString(R.string.player_bulk_delete_tracks_in_progress),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    TextButton(
-                        enabled = !bulkDeleteTracksInProgress && filteredTrackEntries.isNotEmpty(),
-                        onClick = {
-                            bulkDeleteHiddenMode = false
-                            bulkDeleteTrackIndices = filteredTrackEntries.map { it.originalIndex }.toSet()
-                            bulkDeleteTrackCount = bulkDeleteTrackIndices.size
-                            bulkDeleteWasFiltered = trackFilterText.isNotBlank()
-                            showBulkDeleteTracksDialog = true
-                        }
-                    ) {
-                        val actionText = if (filteredTrackEntries.isNotEmpty()) {
-                            context.getString(R.string.player_bulk_delete_tracks_action_count, filteredTrackEntries.size)
-                        } else {
-                            context.getString(R.string.player_bulk_delete_tracks_action)
-                        }
-                        Text(
-                            actionText,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                    TextButton(
-                        enabled = !bulkDeleteTracksInProgress && hiddenTrackEntries.isNotEmpty(),
-                        onClick = {
-                            bulkDeleteHiddenMode = true
-                            bulkDeleteTrackIndices = hiddenTrackEntries.map { it.originalIndex }.toSet()
-                            bulkDeleteTrackCount = bulkDeleteTrackIndices.size
-                            bulkDeleteWasFiltered = trackFilterText.isNotBlank()
-                            showBulkDeleteTracksDialog = true
-                        }
-                    ) {
-                        Text(
-                            if (hiddenTrackEntries.isNotEmpty()) {
-                                context.getString(R.string.player_bulk_delete_hidden_tracks_action_count, hiddenTrackEntries.size)
-                            } else {
-                                context.getString(R.string.player_bulk_delete_hidden_tracks_action)
-                            },
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-                if (pl.uris.isEmpty()) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(context.getString(R.string.player_list_empty), style = MaterialTheme.typography.bodyLarge)
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        state = selectedPlaylistTrackListState,
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        items(filteredTrackEntries.size) { i ->
-                            val entry = filteredTrackEntries[i]
-                            val name = entry.name
-                            val isCurrentTrack = playbackState?.playlistId == pl.id && playbackState.trackIndex == entry.originalIndex
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(
-                                        if (isCurrentTrack) MaterialTheme.colorScheme.tertiaryContainer
-                                        else MaterialTheme.colorScheme.surface
-                                    )
-                                    .clickable { startPlaylistFromIndex(pl, entry.originalIndex) }
-                                    .padding(start = 6.dp, end = 2.dp, top = 3.dp, bottom = 3.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "${entry.originalIndex + 1}.",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    modifier = Modifier.width(22.dp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    name,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f),
-                                    color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
-                                )
-                                Box {
-                                    IconButton(
-                                        onClick = { trackActionMenuIndex = i },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.MoreVert,
-                                            contentDescription = context.getString(R.string.main_menu),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    DropdownMenu(
-                                        expanded = trackActionMenuIndex == i,
-                                        onDismissRequest = { trackActionMenuIndex = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_play_from_here)) },
-                                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                                            onClick = {
-                                                trackActionMenuIndex = null
-                                                startPlaylistFromIndex(pl, entry.originalIndex)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_move_up)) },
-                                            leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
-                                            enabled = entry.originalIndex > 0,
-                                            onClick = {
-                                                trackActionMenuIndex = null
-                                                if (entry.originalIndex > 0) scope.launch {
-                                                    val uris = pl.uris.toMutableList()
-                                                    val names = pl.names.toMutableList()
-                                                    uris.add(entry.originalIndex - 1, uris.removeAt(entry.originalIndex))
-                                                    names.add(entry.originalIndex - 1, names.removeAt(entry.originalIndex))
-                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                                }
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_move_down)) },
-                                            leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
-                                            enabled = entry.originalIndex < pl.uris.size - 1,
-                                            onClick = {
-                                                trackActionMenuIndex = null
-                                                if (entry.originalIndex < pl.uris.size - 1) scope.launch {
-                                                    val uris = pl.uris.toMutableList()
-                                                    val names = pl.names.toMutableList()
-                                                    uris.add(entry.originalIndex + 1, uris.removeAt(entry.originalIndex))
-                                                    names.add(entry.originalIndex + 1, names.removeAt(entry.originalIndex))
-                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-                                                }
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.browser_copy_to_list)) },
-                                            leadingIcon = { Icon(Icons.Default.ContentCopy, contentDescription = null) },
-                                            onClick = {
-                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, entry.originalIndex, move = false)
-                                                trackActionMenuIndex = null
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(stringResource(R.string.browser_move_to_list)) },
-                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = null) },
-                                            onClick = {
-                                                pendingTrackTransfer = PlaylistTrackTransfer(pl, entry.originalIndex, move = true)
-                                                trackActionMenuIndex = null
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.common_delete)) },
-                                            leadingIcon = {
-                                                Icon(
-                                                    Icons.Default.Delete,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.error
-                                                )
-                                            },
-                                            onClick = {
-                                                trackActionMenuIndex = null
-                                                scope.launch {
-                                                    removePlaylistTrackAt(
-                                                        context = context,
-                                                        prefs = prefs,
-                                                        pl = pl,
-                                                        trackIndex = entry.originalIndex,
-                                                        playbackState = playbackState,
-                                                        deleteSourceFile = pl.isDirectorySource,
-                                                        onStopPlayback = onStopPlayback
-                                                    )
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        context.getString(R.string.player_playlist_section),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(onClick = { showCreatePlaylistDialog = true }) {
-                        Text(context.getString(R.string.player_new_list))
-                    }
-                }
-                if (playlists.isEmpty()) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            context.getString(R.string.player_no_playlists_hint),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        Modifier.weight(1f),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 4.dp, vertical = 2.dp),
-                        verticalArrangement = Arrangement.spacedBy(0.dp)
-                    ) {
-                        items(playlists.size) { i ->
-                            val pl = playlists[i]
-                            val isCurrent = playbackState?.playlistId == pl.id
-                            val isDangerousPlaylist = pl.isDirectorySource
-                            val rowBackground = when {
-                                isDangerousPlaylist && isCurrent -> MaterialTheme.colorScheme.errorContainer
-                                isDangerousPlaylist -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.82f)
-                                isCurrent -> MaterialTheme.colorScheme.primaryContainer
-                                else -> MaterialTheme.colorScheme.surface
-                            }
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .background(rowBackground)
-                                    .clickable { selectedPlaylistId = pl.id }
-                                    .padding(start = 6.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(
-                                        pl.displayName(context.getString(R.string.player_unnamed_playlist)),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface
-                                    )
-                                    val bookmarkCount = playerBookmarks.count { it.playlistId == pl.id }
-                                    Text(
-                                        context.getString(R.string.browser_playlist_track_bookmark, pl.trackCount, bookmarkCount),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    if (pl.previewEnabled) {
-                                        Text(
-                                            previewListHint(pl),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 2,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = if (isDangerousPlaylist) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                    if (isDangerousPlaylist) {
-                                        Text(
-                                            context.getString(R.string.browser_playlist_dir_list_hint),
-                                            style = MaterialTheme.typography.labelSmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            color = MaterialTheme.colorScheme.onErrorContainer
-                                        )
-                                    }
-                                }
-                                Box {
-                                    IconButton(
-                                        onClick = { playlistActionMenuIndex = i },
-                                        modifier = Modifier.size(32.dp)
-                                    ) {
-                                        Icon(
-                                            Icons.Default.MoreVert,
-                                            contentDescription = context.getString(R.string.main_menu),
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                    }
-                                    DropdownMenu(
-                                        expanded = playlistActionMenuIndex == i,
-                                        onDismissRequest = { playlistActionMenuIndex = null }
-                                    ) {
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_play_desc)) },
-                                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null) },
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                if (selectedPlaylistId == pl.id) {
-                                                    val entries = pl.uris.mapIndexed { idx, uri ->
-                                                        PlayerTrackEntry(
-                                                            originalIndex = idx,
-                                                            uri = uri,
-                                                            name = pl.names.getOrElse(idx) { uri.substringAfterLast('/') },
-                                                            metadata = trackMetadataCache[uri]
-                                                        )
-                                                    }
-                                                    val filtered = if (trackFilterText.isBlank()) {
-                                                        entries
-                                                    } else {
-                                                        runCatching { Regex(trackFilterText) }.getOrNull()?.let { regex ->
-                                                            entries.filter { entry ->
-                                                                regex.containsMatchIn(trackFilterTarget(trackFilterField, entry.name, entry.metadata))
-                                                            }
-                                                        } ?: entries
-                                                    }
-                                                    if (filtered.isNotEmpty()) {
-                                                        startPlaylistFromIndex(pl, filtered.first().originalIndex)
-                                                    } else {
-                                                        Toast.makeText(context, context.getString(R.string.player_track_filter_no_result), Toast.LENGTH_SHORT).show()
-                                                    }
-                                                } else {
-                                                    startPlaylist(pl)
-                                                }
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_move_up)) },
-                                            leadingIcon = { Icon(Icons.Default.ArrowUpward, contentDescription = null) },
-                                            enabled = i > 0,
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                if (i > 0) scope.launch {
-                                                    val ids = playlists.map { it.id }.toMutableList()
-                                                    ids.removeAt(i)
-                                                    ids.add(i - 1, pl.id)
-                                                    prefs.updatePlaylistOrder(ids)
-                                                }
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_move_down)) },
-                                            leadingIcon = { Icon(Icons.Default.ArrowDownward, contentDescription = null) },
-                                            enabled = i < playlists.size - 1,
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                if (i < playlists.size - 1) scope.launch {
-                                                    val ids = playlists.map { it.id }.toMutableList()
-                                                    ids.removeAt(i)
-                                                    ids.add(i + 1, pl.id)
-                                                    prefs.updatePlaylistOrder(ids)
-                                                }
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_rename_playlist)) },
-                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null) },
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                openRenamePlaylistDialog(pl)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_resort_playlist)) },
-                                            leadingIcon = { Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = null) },
-                                            enabled = pl.isDirectorySource || pl.uris.size >= 2,
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                openSortPlaylistDialog(pl)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_find_duplicate_tracks)) },
-                                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                            enabled = pl.uris.size >= 2,
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                openDuplicateSongsDialog(pl)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.player_preview_settings)) },
-                                            leadingIcon = { Icon(Icons.Default.Timer, contentDescription = null) },
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                openPreviewSettingsDialog(pl)
-                                            }
-                                        )
-                                        DropdownMenuItem(
-                                            text = { Text(context.getString(R.string.common_delete)) },
-                                            leadingIcon = {
-                                                Icon(
-                                                    Icons.Default.Delete,
-                                                    contentDescription = null,
-                                                    tint = MaterialTheme.colorScheme.error
-                                                )
-                                            },
-                                            onClick = {
-                                                playlistActionMenuIndex = null
-                                                scope.launch {
-                                                    if (playbackState?.playlistId == pl.id) {
-                                                        onStopPlayback()
-                                                    }
-                                                    prefs.removePlaylist(pl.id)
-                                                }
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            PlaybackBottomControlBar(
-                isPlaying = playbackState?.isPlaying == true,
-                enabled = playbackState != null || restorePlaylist != null,
-                onPrev = {
-                    if (playbackState != null) onPlayPrev()
-                },
-                onPlayPause = {
-                    if (playbackState != null) onPlayPause()
-                    else resumeLastPlayback(restorePlaylist)
-                },
-                onNext = {
-                    if (playbackState != null) onPlayNext()
-                }
-            )
-        }
-        if (showCreatePlaylistDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    showCreatePlaylistDialog = false
-                    newPlaylistName = ""
-                },
-                title = { Text(stringResource(R.string.browser_new_empty_playlist)) },
-                text = {
-                    OutlinedTextField(
-                        value = newPlaylistName,
-                        onValueChange = { newPlaylistName = it },
-                        label = { Text(stringResource(R.string.browser_playlist_name_label)) },
-                        singleLine = true
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = { scope.launch { createEmptyPlaylist(newPlaylistName) } }) {
-                        Text(context.getString(R.string.common_ok))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showCreatePlaylistDialog = false
-                        newPlaylistName = ""
-                    }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        pendingTrackTransfer?.let { transfer ->
-            val targetPlaylists = playlists.filter { it.id != transfer.source.id && !it.isDirectorySource }
-            AlertDialog(
-                onDismissRequest = { pendingTrackTransfer = null },
-                title = { Text(if (transfer.move) stringResource(R.string.browser_move_to_playlist) else stringResource(R.string.browser_copy_to_playlist)) },
-                text = {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        if (targetPlaylists.isEmpty()) {
-                            Text(
-                                context.getString(R.string.browser_playlist_no_normal_move_target),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            targetPlaylists.forEach { playlist ->
-                                OutlinedButton(
-                                    onClick = { scope.launch { transferTrackToPlaylist(transfer, playlist) } },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(Modifier.fillMaxWidth()) {
-                                        Text(playlist.displayName(), color = MaterialTheme.colorScheme.onSurface)
-                                        Text(
-                                            context.getString(R.string.player_track_count, playlist.trackCount),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { pendingTrackTransfer = null }) {
-                        Text(context.getString(R.string.common_cancel))
-                    }
-                }
-            )
-        }
-        if (showPreviewSettingsDialog) {
-            val target = previewSettingsTarget
-            AlertDialog(
-                onDismissRequest = {
-                    showPreviewSettingsDialog = false
-                    previewSettingsTarget = null
-                    previewTimeError = null
-                },
-                title = { Text(context.getString(R.string.player_preview_settings_title)) },
-                text = {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(context.getString(R.string.player_preview_enabled), style = MaterialTheme.typography.bodyLarge)
-                                Text(
-                                    context.getString(R.string.player_preview_enabled_hint),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = previewEnabledInput,
-                                onCheckedChange = { previewEnabledInput = it }
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        OutlinedTextField(
-                            value = previewStartInput,
-                            onValueChange = {
-                                previewStartInput = it
-                                previewTimeError = null
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(context.getString(R.string.player_preview_start_label)) },
-                            supportingText = { Text(context.getString(R.string.player_preview_start_hint)) },
-                            singleLine = true,
-                            enabled = previewEnabledInput
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = previewMaxDurationInput,
-                            onValueChange = {
-                                previewMaxDurationInput = it
-                                previewTimeError = null
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(context.getString(R.string.player_preview_max_duration_label)) },
-                            supportingText = { Text(context.getString(R.string.player_preview_max_duration_hint)) },
-                            singleLine = true,
-                            enabled = previewEnabledInput
-                        )
-                        previewTimeError?.let { err ->
-                            Spacer(Modifier.height(8.dp))
-                            Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val settingsTarget = target ?: return@Button
-                        val startMs = if (previewEnabledInput) {
-                            PlaybackTimeFormat.parseToMs(previewStartInput) ?: run {
-                                previewTimeError = context.getString(R.string.player_preview_time_invalid)
-                                return@Button
-                            }
-                        } else {
-                            0L
-                        }
-                        val maxMs = if (previewEnabledInput && previewMaxDurationInput.isNotBlank()) {
-                            PlaybackTimeFormat.parseToMs(previewMaxDurationInput) ?: run {
-                                previewTimeError = context.getString(R.string.player_preview_time_invalid)
-                                return@Button
-                            }
-                        } else {
-                            0L
-                        }
-                        scope.launch {
-                            prefs.updatePlaylist(
-                                settingsTarget.copy(
-                                    previewEnabled = previewEnabledInput,
-                                    previewStartMs = startMs.coerceAtLeast(0L),
-                                    previewMaxDurationMs = maxMs.coerceAtLeast(0L)
-                                )
-                            )
-                            if (playbackState?.playlistId == settingsTarget.id) {
-                                val reloadIntent = Intent(context, PlaybackService::class.java).apply {
-                                    action = ACTION_RELOAD_PLAYLIST
-                                    putExtra(EXTRA_PLAYLIST_ID, settingsTarget.id)
-                                }
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                                    context.startForegroundService(reloadIntent)
-                                } else {
-                                    context.startService(reloadIntent)
-                                }
-                            }
-                            showPreviewSettingsDialog = false
-                            previewSettingsTarget = null
-                            previewTimeError = null
-                            Toast.makeText(context, context.getString(R.string.player_preview_saved), Toast.LENGTH_SHORT).show()
-                        }
-                    }) { Text(context.getString(R.string.common_save)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showPreviewSettingsDialog = false
-                        previewSettingsTarget = null
-                        previewTimeError = null
-                    }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showRenamePlaylistDialog) {
-            val target = playlistRenameTarget
-            AlertDialog(
-                onDismissRequest = {
-                    showRenamePlaylistDialog = false
-                    playlistRenameTarget = null
-                    playlistRenameText = ""
-                },
-                title = { Text(context.getString(R.string.player_rename_playlist_title)) },
-                text = {
-                    OutlinedTextField(
-                        value = playlistRenameText,
-                        onValueChange = { playlistRenameText = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(context.getString(R.string.player_playlist_name_label)) },
-                        singleLine = true
-                    )
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        val newName = playlistRenameText.trim()
-                        if (newName.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.player_playlist_name_required), Toast.LENGTH_SHORT).show()
-                            return@Button
-                        }
-                        val renameTarget = target ?: return@Button
-                        scope.launch {
-                            prefs.updatePlaylist(renameTarget.copy(name = newName, note = ""))
-                            showRenamePlaylistDialog = false
-                            playlistRenameTarget = null
-                            playlistRenameText = ""
-                        }
-                    }) { Text(context.getString(R.string.common_save)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showRenamePlaylistDialog = false
-                        playlistRenameTarget = null
-                        playlistRenameText = ""
-                    }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showSortPlaylistDialog) {
-            val sortTarget = playlistSortTarget
-            val sortFieldOptions = listOf(
-                PlaylistTrackSortField.ARTIST to R.string.player_resort_field_artist,
-                PlaylistTrackSortField.ALBUM to R.string.player_resort_field_album,
-                PlaylistTrackSortField.YEAR to R.string.player_resort_field_year,
-                PlaylistTrackSortField.DIRECTORY to R.string.player_resort_field_directory,
-                PlaylistTrackSortField.RANDOM to R.string.player_resort_field_random
-            )
-            AlertDialog(
-                onDismissRequest = {
-                    if (!playlistSortInProgress) {
-                        showSortPlaylistDialog = false
-                        playlistSortTarget = null
-                    }
-                },
-                title = { Text(context.getString(R.string.player_resort_playlist_title)) },
-                text = {
-                    if (playlistSortInProgress) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Text(context.getString(R.string.player_resort_in_progress))
-                        }
-                    } else {
-                        Column {
-                            if (sortTarget?.isDirectorySource == true) {
-                                Text(
-                                    context.getString(R.string.player_resort_directory_hint),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            sortFieldOptions.forEach { (field, labelRes) ->
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clickable { playlistSortField = field }
-                                        .padding(vertical = 2.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    androidx.compose.material3.RadioButton(
-                                        selected = playlistSortField == field,
-                                        onClick = { playlistSortField = field }
-                                    )
-                                    Text(context.getString(labelRes))
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { playlistSortOrder = PlaylistSortOrder.ASCENDING }
-                                    .padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                androidx.compose.material3.RadioButton(
-                                    selected = playlistSortOrder == PlaylistSortOrder.ASCENDING,
-                                    onClick = { playlistSortOrder = PlaylistSortOrder.ASCENDING }
-                                )
-                                Text(context.getString(R.string.player_resort_order_asc))
-                            }
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clickable { playlistSortOrder = PlaylistSortOrder.DESCENDING }
-                                    .padding(vertical = 2.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                androidx.compose.material3.RadioButton(
-                                    selected = playlistSortOrder == PlaylistSortOrder.DESCENDING,
-                                    onClick = { playlistSortOrder = PlaylistSortOrder.DESCENDING }
-                                )
-                                Text(context.getString(R.string.player_resort_order_desc))
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    val canResort = sortTarget != null && (sortTarget.isDirectorySource || sortTarget.uris.size >= 2)
-                    Button(
-                        enabled = !playlistSortInProgress && canResort,
-                        onClick = {
-                            val pl = sortTarget ?: return@Button
-                            if (!pl.isDirectorySource && pl.uris.size < 2) {
-                                Toast.makeText(context, context.getString(R.string.player_resort_too_few), Toast.LENGTH_SHORT).show()
-                                return@Button
-                            }
-                            playlistSortInProgress = true
-                            scope.launch {
-                                try {
-                                    val updated = resortPlaylistTracks(
-                                        context = context,
-                                        prefs = prefs,
-                                        pl = pl,
-                                        field = playlistSortField,
-                                        order = playlistSortOrder,
-                                        playbackState = playbackState,
-                                        onStopPlayback = onStopPlayback
-                                    )
-                                    Toast.makeText(
-                                        context,
-                                        context.getString(R.string.player_resort_done, updated.trackCount),
-                                        Toast.LENGTH_SHORT
-                                    ).show()
-                                } finally {
-                                    playlistSortInProgress = false
-                                    showSortPlaylistDialog = false
-                                    playlistSortTarget = null
-                                }
-                            }
-                        }
-                    ) { Text(context.getString(R.string.common_ok)) }
-                },
-                dismissButton = {
-                    TextButton(
-                        enabled = !playlistSortInProgress,
-                        onClick = {
-                            showSortPlaylistDialog = false
-                            playlistSortTarget = null
-                        }
-                    ) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showDuplicateSongsDialog) {
-            val targetPlaylist = duplicateSongsTargetPlaylist
-            val duplicateGroupListState = remember(targetPlaylist?.id) { LazyListState() }
-            fun closeDuplicateSongsDialog() {
-                showDuplicateSongsDialog = false
-                duplicateSongsLoading = false
-                duplicateSongsMutating = false
-                duplicateSongGroups = emptyList()
-                duplicateSongsTargetPlaylist = null
-            }
-            Dialog(
-                onDismissRequest = { closeDuplicateSongsDialog() },
-                properties = DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    shape = MaterialTheme.shapes.large,
-                    tonalElevation = 6.dp
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 620.dp)
-                            .padding(16.dp)
-                    ) {
-                        Text(context.getString(R.string.player_duplicate_tracks_title), style = MaterialTheme.typography.titleLarge)
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            context.getString(R.string.player_duplicate_tracks_rule_hint),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (targetPlaylist?.isDirectorySource == true) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                context.getString(R.string.player_duplicate_tracks_directory_hint),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        if (duplicateSongsLoading) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(12.dp))
-                                Text(context.getString(R.string.player_duplicate_tracks_scanning))
-                            }
-                        } else if (duplicateSongGroups.isEmpty()) {
-                            Text(
-                                context.getString(R.string.player_duplicate_tracks_none),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            Text(
-                                context.getString(
-                                    R.string.player_duplicate_tracks_found_summary,
-                                    duplicateSongGroups.size,
-                                    duplicateSongGroups.sumOf { it.entries.size }
-                                ),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            if (duplicateSongsMutating) {
-                                Spacer(Modifier.height(6.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp)
-                                    Spacer(Modifier.width(8.dp))
-                                    Text(
-                                        context.getString(R.string.player_duplicate_tracks_mutating),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Spacer(Modifier.height(8.dp))
-                            LazyColumn(
-                                modifier = Modifier.weight(1f),
-                                state = duplicateGroupListState,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(items = duplicateSongGroups, key = { it.key }) { group ->
-                                    Card(
-                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                                        modifier = Modifier.fillMaxWidth()
-                                    ) {
-                                        Column(Modifier.padding(12.dp)) {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    group.displayTitle,
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    modifier = Modifier.weight(1f),
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    context.getString(R.string.player_duplicate_tracks_group_count, group.entries.size),
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                )
-                                            }
-                                            Spacer(Modifier.height(8.dp))
-                                            group.entries.forEachIndexed { entryIndex, entry ->
-                                                Column(Modifier.fillMaxWidth()) {
-                                                    Row(
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                        verticalAlignment = Alignment.Top,
-                                                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                                    ) {
-                                                        Column(modifier = Modifier.weight(1f)) {
-                                                            Text(
-                                                                context.getString(R.string.player_duplicate_tracks_entry_label, entry.originalIndex + 1),
-                                                                style = MaterialTheme.typography.labelSmall,
-                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                            )
-                                                            Text(
-                                                                entry.metadata?.title?.takeIf { it.isNotBlank() } ?: entry.name,
-                                                                style = MaterialTheme.typography.bodySmall,
-                                                                maxLines = 2,
-                                                                overflow = TextOverflow.Ellipsis,
-                                                                color = MaterialTheme.colorScheme.onSurface
-                                                            )
-                                                            val metaText = entry.metadata?.let { formatTrackMetadata(context, it) }.orEmpty()
-                                                            if (metaText.isNotBlank()) {
-                                                                Text(
-                                                                    metaText,
-                                                                    style = MaterialTheme.typography.labelSmall,
-                                                                    maxLines = 2,
-                                                                    overflow = TextOverflow.Ellipsis,
-                                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                                )
-                                                            }
-                                                        }
-                                                        TextButton(
-                                                            enabled = !duplicateSongsLoading && !duplicateSongsMutating,
-                                                            onClick = {
-                                                                val currentPlaylist = targetPlaylist ?: return@TextButton
-                                                                scope.launch {
-                                                                    duplicateSongsMutating = true
-                                                                    try {
-                                                                        val result = removeTracksFromPlaylistByIndices(
-                                                                            context = context,
-                                                                            prefs = prefs,
-                                                                            playlist = currentPlaylist,
-                                                                            removeIndices = setOf(entry.originalIndex),
-                                                                            playbackState = playbackState,
-                                                                            onStopPlayback = onStopPlayback
-                                                                        )
-                                                                        if (result.removedCount > 0) {
-                                                                            Toast.makeText(
-                                                                                context,
-                                                                                context.getString(R.string.player_duplicate_tracks_delete_done, result.removedCount),
-                                                                                Toast.LENGTH_SHORT
-                                                                            ).show()
-                                                                        }
-                                                                        if (result.failedNames.isNotEmpty()) {
-                                                                            val firstFailed = result.failedNames.first()
-                                                                            Toast.makeText(
-                                                                                context,
-                                                                                context.getString(
-                                                                                    R.string.player_duplicate_tracks_delete_partial_failed,
-                                                                                    result.failedNames.size,
-                                                                                    firstFailed
-                                                                                ),
-                                                                                Toast.LENGTH_LONG
-                                                                            ).show()
-                                                                        }
-                                                                        duplicateSongsTargetPlaylist = result.updatedPlaylist
-                                                                        duplicateSongGroups = updateDuplicateGroupsAfterRemoval(
-                                                                            duplicateSongGroups,
-                                                                            result.removedIndices
-                                                                        )
-                                                                    } finally {
-                                                                        duplicateSongsMutating = false
-                                                                    }
-                                                                }
-                                                            }
-                                                        ) {
-                                                            Icon(
-                                                                Icons.Default.Delete,
-                                                                contentDescription = context.getString(R.string.common_delete)
-                                                            )
-                                                            Spacer(Modifier.width(4.dp))
-                                                            Text(context.getString(R.string.common_delete))
-                                                        }
-                                                    }
-                                                    if (entryIndex < group.entries.lastIndex) {
-                                                        Spacer(Modifier.height(6.dp))
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(onClick = { closeDuplicateSongsDialog() }) {
-                                Text(context.getString(R.string.common_close))
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if (showBulkDeleteTracksDialog && selectedPlaylist != null) {
-            val targetPlaylist = selectedPlaylist
-            AlertDialog(
-                onDismissRequest = {
-                    if (!bulkDeleteTracksInProgress) {
-                        showBulkDeleteTracksDialog = false
-                    }
-                },
-                title = { Text(context.getString(R.string.player_bulk_delete_tracks_confirm_title)) },
-                text = {
-                    Column {
-                        Text(
-                            if (bulkDeleteHiddenMode) {
-                                if (targetPlaylist.isDirectorySource) {
-                                    context.getString(
-                                        R.string.player_bulk_delete_hidden_tracks_confirm_directory,
-                                        bulkDeleteTrackCount
-                                    )
-                                } else {
-                                    context.getString(
-                                        R.string.player_bulk_delete_hidden_tracks_confirm_regular,
-                                        bulkDeleteTrackCount
-                                    )
-                                }
-                            } else if (targetPlaylist.isDirectorySource) {
-                                context.getString(
-                                    R.string.player_bulk_delete_tracks_confirm_directory,
-                                    bulkDeleteTrackCount
-                                )
-                            } else {
-                                context.getString(
-                                    R.string.player_bulk_delete_tracks_confirm_regular,
-                                    bulkDeleteTrackCount
-                                )
-                            },
-                            color = if (targetPlaylist.isDirectorySource) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            if (bulkDeleteHiddenMode) {
-                                context.getString(R.string.player_bulk_delete_hidden_tracks_scope_filtered)
-                            } else if (bulkDeleteWasFiltered) {
-                                context.getString(R.string.player_bulk_delete_tracks_scope_filtered)
-                            } else {
-                                context.getString(R.string.player_bulk_delete_tracks_scope_all)
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        enabled = !bulkDeleteTracksInProgress && bulkDeleteTrackIndices.isNotEmpty(),
-                        onClick = {
-                            val removeSet = bulkDeleteTrackIndices
-                            bulkDeleteTracksInProgress = true
-                            scope.launch {
-                                try {
-                                    val result = removeTracksFromPlaylistByIndices(
-                                        context = context,
-                                        prefs = prefs,
-                                        playlist = targetPlaylist,
-                                        removeIndices = removeSet,
-                                        playbackState = playbackState,
-                                        onStopPlayback = onStopPlayback
-                                    )
-                                    if (result.removedCount > 0) {
-                                        Toast.makeText(
-                                            context,
-                                            context.getString(R.string.player_bulk_delete_tracks_done, result.removedCount),
-                                            Toast.LENGTH_SHORT
-                                        ).show()
-                                    }
-                                    if (result.failedNames.isNotEmpty()) {
-                                        Toast.makeText(
-                                            context,
-                                            if (bulkDeleteHiddenMode) {
-                                                context.getString(
-                                                    R.string.player_bulk_delete_hidden_tracks_partial_failed,
-                                                    result.failedNames.size,
-                                                    result.failedNames.first()
-                                                )
-                                            } else {
-                                                context.getString(
-                                                    R.string.player_bulk_delete_tracks_partial_failed,
-                                                    result.failedNames.size,
-                                                    result.failedNames.first()
-                                                )
-                                            },
-                                            Toast.LENGTH_LONG
-                                        ).show()
-                                    }
-                                } finally {
-                                    bulkDeleteTracksInProgress = false
-                                    showBulkDeleteTracksDialog = false
-                                    bulkDeleteTrackIndices = emptySet()
-                                    bulkDeleteTrackCount = 0
-                                    bulkDeleteWasFiltered = false
-                                    bulkDeleteHiddenMode = false
-                                }
-                            }
-                        }
-                    ) {
-                        Text(context.getString(R.string.common_delete))
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        enabled = !bulkDeleteTracksInProgress,
-                        onClick = {
-                            showBulkDeleteTracksDialog = false
-                            bulkDeleteHiddenMode = false
-                        }
-                    ) {
-                        Text(context.getString(R.string.common_cancel))
-                    }
-                }
-            )
-        }
-        if (showAddBookmarkDialog) {
-            AlertDialog(
-                onDismissRequest = { showAddBookmarkDialog = false },
-                title = { Text(context.getString(R.string.player_save_playback_bookmark_title)) },
-                text = {
-                    Column {
-                        Text(
-                            context.getString(
-                                R.string.player_bookmark_position,
-                                bookmarkPendingTrackIndex + 1,
-                                formatPlaybackTime(bookmarkPendingPositionMs.toInt())
-                            ),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (bookmarkPendingTrackName.isNotBlank()) {
-                            Text(
-                                bookmarkPendingTrackName,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = bookmarkNoteInput,
-                            onValueChange = { bookmarkNoteInput = it },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(context.getString(R.string.player_bookmark_note_label)) },
-                            placeholder = { Text(context.getString(R.string.player_bookmark_note_placeholder)) },
-                            minLines = 2,
-                            maxLines = 4
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            val pid = bookmarkPendingPlaylistId
-                            if (pid == null) return@Button
-                            scope.launch {
-                                prefs.addPlayerListBookmark(
-                                    playlistId = pid,
-                                    dirUri = bookmarkPendingDirUri,
-                                    trackIndex = bookmarkPendingTrackIndex,
-                                    positionMs = bookmarkPendingPositionMs,
-                                    trackName = bookmarkPendingTrackName,
-                                    note = bookmarkNoteInput
-                                )
-                                showAddBookmarkDialog = false
-                                Toast.makeText(context, context.getString(R.string.player_bookmark_saved), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    ) { Text(context.getString(R.string.common_save)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showAddBookmarkDialog = false }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        editingBookmarkId?.let { bookmarkId ->
-            AlertDialog(
-                onDismissRequest = { editingBookmarkId = null },
-                title = { Text(context.getString(R.string.player_edit_bookmark_note)) },
-                text = {
-                    OutlinedTextField(
-                        value = editingBookmarkNote,
-                        onValueChange = { editingBookmarkNote = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(context.getString(R.string.common_note)) },
-                        minLines = 2,
-                        maxLines = 4
-                    )
-                },
-                confirmButton = {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                prefs.updatePlayerListBookmarkNote(bookmarkId, editingBookmarkNote)
-                                editingBookmarkId = null
-                            }
-                        }
-                    ) { Text(context.getString(R.string.common_save)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { editingBookmarkId = null }) { Text(context.getString(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showBookmarkManagerDialog) {
-            Dialog(onDismissRequest = { showBookmarkManagerDialog = false }) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    tonalElevation = 6.dp,
-                    modifier = Modifier.fillMaxWidth().widthIn(max = 680.dp)
-                ) {
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                            .heightIn(max = 560.dp)
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                context.getString(R.string.player_bookmark_manager_title),
-                                style = MaterialTheme.typography.titleLarge,
-                                modifier = Modifier.weight(1f)
-                            )
-                            TextButton(onClick = { showBookmarkManagerDialog = false }) {
-                                Text(context.getString(R.string.common_close))
-                            }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        if (playerBookmarks.isEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(context.getString(R.string.player_no_saved_bookmarks), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } else {
-                            LazyColumn(
-                                modifier = Modifier.weight(1f),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                items(playerBookmarks.sortedByDescending { it.savedAt }, key = { it.id }) { bm ->
-                                    val playlist = bm.playlistId?.let { playlistById[it] }
-                                    val jumpEnabled = playlist != null && bm.trackIndex in playlist.uris.indices
-                                    Card(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-                                    ) {
-                                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
-                                            Text(
-                                                playlist?.name ?: context.getString(R.string.player_playlist_missing),
-                                                style = MaterialTheme.typography.titleSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            Spacer(Modifier.height(4.dp))
-                                            Text(
-                                                context.getString(
-                                                    R.string.player_bookmark_position_compact,
-                                                    bm.trackIndex + 1,
-                                                    formatPlaybackTime(bm.positionMs.toInt())
-                                                ),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                            if (bm.trackName.isNotBlank()) {
-                                                Text(
-                                                    bm.trackName,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                            if (bm.note.isNotBlank()) {
-                                                Spacer(Modifier.height(4.dp))
-                                                Text(
-                                                    bm.note,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurface,
-                                                    maxLines = 3,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                            }
-                                            Spacer(Modifier.height(8.dp))
-                                            Row(
-                                                Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                            ) {
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        editingBookmarkId = bm.id
-                                                        editingBookmarkNote = bm.note
-                                                    }
-                                                ) {
-                                                    Text(context.getString(R.string.common_note))
-                                                }
-                                                OutlinedButton(
-                                                    onClick = {
-                                                        scope.launch {
-                                                            prefs.deletePlayerListBookmark(bm.id)
-                                                        }
-                                                    }
-                                                ) {
-                                                    Text(context.getString(R.string.common_delete))
-                                                }
-                                                Button(
-                                                    onClick = {
-                                                        playlist?.let {
-                                                            startPlaylistFromIndex(it, bm.trackIndex, bm.positionMs.toInt())
-                                                            showBookmarkManagerDialog = false
-                                                        }
-                                                    },
-                                                    enabled = jumpEnabled
-                                                ) {
-                                                    Text(context.getString(R.string.player_jump))
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun QuickObfuscatePasswordDialog(
     isMasked: Boolean,
