@@ -82,11 +82,11 @@ internal fun htmlViewerRouteFromUrl(url: String): TransientRoute.HtmlViewer =
  * 全部通过 [onRouteChange] 回传给 AppShell，Host 自身不持有跨组合状态。
  */
 @Composable
-fun TransientViewerRouteHost(
+internal fun TransientViewerRouteHost(
     route: TransientRoute,
     prefs: Preferences,
     markdownViewerSessionCache: MarkdownViewerSessionCache,
-    bookNoteController: BookNoteTabController,
+    bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onRouteChange: (TransientRoute?) -> Unit
 ) {
@@ -142,11 +142,11 @@ fun TransientViewerRouteHost(
                 uri = route.uri,
                 fileName = route.fileName,
                 prefs = prefs,
-                bookNoteLoadedData = bookNoteController.data,
-                bookNoteEntries = bookNoteController.entriesSnapshot,
-                bookNoteInProgress = bookNoteController.inProgress,
-                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
-                onBookNoteEntriesChanged = bookNoteController.updateEntries,
+                bookNoteLoadedData = bookNote.bookNoteData,
+                bookNoteEntries = bookNote.bookNoteEntries,
+                bookNoteInProgress = bookNote.bookNoteInProgress,
+                onRequestOpenBookNotes = bookNote::requestOpenBookNotes,
+                onBookNoteEntriesChanged = bookNote::updateBookNoteEntries,
                 onBack = { onRouteChange(null) }
             )
         }

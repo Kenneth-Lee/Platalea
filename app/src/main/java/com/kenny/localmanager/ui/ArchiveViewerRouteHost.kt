@@ -25,7 +25,7 @@ import java.io.File
 internal fun ArchiveViewerRouteHost(
     workflow: ArchiveReaderWorkflowState,
     markdownViewerSessionCache: MarkdownViewerSessionCache,
-    bookNoteController: BookNoteTabController,
+    bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onSavePicZipImage: suspend (File, String) -> Boolean,    onEncryptedExitRequest: (EncryptedCacheExitDialogState) -> Unit
 ) {
@@ -132,11 +132,11 @@ internal fun ArchiveViewerRouteHost(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,
-                bookNoteLoadedData = bookNoteController.data,
-                bookNoteEntries = bookNoteController.entriesSnapshot,
-                bookNoteInProgress = bookNoteController.inProgress,
-                onRequestOpenBookNotes = bookNoteController.requestOpenWithCachedPassword,
-                onBookNoteEntriesChanged = bookNoteController.updateEntries,
+                bookNoteLoadedData = bookNote.bookNoteData,
+                bookNoteEntries = bookNote.bookNoteEntries,
+                bookNoteInProgress = bookNote.bookNoteInProgress,
+                onRequestOpenBookNotes = bookNote::requestOpenBookNotes,
+                onBookNoteEntriesChanged = bookNote::updateBookNoteEntries,
                 onBack = { close() },
                 logDebug = null
             )

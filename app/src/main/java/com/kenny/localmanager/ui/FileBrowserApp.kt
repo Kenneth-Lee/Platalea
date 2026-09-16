@@ -140,8 +140,6 @@ import android.webkit.MimeTypeMap
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
-import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
-import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.data.Playlist
@@ -214,7 +212,6 @@ import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import com.kenny.localmanager.dict.isStarDictImportCandidate
-import com.kenny.localmanager.requestPinnedTabShortcut
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
@@ -2346,23 +2343,19 @@ fun FileBrowserApp(
     }
 
 
-    val quickNoteController = rememberQuickNoteTabController(
+    val quickNoteTab = quickNoteTabFeature(
+        prefs = prefs,
         rootUri = browserTab.rootUri,
         isActive = currentMainTab == MainTab.QUICK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
-    val bookNoteController = rememberBookNoteTabController(
+    val bookNoteTab = bookNoteTabFeature(
         rootUri = browserTab.rootUri,
         isActive = currentMainTab == MainTab.BOOK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
 
     // Config 域：配置导入 / 导出工作流（独立状态持有者，写盘后通过回调刷新目录）
-    val configImportExportWorkflow = rememberConfigImportExportWorkflow(
-        prefs = prefs,
-        rootUriProvider = { browserTab.rootUri },
-        onConfigFileWritten = { browserTab.refresh() }
-    )
 
     val treeLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocumentTree()
@@ -2431,14 +2424,12 @@ fun FileBrowserApp(
 
         fun requestOpenQuickNoteTabFromDirectory() {
             requestOpenMainTab(MainTab.QUICK_NOTE)
-            quickNoteController.requestOpenWithCachedPassword(true)
+            quickNoteTab.requestOpenWithCachedPassword()
         }
 
         var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
         // App-level transient dialogs / playback-target workflow
-        var showCacheManagementDialog by remember { mutableStateOf(false) }
-        var showKeyManagementDialog by remember { mutableStateOf(false) }
         LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) browserTab.refresh() }
         var lastBackPressTime by remember { mutableStateOf(0L) }
         fun finishCurrentActivity() {
@@ -2447,15 +2438,7 @@ fun FileBrowserApp(
 
         fun requestExitApp() {
             if (activeMainTab == MainTab.QUICK_NOTE) {
-                if (quickNoteController.inProgress) {
-                    Toast.makeText(context, context.getString(R.string.browser_quick_note_busy), Toast.LENGTH_SHORT).show()
-                    return
-                }
-                quickNoteController.persistIfNeeded(context.getString(R.string.quick_note_persist_reason_exit)) { saved ->
-                    if (saved) {
-                        finishCurrentActivity()
-                    }
-                }
+                quickNoteTab.requestExitApp(context) { finishCurrentActivity() }
                 return
             }
             if (bypassExitDoubleConfirm) {
@@ -2496,14 +2479,26 @@ fun FileBrowserApp(
             }
         }
 
-        // Tab domain services
-        val ftpManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
-        val localShareManager = remember { com.kenny.localmanager.ftp.FtpServerManager(context) }
-        val familyNetworkManager = remember { com.kenny.localmanager.family.FamilyNetworkManager(context) }
-        // 网络服务域共享配置（FTP / WebUI / 家庭网络）：状态所有权在 NetworkServiceConfigState
-        val networkServiceConfig = rememberNetworkServiceConfigState(prefs)
-            var showGitConfigDialog by remember { mutableStateOf(false) }
-        var showPubkeyShareScreen by remember { mutableStateOf(false) }
+        // 网络服务域（FTP / WebUI / 家庭网络）：三服务对象 + 共享配置 + 生命周期接线全部内聚于工厂
+        val networkServices = networkServicesTabs(
+            context = context,
+            prefs = prefs,
+            activeMainTab = currentMainTab ?: MainTab.DIRECTORY,
+            rootUri = browserTab.rootUri,
+            displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!,
+            familyRootUri = browserTab.rootUri ?: initialDirUri,
+            hideDotFiles = browserTab.hideDotFiles,
+            onRequestExitApp = { requestExitApp() }
+        )
+        // Config 域：设置 tab 功能对象（设置项镜像、对话框群、导入导出 workflow 内聚于工厂）
+        val configTab = configTabFeature(
+            context = context,
+            prefs = prefs,
+            scope = scope,
+            networkConfig = networkServices.config,
+            browserRootUri = { browserTab.rootUri },
+            onFilesChanged = { browserTab.refresh() }
+        )
         // Git 分享临时流程（目录文件共享到 Git 仓库）
         var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
         val shareGitLogs = remember { mutableStateListOf<String>() }
@@ -2525,47 +2520,6 @@ fun FileBrowserApp(
             onOpenPlayerTab = { requestOpenPlayerTab() },
         )
 
-        LaunchedEffect(prefs) {
-            val legacyExtra = prefs.familyNetworkExtraRoles.first()
-            if (!legacyExtra.isNullOrBlank()) {
-                familyNetworkManager.migrateUserRolesFromLegacyConfig(legacyExtra)
-                prefs.setFamilyNetworkExtraRoles(null)
-            }
-        }
-        LaunchedEffect(activeMainTab) {
-            withContext(Dispatchers.IO) {
-                if (activeMainTab != MainTab.FTP) {
-                    ftpManager.stop()
-                }
-                if (activeMainTab != MainTab.LOCAL_SHARE) {
-                    localShareManager.stop()
-                }
-            }
-        }
-        // AppShell 编排：网络服务配置变化时同步到家庭网络服务
-        LaunchedEffect(
-            networkServiceConfig.ftpPassword,
-            networkServiceConfig.localNetworkServiceEnabled,
-            networkServiceConfig.familyNetworkUserName,
-            networkServiceConfig.familyNetworkAvatarId,
-            networkServiceConfig.familyNetworkHostName
-        ) {
-            familyNetworkManager.configure(
-                networkServiceConfig.ftpPassword,
-                networkServiceConfig.localNetworkServiceEnabled,
-                networkServiceConfig.familyNetworkUserName.ifBlank { null },
-                networkServiceConfig.familyNetworkAvatarId.ifBlank { null },
-                networkServiceConfig.familyNetworkHostName.ifBlank { null }
-            )
-        }
-        LaunchedEffect(activeMainTab) {
-            familyNetworkManager.setFamilyTabActive(activeMainTab == MainTab.FAMILY_NETWORK)
-        }
-        DisposableEffect(familyNetworkManager) {
-            onDispose {
-                familyNetworkManager.destroy()
-            }
-        }
         BackHandler {
             when {
                 progressOp != null -> {
@@ -2579,12 +2533,10 @@ fun FileBrowserApp(
                     if (!guarded || !crypto.inProgress) crypto.close()
                 }
                 showChangeRootConfirm -> showChangeRootConfirm = false
-                showKeyManagementDialog -> showKeyManagementDialog = false
-                showCacheManagementDialog -> showCacheManagementDialog = false
-                showGitConfigDialog -> showGitConfigDialog = false
+                configTab.hasOpenConfigDialog -> configTab.closeTopConfigDialog()
                 browserTab.showPendingDeleteConfirm -> browserTab.showPendingDeleteConfirm = false
                 browserTab.showPendingList -> browserTab.showPendingList = false
-                familyNetworkManager.state.value.openBoardSession != null -> familyNetworkManager.closeBulletinBoard()
+                networkServices.family.isBulletinBoardOpen -> networkServices.family.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 archiveOps.request != null -> archiveOps.close()
                 archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
@@ -2594,10 +2546,6 @@ fun FileBrowserApp(
                     requestExitApp()
                 }
             }
-        }
-            var startupDecryptKey by remember { mutableStateOf(false) }
-        LaunchedEffect(prefs) {
-            prefs.startupDecryptKey.collect { startupDecryptKey = it }
         }
         val copyMoveLog: ((String) -> Unit)? = null
         suspend fun runWithProgress(
@@ -2923,7 +2871,6 @@ fun FileBrowserApp(
 
 
 
-        val ftpRootUri = browserTab.rootUri
         Column(Modifier.fillMaxSize()) {
             if (crypto.pubEncryptInProgress || saveInProgress) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
@@ -2936,7 +2883,7 @@ fun FileBrowserApp(
             archiveReader = archiveReader,
             archiveOps = archiveOps,
             crypto = crypto,
-            configImportExportWorkflow = configImportExportWorkflow,
+            configImportExportWorkflow = configTab.importExport,
             markdownViewerSessionCache = markdownViewerSessionCache,
             playbackState = playerTab.playbackState,
             initialDirUri = initialDirUri,
@@ -3007,114 +2954,17 @@ fun FileBrowserApp(
                         }
                     },
                         onClearRecentItems = {
-                        scope.launch {
-                            prefs.clearRecentOpenItems()
+                            scope.launch {
+                                prefs.clearRecentOpenItems()
+                            }
                         }
-                    }
                     )
                 )
             },
-            mainTabFeature(
-                MainTab.FTP,
-                {
-                        FtpTabRoute(
-                            FtpTabRouteState(
-                                rootUri = ftpRootUri,
-                                displayUri = displayUri,
-                                ftpManager = ftpManager,
-                                ftpPort = networkServiceConfig.ftpPort,
-                                ftpPassword = networkServiceConfig.ftpPassword,
-                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        )
-                    }
-            ),
-            mainTabFeature(
-                MainTab.LOCAL_SHARE,
-                {
-                        WebUiTabRoute(
-                            WebUiTabRouteState(
-                                rootUri = ftpRootUri,
-                                displayUri = displayUri,
-                                manager = localShareManager,
-                                port = networkServiceConfig.ftpPort,
-                                password = networkServiceConfig.ftpPassword,
-                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        )
-                    }
-            ),
-            mainTabFeature(
-                MainTab.FAMILY_NETWORK,
-                {
-                        FamilyNetworkScreen(
-                            manager = familyNetworkManager,
-                            networkPassword = networkServiceConfig.ftpPassword,
-                            localServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
-                            familyNetworkUserName = networkServiceConfig.familyNetworkUserName,
-                            familyNetworkAvatarId = networkServiceConfig.familyNetworkAvatarId,
-                            familyNetworkHostName = networkServiceConfig.familyNetworkHostName,
-                            timeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
-                            rootUri = browserTab.rootUri ?: initialDirUri,
-                            hideDotFiles = browserTab.hideDotFiles,
-                            onDismiss = { requestExitApp() }
-                        )
-                    }
-            ),
-            mainTabFeature(
-                MainTab.CONFIG,
-                {
-                        ConfigTabRoute(
-                            ConfigTabRouteState(
-                                filterVisible = browserTab.filterVisible,
-                                onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
-                                hideDotFiles = browserTab.hideDotFiles,
-                                onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
-                                startupDecryptKey = startupDecryptKey,
-                                onStartupDecryptKeyChange = { enabled ->
-                                    scope.launch { prefs.setStartupDecryptKey(enabled) }
-                                    if (!enabled) SecretKeyPasswordCache.clear()
-                                },
-                                viewerPreviewBytes = viewerPreviewBytes,
-                                onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
-                                ftpPassword = networkServiceConfig.ftpPassword ?: "",
-                                onFtpPasswordChange = { s -> networkServiceConfig.setFtpPassword(s.ifBlank { null }) },
-                                networkServiceTimeoutMinutes = networkServiceConfig.networkServiceTimeoutMinutes,
-                                onNetworkServiceTimeoutMinutesChange = { networkServiceConfig.setNetworkServiceTimeoutMinutes(it) },
-                                localNetworkServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
-                                onLocalNetworkServiceEnabledChange = { enabled -> networkServiceConfig.setLocalNetworkServiceEnabled(enabled) },
-                                familyNetworkUserName = networkServiceConfig.familyNetworkUserName,
-                                onFamilyNetworkUserNameChange = { name -> networkServiceConfig.setFamilyNetworkUserName(name) },
-                                familyNetworkAvatarId = networkServiceConfig.familyNetworkAvatarId,
-                                onFamilyNetworkAvatarIdChange = { avatarId -> networkServiceConfig.setFamilyNetworkAvatarId(avatarId) },
-                                familyNetworkHostName = networkServiceConfig.familyNetworkHostName,
-                                onFamilyNetworkHostNameChange = { name -> networkServiceConfig.setFamilyNetworkHostName(name) },
-                                onOpenGitConfig = { showGitConfigDialog = true },
-                                onManageKeys = { showKeyManagementDialog = true },
-                                onOpenCacheManagement = { showCacheManagementDialog = true },
-                                onExportConfig = { configImportExportWorkflow.openExportDialog() },
-                                onCreatePlayerShortcut = {
-                                    val playerErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_PLAYER)
-                                    if (playerErr == null) {
-                                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_requested), Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.config_player_shortcut_failed, playerErr), Toast.LENGTH_LONG).show()
-                                    }
-                                },
-                                onCreateQuickNoteShortcut = {
-                                    val quickNoteErr = requestPinnedTabShortcut(context, SHORTCUT_TAB_QUICK_NOTE)
-                                    if (quickNoteErr == null) {
-                                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_requested), Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.config_quick_note_shortcut_failed, quickNoteErr), Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            )
-                        )
-                    }
-            ),
+            networkServices.ftp,
+            networkServices.webUi,
+            networkServices.family,
+            configTab,
             mainTabFeature(
                 MainTab.GIT_SHARE,
                 {
@@ -3138,18 +2988,8 @@ fun FileBrowserApp(
                         )
                     }
             ),
-            mainTabFeature(
-                MainTab.BOOK_NOTE,
-                {
-                        BookNoteTabRoute(controller = bookNoteController)
-                    }
-            ),
-            mainTabFeature(
-                MainTab.QUICK_NOTE,
-                {
-                        QuickNoteTabRoute(prefs = prefs, controller = quickNoteController)
-                    }
-            ),
+            bookNoteTab,
+            quickNoteTab,
             mainTabFeature(
                 MainTab.QUICK_CRYPTO,
                 {
@@ -3175,7 +3015,7 @@ fun FileBrowserApp(
             playerTab
                     )
                 )
-            
+            } // （修复）Box(weight 1f) 闭合：原版此处闭合后 TabBar 才能位于 Box 之下、Column 之内
 
             ScrollableMainTabBar(
                 activeMainTab = activeMainTab,
@@ -3184,9 +3024,9 @@ fun FileBrowserApp(
         }
         bulletinForwardPayload?.let { payload ->
             BulletinForwardTargetFlow(
-                manager = familyNetworkManager,
+                manager = networkServices.familyNetworkManager,
                 payload = payload,
-                localServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,
+                localServiceEnabled = networkServices.config.localNetworkServiceEnabled,
                 keepEphemeralSession = activeMainTab != MainTab.FAMILY_NETWORK,
                 onDismiss = { bulletinForwardPayload = null },
                 onComplete = {
@@ -3196,10 +3036,6 @@ fun FileBrowserApp(
             )
         }
         // Config 域：配置导入 / 导出工作流对话框（状态与逻辑在 ConfigImportExportWorkflowState 中）
-        ConfigImportExportDialogs(state = configImportExportWorkflow)
-        if (showCacheManagementDialog) {
-            CacheManagementDialog(context = context, onDismiss = { showCacheManagementDialog = false })
-        }
         if (showRootSwitchDialog) {
             AlertDialog(
                 onDismissRequest = { showRootSwitchDialog = false },
@@ -3265,37 +3101,6 @@ fun FileBrowserApp(
                 },
                 dismissButton = {
                     TextButton(onClick = { showRootSwitchDialog = false }) { Text(stringResource(R.string.common_cancel)) }
-                }
-            )
-        }
-        if (showGitConfigDialog) {
-            GitConfigDialog(
-                prefs = prefs,
-                rootUri = browserTab.rootUri?.let { normalizeContentUriString(it) },
-                onDismiss = {
-                    showGitConfigDialog = false
-                    browserTab.refresh()
-                }
-            )
-        }
-        if (showKeyManagementDialog) {
-            KeyManagementDialog(
-                context = context,
-                onDismiss = { showKeyManagementDialog = false },
-                onKeysChanged = { browserTab.refresh() },
-                onOpenPubkeyShare = {
-                    showKeyManagementDialog = false
-                    showPubkeyShareScreen = true
-                }
-            )
-        }
-        if (showPubkeyShareScreen) {
-            PubkeyShareScreen(
-                prefs = prefs,
-                rootUri = browserTab.rootUri?.let { normalizeContentUriString(it) },
-                onDismiss = {
-                    showPubkeyShareScreen = false
-                    browserTab.refresh()
                 }
             )
         }
@@ -3495,14 +3300,6 @@ fun FileBrowserApp(
             onBatchFinished = { finishPendingListAndReturn() }
         )
 
-        TabPasswordPromptDialog(
-            state = quickNoteController.passwordPromptState,
-            fileName = QUICK_NOTE_GPG_FILE_NAME
-        )
-        TabPasswordPromptDialog(
-            state = bookNoteController.passwordPromptState,
-            fileName = QUICK_NOTE_GPG_FILE_NAME
-        )
         // Archive 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 ArchiveReaderWorkflowState）
         ArchiveReaderDialogs(archiveReader)
         // Archive 操作向导域：解压 / 压缩表单对话框（确认后由宿主执行文件操作）
@@ -3543,6 +3340,9 @@ fun FileBrowserApp(
             )
         }
     }
+    // （修复）MainTabsRootContent 局部函数定义至此闭合。
+    // 5b3f9ec 平移时丢失了此闭合括号，导致下方顶层 when 被吞进定义体，
+    // else -> MainTabsRootContent() 成为永不可达的递归调用，主界面组合为空（白屏）。
     when {
         showUnlockGate -> {
             BackHandler { (context as? Activity)?.finish() }
@@ -3643,7 +3443,7 @@ fun FileBrowserApp(
                 route = transientRoute!!,
                 prefs = prefs,
                 markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNoteController = bookNoteController,
+                bookNote = bookNoteTab,
                 recordRecentOpen = { type, key, title, uri, playlistId ->
                     recordRecentOpen(
                         type = type,
@@ -3661,7 +3461,7 @@ fun FileBrowserApp(
             ArchiveViewerRouteHost(
                 workflow = archiveReader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNoteController = bookNoteController,
+                bookNote = bookNoteTab,
                 recordRecentOpen = { type, key, title, uri, playlistId ->
                     recordRecentOpen(
                         type = type,
@@ -3787,8 +3587,6 @@ fun FileBrowserApp(
             }
         )
     }
-
-}
 }
 
 /** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
