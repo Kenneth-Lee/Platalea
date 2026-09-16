@@ -195,13 +195,25 @@ internal typealias RunProgressBlock = suspend (
     block: suspend ((Int) -> Unit) -> Unit
 ) -> Unit
 
-internal enum class MainTab(val key: String, val labelRes: Int) {
+/**
+ * tab 的退出恢复策略（AppShell 编排约定）：
+ * - PERSISTENT：常规 tab，退出时保存、下次启动恢复到它
+ * - TRANSIENT：会话型 tab（网络服务等），退出不作为恢复目标，
+ *   启动恢复时回落到最近的 PERSISTENT tab
+ */
+internal enum class TabExitRestorePolicy { PERSISTENT, TRANSIENT }
+
+internal enum class MainTab(
+    val key: String,
+    val labelRes: Int,
+    val exitRestorePolicy: TabExitRestorePolicy = TabExitRestorePolicy.PERSISTENT
+) {
     DIRECTORY("directory", R.string.main_tab_directory),
     RECENT("recent", R.string.main_tab_recent),
     PLAYER("player", R.string.main_tab_player),
-    FTP("ftp", R.string.main_tab_ftp),
-    LOCAL_SHARE("local_share", R.string.main_tab_local_share),
-    FAMILY_NETWORK("family_network", R.string.main_tab_family_network),
+    FTP("ftp", R.string.main_tab_ftp, TabExitRestorePolicy.TRANSIENT),
+    LOCAL_SHARE("local_share", R.string.main_tab_local_share, TabExitRestorePolicy.TRANSIENT),
+    FAMILY_NETWORK("family_network", R.string.main_tab_family_network, TabExitRestorePolicy.TRANSIENT),
     CONFIG("config", R.string.main_tab_config),
     GIT_SHARE("git_share", R.string.main_tab_git_share),
     GIT_PROJECTS("git_projects", R.string.main_tab_git_projects),
@@ -263,110 +275,10 @@ internal fun dedupeAudioList(audioList: List<DocumentFileModel>): List<DocumentF
     return audioList.filter { seen.add(it.uri.toString()) }
 }
 
-private fun notifyPlaybackTrackRemoved(context: Context, playlistId: String, removedIndex: Int) {
-    val intent = Intent(context, PlaybackService::class.java).apply {
-        action = ACTION_REMOVE_PLAYLIST_TRACK
-        putExtra(EXTRA_PLAYLIST_ID, playlistId)
-        putExtra(EXTRA_START_INDEX, removedIndex)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-}
 
-private fun notifyPlaybackPlaylistReloaded(
-    context: Context,
-    playlistId: String,
-    startIndex: Int,
-    startPositionMs: Int
-) {
-    val intent = Intent(context, PlaybackService::class.java).apply {
-        action = ACTION_RELOAD_PLAYLIST
-        putExtra(EXTRA_PLAYLIST_ID, playlistId)
-        putExtra(EXTRA_START_INDEX, startIndex)
-        putExtra(EXTRA_START_POSITION_MS, startPositionMs)
-    }
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-}
 
-internal suspend fun removePlaylistTrackAt(
-    context: Context,
-    prefs: Preferences,
-    pl: Playlist,
-    trackIndex: Int,
-    playbackState: PlaybackState?,
-    deleteSourceFile: Boolean,
-    onStopPlayback: () -> Unit
-) {
-    if (trackIndex !in pl.uris.indices) return
-    if (deleteSourceFile && pl.isDirectorySource) {
-        val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[trackIndex]))
-        if (!deleted) {
-            Toast.makeText(context, context.getString(R.string.browser_delete_source_failed), Toast.LENGTH_SHORT).show()
-            return
-        }
-    }
-    val uris = pl.uris.toMutableList().apply { removeAt(trackIndex) }
-    val names = pl.names.toMutableList().apply {
-        if (trackIndex in indices) removeAt(trackIndex)
-    }
-    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
-    if (playbackState?.playlistId == pl.id) {
-        if (uris.isEmpty()) {
-            onStopPlayback()
-        } else {
-            notifyPlaybackTrackRemoved(context, pl.id, trackIndex)
-        }
-    }
-}
 
-internal fun syncPlaybackAfterPlaylistUpdate(
-    context: Context,
-    playlistId: String,
-    previousUris: List<String>,
-    previousTrackIndex: Int,
-    previousPositionMs: Int,
-    updated: Playlist,
-    playbackState: PlaybackState?,
-    onStopPlayback: () -> Unit
-) {
-    val state = playbackState ?: return
-    if (state.playlistId != playlistId) return
-    if (updated.uris.isEmpty()) {
-        onStopPlayback()
-        return
-    }
-    val currentUri = previousUris.getOrNull(previousTrackIndex)
-    val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
-    if (newIndex >= 0) {
-        notifyPlaybackPlaylistReloaded(context, playlistId, newIndex, previousPositionMs)
-    } else {
-        notifyPlaybackPlaylistReloaded(context, playlistId, 0, 0)
-    }
-}
 
-internal suspend fun createDirectoryPlaybackPlaylistAndStart(
-    context: Context,
-    prefs: Preferences,
-    directoryUri: String,
-    directoryName: String
-): Playlist? {
-    val audioList = withContext(Dispatchers.IO) {
-        collectMusicFilesRecursively(context, directoryUri).map { it.model }
-    }
-    if (audioList.isEmpty()) return null
-    return createNewPlaybackPlaylistAndStart(
-        context = context,
-        prefs = prefs,
-        audioList = audioList,
-        playlistName = directoryName.ifBlank {
-            context.getString(
-                R.string.player_playlist_default_name,
-                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
-            )
-        },
-        sourceType = Playlist.SOURCE_TYPE_DIRECTORY,
-        sourceUri = directoryUri
-    )
-}
 
 @Composable
 private fun ScrollableMainTabBar(
@@ -1357,7 +1269,9 @@ fun FileBrowserApp(
     initialLaunchTarget: String? = null
 ) {
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
+    // 配置功能（域服务）：持久配置唯一创建入口；各域经窄投影消费（F4 批次逐域替换 legacy）
+    val config = rememberConfigService(context)
+    val prefs = config.legacy
 
     // AppShell + DirectoryRoot state (long-lived while the app shell is active)
     // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
@@ -1384,10 +1298,6 @@ fun FileBrowserApp(
 
     // App shell commands / helpers
     val scope = rememberCoroutineScope()
-    val networkServiceTabs = remember {
-        setOf(MainTab.FTP, MainTab.FAMILY_NETWORK, MainTab.LOCAL_SHARE)
-    }
-    fun isNetworkServiceTab(tab: MainTab?): Boolean = tab in networkServiceTabs
 
     // Startup behavior
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
@@ -1428,10 +1338,10 @@ fun FileBrowserApp(
     // App 级 Tab 命令入口：所有跨域"切到某 Tab"的请求统一走这里，避免各处直接改 currentMainTab
     fun persistTabChoice(tab: MainTab, previousTab: MainTab?) {
         scope.launch {
-            val previousNonServer = previousTab
-            if (isNetworkServiceTab(tab)) {
-                if (previousNonServer != null && !isNetworkServiceTab(previousNonServer)) {
-                    prefs.setLastNonServerMainTab(previousNonServer.key)
+            val previousTab = previousTab
+            if (tab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
+                if (previousTab != null && previousTab.exitRestorePolicy == TabExitRestorePolicy.PERSISTENT) {
+                    prefs.setLastNonServerMainTab(previousTab.key)
                 }
             } else {
                 prefs.setLastNonServerMainTab(tab.key)
@@ -1451,21 +1361,13 @@ fun FileBrowserApp(
         switchMainTab(tab)
     }
 
-    fun requestOpenPlayerTab() {
-        requestOpenMainTab(MainTab.PLAYER)
-    }
-
-    fun requestOpenAboutTab() {
-        requestOpenMainTab(MainTab.ABOUT)
-    }
-
     LaunchedEffect(prefs, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
             Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
             withContext(Dispatchers.IO) {
                 CrashReportStore.exportLatestToRootAndClear(context)
             }
-            requestOpenAboutTab()
+            switchMainTab(MainTab.ABOUT)
             CrashReportStore.markLatestSeen(context)
             return@LaunchedEffect
         }
@@ -1474,7 +1376,7 @@ fun FileBrowserApp(
         val savedNonServerTab = MainTab.fromKey(prefs.lastNonServerMainTab.first())
         val restoreTab = if (launchTab != null) {
             launchTab
-        } else if (isNetworkServiceTab(savedTab)) {
+        } else if (savedTab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
             savedNonServerTab
         } else {
             savedTab
@@ -1709,13 +1611,13 @@ fun FileBrowserApp(
         // PlayerTab 域：播放器 tab 功能对象（接口面：MainTabFeature + PlayerTabApi，实现不可见）
         val playerTab = playerTabFeature(
             context = context,
-            prefs = prefs,
+            config = config.player,
             scope = scope,
             autoplayShortcut = launchShortcutTarget == MainTab.PLAYER,
             onRequestExitApp = { requestExitApp() },
             recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
             onBatchFinished = { browserTab.finishPendingList() },
-            onOpenPlayerTab = { requestOpenPlayerTab() },
+            onOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
         )
 
         BackHandler {
@@ -2100,8 +2002,9 @@ fun FileBrowserApp(
             onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
             onBatchMask = { list -> batchMaskOp = list },
             onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
+            onAddDirectoryToPlayback = { uri, name -> playerTab.requestCreateDirectoryPlaylist(uri, name) },
             onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
-            requestOpenPlayerTab = { requestOpenPlayerTab() },
+            requestOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
             onSetProgressCancel = { action -> progressCancelAction = action },
         )
@@ -2223,7 +2126,7 @@ fun FileBrowserApp(
                 manager = networkServices.familyNetworkManager,
                 payload = payload,
                 localServiceEnabled = networkServices.config.localNetworkServiceEnabled,
-                keepEphemeralSession = activeMainTab != MainTab.FAMILY_NETWORK,
+                keepEphemeralSession = !networkServices.familyNetworkForeground,
                 onDismiss = { bulletinForwardPayload = null },
                 onComplete = {
                     finishPendingListAndReturn()

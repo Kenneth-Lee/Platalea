@@ -129,12 +129,13 @@ import com.kenny.localmanager.file.RecursiveFileSearchHit
 import com.kenny.localmanager.file.searchFilesRecursively
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.dict.isStarDictImportCandidate
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -1500,10 +1501,13 @@ internal fun FileBrowserScreen(
             val uriToSave = latestCurrentUriState.value
             val itemsToSave = latestDisplayItemsState.value
             val wasLoading = latestLoadingState.value
-            runBlocking {
-                withContext(Dispatchers.IO) {
-                    persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
-                }
+            // [死锁修复] 原实现 runBlocking{ withContext(IO){ DataStore.edit } } 在主线程
+            // dispose 路径上同步等待 DataStore，与 Main 队列上的挂起协程互等（DataStore 官方
+            // 明确禁止主线程 runBlocking）。改用 NonCancellable 的独立 IO 协程 fire-and-forget：
+            // 不依赖已随组合取消的 scope，也不阻塞主线程；仅丢「dispose 后进程立即死亡」的
+            // 极端窗口（滚动位置记忆，非关键数据，ON_STOP 兜底同路径）。
+            CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+                persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
             }
         }
     }

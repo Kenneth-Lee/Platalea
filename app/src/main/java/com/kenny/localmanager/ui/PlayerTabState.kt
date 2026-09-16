@@ -30,10 +30,16 @@ import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.data.Playlist
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.player.ACTION_PLAY
 import com.kenny.localmanager.player.ACTION_RESUME
 import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
+import android.net.Uri
+import com.kenny.localmanager.file.collectMusicFilesRecursively
+import com.kenny.localmanager.file.deleteDocument
+import com.kenny.localmanager.player.ACTION_RELOAD_PLAYLIST
+import com.kenny.localmanager.player.ACTION_REMOVE_PLAYLIST_TRACK
+import com.kenny.localmanager.player.EXTRA_START_INDEX
+import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import kotlinx.coroutines.CoroutineScope
@@ -43,7 +49,7 @@ import kotlinx.coroutines.withContext
 
 internal suspend fun createNewPlaybackPlaylistAndStart(
     context: Context,
-    prefs: Preferences,
+    config: PlayerConfigView,
     audioList: List<DocumentFileModel>,
     playlistName: String? = null,
     sourceType: String = Playlist.SOURCE_TYPE_MANUAL,
@@ -62,7 +68,7 @@ internal suspend fun createNewPlaybackPlaylistAndStart(
         sourceType = sourceType,
         sourceUri = sourceUri
     )
-    withContext(Dispatchers.IO) { prefs.addPlaylist(playlist) }
+    withContext(Dispatchers.IO) { config.addPlaylist(playlist) }
     val intent = Intent(context, PlaybackService::class.java).apply {
         action = ACTION_PLAY
         putExtra(EXTRA_PLAYLIST_ID, playlist.id)
@@ -73,13 +79,13 @@ internal suspend fun createNewPlaybackPlaylistAndStart(
 
 private suspend fun appendToPlaybackPlaylistAndStart(
     context: Context,
-    prefs: Preferences,
+    config: PlayerConfigView,
     target: Playlist,
     audioList: List<DocumentFileModel>
 ): String? {
     if (audioList.isEmpty()) return null
     val result = withContext(Dispatchers.IO) {
-        prefs.appendTracksToPlaylist(
+        config.appendTracksToPlaylist(
             target.id,
             audioList.map { it.uri.toString() },
             audioList.map { it.name }
@@ -106,6 +112,8 @@ private suspend fun appendToPlaybackPlaylistAndStart(
 internal interface PlayerTabApi {
     val playbackState: PlaybackState?
     fun requestAddToPlayback(audioList: List<DocumentFileModel>)
+    /** 目录整体建列表并播放（browser 域"目录播放"出口：收集、建列表、记录最近、切 tab 编排内聚于此）。 */
+    fun requestCreateDirectoryPlaylist(directoryUri: String, directoryName: String)
 }
 
 /** 主程序持有的播放器 tab 接口：呈现（MainTabFeature）+ 跨域 API（PlayerTabApi）。 */
@@ -118,7 +126,7 @@ internal interface PlayerTabFeature : MainTabFeature, PlayerTabApi
 @Composable
 internal fun playerTabFeature(
     context: Context,
-    prefs: Preferences,
+    config: PlayerConfigView,
     scope: CoroutineScope,
     autoplayShortcut: Boolean,
     onRequestExitApp: () -> Unit,
@@ -129,7 +137,7 @@ internal fun playerTabFeature(
     val state = remember(autoplayShortcut) {
         PlayerTabState(
             context = context,
-            prefs = prefs,
+            config = config,
             scope = scope,
             autoplayShortcutPendingInitial = autoplayShortcut,
             onRequestExitApp = onRequestExitApp,
@@ -149,7 +157,7 @@ internal fun playerTabFeature(
  */
 private class PlayerTabState(
     val context: Context,
-    val prefs: Preferences,
+    val config: PlayerConfigView,
     private val scope: CoroutineScope,
     private val autoplayShortcutPendingInitial: Boolean,
     private val onRequestExitApp: () -> Unit,
@@ -198,7 +206,8 @@ private class PlayerTabState(
         PlayerTabRoute(
             PlayerTabRouteState(
                 context = context,
-                prefs = prefs,
+                config = config,
+                recordRecentOpen = recordRecentOpen,
                 playbackState = playbackState,
                 onRequestExitApp = onRequestExitApp
             )
@@ -206,19 +215,19 @@ private class PlayerTabState(
     }
     override val overlay: (@Composable () -> Unit)? = { PlayerPlaybackTargetDialog(state = this) }
 
-    /** 常驻接线：服务播放状态与 prefs 快照的镜像 collect（消费者分布在多个 tab，宿主顶层调用）。 */
+    /** 常驻接线：服务播放状态与配置快照的镜像 collect（消费者分布在多个 tab，宿主顶层调用）。 */
     fun attach() {
         scope.launch {
             PlaybackService.playbackState.collect { playbackState = it }
         }
         scope.launch {
-            prefs.playlists.collect {
+            config.playlists.collect {
                 playlists = it
                 playlistsLoaded = true
             }
         }
         scope.launch {
-            prefs.playerLastPlaylistId.collect { playerLastPlaylistId = it }
+            config.playerLastPlaylistId.collect { playerLastPlaylistId = it }
         }
     }
 
@@ -268,7 +277,7 @@ private class PlayerTabState(
     /** 新建播放列表并开始播放（含记录最近、批量收尾、切 tab、Toast 编排）。 */
     fun createNewPlaylistAndStart(audioList: List<DocumentFileModel>) {
         scope.launch {
-            val playlist = createNewPlaybackPlaylistAndStart(context, prefs, audioList) ?: return@launch
+            val playlist = createNewPlaybackPlaylistAndStart(context, config, audioList) ?: return@launch
             recordRecentOpen(
                 RECENT_TYPE_PLAYLIST,
                 playlist.id,
@@ -286,7 +295,7 @@ private class PlayerTabState(
     /** 追加到既有播放列表并开始播放（含记录最近、批量收尾、切 tab、Toast 编排）。 */
     fun appendToPlaylistAndStart(target: Playlist, audioList: List<DocumentFileModel>) {
         scope.launch {
-            val msg = appendToPlaybackPlaylistAndStart(context, prefs, target, audioList)
+            val msg = appendToPlaybackPlaylistAndStart(context, config, target, audioList)
             if (msg == null) {
                 Toast.makeText(context, context.getString(R.string.browser_add_to_playlist_failed), Toast.LENGTH_SHORT).show()
                 return@launch
@@ -302,6 +311,28 @@ private class PlayerTabState(
             onOpenPlayerTab()
             clearPendingTargetState()
             Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 目录整体建列表并播放（原 BrowserTabHost onCreateMusicPlaylist 编排）。 */
+    override fun requestCreateDirectoryPlaylist(directoryUri: String, directoryName: String) {
+        scope.launch {
+            val playlist = withContext(Dispatchers.IO) {
+                createDirectoryPlaybackPlaylistAndStart(context, config, directoryUri, directoryName)
+            }
+            if (playlist == null) {
+                Toast.makeText(context, context.getString(R.string.browser_no_music_in_dir), Toast.LENGTH_SHORT).show()
+            } else {
+                recordRecentOpen(
+                    RECENT_TYPE_PLAYLIST,
+                    playlist.id,
+                    playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
+                    null,
+                    playlist.id
+                )
+                onOpenPlayerTab()
+                Toast.makeText(context, context.getString(R.string.browser_playlist_from_dir_started), Toast.LENGTH_SHORT).show()
+            }
         }
     }
 }
@@ -423,4 +454,115 @@ private fun AudioDeviceInfo.debugLabel(): String {
         else -> "TYPE_$type"
     }
     return "$typeName(id=$id,name=${getProductName()})"
+}
+
+// ===== 播放列表持久化编排（自 FileBrowserApp.kt 平移；配置经 PlayerConfigView）=====
+
+private fun notifyPlaybackTrackRemoved(context: Context, playlistId: String, removedIndex: Int) {
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_REMOVE_PLAYLIST_TRACK
+        putExtra(EXTRA_PLAYLIST_ID, playlistId)
+        putExtra(EXTRA_START_INDEX, removedIndex)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+}
+
+
+private fun notifyPlaybackPlaylistReloaded(
+    context: Context,
+    playlistId: String,
+    startIndex: Int,
+    startPositionMs: Int
+) {
+    val intent = Intent(context, PlaybackService::class.java).apply {
+        action = ACTION_RELOAD_PLAYLIST
+        putExtra(EXTRA_PLAYLIST_ID, playlistId)
+        putExtra(EXTRA_START_INDEX, startIndex)
+        putExtra(EXTRA_START_POSITION_MS, startPositionMs)
+    }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+}
+
+
+internal fun syncPlaybackAfterPlaylistUpdate(
+    context: Context,
+    playlistId: String,
+    previousUris: List<String>,
+    previousTrackIndex: Int,
+    previousPositionMs: Int,
+    updated: Playlist,
+    playbackState: PlaybackState?,
+    onStopPlayback: () -> Unit
+) {
+    val state = playbackState ?: return
+    if (state.playlistId != playlistId) return
+    if (updated.uris.isEmpty()) {
+        onStopPlayback()
+        return
+    }
+    val currentUri = previousUris.getOrNull(previousTrackIndex)
+    val newIndex = currentUri?.let { uri -> updated.uris.indexOf(uri) } ?: -1
+    if (newIndex >= 0) {
+        notifyPlaybackPlaylistReloaded(context, playlistId, newIndex, previousPositionMs)
+    } else {
+        notifyPlaybackPlaylistReloaded(context, playlistId, 0, 0)
+    }
+}
+
+
+internal suspend fun removePlaylistTrackAt(
+    context: Context,
+    config: PlayerConfigView,
+    pl: Playlist,
+    trackIndex: Int,
+    playbackState: PlaybackState?,
+    deleteSourceFile: Boolean,
+    onStopPlayback: () -> Unit
+) {
+    if (trackIndex !in pl.uris.indices) return
+    if (deleteSourceFile && pl.isDirectorySource) {
+        val deleted = context.contentResolver.deleteDocument(Uri.parse(pl.uris[trackIndex]))
+        if (!deleted) {
+            Toast.makeText(context, context.getString(R.string.browser_delete_source_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+    }
+    val uris = pl.uris.toMutableList().apply { removeAt(trackIndex) }
+    val names = pl.names.toMutableList().apply {
+        if (trackIndex in indices) removeAt(trackIndex)
+    }
+    config.updatePlaylist(pl.copy(uris = uris, names = names))
+    if (playbackState?.playlistId == pl.id) {
+        if (uris.isEmpty()) {
+            onStopPlayback()
+        } else {
+            notifyPlaybackTrackRemoved(context, pl.id, trackIndex)
+        }
+    }
+}
+
+
+private suspend fun createDirectoryPlaybackPlaylistAndStart(
+    context: Context,
+    config: PlayerConfigView,
+    directoryUri: String,
+    directoryName: String
+): Playlist? {
+    val audioList = withContext(Dispatchers.IO) {
+        collectMusicFilesRecursively(context, directoryUri).map { it.model }
+    }
+    if (audioList.isEmpty()) return null
+    return createNewPlaybackPlaylistAndStart(
+        context = context,
+        config = config,
+        audioList = audioList,
+        playlistName = directoryName.ifBlank {
+            context.getString(
+                R.string.player_playlist_default_name,
+                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date())
+            )
+        },
+        sourceType = Playlist.SOURCE_TYPE_DIRECTORY,
+        sourceUri = directoryUri
+    )
 }

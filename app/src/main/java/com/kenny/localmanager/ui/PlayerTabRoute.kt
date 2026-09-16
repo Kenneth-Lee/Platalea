@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.compose.runtime.Composable
-import com.kenny.localmanager.data.Preferences
+
 import com.kenny.localmanager.player.ACTION_NEXT
 import com.kenny.localmanager.player.ACTION_PAUSE
 import com.kenny.localmanager.player.ACTION_PREV
@@ -15,17 +15,19 @@ import com.kenny.localmanager.player.EXTRA_POSITION_MS
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 
-data class PlayerTabRouteState(
+internal data class PlayerTabRouteState(
     val context: Context,
-    val prefs: Preferences,
+    val config: PlayerConfigView,
+    val recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     val playbackState: PlaybackState?,
     val onRequestExitApp: () -> Unit
 )
 
 @Composable
-fun PlayerTabRoute(state: PlayerTabRouteState) {
+internal fun PlayerTabRoute(state: PlayerTabRouteState) {
     PlaybackScreen(
-        prefs = state.prefs,
+        config = state.config,
+        recordRecentOpen = state.recordRecentOpen,
         playbackState = state.playbackState,
         onStopPlayback = {
             val intent = Intent(state.context, PlaybackService::class.java).setAction(ACTION_STOP)

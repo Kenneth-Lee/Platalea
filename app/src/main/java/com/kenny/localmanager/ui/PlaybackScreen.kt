@@ -103,7 +103,6 @@ import com.kenny.localmanager.data.PLAYER_AUDIO_PRESET_VOCAL
 import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Playlist
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.collectMusicFilesRecursively
 import com.kenny.localmanager.player.PlaylistSortOrder
@@ -132,7 +131,7 @@ import java.util.Locale
 
 private suspend fun resortPlaylistTracks(
     context: Context,
-    prefs: Preferences,
+    config: PlayerConfigView,
     pl: Playlist,
     field: PlaylistTrackSortField,
     order: PlaylistSortOrder,
@@ -157,7 +156,7 @@ private suspend fun resortPlaylistTracks(
     } else {
         working
     }
-    prefs.updatePlaylist(updated)
+    config.updatePlaylist(updated)
     syncPlaybackAfterPlaylistUpdate(
         context = context,
         playlistId = pl.id,
@@ -238,7 +237,7 @@ private fun PlaybackBottomControlBar(
 
 private suspend fun removeTracksFromPlaylistByIndices(
     context: Context,
-    prefs: Preferences,
+    config: PlayerConfigView,
     playlist: Playlist,
     removeIndices: Set<Int>,
     playbackState: PlaybackState?,
@@ -284,7 +283,7 @@ private suspend fun removeTracksFromPlaylistByIndices(
 
     val updated = playlist.copy(uris = uris, names = names)
     if (removedCount > 0) {
-        prefs.updatePlaylist(updated)
+        config.updatePlaylist(updated)
         syncPlaybackAfterPlaylistUpdate(
             context = context,
             playlistId = playlist.id,
@@ -360,8 +359,9 @@ private suspend fun refreshDirectoryPlaylistFromSource(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PlaybackScreen(
-    prefs: Preferences,
+internal fun PlaybackScreen(
+    config: PlayerConfigView,
+    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     playbackState: PlaybackState?,
     onStopPlayback: () -> Unit,
     onPlayPrev: () -> Unit,
@@ -425,17 +425,17 @@ fun PlaybackScreen(
     var bulkDeleteTracksInProgress by remember { mutableStateOf(false) }
     var trackMetadataCache by remember(selectedPlaylistId) { mutableStateOf<Map<String, TrackMetadata>>(emptyMap()) }
     var trackMetadataLoading by remember(selectedPlaylistId) { mutableStateOf(false) }
-    LaunchedEffect(prefs) {
-        prefs.playlists.collect { playlists = it }
+    LaunchedEffect(config) {
+        config.playlists.collect { playlists = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.playerLastPlaylistId.collect { lastPlaylistId = it }
+    LaunchedEffect(config) {
+        config.playerLastPlaylistId.collect { lastPlaylistId = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.playerListBookmarks.collect { playerBookmarks = it }
+    LaunchedEffect(config) {
+        config.playerListBookmarks.collect { playerBookmarks = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.playerAudioSettings.collect { playerAudioSettings = it }
+    LaunchedEffect(config) {
+        config.playerAudioSettings.collect { playerAudioSettings = it }
     }
     val playlistById = remember(playlists) { playlists.associateBy { it.id } }
     val selectedPlaylist = selectedPlaylistId?.let { id -> playlists.find { it.id == id } }
@@ -525,14 +525,13 @@ fun PlaybackScreen(
     }
 
     fun recordPlayedPlaylist(pl: Playlist) {
-        scope.launch {
-            prefs.addRecentOpenItem(
-                type = RECENT_TYPE_PLAYLIST,
-                key = pl.id,
-                title = pl.displayName(context.getString(R.string.player_unnamed_playlist)),
-                playlistId = pl.id
-            )
-        }
+        recordRecentOpen(
+            RECENT_TYPE_PLAYLIST,
+            pl.id,
+            pl.displayName(context.getString(R.string.player_unnamed_playlist)),
+            null,
+            pl.id
+        )
     }
 
     fun startPlaylist(pl: Playlist) {
@@ -577,7 +576,7 @@ fun PlaybackScreen(
             uris = emptyList(),
             names = emptyList()
         )
-        prefs.addPlaylist(playlist)
+        config.addPlaylist(playlist)
         selectedPlaylistId = playlist.id
         showCreatePlaylistDialog = false
         newPlaylistName = ""
@@ -587,7 +586,7 @@ fun PlaybackScreen(
     suspend fun removeTrackEntryAfterMove(source: Playlist, trackIndex: Int) {
         removePlaylistTrackAt(
             context = context,
-            prefs = prefs,
+            config = config,
             pl = source,
             trackIndex = trackIndex,
             playbackState = playbackState,
@@ -604,7 +603,7 @@ fun PlaybackScreen(
         if (target.id == transfer.source.id) return
         val trackUri = transfer.source.uris.getOrNull(transfer.trackIndex) ?: return
         val trackName = transfer.source.names.getOrElse(transfer.trackIndex) { trackUri.substringAfterLast('/') }
-        val result = prefs.appendTracksToPlaylist(target.id, listOf(trackUri), listOf(trackName))
+        val result = config.appendTracksToPlaylist(target.id, listOf(trackUri), listOf(trackName))
         if (!result.found) {
             Toast.makeText(context, context.getString(R.string.browser_playlist_target_missing), Toast.LENGTH_SHORT).show()
             return
@@ -646,7 +645,7 @@ fun PlaybackScreen(
             PLAYER_AUDIO_PRESET_HEADPHONE to context.getString(R.string.browser_headphone_preset)
         )
         fun updatePlayerAudioSettings(transform: (PlayerAudioSettings) -> PlayerAudioSettings) {
-            scope.launch { prefs.updatePlayerAudioSettings(transform) }
+            scope.launch { config.updatePlayerAudioSettings(transform) }
         }
         AlertDialog(
             onDismissRequest = { showPlayerAudioSettingsDialog = false },
@@ -1238,7 +1237,7 @@ fun PlaybackScreen(
                                                     val names = pl.names.toMutableList()
                                                     uris.add(entry.originalIndex - 1, uris.removeAt(entry.originalIndex))
                                                     names.add(entry.originalIndex - 1, names.removeAt(entry.originalIndex))
-                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                                    config.updatePlaylist(pl.copy(uris = uris, names = names))
                                                 }
                                             }
                                         )
@@ -1253,7 +1252,7 @@ fun PlaybackScreen(
                                                     val names = pl.names.toMutableList()
                                                     uris.add(entry.originalIndex + 1, uris.removeAt(entry.originalIndex))
                                                     names.add(entry.originalIndex + 1, names.removeAt(entry.originalIndex))
-                                                    prefs.updatePlaylist(pl.copy(uris = uris, names = names))
+                                                    config.updatePlaylist(pl.copy(uris = uris, names = names))
                                                 }
                                             }
                                         )
@@ -1287,7 +1286,7 @@ fun PlaybackScreen(
                                                 scope.launch {
                                                     removePlaylistTrackAt(
                                                         context = context,
-                                                        prefs = prefs,
+                                                        config = config,
                                                         pl = pl,
                                                         trackIndex = entry.originalIndex,
                                                         playbackState = playbackState,
@@ -1449,7 +1448,7 @@ fun PlaybackScreen(
                                                     val ids = playlists.map { it.id }.toMutableList()
                                                     ids.removeAt(i)
                                                     ids.add(i - 1, pl.id)
-                                                    prefs.updatePlaylistOrder(ids)
+                                                    config.updatePlaylistOrder(ids)
                                                 }
                                             }
                                         )
@@ -1463,7 +1462,7 @@ fun PlaybackScreen(
                                                     val ids = playlists.map { it.id }.toMutableList()
                                                     ids.removeAt(i)
                                                     ids.add(i + 1, pl.id)
-                                                    prefs.updatePlaylistOrder(ids)
+                                                    config.updatePlaylistOrder(ids)
                                                 }
                                             }
                                         )
@@ -1516,7 +1515,7 @@ fun PlaybackScreen(
                                                     if (playbackState?.playlistId == pl.id) {
                                                         onStopPlayback()
                                                     }
-                                                    prefs.removePlaylist(pl.id)
+                                                    config.removePlaylist(pl.id)
                                                 }
                                             }
                                         )
@@ -1690,7 +1689,7 @@ fun PlaybackScreen(
                             0L
                         }
                         scope.launch {
-                            prefs.updatePlaylist(
+                            config.updatePlaylist(
                                 settingsTarget.copy(
                                     previewEnabled = previewEnabledInput,
                                     previewStartMs = startMs.coerceAtLeast(0L),
@@ -1751,7 +1750,7 @@ fun PlaybackScreen(
                         }
                         val renameTarget = target ?: return@Button
                         scope.launch {
-                            prefs.updatePlaylist(renameTarget.copy(name = newName, note = ""))
+                            config.updatePlaylist(renameTarget.copy(name = newName, note = ""))
                             showRenamePlaylistDialog = false
                             playlistRenameTarget = null
                             playlistRenameText = ""
@@ -1861,7 +1860,7 @@ fun PlaybackScreen(
                                 try {
                                     val updated = resortPlaylistTracks(
                                         context = context,
-                                        prefs = prefs,
+                                        config = config,
                                         pl = pl,
                                         field = playlistSortField,
                                         order = playlistSortOrder,
@@ -2037,7 +2036,7 @@ fun PlaybackScreen(
                                                                     try {
                                                                         val result = removeTracksFromPlaylistByIndices(
                                                                             context = context,
-                                                                            prefs = prefs,
+                                                                            config = config,
                                                                             playlist = currentPlaylist,
                                                                             removeIndices = setOf(entry.originalIndex),
                                                                             playbackState = playbackState,
@@ -2166,7 +2165,7 @@ fun PlaybackScreen(
                                 try {
                                     val result = removeTracksFromPlaylistByIndices(
                                         context = context,
-                                        prefs = prefs,
+                                        config = config,
                                         playlist = targetPlaylist,
                                         removeIndices = removeSet,
                                         playbackState = playbackState,
@@ -2266,7 +2265,7 @@ fun PlaybackScreen(
                             val pid = bookmarkPendingPlaylistId
                             if (pid == null) return@Button
                             scope.launch {
-                                prefs.addPlayerListBookmark(
+                                config.addPlayerListBookmark(
                                     playlistId = pid,
                                     dirUri = bookmarkPendingDirUri,
                                     trackIndex = bookmarkPendingTrackIndex,
@@ -2303,7 +2302,7 @@ fun PlaybackScreen(
                     Button(
                         onClick = {
                             scope.launch {
-                                prefs.updatePlayerListBookmarkNote(bookmarkId, editingBookmarkNote)
+                                config.updatePlayerListBookmarkNote(bookmarkId, editingBookmarkNote)
                                 editingBookmarkId = null
                             }
                         }
@@ -2409,7 +2408,7 @@ fun PlaybackScreen(
                                                 OutlinedButton(
                                                     onClick = {
                                                         scope.launch {
-                                                            prefs.deletePlayerListBookmark(bm.id)
+                                                            config.deletePlayerListBookmark(bm.id)
                                                         }
                                                     }
                                                 ) {

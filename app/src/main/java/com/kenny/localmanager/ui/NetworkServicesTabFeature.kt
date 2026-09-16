@@ -28,6 +28,8 @@ internal class NetworkServicesTabs(
     val config: NetworkServiceConfigState,
     /** 家庭网络服务对象：公告转发流（browser 域出口）跨域消费的共享服务。 */
     val familyNetworkManager: FamilyNetworkManager,
+    /** 家庭网络 tab 是否处于前台（域自持判定：非前台时公告转发保留临时会话）。 */
+    val familyNetworkForeground: Boolean,
     val ftp: FtpTabFeature,
     val webUi: LocalShareTabFeature,
     val family: FamilyNetworkTabFeature
@@ -99,6 +101,7 @@ internal fun networkServicesTabs(
     return NetworkServicesTabs(
         config = networkServiceConfig,
         familyNetworkManager = familyNetworkManager,
+        familyNetworkForeground = activeMainTab == MainTab.FAMILY_NETWORK,
         ftp = object : FtpTabFeature {
             override val tab: MainTab get() = MainTab.FTP
             override val content: @Composable () -> Unit = {

@@ -265,6 +265,8 @@ interface MainTabFeature {
 - 2026-09：确立 MainTabFeature 呈现接口与关联判定规则（§4/§4.1）；播放器域按终态模式分离（PlaybackScreen.kt + PlayerTabState.kt 工厂），14 tab 迁移 features 驱动（token diff=0）。
 - 2026-09（二）：速记族、网络服务族、Config 域三批工厂化；主函数仅剩 7 个薄壳 tab 与 BrowserTab 域收尾。
 - 2026-09（三）：BrowserTab 域收尾（批次 E）：FileBrowserScreen 平移、rememberBrowserTabState/browserTabFeature 工厂、RECENT 出口重排；主函数降至 3997 行。
+- 2026-09（四）：批次 F 启动。F1：TabExitRestorePolicy 属性化（网络三 tab 标 TRANSIENT，persistTabChoice/恢复逻辑改问属性，删 isNetworkServiceTab 硬编码；家庭网络前台判定域自持 familyNetworkForeground）。F2：单行转发内联（requestOpenPlayerTab/AboutTab）。F3 骨架+F4 首域（播放器）：新增 ConfigService.kt（配置域服务：唯一创建入口 + 各域窄投影；成员资格判据=是否进统一导出；过渡面 legacy 待逐域替换）；PlayerConfigView 投影接入播放器全链（工厂/State/Route/PlaybackScreen，Preferences 类型从域内清除）；播放器编排函数族（removePlaylistTrackAt/sync/notify×2/createDirectoryPlaylistAndStart）自 FileBrowserApp.kt 迁入域文件；目录建列表经 PlayerTabApi.requestCreateDirectoryPlaylist 出口（编排内聚，browser 域经回调消费）；recent 记录改回调注入。设计对齐：功能身份单数（State/Screen 为内部结构）；配置属于配置域，tab 仅呈现窗口。
+- 2026-09（四b）：修复「加入播放挂死」死锁（真机实锤）。根因：FileBrowserScreen 目录滚动记忆的 onDispose 在主线程 runBlocking 同步等待 DataStore edit（a5cc210 引入的历史隐患，与 Main 队列上挂起的编排协程互等；DataStore 官方禁止主线程 runBlocking），旧版仅侥幸未踩中时序窗口，F4 编排内聚后必现。修复：dispose 改 NonCancellable 独立 IO 协程 fire-and-forget；同类隐患 BrowserTabHost.saveBatchEditableAudioAnnotation（IO 线程 runBlocking）顺手 suspend 化；CrashReportStore 启动期 runBlocking 记录在案待观察。验证：新建/追加两分支播放、tab 往返×3、全部无 ANR。
 
 | 日期 | 变更原因和内容 |
 | --- | --- |

@@ -33,7 +33,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.collect
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -59,7 +58,6 @@ import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.dict.importStarDict
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -330,7 +328,7 @@ private fun saveBatchEditableImageExif(
     }
     return errors
 }
-private fun saveBatchEditableAudioAnnotation(
+private suspend fun saveBatchEditableAudioAnnotation(
     context: Context,
     files: List<DocumentFileModel>,
     patch: EditableAudioAnnotation,
@@ -347,16 +345,14 @@ private fun saveBatchEditableAudioAnnotation(
             saveEditableAudioAnnotationWithJaudiotagger(context, file.uri, merged, file.name)
         } else {
             runCatching {
-                runBlocking {
-                    prefs.setAudioMetaAnnotation(
-                        file.uri.toString(),
-                        AudioMetaAnnotation(
-                            title = merged.title,
-                            artist = merged.artist,
-                            album = merged.album
-                        )
+                prefs.setAudioMetaAnnotation(
+                    file.uri.toString(),
+                    AudioMetaAnnotation(
+                        title = merged.title,
+                        artist = merged.artist,
+                        album = merged.album
                     )
-                }
+                )
             }.exceptionOrNull()?.let { e ->
                 "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
             }
@@ -672,6 +668,7 @@ internal class BrowserTabHostDependencies(
     val onSetProgressCancel: ((() -> Unit)?) -> Unit,
     val onBatchMask: (List<DocumentFileModel>) -> Unit,
     val onAddToPlayback: (List<DocumentFileModel>) -> Unit,
+    val onAddDirectoryToPlayback: (String, String) -> Unit,
 )
 
 @Composable
@@ -700,6 +697,7 @@ internal fun BrowserTabHost(
     val onForwardToBulletin = deps.onForwardToBulletin
     val onOpenQuickNote = deps.onOpenQuickNote
     val requestOpenPlayerTab = deps.requestOpenPlayerTab
+    val onAddDirectoryToPlayback = deps.onAddDirectoryToPlayback
     val runWithProgress = deps.runWithProgress
     val onSetProgressCancel = deps.onSetProgressCancel
     val onBatchMask = deps.onBatchMask
@@ -947,24 +945,7 @@ internal fun BrowserTabHost(
                                     onOpenQuickNote()
                                 },
                                 onCreateMusicPlaylist = { uri, name ->
-                                    scope.launch {
-                                        val playlist = withContext(Dispatchers.IO) {
-                                            createDirectoryPlaybackPlaylistAndStart(context, prefs, uri, name)
-                                        }
-                                        if (playlist == null) {
-                                            Toast.makeText(context, context.getString(R.string.browser_no_music_in_dir), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            recordRecentOpen(
-                                                RECENT_TYPE_PLAYLIST,
-                                                playlist.id,
-                                                playlist.displayName(context.getString(R.string.player_unnamed_playlist)),
-                                                null,
-                                                playlist.id
-                                            )
-                                            requestOpenPlayerTab()
-                                            Toast.makeText(context, context.getString(R.string.browser_playlist_from_dir_started), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
+                                    onAddDirectoryToPlayback(uri, name)
                                 },
                                 onRequestGpgDecrypt = { fileModel, dirUri ->
                                     crypto.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
