@@ -1,16 +1,13 @@
 package com.kenny.localmanager.ui
 
-import android.content.ClipData
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import androidx.core.content.FileProvider
 import android.graphics.drawable.Icon
-import android.graphics.pdf.PdfRenderer
 import android.icu.text.Transliterator
-import android.media.MediaExtractor
-import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -22,8 +19,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,45 +35,24 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.LockOpen
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Devices
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.automirrored.filled.DriveFileMove
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.RemoveCircle
-import androidx.compose.material.icons.automirrored.filled.Sort
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Wifi
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -86,10 +60,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -104,11 +75,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -116,16 +84,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -137,11 +100,7 @@ import org.json.JSONObject
 import android.widget.Toast
 import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.DirectoryScrollMemory
-import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.RecentOpenItem
@@ -156,9 +115,7 @@ import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.getTrashUriIfExists
 import com.kenny.localmanager.file.quickToggleObfuscation
 import com.kenny.localmanager.file.isQuickObfuscatedFileName
-import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.listFilesSafe
-import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
 import com.kenny.localmanager.file.ArchiveCompressionFormat
@@ -167,20 +124,11 @@ import com.kenny.localmanager.file.compressSingleFileToFormat
 import com.kenny.localmanager.file.compressTarArchive
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.UnzipResult
-import com.kenny.localmanager.file.getArchiveFirstLevelEntries
-import com.kenny.localmanager.file.ZipFirstLevelResult
-import com.kenny.localmanager.file.EpubParseResult
-import com.kenny.localmanager.file.extractEpubToCache
-import com.kenny.localmanager.file.loadEpubFromCache
-import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.CacheEntry
 import com.kenny.localmanager.file.getCacheEntries
 import com.kenny.localmanager.file.clearCacheEntry
 import com.kenny.localmanager.file.formatSize
 import com.kenny.localmanager.file.collectMusicFilesRecursively
-import com.kenny.localmanager.file.RecursiveFileSearchCriteria
-import com.kenny.localmanager.file.RecursiveFileSearchHit
-import com.kenny.localmanager.file.searchFilesRecursively
 import com.kenny.localmanager.player.PlaybackService
 import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.TrackMetadata
@@ -211,7 +159,6 @@ import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import com.kenny.localmanager.dict.isStarDictImportCandidate
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
 import com.kenny.localmanager.git.copyFileToShare
@@ -220,11 +167,9 @@ import com.mpatric.mp3agic.Mp3File
 import org.jaudiotagger.audio.AudioFileIO
 import org.jaudiotagger.tag.FieldKey
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
 import java.util.concurrent.Executors
@@ -233,7 +178,6 @@ import java.util.concurrent.TimeoutException
 import java.io.File
 import java.text.Normalizer
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -245,29 +189,6 @@ internal enum class ConfigExportResult {
     FAILED
 }
 
-private data class ExternalAppTarget(
-    val packageName: String,
-    val label: String
-)
-
-private enum class ExternalOpenTypeHint(val mimeType: String, val labelRes: Int) {
-    VIDEO("video/*", R.string.browser_external_type_video),
-    AUDIO("audio/*", R.string.browser_external_type_audio),
-    TEXT("text/plain", R.string.browser_external_type_text),
-    OTHER("*/*", R.string.browser_external_type_other)
-}
-
-private fun isExternalMimeLowConfidence(mimeType: String): Boolean {
-    val normalized = mimeType.trim().lowercase(Locale.ROOT)
-    return normalized.isBlank() || normalized == "*/*" || normalized == "application/octet-stream"
-}
-
-internal const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
-internal const val RECENT_TYPE_HTML_VIEWER = "html_viewer"
-internal const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
-internal const val RECENT_TYPE_PDF_VIEWER = "pdf_viewer"
-internal const val RECENT_TYPE_PLAYLIST = "playlist"
-internal const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
 internal typealias RunProgressBlock = suspend (
     label: String,
     total: Int?,
@@ -320,146 +241,6 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.ABOUT -> Icons.Default.Info
     }
 }
-
-private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
-    return DocumentFileModel(
-        name = name,
-        isDirectory = false,
-        uri = Uri.parse(uri),
-        lastModified = 0L,
-        size = 0L
-    )
-}
-
-
-
-
-private fun openRecentItemByType(
-    context: Context,
-    item: RecentOpenItem,
-    currentPlaybackState: PlaybackState?,
-    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
-    switchMainTab: (MainTab) -> Unit,
-    onMdZipTarget: (DocumentFileModel) -> Unit,
-    onHtmlZipTarget: (DocumentFileModel) -> Unit,
-    onHtmlTarget: (DocumentFileModel) -> Unit,
-    onHtmlUrlTarget: (String) -> Unit,
-    onPicZipTarget: (DocumentFileModel) -> Unit,
-    onVidZipTarget: (DocumentFileModel) -> Unit,
-    onLlmZipTarget: (DocumentFileModel) -> Unit,
-    onTxtTarget: (DocumentFileModel) -> Unit,
-    onLlmTarget: (DocumentFileModel) -> Unit,
-    onEpubTarget: (DocumentFileModel) -> Unit,
-    onPdfTarget: (DocumentFileModel) -> Unit
-) {
-    when (item.type) {
-        RECENT_TYPE_PLAYLIST -> {
-            val playlistId = item.playlistId
-            if (playlistId.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_playlist_id), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val alreadyPlayingSamePlaylist =
-                currentPlaybackState?.playlistId == playlistId && currentPlaybackState.isPlaying
-            if (!alreadyPlayingSamePlaylist) {
-                val intent = Intent(context, PlaybackService::class.java).apply {
-                    action = ACTION_PLAY
-                    putExtra(EXTRA_PLAYLIST_ID, playlistId)
-                }
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
-            }
-            recordRecentOpen(
-                RECENT_TYPE_PLAYLIST,
-                playlistId,
-                item.title,
-                null,
-                playlistId
-            )
-            switchMainTab(MainTab.PLAYER)
-        }
-
-        RECENT_TYPE_EXTERNAL_OPEN -> {
-            val uri = item.uri
-            if (uri.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val opened = launchExternalOpen(context, uri, null, item.title)
-            if (!opened) {
-                Toast.makeText(context, context.getString(R.string.recent_external_open_failed), Toast.LENGTH_SHORT).show()
-                return
-            }
-            recordRecentOpen(
-                RECENT_TYPE_EXTERNAL_OPEN,
-                item.key,
-                item.title,
-                uri,
-                null
-            )
-        }
-
-        RECENT_TYPE_ZIP_VIEWER -> {
-            val uri = item.uri
-            if (uri.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val model = buildRecentModel(uri, item.title)
-            when {
-                item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> onMdZipTarget(model)
-                item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
-                item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
-                item.title.endsWith(".vid.zip", ignoreCase = true) -> onVidZipTarget(model)
-                else -> {
-                    Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
-                    return
-                }
-            }
-        }
-
-        RECENT_TYPE_HTML_VIEWER -> {
-            val uri = item.uri
-            if (uri.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
-                return
-            }
-            if (uri.startsWith("http://", ignoreCase = true) || uri.startsWith("https://", ignoreCase = true)) {
-                onHtmlUrlTarget(uri)
-            } else {
-                onHtmlTarget(buildRecentModel(uri, item.title))
-            }
-        }
-
-        RECENT_TYPE_EPUB_RENDERER -> {
-            val uri = item.uri
-            if (uri.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
-                return
-            }
-            val model = buildRecentModel(uri, item.title)
-            when {
-                item.title.endsWith(".llm.zip", ignoreCase = true) -> onLlmZipTarget(model)
-                item.title.endsWith(".txt", ignoreCase = true) -> onTxtTarget(model)
-                item.title.endsWith(".llm", ignoreCase = true) -> onLlmTarget(model)
-                else -> onEpubTarget(model)
-            }
-        }
-
-        RECENT_TYPE_PDF_VIEWER -> {
-            val uri = item.uri
-            if (uri.isNullOrBlank()) {
-                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
-                return
-            }
-            onPdfTarget(buildRecentModel(uri, item.title))
-        }
-
-        else -> {
-            Toast.makeText(context, context.getString(R.string.recent_unknown_type, item.type), Toast.LENGTH_SHORT).show()
-        }
-    }
-}
-
 
 private suspend fun runWithUiProgress(
     setProgressState: (OperationProgress?) -> Unit,
@@ -749,12 +530,6 @@ private fun ScrollableMainTabBar(
 }
 
 
-@Composable
-private fun fileItemSubtitle(model: DocumentFileModel): String {
-    val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(model.lastModified))
-    return if (model.displaySize.isNotEmpty()) "${model.displaySize}  $dateStr" else dateStr
-}
-
 internal fun formatPlaybackTime(ms: Int): String {
     val totalSeconds = (ms.coerceAtLeast(0) / 1000)
     val hours = totalSeconds / 3600
@@ -900,56 +675,6 @@ internal enum class DetailMetadataKind {
     UNKNOWN
 }
 
-private data class DetailMetadataRow(
-    val label: String,
-    val value: String,
-    val isSection: Boolean = false
-)
-
-internal data class EditableImageExif(
-    val takenTime: String = "",
-    val artist: String = "",
-    val description: String = "",
-    val software: String = "",
-    val copyright: String = ""
-)
-
-internal data class EditableAudioAnnotation(
-    val title: String = "",
-    val artist: String = "",
-    val album: String = ""
-)
-
-private const val EXIF_TAG_XP_AUTHOR = "XPAuthor"
-private const val EXIF_TAG_XP_COMMENT = "XPComment"
-private const val EXIF_TAG_XP_SOFTWARE = "XPSoftware"
-private const val EXIF_TAG_XP_COPYRIGHT = "XPCopyright"
-private const val LM_EXIF_USER_COMMENT_PREFIX = "LM_EXIF_B64_V1:"
-private const val LM_EXIF_SOFTWARE_MARKER_PREFIX = " [LMEXIF:"
-private const val LM_EXIF_SOFTWARE_MARKER_SUFFIX = "]"
-
-private data class LmExifPayload(
-    val artist: String,
-    val description: String,
-    val software: String,
-    val copyright: String
-)
-
-internal data class EditableImageExifValidation(
-    val takenTimeError: String? = null,
-    val artistError: String? = null,
-    val descriptionError: String? = null,
-    val softwareError: String? = null,
-    val copyrightError: String? = null
-) {
-    val hasError: Boolean
-        get() = !takenTimeError.isNullOrBlank() ||
-            !artistError.isNullOrBlank() ||
-            !descriptionError.isNullOrBlank() ||
-            !softwareError.isNullOrBlank() ||
-            !copyrightError.isNullOrBlank()
-}
-
 internal data class EditableAudioAnnotationValidation(
     val titleError: String? = null,
     val artistError: String? = null,
@@ -983,169 +708,172 @@ internal fun inferDetailMetadataKind(
     }
 }
 
-private fun appendMetaIfNotBlank(
-    rows: MutableList<DetailMetadataRow>,
-    label: String,
-    raw: String?
+internal const val EXIF_TAG_XP_AUTHOR = "XPAuthor"
+internal const val EXIF_TAG_XP_COMMENT = "XPComment"
+internal const val EXIF_TAG_XP_SOFTWARE = "XPSoftware"
+internal const val EXIF_TAG_XP_COPYRIGHT = "XPCopyright"
+internal const val LM_EXIF_USER_COMMENT_PREFIX = "LM_EXIF_B64_V1:"
+internal const val LM_EXIF_SOFTWARE_MARKER_PREFIX = " [LMEXIF:"
+internal const val LM_EXIF_SOFTWARE_MARKER_SUFFIX = "]"
+
+internal data class LmExifPayload(
+    val artist: String,
+    val description: String,
+    val software: String,
+    val copyright: String
+)
+
+internal data class EditableImageExifValidation(
+    val takenTimeError: String? = null,
+    val artistError: String? = null,
+    val descriptionError: String? = null,
+    val softwareError: String? = null,
+    val copyrightError: String? = null
 ) {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return
-    rows += DetailMetadataRow(label, value)
+    val hasError: Boolean
+        get() = !takenTimeError.isNullOrBlank() ||
+            !artistError.isNullOrBlank() ||
+            !descriptionError.isNullOrBlank() ||
+            !softwareError.isNullOrBlank() ||
+            !copyrightError.isNullOrBlank()
 }
 
-private fun appendMetaSection(
-    rows: MutableList<DetailMetadataRow>,
-    label: String
-) {
-    rows += DetailMetadataRow(label = label, value = "", isSection = true)
+
+internal fun guessExternalOpenMimeType(context: Context, uri: Uri, fileNameHint: String?): String {
+    val resolverMime = context.contentResolver.getType(uri)?.trim()?.lowercase(Locale.ROOT)
+    val validResolverMime = resolverMime
+        ?.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "*/*" }
+    if (validResolverMime != null) return validResolverMime
+
+    val candidateName = fileNameHint
+        ?.takeIf { it.isNotBlank() }
+        ?: context.contentResolver.getDisplayName(uri)
+    val ext = candidateName
+        ?.substringAfterLast('.', "")
+        ?.trim()
+        ?.lowercase(Locale.ROOT)
+        .orEmpty()
+    if (ext.isNotEmpty()) {
+        MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { return it }
+        externalOpenArchiveMimeByExt[ext]?.let { return it }
+        if (ext in externalOpenVideoExts) return "video/*"
+        if (ext in externalOpenAudioExts) return "audio/*"
+        if (ext in externalOpenImageExts) return "image/*"
+        if (ext in externalOpenTextExts) return "text/plain"
+    }
+    return resolverMime?.takeIf { it.isNotBlank() } ?: "*/*"
 }
 
-private fun formatBitrate(raw: String?): String? {
-    val bps = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
-    if (bps <= 0) return null
-    return "${(bps / 1000.0).toInt()} kbps"
-}
 
-private fun formatSampleRate(raw: String?): String? {
-    val hz = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
-    if (hz <= 0) return null
-    return "${hz} Hz"
-}
-
-internal fun formatDurationMs(raw: String?): String? {
-    val ms = raw?.trim()?.toLongOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
-    if (ms < 0) return null
-    return formatPlaybackTime(ms.toInt())
-}
-
-private fun formatDurationUs(rawUs: Long?): String? {
-    val us = rawUs ?: return null
-    if (us < 0) return null
-    val ms = (us / 1000L).coerceAtMost(Int.MAX_VALUE.toLong())
-    return formatPlaybackTime(ms.toInt())
-}
-
-private fun formatVideoResolution(widthRaw: String?, heightRaw: String?): String? {
-    val width = widthRaw?.trim()?.toIntOrNull()
-    val height = heightRaw?.trim()?.toIntOrNull()
-    if (width == null || height == null || width <= 0 || height <= 0) return null
-    return "${width} x ${height}"
-}
-
-private fun formatExifExposureTime(raw: String?): String? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val seconds = value.toDoubleOrNull()
-    if (seconds != null && seconds > 0) {
-        return if (seconds < 1.0) {
-            val denominator = (1.0 / seconds).toInt().coerceAtLeast(1)
-            "1/${denominator} s"
-        } else {
-            "${"%.3f".format(Locale.getDefault(), seconds)} s"
+internal fun decodeXpExifText(exif: ExifInterface, tag: String): String? {
+    fun decodeUtf16Le(raw: ByteArray): String? {
+        if (raw.isEmpty()) return null
+        var end = raw.size
+        while (end >= 2 && raw[end - 1] == 0.toByte() && raw[end - 2] == 0.toByte()) {
+            end -= 2
         }
+        if (end <= 0) return null
+        return runCatching {
+            String(raw, 0, end, Charsets.UTF_16LE).trim().ifEmpty { null }
+        }.getOrNull()
     }
-    return value
-}
 
-private fun formatExifFocalLength(raw: String?): String? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val mm = value.toDoubleOrNull()
-    return if (mm != null && mm > 0) {
-        "${"%.1f".format(Locale.getDefault(), mm)} mm"
-    } else {
-        value
+    exif.getAttributeBytes(tag)?.let { bytes ->
+        decodeUtf16Le(bytes)?.let { return it }
     }
-}
 
-private fun formatExifAperture(raw: String?): String? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val fNumber = value.toDoubleOrNull()
-    return if (fNumber != null && fNumber > 0) {
-        "f/${"%.1f".format(Locale.getDefault(), fNumber)}"
-    } else {
-        value
+    val rawAttr = exif.getAttribute(tag)?.trim().orEmpty()
+    if (rawAttr.isBlank()) return null
+    val parsedBytes = runCatching {
+        rawAttr.split(',')
+            .mapNotNull { token -> token.trim().takeIf { it.isNotEmpty() }?.toIntOrNull() }
+            .map { (it and 0xFF).toByte() }
+            .toByteArray()
+    }.getOrNull()
+    if (parsedBytes != null && parsedBytes.isNotEmpty()) {
+        decodeUtf16Le(parsedBytes)?.let { return it }
     }
+    return rawAttr.ifEmpty { null }
 }
 
-private fun formatExifGps(exif: ExifInterface): String? {
-    var lat = exif.getAttributeDouble(ExifInterface.TAG_GPS_LATITUDE, Double.NaN)
-    var lon = exif.getAttributeDouble(ExifInterface.TAG_GPS_LONGITUDE, Double.NaN)
-    if (lat.isNaN() || lon.isNaN()) return null
-    val latRef = exif.getAttribute(ExifInterface.TAG_GPS_LATITUDE_REF)?.trim()?.uppercase(Locale.ROOT)
-    val lonRef = exif.getAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF)?.trim()?.uppercase(Locale.ROOT)
-    if (latRef == "S") lat = -kotlin.math.abs(lat)
-    if (lonRef == "W") lon = -kotlin.math.abs(lon)
-    return "${"%.6f".format(Locale.getDefault(), lat)}, ${"%.6f".format(Locale.getDefault(), lon)}"
+
+internal val externalOpenVideoExts = setOf(
+    "rmvb", "rm", "rv", "ram", "mp4", "m4v", "mkv", "avi", "mov", "wmv", "flv",
+    "ts", "m2ts", "mts", "webm", "3gp", "mpeg", "mpg", "vob", "asf"
+)
+internal val externalOpenAudioExts = setOf(
+    "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "ape", "amr", "aiff", "alac"
+)
+internal val externalOpenImageExts = setOf(
+    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "tiff", "tif", "svg"
+)
+internal val externalOpenTextExts = setOf(
+    "txt", "md", "rst", "log", "json", "xml", "yaml", "yml", "csv", "ini", "toml"
+)
+internal val externalOpenArchiveMimeByExt = mapOf(
+    "zip" to "application/zip",
+    "7z" to "application/x-7z-compressed",
+    "rar" to "application/vnd.rar",
+    "tar" to "application/x-tar",
+    "gz" to "application/gzip",
+    "bz2" to "application/x-bzip2",
+    "xz" to "application/x-xz",
+    "pdf" to "application/pdf",
+    "epub" to "application/epub+zip",
+    "apk" to "application/vnd.android.package-archive",
+    "srt" to "application/x-subrip",
+    "ass" to "text/x-ssa",
+    "ssa" to "text/x-ssa"
+)
+
+internal fun encodeXpExifText(value: String): String {
+    val bytes = (value + "\u0000").toByteArray(Charsets.UTF_16LE)
+    return bytes.joinToString(separator = ",") { (it.toInt() and 0xFF).toString() }
 }
 
-private fun formatExifOrientation(raw: String?): String? {
-    val orientation = raw?.trim()?.toIntOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
-    return when (orientation) {
-        ExifInterface.ORIENTATION_NORMAL -> "0°"
-        ExifInterface.ORIENTATION_ROTATE_90 -> "90°"
-        ExifInterface.ORIENTATION_ROTATE_180 -> "180°"
-        ExifInterface.ORIENTATION_ROTATE_270 -> "270°"
-        ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> "flip-horizontal"
-        ExifInterface.ORIENTATION_FLIP_VERTICAL -> "flip-vertical"
-        ExifInterface.ORIENTATION_TRANSPOSE -> "transpose"
-        ExifInterface.ORIENTATION_TRANSVERSE -> "transverse"
-        else -> orientation.toString()
+
+
+
+
+
+internal fun decodeLmExifPayloadToken(token: String): LmExifPayload? {
+    val normalized = token.trim().takeIf { it.isNotEmpty() } ?: return null
+    val jsonText = runCatching {
+        val bytes = Base64.decode(normalized, Base64.URL_SAFE or Base64.NO_WRAP)
+        String(bytes, Charsets.UTF_8)
+    }.getOrNull() ?: return null
+    return runCatching {
+        val json = JSONObject(jsonText)
+        LmExifPayload(
+            artist = json.optString("artist").trim(),
+            description = json.optString("description").trim(),
+            software = json.optString("software").trim(),
+            copyright = json.optString("copyright").trim()
+        )
+    }.getOrNull()
+}
+
+
+internal fun encodeLmExifPayloadToken(data: EditableImageExif): String? {
+    val payload = JSONObject().apply {
+        put("artist", data.artist.trim())
+        put("description", data.description.trim())
+        put("software", data.software.trim())
+        put("copyright", data.copyright.trim())
     }
+    val hasAny = payload.optString("artist").isNotBlank() ||
+        payload.optString("description").isNotBlank() ||
+        payload.optString("software").isNotBlank() ||
+        payload.optString("copyright").isNotBlank()
+    if (!hasAny) return null
+    return Base64.encodeToString(payload.toString().toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
 }
 
-private fun formatExifWhiteBalance(raw: String?): String? {
-    return when (raw?.trim()) {
-        "0" -> "auto"
-        "1" -> "manual"
-        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
-    }
-}
 
-private fun formatExifFlash(raw: String?): String? {
-    val value = raw?.trim()?.toIntOrNull() ?: return raw?.trim()?.takeIf { it.isNotEmpty() }
-    return if ((value and 0x1) == 1) "fired" else "not-fired"
-}
 
-private fun formatExifMeteringMode(raw: String?): String? {
-    return when (raw?.trim()) {
-        "0" -> "unknown"
-        "1" -> "average"
-        "2" -> "center-weighted"
-        "3" -> "spot"
-        "4" -> "multi-spot"
-        "5" -> "pattern"
-        "6" -> "partial"
-        "255" -> "other"
-        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
-    }
-}
 
-private fun formatExifExposureCompensation(raw: String?): String? {
-    val value = raw?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-    val ev = value.toDoubleOrNull()
-    return if (ev != null) {
-        "${"%.2f".format(Locale.getDefault(), ev)} EV"
-    } else {
-        value
-    }
-}
 
-private fun formatExifColorSpace(raw: String?): String? {
-    return when (raw?.trim()) {
-        "1" -> "sRGB"
-        "65535" -> "uncalibrated"
-        else -> raw?.trim()?.takeIf { it.isNotEmpty() }
-    }
-}
-
-private fun formatExifAltitude(exif: ExifInterface): String? {
-    val raw = exif.getAttributeDouble(ExifInterface.TAG_GPS_ALTITUDE, Double.NaN)
-    if (raw.isNaN()) return null
-    var altitude = raw
-    val ref = exif.getAttributeInt(ExifInterface.TAG_GPS_ALTITUDE_REF, 0)
-    if (ref == 1) altitude = -kotlin.math.abs(altitude)
-    return "${"%.1f".format(Locale.getDefault(), altitude)} m"
-}
-
-private fun normalizeExifDateTime(value: String): String {
+internal fun normalizeExifDateTime(value: String): String {
     val trimmed = value.trim()
     if (trimmed.isEmpty()) return ""
     // 允许用户输入 YYYY-MM-DD HH:MM:SS，保存前转成 EXIF 常用的 YYYY:MM:DD HH:MM:SS
@@ -1162,7 +890,96 @@ private fun normalizeExifDateTime(value: String): String {
     }
 }
 
-private fun isStrictValidExifDateTime(value: String): Boolean {
+
+internal fun readExifTextWithUnicodeFallback(
+    exif: ExifInterface,
+    standardTag: String,
+    xpTag: String? = null
+): String {
+    val standard = exif.getAttribute(standardTag)?.trim().orEmpty()
+    val xp = xpTag?.let { decodeXpExifText(exif, it) }.orEmpty()
+    return when {
+        xp.isNotBlank() -> xp
+        standard.isNotBlank() -> standard
+        else -> ""
+    }
+}
+
+
+internal fun readLmExifPayload(exif: ExifInterface): LmExifPayload? {
+    val raw = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+    if (raw.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
+        val token = raw.removePrefix(LM_EXIF_USER_COMMENT_PREFIX)
+        decodeLmExifPayloadToken(token)?.let { return it }
+    }
+    val (_, tokenFromSoftware) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
+    return tokenFromSoftware?.let { decodeLmExifPayloadToken(it) }
+}
+
+
+internal fun splitSoftwareAndPayloadToken(rawSoftware: String?): Pair<String, String?> {
+    val value = rawSoftware?.trim().orEmpty()
+    if (value.isEmpty()) return "" to null
+    val start = value.lastIndexOf(LM_EXIF_SOFTWARE_MARKER_PREFIX)
+    if (start < 0) return value to null
+    val end = value.indexOf(LM_EXIF_SOFTWARE_MARKER_SUFFIX, start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length)
+    if (end <= start) return value to null
+    val token = value.substring(start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length, end).trim()
+    val clean = (value.substring(0, start) + value.substring(end + LM_EXIF_SOFTWARE_MARKER_SUFFIX.length)).trim()
+    return clean to token.takeIf { it.isNotEmpty() }
+}
+
+
+internal fun toExternalLaunchUri(context: Context, uri: Uri): Uri {
+    if (uri.scheme != "file") return uri
+    val path = uri.path ?: return uri
+    val file = java.io.File(path)
+    if (!file.exists()) return uri
+    return runCatching {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    }.getOrElse { uri }
+}
+
+
+internal fun writeExifTextWithUnicodeSupport(
+    exif: ExifInterface,
+    standardTag: String,
+    value: String,
+    xpTag: String? = null
+) {
+    val normalized = value.trim()
+    if (normalized.isBlank()) {
+        exif.setAttribute(standardTag, null)
+        xpTag?.let { exif.setAttribute(it, null) }
+        return
+    }
+    exif.setAttribute(standardTag, normalized)
+    xpTag?.let { exif.setAttribute(it, encodeXpExifText(normalized)) }
+}
+
+
+internal fun writeLmExifPayload(exif: ExifInterface, data: EditableImageExif) {
+    val token = encodeLmExifPayloadToken(data)
+    val (cleanSoftware, _) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
+    if (token == null) {
+        val existing = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
+        if (existing.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
+            exif.setAttribute(ExifInterface.TAG_USER_COMMENT, null)
+        }
+        writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, cleanSoftware, EXIF_TAG_XP_SOFTWARE)
+        return
+    }
+    exif.setAttribute(ExifInterface.TAG_USER_COMMENT, LM_EXIF_USER_COMMENT_PREFIX + token)
+    val softwareWithMarker = if (data.software.trim().isBlank()) {
+        "${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
+    } else {
+        "${data.software.trim()}${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
+    }
+    writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, softwareWithMarker, EXIF_TAG_XP_SOFTWARE)
+}
+
+
+internal fun isStrictValidExifDateTime(value: String): Boolean {
     val normalized = normalizeExifDateTime(value)
     if (normalized.isBlank()) return true
     val pattern = Regex("^\\d{4}:\\d{2}:\\d{2} \\d{2}:\\d{2}:\\d{2}$")
@@ -1170,6 +987,7 @@ private fun isStrictValidExifDateTime(value: String): Boolean {
     val parser = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply { isLenient = false }
     return runCatching { parser.parse(normalized) != null }.getOrElse { false }
 }
+
 
 internal fun validateEditableImageExifForm(context: Context, data: EditableImageExif): EditableImageExifValidation {
     val takenTimeError = if (!isStrictValidExifDateTime(data.takenTime)) {
@@ -1212,34 +1030,6 @@ internal fun validateEditableAudioAnnotationForm(context: Context, data: Editabl
         artistError = lengthError(R.string.browser_meta_artist_label, data.artist),
         albumError = lengthError(R.string.browser_meta_album_label, data.album)
     )
-}
-
-internal fun compareChangedImageExifFields(before: EditableImageExif, expected: EditableImageExif, actual: EditableImageExif): List<String> {
-    val changed = mutableListOf<String>()
-    val checks = listOf(
-        "takenTime" to { before.takenTime.trim() != expected.takenTime.trim() },
-        "artist" to { before.artist.trim() != expected.artist.trim() },
-        "description" to { before.description.trim() != expected.description.trim() },
-        "software" to { before.software.trim() != expected.software.trim() },
-        "copyright" to { before.copyright.trim() != expected.copyright.trim() }
-    )
-    checks.forEach { (field, changedField) ->
-        if (changedField()) changed += field
-    }
-    return changed
-}
-
-internal fun compareChangedAudioAnnotationFields(before: EditableAudioAnnotation, expected: EditableAudioAnnotation, actual: EditableAudioAnnotation): List<String> {
-    val changed = mutableListOf<String>()
-    val checks = listOf(
-        "title" to { before.title.trim() != expected.title.trim() },
-        "artist" to { before.artist.trim() != expected.artist.trim() },
-        "album" to { before.album.trim() != expected.album.trim() }
-    )
-    checks.forEach { (field, changedField) ->
-        if (changedField()) changed += field
-    }
-    return changed
 }
 
 internal fun mergeEditableImageExifForBatch(current: EditableImageExif, patch: EditableImageExif): EditableImageExif {
@@ -1414,179 +1204,6 @@ internal fun saveEditableAudioAnnotationWithJaudiotagger(
     }
 }
 
-private fun applyAudioMetaAnnotationRows(
-    context: Context,
-    rows: List<DetailMetadataRow>,
-    annotation: AudioMetaAnnotation?
-): List<DetailMetadataRow> {
-    if (annotation == null) return rows
-    val title = annotation.title.trim()
-    val artist = annotation.artist.trim()
-    val album = annotation.album.trim()
-    if (title.isBlank() && artist.isBlank() && album.isBlank()) return rows
-
-    val titleLabel = context.getString(R.string.browser_meta_title_label)
-    val artistLabel = context.getString(R.string.browser_meta_artist_label)
-    val albumLabel = context.getString(R.string.browser_meta_album_label)
-    val updated = rows.map { row ->
-        if (row.isSection) return@map row
-        when (row.label) {
-            titleLabel -> if (title.isNotBlank()) row.copy(value = title) else row
-            artistLabel -> if (artist.isNotBlank()) row.copy(value = artist) else row
-            albumLabel -> if (album.isNotBlank()) row.copy(value = album) else row
-            else -> row
-        }
-    }
-    val result = updated.toMutableList()
-    val hasTitle = updated.any { !it.isSection && it.label == titleLabel }
-    val hasArtist = updated.any { !it.isSection && it.label == artistLabel }
-    val hasAlbum = updated.any { !it.isSection && it.label == albumLabel }
-    if (title.isNotBlank() && !hasTitle) result += DetailMetadataRow(titleLabel, title)
-    if (artist.isNotBlank() && !hasArtist) result += DetailMetadataRow(artistLabel, artist)
-    if (album.isNotBlank() && !hasAlbum) result += DetailMetadataRow(albumLabel, album)
-    return result
-}
-
-private fun decodeXpExifText(exif: ExifInterface, tag: String): String? {
-    fun decodeUtf16Le(raw: ByteArray): String? {
-        if (raw.isEmpty()) return null
-        var end = raw.size
-        while (end >= 2 && raw[end - 1] == 0.toByte() && raw[end - 2] == 0.toByte()) {
-            end -= 2
-        }
-        if (end <= 0) return null
-        return runCatching {
-            String(raw, 0, end, Charsets.UTF_16LE).trim().ifEmpty { null }
-        }.getOrNull()
-    }
-
-    exif.getAttributeBytes(tag)?.let { bytes ->
-        decodeUtf16Le(bytes)?.let { return it }
-    }
-
-    val rawAttr = exif.getAttribute(tag)?.trim().orEmpty()
-    if (rawAttr.isBlank()) return null
-    val parsedBytes = runCatching {
-        rawAttr.split(',')
-            .mapNotNull { token -> token.trim().takeIf { it.isNotEmpty() }?.toIntOrNull() }
-            .map { (it and 0xFF).toByte() }
-            .toByteArray()
-    }.getOrNull()
-    if (parsedBytes != null && parsedBytes.isNotEmpty()) {
-        decodeUtf16Le(parsedBytes)?.let { return it }
-    }
-    return rawAttr.ifEmpty { null }
-}
-
-private fun encodeXpExifText(value: String): String {
-    val bytes = (value + "\u0000").toByteArray(Charsets.UTF_16LE)
-    return bytes.joinToString(separator = ",") { (it.toInt() and 0xFF).toString() }
-}
-
-private fun readExifTextWithUnicodeFallback(
-    exif: ExifInterface,
-    standardTag: String,
-    xpTag: String? = null
-): String {
-    val standard = exif.getAttribute(standardTag)?.trim().orEmpty()
-    val xp = xpTag?.let { decodeXpExifText(exif, it) }.orEmpty()
-    return when {
-        xp.isNotBlank() -> xp
-        standard.isNotBlank() -> standard
-        else -> ""
-    }
-}
-
-private fun writeExifTextWithUnicodeSupport(
-    exif: ExifInterface,
-    standardTag: String,
-    value: String,
-    xpTag: String? = null
-) {
-    val normalized = value.trim()
-    if (normalized.isBlank()) {
-        exif.setAttribute(standardTag, null)
-        xpTag?.let { exif.setAttribute(it, null) }
-        return
-    }
-    exif.setAttribute(standardTag, normalized)
-    xpTag?.let { exif.setAttribute(it, encodeXpExifText(normalized)) }
-}
-
-private fun decodeLmExifPayloadToken(token: String): LmExifPayload? {
-    val normalized = token.trim().takeIf { it.isNotEmpty() } ?: return null
-    val jsonText = runCatching {
-        val bytes = Base64.decode(normalized, Base64.URL_SAFE or Base64.NO_WRAP)
-        String(bytes, Charsets.UTF_8)
-    }.getOrNull() ?: return null
-    return runCatching {
-        val json = JSONObject(jsonText)
-        LmExifPayload(
-            artist = json.optString("artist").trim(),
-            description = json.optString("description").trim(),
-            software = json.optString("software").trim(),
-            copyright = json.optString("copyright").trim()
-        )
-    }.getOrNull()
-}
-
-private fun encodeLmExifPayloadToken(data: EditableImageExif): String? {
-    val payload = JSONObject().apply {
-        put("artist", data.artist.trim())
-        put("description", data.description.trim())
-        put("software", data.software.trim())
-        put("copyright", data.copyright.trim())
-    }
-    val hasAny = payload.optString("artist").isNotBlank() ||
-        payload.optString("description").isNotBlank() ||
-        payload.optString("software").isNotBlank() ||
-        payload.optString("copyright").isNotBlank()
-    if (!hasAny) return null
-    return Base64.encodeToString(payload.toString().toByteArray(Charsets.UTF_8), Base64.URL_SAFE or Base64.NO_WRAP)
-}
-
-private fun splitSoftwareAndPayloadToken(rawSoftware: String?): Pair<String, String?> {
-    val value = rawSoftware?.trim().orEmpty()
-    if (value.isEmpty()) return "" to null
-    val start = value.lastIndexOf(LM_EXIF_SOFTWARE_MARKER_PREFIX)
-    if (start < 0) return value to null
-    val end = value.indexOf(LM_EXIF_SOFTWARE_MARKER_SUFFIX, start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length)
-    if (end <= start) return value to null
-    val token = value.substring(start + LM_EXIF_SOFTWARE_MARKER_PREFIX.length, end).trim()
-    val clean = (value.substring(0, start) + value.substring(end + LM_EXIF_SOFTWARE_MARKER_SUFFIX.length)).trim()
-    return clean to token.takeIf { it.isNotEmpty() }
-}
-
-private fun readLmExifPayload(exif: ExifInterface): LmExifPayload? {
-    val raw = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
-    if (raw.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
-        val token = raw.removePrefix(LM_EXIF_USER_COMMENT_PREFIX)
-        decodeLmExifPayloadToken(token)?.let { return it }
-    }
-    val (_, tokenFromSoftware) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
-    return tokenFromSoftware?.let { decodeLmExifPayloadToken(it) }
-}
-
-private fun writeLmExifPayload(exif: ExifInterface, data: EditableImageExif) {
-    val token = encodeLmExifPayloadToken(data)
-    val (cleanSoftware, _) = splitSoftwareAndPayloadToken(exif.getAttribute(ExifInterface.TAG_SOFTWARE))
-    if (token == null) {
-        val existing = exif.getAttribute(ExifInterface.TAG_USER_COMMENT)?.trim().orEmpty()
-        if (existing.startsWith(LM_EXIF_USER_COMMENT_PREFIX)) {
-            exif.setAttribute(ExifInterface.TAG_USER_COMMENT, null)
-        }
-        writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, cleanSoftware, EXIF_TAG_XP_SOFTWARE)
-        return
-    }
-    exif.setAttribute(ExifInterface.TAG_USER_COMMENT, LM_EXIF_USER_COMMENT_PREFIX + token)
-    val softwareWithMarker = if (data.software.trim().isBlank()) {
-        "${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
-    } else {
-        "${data.software.trim()}${LM_EXIF_SOFTWARE_MARKER_PREFIX}${token}${LM_EXIF_SOFTWARE_MARKER_SUFFIX}"
-    }
-    writeExifTextWithUnicodeSupport(exif, ExifInterface.TAG_SOFTWARE, softwareWithMarker, EXIF_TAG_XP_SOFTWARE)
-}
-
 internal fun readEditableImageExif(context: Context, uri: Uri): EditableImageExif {
     context.contentResolver.openInputStream(uri)?.use { input ->
         val exif = ExifInterface(input)
@@ -1645,320 +1262,6 @@ internal fun saveEditableImageExif(
     }
 }
 
-private fun MediaFormat.stringOrNull(key: String): String? {
-    return if (containsKey(key)) getString(key)?.trim()?.takeIf { it.isNotEmpty() } else null
-}
-
-private fun MediaFormat.intOrNull(key: String): Int? {
-    return if (containsKey(key)) runCatching { getInteger(key) }.getOrNull() else null
-}
-
-private fun MediaFormat.floatOrNull(key: String): Float? {
-    return if (containsKey(key)) runCatching { getFloat(key) }.getOrNull() else null
-}
-
-private fun MediaFormat.longOrNull(key: String): Long? {
-    return if (containsKey(key)) runCatching { getLong(key) }.getOrNull() else null
-}
-
-private fun loadVideoTrackMetadataRows(context: Context, uri: Uri): List<DetailMetadataRow> {
-    val extractor = MediaExtractor()
-    return try {
-        extractor.setDataSource(context, uri, null)
-        val rows = mutableListOf<DetailMetadataRow>()
-        var hasVideoTrack = false
-        var hasAudioTrack = false
-        for (index in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(index)
-            val mime = format.stringOrNull(MediaFormat.KEY_MIME).orEmpty()
-            if (mime.startsWith("video/")) {
-                if (!hasVideoTrack) {
-                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_video_tracks))
-                    hasVideoTrack = true
-                }
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_video_track_mime_label, index + 1),
-                    mime
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_video_track_resolution_label, index + 1),
-                    formatVideoResolution(
-                        format.intOrNull(MediaFormat.KEY_WIDTH)?.toString(),
-                        format.intOrNull(MediaFormat.KEY_HEIGHT)?.toString()
-                    )
-                )
-                val frameRate = format.floatOrNull(MediaFormat.KEY_FRAME_RATE)
-                    ?: format.intOrNull(MediaFormat.KEY_FRAME_RATE)?.toFloat()
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_video_track_fps_label, index + 1),
-                    frameRate?.let { "${"%.2f".format(Locale.getDefault(), it)} fps" }
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_video_track_bitrate_label, index + 1),
-                    formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_video_track_duration_label, index + 1),
-                    formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
-                )
-            } else if (mime.startsWith("audio/")) {
-                if (!hasAudioTrack) {
-                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tracks))
-                    hasAudioTrack = true
-                }
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_audio_track_mime_label, index + 1),
-                    mime
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_audio_track_sample_rate_label, index + 1),
-                    formatSampleRate(format.intOrNull(MediaFormat.KEY_SAMPLE_RATE)?.toString())
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_audio_track_channel_count_label, index + 1),
-                    format.intOrNull(MediaFormat.KEY_CHANNEL_COUNT)?.toString()
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_audio_track_bitrate_label, index + 1),
-                    formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_audio_track_duration_label, index + 1),
-                    formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
-                )
-            }
-        }
-        rows
-    } finally {
-        runCatching { extractor.release() }
-    }
-}
-
-private fun loadAudioTrackMetadataRows(context: Context, uri: Uri): List<DetailMetadataRow> {
-    val extractor = MediaExtractor()
-    return try {
-        extractor.setDataSource(context, uri, null)
-        val rows = mutableListOf<DetailMetadataRow>()
-        var hasAudioTrack = false
-        for (index in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(index)
-            val mime = format.stringOrNull(MediaFormat.KEY_MIME).orEmpty()
-            if (!mime.startsWith("audio/")) continue
-            if (!hasAudioTrack) {
-                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tracks))
-                hasAudioTrack = true
-            }
-            appendMetaIfNotBlank(
-                rows,
-                context.getString(R.string.browser_meta_audio_track_mime_label, index + 1),
-                mime
-            )
-            appendMetaIfNotBlank(
-                rows,
-                context.getString(R.string.browser_meta_audio_track_sample_rate_label, index + 1),
-                formatSampleRate(format.intOrNull(MediaFormat.KEY_SAMPLE_RATE)?.toString())
-            )
-            appendMetaIfNotBlank(
-                rows,
-                context.getString(R.string.browser_meta_audio_track_channel_count_label, index + 1),
-                format.intOrNull(MediaFormat.KEY_CHANNEL_COUNT)?.toString()
-            )
-            appendMetaIfNotBlank(
-                rows,
-                context.getString(R.string.browser_meta_audio_track_bitrate_label, index + 1),
-                formatBitrate(format.intOrNull(MediaFormat.KEY_BIT_RATE)?.toString())
-            )
-            appendMetaIfNotBlank(
-                rows,
-                context.getString(R.string.browser_meta_audio_track_duration_label, index + 1),
-                formatDurationUs(format.longOrNull(MediaFormat.KEY_DURATION))
-            )
-        }
-        rows
-    } finally {
-        runCatching { extractor.release() }
-    }
-}
-
-private fun loadTypeSpecificMetadataRows(
-    context: Context,
-    uri: Uri,
-    fileName: String,
-    mimeType: String,
-    isDirectory: Boolean
-): List<DetailMetadataRow> {
-    if (isDirectory) return emptyList()
-    return when (inferDetailMetadataKind(fileName, mimeType, isDirectory)) {
-        DetailMetadataKind.AUDIO -> runCatching {
-            MediaMetadataRetriever().use { retriever ->
-                retriever.setDataSource(context, uri)
-                val rows = mutableListOf<DetailMetadataRow>()
-                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_tags))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_title_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_album_artist_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_genre_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_year_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_author_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_composer_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_writer_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_WRITER))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_track_number_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_disc_number_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_total_tracks_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_NUM_TRACKS))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_recorded_date_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE))
-
-                appendMetaSection(rows, context.getString(R.string.browser_meta_group_audio_technical))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_audio_mime_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_duration_label), formatDurationMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bitrate_label), formatBitrate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)))
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_sample_rate_label), formatSampleRate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_SAMPLERATE)))
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bits_per_sample_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITS_PER_SAMPLE))
-                }
-                rows += loadAudioTrackMetadataRows(context, uri)
-                rows
-            }
-        }.getOrElse { emptyList() }
-
-        DetailMetadataKind.VIDEO -> runCatching {
-            MediaMetadataRetriever().use { retriever ->
-                retriever.setDataSource(context, uri)
-                val rows = mutableListOf<DetailMetadataRow>()
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_duration_label), formatDurationMs(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_bitrate_label), formatBitrate(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)))
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_resolution_label),
-                    formatVideoResolution(
-                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH),
-                        retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)
-                    )
-                )
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_rotation_label), retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION))
-                rows += loadVideoTrackMetadataRows(context, uri)
-                rows
-            }
-        }.getOrElse { emptyList() }
-
-        DetailMetadataKind.IMAGE -> runCatching {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                val rows = mutableListOf<DetailMetadataRow>()
-                val exif = ExifInterface(input)
-                val width = exif.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0)
-                    .takeIf { it > 0 }
-                    ?: exif.getAttributeInt(ExifInterface.TAG_PIXEL_X_DIMENSION, 0).takeIf { it > 0 }
-                val height = exif.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0)
-                    .takeIf { it > 0 }
-                    ?: exif.getAttributeInt(ExifInterface.TAG_PIXEL_Y_DIMENSION, 0).takeIf { it > 0 }
-                if (width != null && height != null) {
-                    appendMetaIfNotBlank(
-                        rows,
-                        context.getString(R.string.browser_meta_resolution_label),
-                        "${width} x ${height}"
-                    )
-                }
-                val lmPayload = readLmExifPayload(exif)
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_taken_time_label), exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL))
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_artist_label),
-                    lmPayload?.artist?.takeIf { it.isNotBlank() }
-                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_ARTIST, EXIF_TAG_XP_AUTHOR)
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_description_label),
-                    lmPayload?.description?.takeIf { it.isNotBlank() }
-                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_IMAGE_DESCRIPTION, EXIF_TAG_XP_COMMENT)
-                )
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_camera_make_label), exif.getAttribute(ExifInterface.TAG_MAKE))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_camera_model_label), exif.getAttribute(ExifInterface.TAG_MODEL))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_lens_model_label), exif.getAttribute(ExifInterface.TAG_LENS_MODEL))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_iso_label), exif.getAttribute(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_exposure_label), formatExifExposureTime(exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_aperture_label), formatExifAperture(exif.getAttribute(ExifInterface.TAG_F_NUMBER)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_focal_length_label), formatExifFocalLength(exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_orientation_label), formatExifOrientation(exif.getAttribute(ExifInterface.TAG_ORIENTATION)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_white_balance_label), formatExifWhiteBalance(exif.getAttribute(ExifInterface.TAG_WHITE_BALANCE)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_flash_label), formatExifFlash(exif.getAttribute(ExifInterface.TAG_FLASH)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_metering_mode_label), formatExifMeteringMode(exif.getAttribute(ExifInterface.TAG_METERING_MODE)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_exposure_compensation_label), formatExifExposureCompensation(exif.getAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE)))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_color_space_label), formatExifColorSpace(exif.getAttribute(ExifInterface.TAG_COLOR_SPACE)))
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_software_label),
-                    lmPayload?.software?.takeIf { it.isNotBlank() }
-                        ?: splitSoftwareAndPayloadToken(readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_SOFTWARE, EXIF_TAG_XP_SOFTWARE)).first
-                )
-                appendMetaIfNotBlank(
-                    rows,
-                    context.getString(R.string.browser_meta_copyright_label),
-                    lmPayload?.copyright?.takeIf { it.isNotBlank() }
-                        ?: readExifTextWithUnicodeFallback(exif, ExifInterface.TAG_COPYRIGHT, EXIF_TAG_XP_COPYRIGHT)
-                )
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_gps_label), formatExifGps(exif))
-                appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_altitude_label), formatExifAltitude(exif))
-                rows
-            } ?: emptyList()
-        }.getOrElse { emptyList() }
-
-        DetailMetadataKind.PDF -> runCatching {
-            context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
-                PdfRenderer(pfd).use { renderer ->
-                    val rows = mutableListOf<DetailMetadataRow>()
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_page_count_label), renderer.pageCount.toString())
-                    rows
-                }
-            } ?: emptyList()
-        }.getOrElse { emptyList() }
-
-        DetailMetadataKind.EPUB -> runCatching {
-            val parseResult = runCatching {
-                val cacheDir = getEpubCacheDir(context, uri)
-                loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
-                    ?: extractEpubToCache(context, uri, null, fileName) { }
-            }.getOrElse { error ->
-                throw IllegalStateException("${error.javaClass.simpleName}: ${error.message ?: "unknown error"}")
-            }
-
-            when (parseResult) {
-                is EpubParseResult.Success -> {
-                    val rows = mutableListOf<DetailMetadataRow>()
-                    appendMetaSection(rows, context.getString(R.string.browser_meta_group_epub_book))
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_title_label), parseResult.result.bookInfo.title)
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_author_label), parseResult.result.bookInfo.author)
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_language_label), parseResult.result.bookInfo.language)
-                    appendMetaIfNotBlank(rows, context.getString(R.string.browser_meta_chapter_count_label), parseResult.result.chapters.size.toString())
-                    rows
-                }
-
-                is EpubParseResult.Error -> {
-                    val detail = parseResult.detail?.trim().orEmpty()
-                    val message = parseResult.message.trim()
-                    val reason = if (detail.isNotEmpty()) "$message ($detail)" else message
-                    throw IllegalStateException(reason)
-                }
-            }
-        }.getOrElse { error ->
-            throw IllegalStateException(error.message ?: error.javaClass.simpleName)
-        }
-
-        DetailMetadataKind.ARCHIVE,
-        DetailMetadataKind.UNKNOWN -> emptyList()
-    }
-}
-
 internal data class PlaylistTrackTransfer(
     val source: Playlist,
     val trackIndex: Int,
@@ -1968,79 +1271,14 @@ internal data class PlaylistTrackTransfer(
 internal fun normalizeContentUriString(s: String): String =
     com.kenny.localmanager.file.normalizeContentUriString(s)
 
-private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
-
 internal fun fileExtensionKey(name: String): String? {
     val dotIndex = name.lastIndexOf('.')
     if (dotIndex <= 0 || dotIndex >= name.lastIndex) return null
     return name.substring(dotIndex + 1).trim().lowercase().ifBlank { null }
 }
 
-private val externalOpenVideoExts = setOf(
-    "rmvb", "rm", "rv", "ram", "mp4", "m4v", "mkv", "avi", "mov", "wmv", "flv",
-    "ts", "m2ts", "mts", "webm", "3gp", "mpeg", "mpg", "vob", "asf"
-)
-private val externalOpenAudioExts = setOf(
-    "mp3", "flac", "wav", "m4a", "aac", "ogg", "opus", "wma", "ape", "amr", "aiff", "alac"
-)
-private val externalOpenImageExts = setOf(
-    "jpg", "jpeg", "png", "gif", "webp", "bmp", "heic", "heif", "tiff", "tif", "svg"
-)
-private val externalOpenTextExts = setOf(
-    "txt", "md", "rst", "log", "json", "xml", "yaml", "yml", "csv", "ini", "toml"
-)
-private val externalOpenArchiveMimeByExt = mapOf(
-    "zip" to "application/zip",
-    "7z" to "application/x-7z-compressed",
-    "rar" to "application/vnd.rar",
-    "tar" to "application/x-tar",
-    "gz" to "application/gzip",
-    "bz2" to "application/x-bzip2",
-    "xz" to "application/x-xz",
-    "pdf" to "application/pdf",
-    "epub" to "application/epub+zip",
-    "apk" to "application/vnd.android.package-archive",
-    "srt" to "application/x-subrip",
-    "ass" to "text/x-ssa",
-    "ssa" to "text/x-ssa"
-)
 
-private fun toExternalLaunchUri(context: Context, uri: Uri): Uri {
-    if (uri.scheme != "file") return uri
-    val path = uri.path ?: return uri
-    val file = java.io.File(path)
-    if (!file.exists()) return uri
-    return runCatching {
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    }.getOrElse { uri }
-}
-
-private fun guessExternalOpenMimeType(context: Context, uri: Uri, fileNameHint: String?): String {
-    val resolverMime = context.contentResolver.getType(uri)?.trim()?.lowercase(Locale.ROOT)
-    val validResolverMime = resolverMime
-        ?.takeIf { it.isNotBlank() && it != "application/octet-stream" && it != "*/*" }
-    if (validResolverMime != null) return validResolverMime
-
-    val candidateName = fileNameHint
-        ?.takeIf { it.isNotBlank() }
-        ?: context.contentResolver.getDisplayName(uri)
-    val ext = candidateName
-        ?.substringAfterLast('.', "")
-        ?.trim()
-        ?.lowercase(Locale.ROOT)
-        .orEmpty()
-    if (ext.isNotEmpty()) {
-        MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { return it }
-        externalOpenArchiveMimeByExt[ext]?.let { return it }
-        if (ext in externalOpenVideoExts) return "video/*"
-        if (ext in externalOpenAudioExts) return "audio/*"
-        if (ext in externalOpenImageExts) return "image/*"
-        if (ext in externalOpenTextExts) return "text/plain"
-    }
-    return resolverMime?.takeIf { it.isNotBlank() } ?: "*/*"
-}
-
-private fun buildExternalOpenIntent(
+internal fun buildExternalOpenIntent(
     context: Context,
     uri: Uri,
     packageName: String? = null,
@@ -2056,31 +1294,6 @@ private fun buildExternalOpenIntent(
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         if (context !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     }
-}
-
-@Suppress("DEPRECATION")
-private fun queryExternalOpenTargets(
-    context: Context,
-    uriString: String,
-    fileNameHint: String? = null,
-    forcedMimeType: String? = null
-): List<ExternalAppTarget> {
-    val packageManager = context.packageManager
-    return packageManager.queryIntentActivities(
-        buildExternalOpenIntent(context, Uri.parse(uriString), fileNameHint = fileNameHint, forcedMimeType = forcedMimeType),
-        PackageManager.MATCH_DEFAULT_ONLY
-    ).asSequence()
-        .mapNotNull { resolveInfo ->
-            val packageName = resolveInfo.activityInfo?.packageName?.trim().orEmpty()
-            if (packageName.isBlank() || packageName == context.packageName) return@mapNotNull null
-            val label = runCatching { resolveInfo.loadLabel(packageManager)?.toString() }.getOrNull()
-                ?.takeIf { it.isNotBlank() }
-                ?: packageName
-            ExternalAppTarget(packageName = packageName, label = label)
-        }
-        .distinctBy { it.packageName }
-        .sortedBy { it.label.lowercase(Locale.getDefault()) }
-        .toList()
 }
 
 internal fun launchExternalOpen(
@@ -2148,9 +1361,9 @@ fun FileBrowserApp(
 
     // AppShell + DirectoryRoot state (long-lived while the app shell is active)
     // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
-    val browserTab = remember { BrowserTabState(context, prefs) }
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
+    val browserTab = rememberBrowserTabState(context, prefs, initialDirUri)
 
     // Transient viewer / editor routes (short-lived feature flows)
     var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
@@ -2199,21 +1412,6 @@ fun FileBrowserApp(
     }
     LaunchedEffect(prefs) {
         prefs.recentOpenItems.collect { recentOpenItems = it }
-    }
-    LaunchedEffect(Unit) {
-        browserTab.restoreRoot()
-    }
-    LaunchedEffect(browserTab.rootUri, initialDirUri) {
-        browserTab.ensureCurrentUri(initialDirUri)
-    }
-    LaunchedEffect(prefs) {
-        prefs.filterVisible.collect { browserTab.filterVisible = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.hideDotFiles.collect { browserTab.hideDotFiles = it }
-    }
-    LaunchedEffect(prefs) {
-        prefs.externalOpenByExtension.collect { browserTab.preferredExternalPackages = it }
     }
     LaunchedEffect(prefs) {
         prefs.recentRootUris.collect { recentRootUris = it }
@@ -2907,13 +2105,11 @@ fun FileBrowserApp(
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
             onSetProgressCancel = { action -> progressCancelAction = action },
         )
+        val directoryTab = browserTabFeature(state = browserTab, deps = browserTabHostDependencies)
                 MainTabContentHost(
                     activeMainTab = activeMainTab,
                     features = listOf(
-            mainTabFeature(
-                MainTab.DIRECTORY,
-                { BrowserTabHost(state = browserTab, deps = browserTabHostDependencies) }
-            ),
+            directoryTab,
             mainTabFeature(MainTab.RECENT) {
                 RecentTabRoute(
                     RecentTabRouteState(
@@ -3640,73 +2836,6 @@ private fun OperationProgressDialog(progress: OperationProgress, onCancel: (() -
 
 /** 密码保护解密后的内容，暂存于内存中供渲染。 */
 /** 判断文件名是否为压缩 Markdown/RST 文件（.md.zip 或 .rst.zip）。 */
-private fun isCompressedMarkdown(name: String): Boolean =
-    name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
-
-
-/** 判断文件名是否为压缩 HTML 文件（.html.zip）。 */
-private fun isCompressedHtml(name: String): Boolean =
-    name.endsWith(".html.zip", ignoreCase = true)
-
-/** 判断文件名是否为压缩 LLM 包（.llm.zip）。 */
-private fun isCompressedLlmZip(name: String): Boolean =
-    name.endsWith(".llm.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .pic.zip 图片压缩包。 */
-private fun isPicZip(name: String): Boolean =
-    name.endsWith(".pic.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .vid.zip 视频压缩包。 */
-internal fun isVidZip(name: String): Boolean =
-    name.endsWith(".vid.zip", ignoreCase = true)
-
-/** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩格式）。 */
-internal fun isExtractableArchive(name: String): Boolean =
-    (name.endsWith(".zip", ignoreCase = true) && !isPicZip(name) && !isVidZip(name)) ||
-        name.endsWith(".rar", ignoreCase = true) ||
-        name.endsWith(".7z", ignoreCase = true) ||
-        sevenZSplitPartRegex.matches(name) ||
-        name.endsWith(".tar", ignoreCase = true) ||
-        name.endsWith(".tar.gz", ignoreCase = true) ||
-        name.endsWith(".tgz", ignoreCase = true) ||
-        name.endsWith(".tar.bz2", ignoreCase = true) ||
-        name.endsWith(".tbz2", ignoreCase = true) ||
-        name.endsWith(".tar.xz", ignoreCase = true) ||
-        name.endsWith(".txz", ignoreCase = true) ||
-        (name.endsWith(".gz", ignoreCase = true) &&
-            !name.endsWith(".tar.gz", ignoreCase = true) &&
-            !name.endsWith(".tgz", ignoreCase = true)) ||
-        (name.endsWith(".bz2", ignoreCase = true) &&
-            !name.endsWith(".tar.bz2", ignoreCase = true) &&
-            !name.endsWith(".tbz2", ignoreCase = true)) ||
-        (name.endsWith(".xz", ignoreCase = true) &&
-            !name.endsWith(".tar.xz", ignoreCase = true) &&
-            !name.endsWith(".txz", ignoreCase = true))
-
-/** 判断文件名是否为 EPUB 文件。 */
-private fun isEpubFile(name: String): Boolean =
-    name.endsWith(".epub", ignoreCase = true)
-
-/** 判断文件名是否为 TXT 文件。 */
-private fun isTxtFile(name: String): Boolean =
-    name.endsWith(".txt", ignoreCase = true)
-
-/** 判断文件名是否为 LLM 对话文件。 */
-private fun isLlmFile(name: String): Boolean =
-    name.endsWith(".llm", ignoreCase = true)
-
-/** 判断文件名是否为 PDF 文件。 */
-private fun isPdfFile(name: String): Boolean =
-    name.endsWith(".pdf", ignoreCase = true)
-
-private fun getCompressedPayloadExtension(name: String): String? {
-    if (!name.endsWith(".zip", ignoreCase = true)) return null
-    val withoutZip = name.dropLast(4)
-    val dotIndex = withoutZip.lastIndexOf('.')
-    if (dotIndex <= 0 || dotIndex >= withoutZip.length - 1) return null
-    return withoutZip.substring(dotIndex + 1)
-}
-
 /** 判断文件名是否为图片文件（目录图库查看用，包含 SVG）。 */
 internal fun isGalleryImageFile(name: String): Boolean =
     name.endsWith(".jpg", ignoreCase = true) ||
@@ -3728,2618 +2857,6 @@ private sealed class GpgMethod {
 }
 
 internal data class CachedDir(val items: List<DocumentFileModel>)
-
-private enum class FileSortOrder(@androidx.annotation.StringRes val labelRes: Int) {
-    NAME(R.string.browser_name_field),
-    TIME(R.string.browser_modified_field),
-    SIZE(R.string.browser_size_field)
-}
-
-private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Comparator<DocumentFileModel> {
-    val dirFirst = compareBy<DocumentFileModel> { !it.isDirectory }
-    val nameThen = compareBy<DocumentFileModel> { it.name.lowercase() }
-    return when (sortOrder) {
-        FileSortOrder.NAME -> dirFirst.then(if (ascending) nameThen else nameThen.reversed())
-        FileSortOrder.TIME -> dirFirst.then(
-            if (ascending) compareBy { it.lastModified } else compareByDescending { it.lastModified }
-        ).then(nameThen)
-        FileSortOrder.SIZE -> dirFirst.then(
-            if (ascending) compareBy { it.size } else compareByDescending { it.size }
-        ).then(nameThen)
-    }
-}
-
-private fun parseFileSearchSize(context: Context, raw: String): Long? {
-    val normalized = raw.trim()
-    if (normalized.isEmpty()) return null
-    val match = Regex("""^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?b?)?$""", RegexOption.IGNORE_CASE).matchEntire(normalized)
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_format_invalid, raw))
-    val value = match.groupValues[1].toDoubleOrNull()
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_invalid, raw))
-    val unit = match.groupValues[2].lowercase(Locale.getDefault())
-    val multiplier = when (unit) {
-        "", "b" -> 1.0
-        "k", "kb" -> 1024.0
-        "m", "mb" -> 1024.0 * 1024
-        "g", "gb" -> 1024.0 * 1024 * 1024
-        "t", "tb" -> 1024.0 * 1024 * 1024 * 1024
-        else -> throw IllegalArgumentException(context.getString(R.string.browser_size_unit_unsupported, unit))
-    }
-    val bytes = value * multiplier
-    if (!bytes.isFinite() || bytes < 0.0) {
-        throw IllegalArgumentException(context.getString(R.string.browser_size_must_non_negative, raw))
-    }
-    return bytes.toLong()
-}
-
-private fun parseFileSearchDate(context: Context, raw: String, endOfDay: Boolean): Long? {
-    val normalized = raw.trim()
-    if (normalized.isEmpty()) return null
-    val parser = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
-    val parsed = parser.parse(normalized)
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_date_format_invalid, raw))
-    if (!endOfDay) return parsed.time
-    return Calendar.getInstance().apply {
-        time = parsed
-        set(Calendar.HOUR_OF_DAY, 23)
-        set(Calendar.MINUTE, 59)
-        set(Calendar.SECOND, 59)
-        set(Calendar.MILLISECOND, 999)
-    }.timeInMillis
-}
-
-@Composable
-private fun FileSearchDialog(
-    namePattern: String,
-    minSize: String,
-    maxSize: String,
-    modifiedAfter: String,
-    modifiedBefore: String,
-    searching: Boolean,
-    error: String?,
-    onNamePatternChange: (String) -> Unit,
-    onMinSizeChange: (String) -> Unit,
-    onMaxSizeChange: (String) -> Unit,
-    onModifiedAfterChange: (String) -> Unit,
-    onModifiedBeforeChange: (String) -> Unit,
-    onSearch: () -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(stringResource(R.string.browser_file_search_title), style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = namePattern,
-                    onValueChange = onNamePatternChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_filename_regex_label)) },
-                    placeholder = { Text(stringResource(R.string.browser_regex_example)) },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = minSize,
-                    onValueChange = onMinSizeChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_min_size_label)) },
-                    placeholder = { Text(stringResource(R.string.browser_size_example_mb)) },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = maxSize,
-                    onValueChange = onMaxSizeChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_max_size_label)) },
-                    placeholder = { Text(stringResource(R.string.browser_size_example_large)) },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = modifiedAfter,
-                    onValueChange = onModifiedAfterChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_min_mtime_label)) },
-                    placeholder = { Text("yyyy-MM-dd") },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = modifiedBefore,
-                    onValueChange = onModifiedBeforeChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_max_mtime_label)) },
-                    placeholder = { Text("yyyy-MM-dd") },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    stringResource(R.string.browser_recursive_search_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                error?.let {
-                    Spacer(Modifier.height(8.dp))
-                    SelectionContainer {
-                        Text(it, color = MaterialTheme.colorScheme.error)
-                    }
-                }
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onClear, enabled = !searching) { Text(stringResource(R.string.browser_clear_filter)) }
-                    TextButton(onClick = onDismiss, enabled = !searching) { Text(stringResource(R.string.common_close)) }
-                    TextButton(onClick = onSearch, enabled = !searching) {
-                        Text(if (searching) stringResource(R.string.browser_search_in_progress) else stringResource(R.string.browser_start_search))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FileSearchResultsDialog(
-    results: List<RecursiveFileSearchHit>,
-    pendingUris: Set<String>,
-    onAddAll: () -> Unit,
-    onAddOne: (DocumentFileModel) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val timeFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(20.dp)
-                    .heightIn(max = 640.dp)
-            ) {
-                Text(stringResource(R.string.browser_search_results, results.size), style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End
-                ) {
-                    TextButton(onClick = onAddAll, enabled = results.any { it.model.uri.toString() !in pendingUris }) {
-                        Text(stringResource(R.string.browser_add_all_to_pending))
-                    }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-                }
-                Spacer(Modifier.height(8.dp))
-                if (results.isEmpty()) {
-                    Text(stringResource(R.string.browser_no_matching_files_dot), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                        items(results, key = { it.model.uri.toString() }) { item ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp)
-                            ) {
-                                Column(Modifier.padding(12.dp)) {
-                                    Text(item.model.name, style = MaterialTheme.typography.titleSmall)
-                                    Spacer(Modifier.height(4.dp))
-                                    SelectionContainer {
-                                        Text(
-                                            item.relativePath,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Spacer(Modifier.height(4.dp))
-                                    Text(
-                                        context.getString(R.string.browser_search_result_size_modified, item.model.displaySize.ifBlank { context.getString(R.string.browser_unknown) }, timeFormatter.format(Date(item.model.lastModified))),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                        TextButton(
-                                            onClick = { onAddOne(item.model) },
-                                            enabled = item.model.uri.toString() !in pendingUris
-                                        ) {
-                                            Text(if (item.model.uri.toString() in pendingUris) stringResource(R.string.browser_already_in_pending) else stringResource(R.string.browser_add_to_pending))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun FileBrowserScreen(
-    modifier: Modifier = Modifier,
-    currentUri: String,
-    refreshTrigger: Int,
-    dirCache: Map<String, CachedDir>,
-    onCacheDir: (uri: String, items: List<DocumentFileModel>) -> Unit,
-    pendingList: List<DocumentFileModel>,
-    rootUri: String?,
-    listState: LazyListState,
-    onNavigate: (String) -> Unit,
-    onBack: () -> Unit,
-    canGoBack: Boolean,
-    onEmptyTrash: (() -> Unit)? = null,
-    onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
-    isViewingTrash: Boolean = false,
-    filterVisible: Boolean = true,
-    hideDotFiles: Boolean = false,
-    preferredExternalPackages: Map<String, String> = emptyMap(),
-    onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
-    onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?) -> Boolean = { _, _, _, _, _ -> false },
-    onClearExternalOpenPreference: (name: String) -> Unit = {},
-    onAddToPendingList: (DocumentFileModel) -> Unit,
-    onRemoveFromPendingList: (DocumentFileModel) -> Unit,
-    onCopyPendingToCurrentDir: () -> Unit = {},
-    onMovePendingToCurrentDir: () -> Unit = {},
-    onShowPendingList: (Boolean) -> Unit,
-    onRefresh: () -> Unit,
-    onChangeRoot: () -> Unit = {},
-    onCreateQuickNote: () -> Unit = {},
-    onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
-    onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
-    onForwardToBulletin: ((List<DocumentFileModel>) -> Unit)? = null,
-    onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
-    onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
-    onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
-    onRequestQuickMask: ((DocumentFileModel) -> Unit)? = null,
-    onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
-    onUnzipRequest: (DocumentFileModel) -> Unit = {},
-    onRequestMdZipView: (DocumentFileModel) -> Unit = {},
-    onRequestHtmlView: (DocumentFileModel) -> Unit = {},
-    onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
-    onRequestOpenUrl: (String) -> Unit = {},
-    onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
-    onRequestEpubView: (DocumentFileModel) -> Unit = {},
-    onRequestPicZipView: (DocumentFileModel) -> Unit = {},
-    onRequestVidZipView: (DocumentFileModel) -> Unit = {},
-    onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
-    onRequestPdfView: (DocumentFileModel) -> Unit = {},
-    onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
-    onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
-    onRequestPassView: (DocumentFileModel) -> Unit = {},
-    onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
-    onRequestTxtView: (DocumentFileModel) -> Unit = {},
-    onRequestLlmView: (DocumentFileModel) -> Unit = {},
-    onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
-    onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
-    playbackState: PlaybackState? = null,
-    onOpenPlaybackScreen: () -> Unit = {}
-) {
-    val directoryScrollMinItems = 30
-    val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
-    val scope = rememberCoroutineScope()
-    var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
-    var loading by remember(currentUri) { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    var actionTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var showRenameDialog by remember { mutableStateOf(false) }
-    var renameValue by remember { mutableStateOf("") }
-    var showContextMenu by remember { mutableStateOf(false) }
-    var contextMenuTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var showCreateFileDialog by remember { mutableStateOf(false) }
-    var showCreateDirDialog by remember { mutableStateOf(false) }
-    var newFileName by remember { mutableStateOf("") }
-    var newDirName by remember { mutableStateOf("") }
-    var showDeleteConfirm by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var filterText by remember { mutableStateOf("") }
-    var sortOrder by remember { mutableStateOf(FileSortOrder.NAME) }
-    var sortAscending by remember { mutableStateOf(true) }
-    var showSortMenu by remember { mutableStateOf(false) }
-    var externalOpenTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-    var externalOpenOptions by remember { mutableStateOf<List<ExternalAppTarget>>(emptyList()) }
-    var externalOpenForcedMimeType by remember { mutableStateOf<String?>(null) }
-    var externalOpenShowTypeChooser by remember { mutableStateOf(false) }
-    var showOpenUrlDialog by remember { mutableStateOf(false) }
-    var openUrlInput by remember { mutableStateOf("") }
-    var openUrlError by remember { mutableStateOf<String?>(null) }
-    var showFileSearchDialog by remember { mutableStateOf(false) }
-    var showFileSearchResultsDialog by remember { mutableStateOf(false) }
-    var fileSearchNamePattern by remember { mutableStateOf("") }
-    var fileSearchMinSize by remember { mutableStateOf("") }
-    var fileSearchMaxSize by remember { mutableStateOf("") }
-    var fileSearchModifiedAfter by remember { mutableStateOf("") }
-    var fileSearchModifiedBefore by remember { mutableStateOf("") }
-    var fileSearchResults by remember { mutableStateOf<List<RecursiveFileSearchHit>>(emptyList()) }
-    var fileSearchRunning by remember { mutableStateOf(false) }
-    var fileSearchError by remember { mutableStateOf<String?>(null) }
-
-    fun showExternalOpenDialog(target: DocumentFileModel) {
-        externalOpenTarget = target
-        externalOpenForcedMimeType = null
-        val autoMime = guessExternalOpenMimeType(context, toExternalLaunchUri(context, target.uri), target.name)
-        val options = queryExternalOpenTargets(context, target.uri.toString(), target.name)
-        externalOpenOptions = options
-        externalOpenShowTypeChooser = options.isEmpty() || isExternalMimeLowConfidence(autoMime)
-    }
-
-    fun normalizeUserInputUrl(raw: String): String? {
-        val trimmed = raw.trim()
-        if (trimmed.isEmpty()) return null
-        val normalized = if (Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed)) trimmed else "https://$trimmed"
-        val parsed = runCatching { Uri.parse(normalized) }.getOrNull() ?: return null
-        val scheme = parsed.scheme?.lowercase()
-        val host = parsed.host?.trim().orEmpty()
-        return if ((scheme == "http" || scheme == "https") && host.isNotEmpty()) normalized else null
-    }
-
-    val currentDirectoryName = remember(currentUri) {
-        val uri = Uri.parse(currentUri)
-        val doc = DocumentFile.fromTreeUri(context, uri) ?: DocumentFile.fromSingleUri(context, uri)
-        doc?.name ?: context.getString(R.string.directory_root_name)
-    }
-
-    fun clearFileSearchInputs() {
-        fileSearchNamePattern = ""
-        fileSearchMinSize = ""
-        fileSearchMaxSize = ""
-        fileSearchModifiedAfter = ""
-        fileSearchModifiedBefore = ""
-        fileSearchError = null
-    }
-
-    fun addSearchResultsToPending(targets: List<DocumentFileModel>) {
-        val existingUris = pendingList.map { it.uri.toString() }.toHashSet()
-        val toAdd = targets.filter { existingUris.add(it.uri.toString()) }
-        toAdd.forEach(onAddToPendingList)
-        Toast.makeText(context, if (toAdd.isEmpty()) context.getString(R.string.browser_no_new_pending_items) else context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
-    }
-
-    fun runFileSearch() {
-        val nameRegex = try {
-            fileSearchNamePattern.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
-        } catch (error: Exception) {
-            fileSearchError = context.getString(R.string.browser_filename_regex_invalid, error.message ?: error.javaClass.simpleName)
-            return
-        }
-        val minSizeBytes = try {
-            parseFileSearchSize(context, fileSearchMinSize)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_min_size_invalid)
-            return
-        }
-        val maxSizeBytes = try {
-            parseFileSearchSize(context, fileSearchMaxSize)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_max_size_invalid)
-            return
-        }
-        val modifiedAfterMillis = try {
-            parseFileSearchDate(context, fileSearchModifiedAfter, endOfDay = false)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_min_invalid)
-            return
-        }
-        val modifiedBeforeMillis = try {
-            parseFileSearchDate(context, fileSearchModifiedBefore, endOfDay = true)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_max_invalid)
-            return
-        }
-        if (minSizeBytes != null && maxSizeBytes != null && minSizeBytes > maxSizeBytes) {
-            fileSearchError = context.getString(R.string.browser_size_range_invalid)
-            return
-        }
-        if (modifiedAfterMillis != null && modifiedBeforeMillis != null && modifiedAfterMillis > modifiedBeforeMillis) {
-            fileSearchError = context.getString(R.string.browser_mtime_range_invalid)
-            return
-        }
-        scope.launch {
-            fileSearchRunning = true
-            fileSearchError = null
-            try {
-                val criteria = RecursiveFileSearchCriteria(
-                    nameRegex = nameRegex,
-                    minSizeBytes = minSizeBytes,
-                    maxSizeBytes = maxSizeBytes,
-                    modifiedAfterMillis = modifiedAfterMillis,
-                    modifiedBeforeMillis = modifiedBeforeMillis
-                )
-                val results = withContext(Dispatchers.IO) {
-                    searchFilesRecursively(context, currentUri, criteria)
-                }
-                fileSearchResults = results
-                showFileSearchDialog = false
-                showFileSearchResultsDialog = true
-                if (results.isEmpty()) {
-                    Toast.makeText(context, context.getString(R.string.browser_no_matching_files), Toast.LENGTH_SHORT).show()
-                }
-            } catch (error: Exception) {
-                fileSearchError = context.getString(R.string.browser_search_failed, error.message ?: error.javaClass.simpleName)
-            } finally {
-                fileSearchRunning = false
-            }
-        }
-    }
-
-    LaunchedEffect(currentUri, refreshTrigger) {
-        val normalizedUri = normalizeContentUriString(currentUri)
-        val cached = dirCache[normalizedUri]
-        if (cached != null) {
-            items = cached.items
-            loading = false
-            error = null
-            launch {
-                try {
-                    val result = withContext(Dispatchers.IO) {
-                        listChildrenFast(context, currentUri)
-                    }
-                    items = result
-                    onCacheDir(normalizedUri, result)
-                } catch (e: Exception) {
-                    error = e.message ?: context.getString(R.string.browser_loading_failed)
-                    items = emptyList()
-                }
-            }
-            return@LaunchedEffect
-        }
-        loading = true
-        error = null
-        try {
-            val result = withContext(Dispatchers.IO) {
-                listChildrenFast(context, currentUri)
-            }
-            items = result
-            onCacheDir(normalizedUri, result)
-        } catch (e: Exception) {
-            error = e.message ?: context.getString(R.string.browser_loading_failed)
-            items = emptyList()
-        }
-        loading = false
-    }
-
-    val sortedItems = remember(items, sortOrder, sortAscending) {
-        items.sortedWith(fileListComparator(sortOrder, sortAscending))
-    }
-    val filteredItems = remember(sortedItems, filterText, filterVisible, hideDotFiles) {
-        var list = sortedItems
-        if (hideDotFiles) list = list.filter { !it.name.startsWith(".") }
-        if (filterVisible && filterText.isNotBlank()) {
-            list = runCatching { Regex(filterText) }.getOrNull()?.let { regex ->
-                list.filter { regex.containsMatchIn(it.name) }
-            } ?: list
-        }
-        list
-    }
-    val displayItems = filteredItems
-    val galleryImageItems = remember(sortedItems, hideDotFiles) {
-        sortedItems.filter { item ->
-            !item.isDirectory &&
-                isGalleryImageFile(item.name) &&
-                (!hideDotFiles || !item.name.startsWith("."))
-        }
-    }
-
-    fun defaultOpenMenuLabel(target: DocumentFileModel): String {
-        if (target.isDirectory) return context.getString(R.string.context_default_enter_directory)
-        return when {
-            isCompressedMarkdown(target.name) -> context.getString(R.string.context_view_zip_markdown)
-            isHtmlFile(target.name) -> context.getString(R.string.context_default_open_html)
-            isCompressedHtml(target.name) -> context.getString(R.string.context_view_zip_html)
-            isCompressedLlmZip(target.name) -> context.getString(R.string.context_view_zip_llm)
-            isEpubFile(target.name) -> context.getString(R.string.context_default_open_epub)
-            isTxtFile(target.name) -> context.getString(R.string.context_default_open_txt)
-            isLlmFile(target.name) -> context.getString(R.string.context_default_open_llm)
-            isGalleryImageFile(target.name) -> context.getString(R.string.context_view_images)
-            isPicZip(target.name) -> context.getString(R.string.context_view_compressed_images)
-            isVidZip(target.name) -> context.getString(R.string.context_view_videos)
-            isPdfFile(target.name) -> context.getString(R.string.context_default_open_pdf)
-            isExtractableArchive(target.name) -> context.getString(R.string.browser_extract_action)
-            target.name.endsWith(".gpg", ignoreCase = true) -> context.getString(R.string.context_gpg_decrypt)
-            target.name.endsWith(".pass", ignoreCase = true) -> context.getString(R.string.context_view_password)
-            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) -> context.getString(R.string.context_render_markdown)
-            else -> {
-                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
-                if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
-                else context.getString(R.string.context_open_with_internal_viewer)
-            }
-        }
-    }
-
-    fun openItemByDefault(target: DocumentFileModel) {
-        if (target.isDirectory) {
-            onNavigate(target.uri.toString())
-            return
-        }
-        when {
-            isCompressedMarkdown(target.name) ->
-                onRequestMdZipView(target)
-            isHtmlFile(target.name) ->
-                onRequestHtmlView(target)
-            isCompressedHtml(target.name) ->
-                onRequestHtmlZipView(target)
-            isCompressedLlmZip(target.name) ->
-                onRequestLlmZipView(target)
-            isEpubFile(target.name) ->
-                onRequestEpubView(target)
-            isTxtFile(target.name) ->
-                onRequestTxtView(target)
-            isLlmFile(target.name) ->
-                onRequestLlmView(target)
-            isGalleryImageFile(target.name) ->
-                onRequestDirectoryImageView(target, currentUri, galleryImageItems)
-            isPicZip(target.name) ->
-                onRequestPicZipView(target)
-            isVidZip(target.name) ->
-                onRequestVidZipView(target)
-            isPdfFile(target.name) ->
-                onRequestPdfView(target)
-            isExtractableArchive(target.name) ->
-                onUnzipRequest(target)
-            target.name.endsWith(".gpg", ignoreCase = true) ->
-                onRequestGpgDecrypt(target, currentUri)
-            target.name.endsWith(".pass", ignoreCase = true) ->
-                onRequestPassView(target)
-            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) ->
-                onOpenMarkdownView(target.uri.toString(), target.name, false)
-            else -> {
-                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
-                if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {
-                    Unit
-                } else {
-                    val encrypted = target.name.endsWith(".gpg", ignoreCase = true)
-                    onOpenFile(target.uri.toString(), target.name, encrypted)
-                }
-            }
-        }
-    }
-
-    fun buildDirectoryHeadFingerprint(list: List<DocumentFileModel>): String {
-        if (list.isEmpty()) return "0"
-        val head = list.asSequence()
-            .take(8)
-            .joinToString("|") { "${it.name}#${it.lastModified}" }
-        return "${list.size}:$head"
-    }
-
-    suspend fun persistDirectoryScrollMemory(uriToSave: String, itemsToSave: List<DocumentFileModel>, wasLoading: Boolean) {
-        if (wasLoading) return
-        if (itemsToSave.size < directoryScrollMinItems) {
-            prefs.removeDirectoryScrollMemory(uriToSave)
-            return
-        }
-        val maxIndex = (itemsToSave.size - 1).coerceAtLeast(0)
-        val index = listState.firstVisibleItemIndex.coerceIn(0, maxIndex)
-        val anchorItem = itemsToSave.getOrNull(index)
-        val now = System.currentTimeMillis()
-        prefs.setDirectoryScrollMemory(
-            DirectoryScrollMemory(
-                dirUri = uriToSave,
-                anchorUri = anchorItem?.uri?.toString(),
-                anchorName = anchorItem?.name.orEmpty(),
-                index = index,
-                offset = listState.firstVisibleItemScrollOffset.coerceAtLeast(0),
-                itemCount = itemsToSave.size,
-                headFingerprint = buildDirectoryHeadFingerprint(itemsToSave),
-                savedAt = now,
-                lastAccessAt = now
-            )
-        )
-    }
-
-    var restoredForUri by remember(currentUri) { mutableStateOf(false) }
-    LaunchedEffect(currentUri, loading, displayItems) {
-        if (restoredForUri || loading) return@LaunchedEffect
-        restoredForUri = true
-        if (displayItems.size < directoryScrollMinItems) return@LaunchedEffect
-        val memory = withContext(Dispatchers.IO) { prefs.getDirectoryScrollMemory(currentUri) } ?: return@LaunchedEffect
-        val fallbackMaxIndex = (displayItems.size - 1).coerceAtLeast(0)
-        val anchorIndex = memory.anchorUri?.let { uri ->
-            displayItems.indexOfFirst { it.uri.toString() == uri }
-        } ?: -1
-        val nameAnchorIndex = if (anchorIndex >= 0 || memory.anchorName.isBlank()) {
-            -1
-        } else {
-            displayItems.indexOfFirst { it.name == memory.anchorName }
-        }
-        val currentFingerprint = buildDirectoryHeadFingerprint(displayItems)
-        val targetIndex = when {
-            anchorIndex >= 0 -> anchorIndex
-            nameAnchorIndex >= 0 -> nameAnchorIndex
-            memory.headFingerprint == currentFingerprint -> memory.index.coerceIn(0, fallbackMaxIndex)
-            else -> -1
-        }
-        if (targetIndex < 0) return@LaunchedEffect
-        val targetOffset = memory.offset.coerceAtLeast(0)
-        runCatching {
-            listState.scrollToItem(targetIndex, targetOffset)
-        }
-    }
-
-    val latestCurrentUriState = androidx.compose.runtime.rememberUpdatedState(currentUri)
-    val latestDisplayItemsState = androidx.compose.runtime.rememberUpdatedState(displayItems)
-    val latestLoadingState = androidx.compose.runtime.rememberUpdatedState(loading)
-    val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, currentUri) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP) {
-                val uriToSave = latestCurrentUriState.value
-                val itemsToSave = latestDisplayItemsState.value
-                val wasLoading = latestLoadingState.value
-                scope.launch(Dispatchers.IO) {
-                    persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
-                }
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            val uriToSave = latestCurrentUriState.value
-            val itemsToSave = latestDisplayItemsState.value
-            val wasLoading = latestLoadingState.value
-            runBlocking {
-                withContext(Dispatchers.IO) {
-                    persistDirectoryScrollMemory(uriToSave, itemsToSave, wasLoading)
-                }
-            }
-        }
-    }
-
-    var showFabMenu by remember { mutableStateOf(false) }
-    var showOverflowMenu by remember { mutableStateOf(false) }
-    var showQuickCopyConfirm by remember { mutableStateOf(false) }
-    var showQuickMoveConfirm by remember { mutableStateOf(false) }
-    Scaffold(
-        modifier = modifier,
-        topBar = {
-            Column(Modifier.fillMaxWidth()) {
-                TopAppBar(
-                    title = {
-                        val doc = DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
-                            ?: DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
-                        Text(
-                            doc?.name ?: context.getString(R.string.directory_root_name),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    navigationIcon = {
-                        if (canGoBack) {
-                            IconButton(onClick = onBack) {
-                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = context.getString(R.string.common_back))
-                            }
-                        }
-                    },
-                    actions = {
-                        IconButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, contentDescription = context.getString(R.string.common_refresh))
-                        }
-                        Box {
-                            IconButton(onClick = { showSortMenu = true }) {
-                                Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = stringResource(R.string.browser_sort_desc))
-                            }
-                            DropdownMenu(
-                                expanded = showSortMenu,
-                                onDismissRequest = { showSortMenu = false }
-                            ) {
-                                FileSortOrder.entries.forEach { order ->
-                                    val isCurrent = sortOrder == order
-                                    val direction = if (isCurrent) (if (sortAscending) " ↑" else " ↓") else ""
-                                    DropdownMenuItem(
-                                        text = { Text(stringResource(order.labelRes) + direction) },
-                                        onClick = {
-                                            if (isCurrent) {
-                                                sortAscending = !sortAscending
-                                            } else {
-                                                sortOrder = order
-                                                sortAscending = true
-                                            }
-                                            showSortMenu = false
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        IconButton(onClick = { showOverflowMenu = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.main_menu))
-                        }
-                        DropdownMenu(
-                            expanded = showOverflowMenu,
-                            onDismissRequest = { showOverflowMenu = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.config_change_root)) },
-                                leadingIcon = { Icon(Icons.Default.FolderOpen, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onChangeRoot()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.main_menu_open_url)) },
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    showOpenUrlDialog = true
-                                    openUrlError = null
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.browser_generate_dir_playlist)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    onCreateMusicPlaylist(currentUri, currentDirectoryName)
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.browser_file_search_title)) },
-                                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    fileSearchError = null
-                                    showFileSearchDialog = true
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.main_menu_add_filtered_to_pending)) },
-                                leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
-                                    toAdd.forEach { onAddToPendingList(it) }
-                                    Toast.makeText(context, context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
-                                }
-                            )
-                            onEmptyTrash?.let { empty ->
-                                DropdownMenuItem(
-                                    text = { Text(context.getString(R.string.main_menu_empty_trash)) },
-                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        empty()
-                                    }
-                                )
-                            }
-                            DropdownMenuItem(
-                                text = { Text(context.getString(R.string.debug_trigger_crash)) },
-                                leadingIcon = { Icon(Icons.Default.Warning, contentDescription = null) },
-                                onClick = {
-                                    showOverflowMenu = false
-                                    throw IllegalStateException("debug crash trigger from FileBrowserApp")
-                                }
-                            )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        titleContentColor = MaterialTheme.colorScheme.onSurface
-                    )
-                )
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val totalCount = items.size
-                    val visibleCount = displayItems.size
-                    val countLabel = if (visibleCount != totalCount) {
-                        context.getString(R.string.browser_directory_item_count_filtered, visibleCount, totalCount)
-                    } else {
-                        context.getString(R.string.browser_directory_item_count, totalCount)
-                    }
-                    Text(
-                        text = countLabel,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                if (filterVisible) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        OutlinedTextField(
-                            value = filterText,
-                            onValueChange = { filterText = it },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            placeholder = { Text(context.getString(R.string.directory_filter_placeholder)) },
-                            label = null
-                        )
-                        if (filterText.isNotEmpty()) {
-                            IconButton(onClick = { filterText = "" }) {
-                                Icon(Icons.Default.RemoveCircle, contentDescription = context.getString(R.string.directory_filter_clear), Modifier.size(20.dp))
-                            }
-                        }
-                    }
-                }
-                playbackState?.let { state ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .clickable { onOpenPlaybackScreen() },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            context.getString(R.string.directory_now_playing, state.trackName, state.trackIndex + 1, state.totalTracks),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        },
-        floatingActionButton = {
-            if (!loading && error == null) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                    horizontalAlignment = Alignment.End
-                ) {
-                    if (pendingList.isNotEmpty()) {
-                        FloatingActionButton(
-                            onClick = { showQuickCopyConfirm = true },
-                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        ) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = context.getString(R.string.fab_copy_to_current))
-                        }
-                        FloatingActionButton(
-                            onClick = { showQuickMoveConfirm = true },
-                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.72f),
-                            contentColor = MaterialTheme.colorScheme.onSecondary
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = context.getString(R.string.fab_move_to_current))
-                        }
-                        FloatingActionButton(
-                            onClick = { onShowPendingList(true) },
-                            containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
-                            contentColor = MaterialTheme.colorScheme.onTertiary
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.List, contentDescription = context.getString(R.string.fab_pending_list))
-                        }
-                    }
-                    FloatingActionButton(
-                        onClick = { showFabMenu = true },
-                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f),
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ) {
-                        Icon(Icons.Default.Add, contentDescription = context.getString(R.string.fab_new))
-                    }
-                }
-            }
-        }
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            when {
-                loading -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
-                    }
-                }
-                error != null -> {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            error!!,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-                else -> {
-                    Column(Modifier.fillMaxSize()) {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 8.dp, 8.dp, 88.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                        items(
-                            count = displayItems.size,
-                            key = { displayItems[it].uri.toString() }
-                        ) { index ->
-                            val item = displayItems[index]
-                            FileItem(
-                                model = item,
-                                hasPreferredExternalApp = fileExtensionKey(item.name)?.let { preferredExternalPackages.containsKey(it) } == true,
-                                isInPendingList = pendingList.any { it.uri == item.uri },
-                                onClick = { openItemByDefault(item) },
-                                onLongClick = {
-                                    contextMenuTarget = item
-                                    showContextMenu = true
-                                },
-                                onDoubleClick = {
-                                    if (pendingList.any { it.uri == item.uri }) onRemoveFromPendingList(item)
-                                    else onAddToPendingList(item)
-                                }
-                            )
-                        }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showOpenUrlDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showOpenUrlDialog = false
-                openUrlError = null
-            },
-            title = { Text(context.getString(R.string.main_menu_open_url)) },
-            text = {
-                Column {
-                    OutlinedTextField(
-                        value = openUrlInput,
-                        onValueChange = {
-                            openUrlInput = it
-                            if (openUrlError != null) openUrlError = null
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(context.getString(R.string.open_url_label)) },
-                        placeholder = { Text(context.getString(R.string.open_url_placeholder)) },
-                        singleLine = true
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = context.getString(R.string.open_url_hint),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    openUrlError?.let { error ->
-                        Spacer(Modifier.height(8.dp))
-                        SelectionContainer {
-                            Text(error, color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    val normalized = normalizeUserInputUrl(openUrlInput)
-                    if (normalized == null) {
-                        openUrlError = context.getString(R.string.open_url_invalid)
-                        return@TextButton
-                    }
-                    showOpenUrlDialog = false
-                    openUrlError = null
-                    onRequestOpenUrl(normalized)
-                }) {
-                    Text(context.getString(R.string.open_url_confirm))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showOpenUrlDialog = false
-                    openUrlError = null
-                }) {
-                    Text(context.getString(R.string.common_close))
-                }
-            }
-        )
-    }
-
-    if (showFileSearchDialog) {
-        FileSearchDialog(
-            namePattern = fileSearchNamePattern,
-            minSize = fileSearchMinSize,
-            maxSize = fileSearchMaxSize,
-            modifiedAfter = fileSearchModifiedAfter,
-            modifiedBefore = fileSearchModifiedBefore,
-            searching = fileSearchRunning,
-            error = fileSearchError,
-            onNamePatternChange = {
-                fileSearchNamePattern = it
-                if (fileSearchError != null) fileSearchError = null
-            },
-            onMinSizeChange = {
-                fileSearchMinSize = it
-                if (fileSearchError != null) fileSearchError = null
-            },
-            onMaxSizeChange = {
-                fileSearchMaxSize = it
-                if (fileSearchError != null) fileSearchError = null
-            },
-            onModifiedAfterChange = {
-                fileSearchModifiedAfter = it
-                if (fileSearchError != null) fileSearchError = null
-            },
-            onModifiedBeforeChange = {
-                fileSearchModifiedBefore = it
-                if (fileSearchError != null) fileSearchError = null
-            },
-            onSearch = { runFileSearch() },
-            onClear = { clearFileSearchInputs() },
-            onDismiss = {
-                if (!fileSearchRunning) showFileSearchDialog = false
-            }
-        )
-    }
-
-    if (showFileSearchResultsDialog) {
-        FileSearchResultsDialog(
-            results = fileSearchResults,
-            pendingUris = pendingList.map { it.uri.toString() }.toSet(),
-            onAddAll = { addSearchResultsToPending(fileSearchResults.map { it.model }) },
-            onAddOne = { addSearchResultsToPending(listOf(it)) },
-            onDismiss = { showFileSearchResultsDialog = false }
-        )
-    }
-
-    if (showContextMenu && contextMenuTarget != null) {
-        val menuTarget = contextMenuTarget!!
-        Dialog(onDismissRequest = { showContextMenu = false; contextMenuTarget = null }) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp)
-                ) {
-                    Text(
-                        menuTarget.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            openItemByDefault(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) {
-                        Text(
-                            defaultOpenMenuLabel(menuTarget),
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                    if (!menuTarget.isDirectory) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                showExternalOpenDialog(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_open_with_other_app), color = MaterialTheme.colorScheme.onSurface) }
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onClearExternalOpenPreference(menuTarget.name)
-                                onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
-                        if (menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
-                                    contextMenuTarget = null
-                                }
-                                ) { Text(context.getString(R.string.context_render_markdown), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (menuTarget.name.endsWith(".zip", ignoreCase = true)) {
-                            if (isCompressedMarkdown(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestMdZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_markdown), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isCompressedHtml(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestHtmlZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_html), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isCompressedLlmZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestLlmZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_llm), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isPicZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestPicZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_compressed_images), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isVidZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestVidZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_videos), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                        }
-                        if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestGpgEncrypt(menuTarget, currentUri)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_gpg_encrypt), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)
-                            || menuTarget.name.endsWith(".txt", ignoreCase = true))
-                            && onRequestPassProtect != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassProtect(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_pass_protect), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (menuTarget.name.endsWith(".pass", ignoreCase = true)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassView(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_view_password), color = MaterialTheme.colorScheme.onSurface) }
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassEdit(menuTarget, currentUri)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_edit_directly), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (menuTarget.name.endsWith(".json", ignoreCase = true) && onRequestImportConfig != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestImportConfig(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_import_config), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (isStarDictImportCandidate(menuTarget.name) && onRequestImportStarDict != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestImportStarDict(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_import_stardict), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                    } else {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onCreateMusicPlaylist(menuTarget.uri.toString(), menuTarget.name)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.browser_generate_music_playlist), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    if (isViewingTrash && onRestoreFromTrash != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onRestoreFromTrash(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_restore), color = MaterialTheme.colorScheme.primary) }
-                    }
-                    if (!menuTarget.isDirectory) {
-                        onRequestQuickMask?.let { fn ->
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    fn(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_quick_mask), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                    }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            onCompressArchiveRequest(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) { Text(context.getString(R.string.context_compress_archive), color = MaterialTheme.colorScheme.onSurface) }
-                    if (!menuTarget.isDirectory && onShareFileToGit != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onShareFileToGit.invoke(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_share_to_git), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    if (onForwardToBulletin != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onForwardToBulletin.invoke(listOf(menuTarget))
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_forward_to_bulletin), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            if (pendingList.any { it.uri == menuTarget.uri }) onRemoveFromPendingList(menuTarget)
-                            else onAddToPendingList(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) {
-                        Text(
-                            if (pendingList.any { it.uri == menuTarget.uri }) context.getString(R.string.context_remove_from_pending) else context.getString(R.string.context_add_to_pending),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            showFileDetail = menuTarget
-                            contextMenuTarget = null
-                        }
-                    ) { Text(context.getString(R.string.context_details), color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            contextMenuTarget = null
-                            showDeleteConfirm = menuTarget
-                        }
-                    ) { Text(stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
-                    TextButton(onClick = { showContextMenu = false; contextMenuTarget = null }) {
-                        Text(stringResource(R.string.common_cancel), color = MaterialTheme.colorScheme.onSurface)
-                    }
-                }
-            }
-        }
-    }
-
-    if (externalOpenTarget != null) {
-        val target = externalOpenTarget!!
-        Dialog(onDismissRequest = {
-            externalOpenTarget = null
-            externalOpenOptions = emptyList()
-            externalOpenForcedMimeType = null
-            externalOpenShowTypeChooser = false
-        }) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp)
-                        .heightIn(max = 480.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(context.getString(R.string.context_choose_open_app), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        target.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    if (externalOpenShowTypeChooser) {
-                        Text(
-                            stringResource(R.string.browser_external_type_prompt),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(8.dp))
-                        ExternalOpenTypeHint.entries.forEach { hint ->
-                            TextButton(
-                                onClick = {
-                                    externalOpenForcedMimeType = hint.mimeType
-                                    externalOpenOptions = queryExternalOpenTargets(
-                                        context,
-                                        target.uri.toString(),
-                                        target.name,
-                                        hint.mimeType
-                                    )
-                                    if (externalOpenOptions.isEmpty()) {
-                                        Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
-                                        externalOpenShowTypeChooser = true
-                                    } else {
-                                        externalOpenShowTypeChooser = false
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(hint.labelRes), color = MaterialTheme.colorScheme.onSurface)
-                            }
-                        }
-                        if (externalOpenOptions.isNotEmpty()) {
-                            Spacer(Modifier.height(8.dp))
-                            TextButton(
-                                onClick = {
-                                    externalOpenForcedMimeType = null
-                                    externalOpenShowTypeChooser = false
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(stringResource(R.string.browser_external_use_auto_list), color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    } else {
-                        TextButton(
-                            onClick = { externalOpenShowTypeChooser = true },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(stringResource(R.string.browser_external_filter_by_type), color = MaterialTheme.colorScheme.primary)
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        externalOpenOptions.forEach { option ->
-                            TextButton(
-                                onClick = {
-                                    val opened = onOpenWithOtherApp(
-                                        target.uri.toString(),
-                                        target.name,
-                                        option.packageName,
-                                        true,
-                                        externalOpenForcedMimeType
-                                    )
-                                    if (opened) {
-                                        externalOpenTarget = null
-                                        externalOpenOptions = emptyList()
-                                        externalOpenForcedMimeType = null
-                                        externalOpenShowTypeChooser = false
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(Modifier.fillMaxWidth()) {
-                                    Text(option.label, color = MaterialTheme.colorScheme.onSurface)
-                                    Text(
-                                        option.packageName,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = {
-                            externalOpenTarget = null
-                            externalOpenOptions = emptyList()
-                            externalOpenForcedMimeType = null
-                            externalOpenShowTypeChooser = false
-                        }) {
-                            Text(context.getString(R.string.common_cancel))
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (showFabMenu) {
-        Dialog(onDismissRequest = { showFabMenu = false }) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
-            ) {
-                Column(Modifier.padding(24.dp)) {
-                    Text(context.getString(R.string.new_menu_title), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(16.dp))
-                    TextButton(
-                        onClick = {
-                            showFabMenu = false
-                            newFileName = ""
-                            showCreateFileDialog = true
-                        }
-                    ) { Text(context.getString(R.string.new_menu_file), color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(
-                        onClick = {
-                            showFabMenu = false
-                            newDirName = ""
-                            showCreateDirDialog = true
-                        }
-                    ) { Text(context.getString(R.string.new_menu_folder), color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(
-                        onClick = {
-                            showFabMenu = false
-                            onCreateQuickNote()
-                        }
-                    ) { Text(context.getString(R.string.new_menu_quick_note), color = MaterialTheme.colorScheme.onSurface) }
-                    TextButton(onClick = { showFabMenu = false }) { Text(context.getString(R.string.common_cancel), color = MaterialTheme.colorScheme.onSurface) }
-                }
-            }
-        }
-    }
-
-    if (showCreateFileDialog) {
-        val createFileFocus = remember { FocusRequester() }
-        LaunchedEffect(Unit) {
-            delay(150)
-            createFileFocus.requestFocus()
-        }
-        AlertDialog(
-            onDismissRequest = { showCreateFileDialog = false },
-            title = { Text(context.getString(R.string.create_file_title)) },
-            text = {
-                OutlinedTextField(
-                    value = newFileName,
-                    onValueChange = { newFileName = it },
-                    label = { Text(context.getString(R.string.create_file_name)) },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(createFileFocus),
-                    placeholder = { Text(context.getString(R.string.create_file_placeholder)) }
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val name = newFileName.trim()
-                        if (name.isNotEmpty()) {
-                            val uri = Uri.parse(currentUri)
-                            val dir = if (currentUri.contains("/tree/")) {
-                                DocumentFile.fromTreeUri(context, uri)
-                            } else {
-                                DocumentFile.fromSingleUri(context, uri)
-                            }
-                            when {
-                                dir == null || !dir.isDirectory -> Toast.makeText(context, context.getString(R.string.create_access_failed), Toast.LENGTH_SHORT).show()
-                                dir.createFile("application/octet-stream", name) == null -> Toast.makeText(context, context.getString(R.string.create_failed), Toast.LENGTH_SHORT).show()
-                                else -> { showCreateFileDialog = false; onRefresh() }
-                            }
-                        }
-                    }
-                ) { Text(context.getString(R.string.common_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateFileDialog = false }) { Text(context.getString(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    if (showCreateDirDialog) {
-        val createDirFocus = remember { FocusRequester() }
-        LaunchedEffect(Unit) {
-            delay(150)
-            createDirFocus.requestFocus()
-        }
-        AlertDialog(
-            onDismissRequest = { showCreateDirDialog = false },
-            title = { Text(context.getString(R.string.create_folder_title)) },
-            text = {
-                OutlinedTextField(
-                    value = newDirName,
-                    onValueChange = { newDirName = it },
-                    label = { Text(context.getString(R.string.create_folder_name)) },
-                    singleLine = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(createDirFocus),
-                    placeholder = { Text(context.getString(R.string.create_folder_placeholder)) }
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        val name = newDirName.trim()
-                        if (name.isNotEmpty()) {
-                            val uri = Uri.parse(currentUri)
-                            val dir = if (currentUri.contains("/tree/")) {
-                                DocumentFile.fromTreeUri(context, uri)
-                            } else {
-                                DocumentFile.fromSingleUri(context, uri)
-                            }
-                            when {
-                                dir == null || !dir.isDirectory -> Toast.makeText(context, context.getString(R.string.create_access_failed), Toast.LENGTH_SHORT).show()
-                                dir.createDirectory(name) == null -> Toast.makeText(context, context.getString(R.string.create_failed), Toast.LENGTH_SHORT).show()
-                                else -> { showCreateDirDialog = false; onRefresh() }
-                            }
-                        }
-                    }
-                ) { Text(context.getString(R.string.common_create)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showCreateDirDialog = false }) { Text(context.getString(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    if (showDeleteConfirm != null) {
-        val target = showDeleteConfirm!!
-        var deletePermanently by remember { mutableStateOf(false) }
-        val hasRoot = rootUri != null
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = null },
-            title = { Text(stringResource(R.string.browser_confirm_delete_title)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.browser_delete_confirm_single, target.name), color = MaterialTheme.colorScheme.onSurface)
-                    if (hasRoot) {
-                        Spacer(Modifier.height(12.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.RadioButton(
-                                selected = !deletePermanently,
-                                onClick = { deletePermanently = false }
-                            )
-                            Spacer(Modifier.size(8.dp))
-                            Text(stringResource(R.string.browser_move_to_trash_recoverable), style = MaterialTheme.typography.bodyMedium)
-                        }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            androidx.compose.material3.RadioButton(
-                                selected = deletePermanently,
-                                onClick = { deletePermanently = true }
-                            )
-                            Spacer(Modifier.size(8.dp))
-                            Text(stringResource(R.string.browser_delete_permanently), style = MaterialTheme.typography.bodyMedium)
-                        }
-                    } else {
-                        Spacer(Modifier.height(8.dp))
-                        Text(stringResource(R.string.browser_no_trash_permanent_delete), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteConfirm = null
-                        onConfirmDelete?.invoke(target, deletePermanently)
-                    }
-                ) { Text(if (hasRoot && !deletePermanently) stringResource(R.string.browser_moved_to_trash) else stringResource(R.string.common_delete), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    if (showRenameDialog && actionTarget != null) {
-        var target = actionTarget!!
-        val renameFocus = remember { FocusRequester() }
-        val keyboardController = LocalSoftwareKeyboardController.current
-        LaunchedEffect(Unit) {
-            delay(100)
-            renameFocus.requestFocus()
-            keyboardController?.show()
-        }
-        AlertDialog(
-            onDismissRequest = {
-                showRenameDialog = false
-                actionTarget = null
-            },
-            title = {
-                Text(
-                    stringResource(R.string.browser_archive_operation, target.name),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            },
-            text = {
-                Column {
-                    Text(stringResource(R.string.browser_rename_to), style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = renameValue,
-                        onValueChange = { renameValue = it },
-                        label = { Text(stringResource(R.string.browser_new_name_label)) },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .focusRequester(renameFocus)
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        try {
-                            val newName = renameValue.trim()
-                            if (newName.isEmpty()) return@TextButton
-                            val renamedUri = context.contentResolver.renameDocument(target.uri, newName)
-                            showRenameDialog = false
-                            actionTarget = null
-                            if (renamedUri != null) {
-                                items = items.map {
-                                    if (it.uri == target.uri) it.copy(name = newName, uri = renamedUri) else it
-                                }
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
-                            }
-                        } catch (_: Exception) {}
-                    }
-                ) { Text(stringResource(R.string.browser_rename_title)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRenameDialog = false; actionTarget = null }) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-
-    if (showFileDetail != null) {
-        val detailTarget = showFileDetail!!
-        val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-        var detailRenameValue by remember(detailTarget.uri) { mutableStateOf(detailTarget.name) }
-        var detailMeta by remember(detailTarget.uri) { mutableStateOf<Map<String, String>>(emptyMap()) }
-        val detailRenameFocus = remember { FocusRequester() }
-        val isArchiveFile = isExtractableArchive(detailTarget.name)
-        var zipDetailResult by remember(detailTarget.uri) { mutableStateOf<ZipFirstLevelResult?>(null) }
-        var zipDetailPassword by remember(detailTarget.uri) { mutableStateOf("") }
-        var zipDetailShowPasswordInput by remember(detailTarget.uri) { mutableStateOf(false) }
-        var showTypeSpecificMeta by remember(detailTarget.uri) { mutableStateOf(false) }
-        var typeSpecificMetaLoaded by remember(detailTarget.uri) { mutableStateOf(false) }
-        var typeSpecificMetaLoading by remember(detailTarget.uri) { mutableStateOf(false) }
-        var typeSpecificMetaRows by remember(detailTarget.uri) { mutableStateOf<List<DetailMetadataRow>>(emptyList()) }
-        var typeSpecificMetaError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
-        var showImageExifEditDialog by remember(detailTarget.uri) { mutableStateOf(false) }
-        var imageExifLoading by remember(detailTarget.uri) { mutableStateOf(false) }
-        var imageExifSaving by remember(detailTarget.uri) { mutableStateOf(false) }
-        var imageExifSaveError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
-        var imageExifForm by remember(detailTarget.uri) { mutableStateOf(EditableImageExif()) }
-        var imageExifValidation by remember(detailTarget.uri) { mutableStateOf(EditableImageExifValidation()) }
-        var showAudioMetaEditDialog by remember(detailTarget.uri) { mutableStateOf(false) }
-        var audioMetaLoading by remember(detailTarget.uri) { mutableStateOf(false) }
-        var audioMetaSaving by remember(detailTarget.uri) { mutableStateOf(false) }
-        var audioMetaSaveError by remember(detailTarget.uri) { mutableStateOf<String?>(null) }
-        var audioMetaForm by remember(detailTarget.uri) { mutableStateOf(EditableAudioAnnotation()) }
-        var audioMetaValidation by remember(detailTarget.uri) { mutableStateOf(EditableAudioAnnotationValidation()) }
-        val detailScope = rememberCoroutineScope()
-
-        LaunchedEffect(detailTarget.uri) {
-            withContext(Dispatchers.IO) {
-                try {
-                    val uri = detailTarget.uri
-                    val projection = arrayOf(
-                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE,
-                        DocumentsContract.Document.COLUMN_SIZE,
-                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
-                    )
-                    val meta = mutableMapOf<String, String>()
-                    context.contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                        if (cursor.moveToFirst()) {
-                            for (i in 0 until cursor.columnCount) {
-                                val colName = cursor.getColumnName(i)
-                                val value = cursor.getString(i) ?: continue
-                                meta[colName] = value
-                            }
-                        }
-                    }
-                    detailMeta = meta
-                } catch (_: Exception) {}
-            }
-        }
-
-        val docId = detailMeta[DocumentsContract.Document.COLUMN_DOCUMENT_ID]
-        val fullPath = if (docId != null) {
-            val parts = docId.split(":", limit = 2)
-            if (parts.size == 2) "/${parts[1]}" else docId
-        } else {
-            detailTarget.uri.path ?: detailTarget.uri.toString()
-        }
-        val displayPath = if (detailTarget.isDirectory) {
-            fullPath
-        } else {
-            fullPath.substringBeforeLast('/', fullPath).ifEmpty { "/" }
-        }
-        val mimeType = detailMeta[DocumentsContract.Document.COLUMN_MIME_TYPE] ?: ""
-        val sizeStr = detailTarget.displaySize.ifEmpty {
-            detailMeta[DocumentsContract.Document.COLUMN_SIZE]?.toLongOrNull()?.let { sz ->
-                when {
-                    sz < 1024 -> "$sz B"
-                    sz < 1024 * 1024 -> "%.1f KB".format(sz / 1024.0)
-                    sz < 1024 * 1024 * 1024 -> "%.1f MB".format(sz / (1024.0 * 1024))
-                    else -> "%.1f GB".format(sz / (1024.0 * 1024 * 1024))
-                }
-            } ?: ""
-        }
-        val fmt = remember {
-            java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault())
-        }
-        val lastModifiedStr = if (detailTarget.lastModified > 0) fmt.format(java.util.Date(detailTarget.lastModified)) else ""
-        val lastModifiedFromMeta = detailMeta[DocumentsContract.Document.COLUMN_LAST_MODIFIED]?.toLongOrNull()
-        val lastModifiedMetaStr = if (lastModifiedFromMeta != null && lastModifiedFromMeta > 0) fmt.format(java.util.Date(lastModifiedFromMeta)) else ""
-        val displayModified = lastModifiedStr.ifEmpty { lastModifiedMetaStr }
-        val detailMetaKind = inferDetailMetadataKind(detailTarget.name, mimeType, detailTarget.isDirectory)
-
-        suspend fun loadTypeSpecificMetadataNow(forceReload: Boolean = false) {
-            if (!showTypeSpecificMeta || detailTarget.isDirectory) return
-            if (!forceReload && typeSpecificMetaLoaded) return
-            typeSpecificMetaLoading = true
-            typeSpecificMetaError = null
-            val rows = try {
-                withContext(Dispatchers.IO) {
-                    loadTypeSpecificMetadataRows(
-                        context = context,
-                        uri = detailTarget.uri,
-                        fileName = detailTarget.name,
-                        mimeType = mimeType,
-                        isDirectory = detailTarget.isDirectory
-                    )
-                }
-            } catch (e: Exception) {
-                typeSpecificMetaError = e.message ?: e.javaClass.simpleName
-                emptyList()
-            }
-            val mergedRows = if (detailMetaKind == DetailMetadataKind.AUDIO) {
-                val annotation = withContext(Dispatchers.IO) {
-                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
-                }
-                applyAudioMetaAnnotationRows(context, rows, annotation)
-            } else {
-                rows
-            }
-            typeSpecificMetaRows = mergedRows
-            typeSpecificMetaLoaded = true
-            typeSpecificMetaLoading = false
-
-            if (isArchiveFile && zipDetailResult == null) {
-                zipDetailResult = withContext(Dispatchers.IO) {
-                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, null)
-                }
-            }
-        }
-
-        LaunchedEffect(showTypeSpecificMeta, detailTarget.uri, mimeType) {
-            loadTypeSpecificMetadataNow(forceReload = false)
-        }
-
-        Dialog(onDismissRequest = { showFileDetail = null }) {
-            Surface(
-                shape = MaterialTheme.shapes.large,
-                color = MaterialTheme.colorScheme.surface,
-                tonalElevation = 6.dp
-            ) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(stringResource(R.string.context_details), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(16.dp))
-
-                    Text(stringResource(R.string.browser_full_path), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SelectionContainer(modifier = Modifier.weight(1f)) {
-                            Text(displayPath, style = MaterialTheme.typography.bodyMedium)
-                        }
-                        IconButton(onClick = {
-                            clipboardManager?.setPrimaryClip(ClipData.newPlainText(context.getString(R.string.browser_full_path), displayPath))
-                            Toast.makeText(context, context.getString(R.string.browser_path_copied), Toast.LENGTH_SHORT).show()
-                        }) {
-                            Icon(Icons.Default.ContentCopy, contentDescription = stringResource(R.string.browser_copy_path), Modifier.size(20.dp))
-                        }
-                    }
-
-                    Spacer(Modifier.height(12.dp))
-                    Text(stringResource(R.string.browser_rename_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(4.dp))
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        OutlinedTextField(
-                            value = detailRenameValue,
-                            onValueChange = { detailRenameValue = it },
-                            singleLine = false,
-                            minLines = 1,
-                            maxLines = 6,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .focusRequester(detailRenameFocus),
-                            textStyle = MaterialTheme.typography.bodyMedium
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            TextButton(
-                                onClick = {
-                                    val newName = detailRenameValue.trim()
-                                    if (newName.isNotEmpty() && newName != detailTarget.name) {
-                                        try {
-                                            val renamedUri = context.contentResolver.renameDocument(detailTarget.uri, newName)
-                                            if (renamedUri != null) {
-                                                items = items.map {
-                                                    if (it.uri == detailTarget.uri) it.copy(name = newName, uri = renamedUri) else it
-                                                }
-                                                showFileDetail = showFileDetail?.copy(name = newName, uri = renamedUri)
-                                                Toast.makeText(context, context.getString(R.string.browser_renamed), Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
-                                            }
-                                        } catch (_: Exception) {
-                                            Toast.makeText(context, context.getString(R.string.browser_rename_failed), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                },
-                                enabled = detailRenameValue.trim().let { it.isNotEmpty() && it != detailTarget.name }
-                            ) { Text(stringResource(R.string.common_ok)) }
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    Text(stringResource(R.string.browser_file_properties_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(8.dp))
-
-                    @Composable
-                    fun MetaRow(label: String, value: String) {
-                        if (value.isNotEmpty()) {
-                            Row(Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
-                                Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.width(80.dp))
-                                SelectionContainer(modifier = Modifier.weight(1f)) {
-                                    Text(value, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        }
-                    }
-
-                    MetaRow(context.getString(R.string.browser_type_field), if (detailTarget.isDirectory) context.getString(R.string.browser_folder_type) else mimeType.ifEmpty { context.getString(R.string.browser_file_type) })
-                    if (!detailTarget.isDirectory) MetaRow(context.getString(R.string.browser_size_field), sizeStr)
-                    MetaRow(context.getString(R.string.browser_modified_field), displayModified)
-
-                    if (!detailTarget.isDirectory) {
-                        Spacer(Modifier.height(16.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                stringResource(R.string.browser_type_specific_section_title),
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            TextButton(onClick = { showTypeSpecificMeta = !showTypeSpecificMeta }) {
-                                Text(
-                                    if (showTypeSpecificMeta) {
-                                        stringResource(R.string.browser_type_specific_collapse)
-                                    } else {
-                                        stringResource(R.string.browser_type_specific_expand)
-                                    }
-                                )
-                            }
-                        }
-
-                        if (showTypeSpecificMeta) {
-                            Spacer(Modifier.height(8.dp))
-                            if (detailMetaKind == DetailMetadataKind.IMAGE) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            detailScope.launch {
-                                                imageExifLoading = true
-                                                imageExifSaveError = null
-                                                imageExifValidation = EditableImageExifValidation()
-                                                imageExifForm = withContext(Dispatchers.IO) {
-                                                    readEditableImageExif(context, detailTarget.uri)
-                                                }
-                                                imageExifLoading = false
-                                                showImageExifEditDialog = true
-                                            }
-                                        }
-                                    ) {
-                                        Text(stringResource(R.string.browser_type_specific_edit_image_meta))
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            } else if (detailMetaKind == DetailMetadataKind.AUDIO) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.End,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedButton(
-                                        onClick = {
-                                            detailScope.launch {
-                                                audioMetaLoading = true
-                                                audioMetaSaveError = null
-                                                audioMetaValidation = EditableAudioAnnotationValidation()
-                                                val annotation = withContext(Dispatchers.IO) {
-                                                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
-                                                }
-                                                val fromFile = withContext(Dispatchers.IO) {
-                                                    readEditableAudioAnnotation(context, detailTarget.uri)
-                                                }
-                                                audioMetaForm = EditableAudioAnnotation(
-                                                    title = annotation?.title?.takeIf { it.isNotBlank() } ?: fromFile.title,
-                                                    artist = annotation?.artist?.takeIf { it.isNotBlank() } ?: fromFile.artist,
-                                                    album = annotation?.album?.takeIf { it.isNotBlank() } ?: fromFile.album
-                                                )
-                                                audioMetaLoading = false
-                                                showAudioMetaEditDialog = true
-                                            }
-                                        }
-                                    ) {
-                                        Text(stringResource(R.string.browser_type_specific_edit_audio_meta))
-                                    }
-                                }
-                                Spacer(Modifier.height(8.dp))
-                            }
-                            when {
-                                typeSpecificMetaLoading -> {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        CircularProgressIndicator(Modifier.size(20.dp))
-                                        Spacer(Modifier.width(8.dp))
-                                        Text(
-                                            stringResource(R.string.browser_type_specific_loading),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                typeSpecificMetaError != null -> {
-                                    Text(
-                                        stringResource(R.string.browser_type_specific_error, typeSpecificMetaError ?: ""),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                }
-                                typeSpecificMetaRows.isNotEmpty() -> {
-                                    typeSpecificMetaRows.forEach { row ->
-                                        if (row.isSection) {
-                                            Spacer(Modifier.height(8.dp))
-                                            Text(
-                                                text = row.label,
-                                                style = MaterialTheme.typography.labelMedium,
-                                                color = MaterialTheme.colorScheme.primary
-                                            )
-                                        } else {
-                                            MetaRow(row.label, row.value)
-                                        }
-                                    }
-                                }
-                                else -> {
-                                    Text(
-                                        stringResource(R.string.browser_type_specific_empty),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-
-                            if (isArchiveFile) {
-                                Spacer(Modifier.height(12.dp))
-                                Text(stringResource(R.string.browser_archive_contents), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.height(8.dp))
-                                when (val r = zipDetailResult) {
-                                    is ZipFirstLevelResult.Ok -> {
-                                        if (r.entries.isEmpty()) {
-                                            Text(stringResource(R.string.browser_empty_placeholder), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        } else {
-                                            Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                                                r.entries.forEach { entry ->
-                                                    Text(entry, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    is ZipFirstLevelResult.OkSingleDir -> {
-                                        Column(Modifier.fillMaxWidth().heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
-                                            Text("${r.rootDirName}/", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
-                                            if (r.children.isEmpty()) {
-                                                Text(stringResource(R.string.browser_empty_placeholder_indent), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            } else {
-                                                r.children.forEach { child ->
-                                                    Text("  $child", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ZipFirstLevelResult.Encrypted -> {
-                                        if (!zipDetailShowPasswordInput) {
-                                            OutlinedButton(onClick = { zipDetailShowPasswordInput = true }) {
-                                                Text(stringResource(R.string.browser_enter_password_view))
-                                            }
-                                        } else {
-                                            Column(Modifier.fillMaxWidth()) {
-                                                ReliablePasswordInputField(
-                                                    value = zipDetailPassword,
-                                                    onValueChange = { zipDetailPassword = it },
-                                                    label = { Text(stringResource(R.string.browser_enter_password)) },
-                                                    modifier = Modifier.fillMaxWidth()
-                                                )
-                                                Spacer(Modifier.height(8.dp))
-                                                Row(horizontalArrangement = Arrangement.End) {
-                                                    TextButton(onClick = { zipDetailShowPasswordInput = false; zipDetailPassword = "" }) { Text(stringResource(R.string.common_cancel)) }
-                                                    Spacer(Modifier.width(8.dp))
-                                                    Button(
-                                                        onClick = {
-                                                            detailScope.launch {
-                                                                val res = withContext(Dispatchers.IO) {
-                                                                    getArchiveFirstLevelEntries(context, detailTarget.uri, detailTarget.name, zipDetailPassword.toCharArray())
-                                                                }
-                                                                zipDetailResult = res
-                                                                if (res is ZipFirstLevelResult.Error) {
-                                                                    Toast.makeText(context, context.getString(R.string.browser_password_wrong_or_unreadable), Toast.LENGTH_SHORT).show()
-                                                                }
-                                                            }
-                                                        },
-                                                        enabled = zipDetailPassword.isNotEmpty()
-                                                    ) { Text(stringResource(R.string.common_ok)) }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    ZipFirstLevelResult.Error -> {
-                                        Text(stringResource(R.string.browser_cannot_read_archive), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                                    }
-                                    null -> {
-                                        CircularProgressIndicator(Modifier.size(24.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.height(16.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = { showFileDetail = null }) { Text(stringResource(R.string.common_close)) }
-                    }
-                }
-            }
-        }
-
-        if (showImageExifEditDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    if (!imageExifSaving) showImageExifEditDialog = false
-                },
-                title = { Text(stringResource(R.string.browser_type_specific_edit_image_meta_title)) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        if (imageExifLoading) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.browser_type_specific_loading))
-                            }
-                        } else {
-                            OutlinedTextField(
-                                value = imageExifForm.takenTime,
-                                onValueChange = {
-                                    imageExifForm = imageExifForm.copy(takenTime = it)
-                                    imageExifValidation = imageExifValidation.copy(takenTimeError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_taken_time_label)) },
-                                isError = !imageExifValidation.takenTimeError.isNullOrBlank(),
-                                supportingText = {
-                                    Text(
-                                        imageExifValidation.takenTimeError
-                                            ?: stringResource(R.string.browser_meta_taken_time_hint)
-                                    )
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = imageExifForm.artist,
-                                onValueChange = {
-                                    imageExifForm = imageExifForm.copy(artist = it)
-                                    imageExifValidation = imageExifValidation.copy(artistError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_artist_label)) },
-                                isError = !imageExifValidation.artistError.isNullOrBlank(),
-                                supportingText = {
-                                    imageExifValidation.artistError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = imageExifForm.description,
-                                onValueChange = {
-                                    imageExifForm = imageExifForm.copy(description = it)
-                                    imageExifValidation = imageExifValidation.copy(descriptionError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_description_label)) },
-                                isError = !imageExifValidation.descriptionError.isNullOrBlank(),
-                                supportingText = {
-                                    imageExifValidation.descriptionError?.let { Text(it) }
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = imageExifForm.software,
-                                onValueChange = {
-                                    imageExifForm = imageExifForm.copy(software = it)
-                                    imageExifValidation = imageExifValidation.copy(softwareError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_software_label)) },
-                                isError = !imageExifValidation.softwareError.isNullOrBlank(),
-                                supportingText = {
-                                    imageExifValidation.softwareError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = imageExifForm.copyright,
-                                onValueChange = {
-                                    imageExifForm = imageExifForm.copy(copyright = it)
-                                    imageExifValidation = imageExifValidation.copy(copyrightError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_copyright_label)) },
-                                isError = !imageExifValidation.copyrightError.isNullOrBlank(),
-                                supportingText = {
-                                    imageExifValidation.copyrightError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            imageExifSaveError?.takeIf { it.isNotBlank() }?.let { errorText ->
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = stringResource(R.string.browser_type_specific_save_error, errorText),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            if (imageExifLoading || imageExifSaving) return@TextButton
-                            val validation = validateEditableImageExifForm(context, imageExifForm)
-                            imageExifValidation = validation
-                            if (validation.hasError) {
-                                imageExifSaveError = context.getString(R.string.browser_meta_fix_form_errors)
-                                return@TextButton
-                            }
-                            detailScope.launch {
-                                imageExifSaving = true
-                                imageExifSaveError = null
-                                val saveError = withContext(Dispatchers.IO) {
-                                    saveEditableImageExif(context, detailTarget.uri, imageExifForm)
-                                }
-                                imageExifSaving = false
-                                if (saveError == null) {
-                                    showImageExifEditDialog = false
-                                    Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
-                                    typeSpecificMetaLoaded = false
-                                    loadTypeSpecificMetadataNow(forceReload = true)
-                                } else {
-                                    imageExifSaveError = saveError
-                                }
-                            }
-                        },
-                        enabled = !imageExifLoading && !imageExifSaving
-                    ) {
-                        Text(if (imageExifSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { if (!imageExifSaving) showImageExifEditDialog = false },
-                        enabled = !imageExifSaving
-                    ) {
-                        Text(stringResource(R.string.common_cancel))
-                    }
-                }
-            )
-        }
-
-        if (showAudioMetaEditDialog) {
-            AlertDialog(
-                onDismissRequest = {
-                    if (!audioMetaSaving) showAudioMetaEditDialog = false
-                },
-                title = { Text(stringResource(R.string.browser_type_specific_edit_audio_meta_title)) },
-                text = {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        if (audioMetaLoading) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                CircularProgressIndicator(Modifier.size(20.dp))
-                                Spacer(Modifier.width(8.dp))
-                                Text(stringResource(R.string.browser_type_specific_loading))
-                            }
-                        } else {
-                            OutlinedTextField(
-                                value = audioMetaForm.title,
-                                onValueChange = {
-                                    audioMetaForm = audioMetaForm.copy(title = it)
-                                    audioMetaValidation = audioMetaValidation.copy(titleError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_title_label)) },
-                                isError = !audioMetaValidation.titleError.isNullOrBlank(),
-                                supportingText = {
-                                    audioMetaValidation.titleError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = audioMetaForm.artist,
-                                onValueChange = {
-                                    audioMetaForm = audioMetaForm.copy(artist = it)
-                                    audioMetaValidation = audioMetaValidation.copy(artistError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_artist_label)) },
-                                isError = !audioMetaValidation.artistError.isNullOrBlank(),
-                                supportingText = {
-                                    audioMetaValidation.artistError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            OutlinedTextField(
-                                value = audioMetaForm.album,
-                                onValueChange = {
-                                    audioMetaForm = audioMetaForm.copy(album = it)
-                                    audioMetaValidation = audioMetaValidation.copy(albumError = null)
-                                },
-                                label = { Text(stringResource(R.string.browser_meta_album_label)) },
-                                isError = !audioMetaValidation.albumError.isNullOrBlank(),
-                                supportingText = {
-                                    audioMetaValidation.albumError?.let { Text(it) }
-                                },
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth()
-                            )
-
-                            audioMetaSaveError?.takeIf { it.isNotBlank() }?.let { errorText ->
-                                Spacer(Modifier.height(8.dp))
-                                Text(
-                                    text = stringResource(R.string.browser_type_specific_save_error, errorText),
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            if (audioMetaLoading || audioMetaSaving) return@TextButton
-                            val validation = validateEditableAudioAnnotationForm(context, audioMetaForm)
-                            audioMetaValidation = validation
-                            if (validation.hasError) {
-                                audioMetaSaveError = context.getString(R.string.browser_meta_fix_form_errors)
-                                return@TextButton
-                            }
-                            detailScope.launch {
-                                audioMetaSaving = true
-                                audioMetaSaveError = null
-                                val saveError = withContext(Dispatchers.IO) {
-                                    if (isMp3AudioFile(detailTarget.name, mimeType)) {
-                                        val writeError = saveEditableAudioAnnotationToMp3(
-                                            context,
-                                            detailTarget.uri,
-                                            audioMetaForm
-                                        )
-                                        if (writeError == null) {
-                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
-                                        }
-                                        writeError
-                                    } else if (supportsJaudiotaggerWrite(detailTarget.name, mimeType)) {
-                                        val writeError = saveEditableAudioAnnotationWithJaudiotagger(
-                                            context,
-                                            detailTarget.uri,
-                                            audioMetaForm,
-                                            detailTarget.name
-                                        )
-                                        if (writeError == null) {
-                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
-                                        }
-                                        writeError
-                                    } else {
-                                        runCatching {
-                                            prefs.setAudioMetaAnnotation(
-                                                detailTarget.uri.toString(),
-                                                AudioMetaAnnotation(
-                                                    title = audioMetaForm.title,
-                                                    artist = audioMetaForm.artist,
-                                                    album = audioMetaForm.album
-                                                )
-                                            )
-                                        }.exceptionOrNull()?.let { e ->
-                                            "${e.javaClass.simpleName}: ${e.message ?: "unknown error"}"
-                                        }
-                                    }
-                                }
-                                audioMetaSaving = false
-                                if (saveError == null) {
-                                    showAudioMetaEditDialog = false
-                                    Toast.makeText(context, context.getString(R.string.browser_type_specific_save_success), Toast.LENGTH_SHORT).show()
-                                    typeSpecificMetaLoaded = false
-                                    loadTypeSpecificMetadataNow(forceReload = true)
-                                } else {
-                                    audioMetaSaveError = saveError
-                                }
-                            }
-                        },
-                        enabled = !audioMetaLoading && !audioMetaSaving
-                    ) {
-                        Text(if (audioMetaSaving) stringResource(R.string.browser_type_specific_saving) else stringResource(R.string.common_save))
-                    }
-                },
-                dismissButton = {
-                    TextButton(
-                        onClick = { if (!audioMetaSaving) showAudioMetaEditDialog = false },
-                        enabled = !audioMetaSaving
-                    ) {
-                        Text(stringResource(R.string.common_cancel))
-                    }
-                }
-            )
-        }
-    }
-
-    if (showQuickCopyConfirm || showQuickMoveConfirm) {
-        val isCopy = showQuickCopyConfirm
-        val title = if (isCopy) context.getString(R.string.browser_confirm_copy_title) else context.getString(R.string.browser_confirm_move_title)
-        val actionLabel = if (isCopy) context.getString(R.string.pending_list_action_copy) else context.getString(R.string.pending_list_action_move)
-        AlertDialog(
-            onDismissRequest = {
-                showQuickCopyConfirm = false
-                showQuickMoveConfirm = false
-            },
-            title = { Text(title) },
-            text = {
-                Column {
-                    Text(
-                        context.getString(R.string.browser_pending_compress_confirm, pendingList.size),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    val preview = pendingList.take(20)
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                            .verticalScroll(rememberScrollState())
-                    ) {
-                        preview.forEach { item ->
-                            Text(
-                                item.name,
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        if (pendingList.size > preview.size) {
-                            Text(
-                                context.getString(R.string.browser_pending_more_items, pendingList.size - preview.size),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showQuickCopyConfirm = false
-                        showQuickMoveConfirm = false
-                        if (isCopy) onCopyPendingToCurrentDir() else onMovePendingToCurrentDir()
-                    }
-                ) { Text(actionLabel) }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showQuickCopyConfirm = false
-                        showQuickMoveConfirm = false
-                    }
-                ) { Text(stringResource(R.string.common_cancel)) }
-            }
-        )
-    }
-}
-
-@OptIn(ExperimentalFoundationApi::class)
-@Composable
-fun FileItem(
-    model: DocumentFileModel,
-    hasPreferredExternalApp: Boolean = false,
-    isInPendingList: Boolean = false,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onDoubleClick: (() -> Unit)? = null
-) {
-    val scope = rememberCoroutineScope()
-    var pendingClickJob by remember { mutableStateOf<Job?>(null) }
-    val compressedPayloadExt = getCompressedPayloadExtension(model.name)
-    val showCompressedTag = !model.isDirectory && compressedPayloadExt != null
-    val iconName = if (showCompressedTag) "payload.${compressedPayloadExt}" else model.name
-    val icon = when {
-        model.isDirectory -> Icons.Default.Folder
-        iconName.endsWith(".gpg", ignoreCase = true) -> Icons.Default.Lock
-        iconName.endsWith(".pass", ignoreCase = true) -> Icons.Default.Lock
-        iconName.endsWith(".qx", ignoreCase = true) -> Icons.Default.LockOpen
-        iconName.endsWith(".pic", ignoreCase = true) || iconName.endsWith(".png", ignoreCase = true) || iconName.endsWith(".jpg", ignoreCase = true) || iconName.endsWith(".jpeg", ignoreCase = true) || iconName.endsWith(".gif", ignoreCase = true) || iconName.endsWith(".webp", ignoreCase = true) || iconName.endsWith(".bmp", ignoreCase = true) || iconName.endsWith(".heic", ignoreCase = true) -> Icons.Default.Image
-        iconName.endsWith(".vid", ignoreCase = true) || iconName.endsWith(".mp4", ignoreCase = true) || iconName.endsWith(".mkv", ignoreCase = true) || iconName.endsWith(".avi", ignoreCase = true) || iconName.endsWith(".mov", ignoreCase = true) || iconName.endsWith(".webm", ignoreCase = true) -> Icons.Default.PlayArrow
-        iconName.endsWith(".html", ignoreCase = true) || iconName.endsWith(".htm", ignoreCase = true) -> Icons.AutoMirrored.Filled.Article
-        isEpubFile(iconName) || isTxtFile(iconName) || isLlmFile(iconName) -> Icons.AutoMirrored.Filled.MenuBook
-        isPdfFile(iconName) -> Icons.Default.PictureAsPdf
-        isExtractableArchive(iconName) -> Icons.Default.Archive
-        iconName.endsWith(".md", ignoreCase = true) || iconName.endsWith(".rst", ignoreCase = true) -> Icons.Default.Description
-        else -> Icons.AutoMirrored.Filled.InsertDriveFile
-    }
-    val iconTint = when {
-        model.isDirectory -> MaterialTheme.colorScheme.primary
-        iconName.endsWith(".gpg", ignoreCase = true) -> Color.Red
-        iconName.endsWith(".pass", ignoreCase = true) -> Color.Red
-        iconName.endsWith(".qx", ignoreCase = true) -> Color.Red
-        iconName.endsWith(".pic", ignoreCase = true) || iconName.endsWith(".png", ignoreCase = true) || iconName.endsWith(".jpg", ignoreCase = true) || iconName.endsWith(".jpeg", ignoreCase = true) || iconName.endsWith(".gif", ignoreCase = true) || iconName.endsWith(".webp", ignoreCase = true) || iconName.endsWith(".bmp", ignoreCase = true) || iconName.endsWith(".heic", ignoreCase = true) -> MaterialTheme.colorScheme.tertiary
-        iconName.endsWith(".vid", ignoreCase = true) || iconName.endsWith(".mp4", ignoreCase = true) || iconName.endsWith(".mkv", ignoreCase = true) || iconName.endsWith(".avi", ignoreCase = true) || iconName.endsWith(".mov", ignoreCase = true) || iconName.endsWith(".webm", ignoreCase = true) -> MaterialTheme.colorScheme.secondary
-        isEpubFile(iconName) -> Color(0xFF8B4513)
-        isPdfFile(iconName) -> Color(0xFFD32F2F)
-        isExtractableArchive(iconName) -> MaterialTheme.colorScheme.tertiary
-        iconName.endsWith(".md", ignoreCase = true) || iconName.endsWith(".rst", ignoreCase = true) -> Color.Blue
-        else -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
-    val clickableOnClick: () -> Unit = if (onDoubleClick != null) {
-        {
-            if (pendingClickJob != null) {
-                pendingClickJob?.cancel()
-                pendingClickJob = null
-                onDoubleClick()
-            } else {
-                pendingClickJob = scope.launch {
-                    delay(300)
-                    pendingClickJob = null
-                    onClick()
-                }
-            }
-        }
-    } else {
-        { onClick() }
-    }
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .combinedClickable(onClick = clickableOnClick, onLongClick = onLongClick)
-            .padding(4.dp),
-        colors = CardDefaults.cardColors(MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(modifier = Modifier.size(32.dp)) {
-                Icon(
-                    icon,
-                    contentDescription = null,
-                    Modifier
-                        .size(32.dp)
-                        .align(Alignment.Center),
-                    tint = iconTint
-                )
-                if (showCompressedTag) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(14.dp)
-                            .clip(RoundedCornerShape(4.dp))
-                            .background(MaterialTheme.colorScheme.tertiaryContainer)
-                            .border(1.dp, MaterialTheme.colorScheme.surface, RoundedCornerShape(4.dp)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Default.Archive,
-                            contentDescription = null,
-                            modifier = Modifier.size(10.dp),
-                            tint = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    }
-                }
-                if (hasPreferredExternalApp) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(8.dp)
-                            .clip(RoundedCornerShape(99.dp))
-                            .background(MaterialTheme.colorScheme.secondary)
-                    )
-                }
-            }
-            Spacer(Modifier.size(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(
-                    model.name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = fileItemSubtitle(model),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            if (isInPendingList) {
-                Spacer(Modifier.size(8.dp))
-                Icon(
-                    Icons.AutoMirrored.Filled.PlaylistAdd,
-                    contentDescription = stringResource(R.string.browser_already_in_pending_list),
-                    Modifier.size(20.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

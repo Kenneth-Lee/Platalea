@@ -246,7 +246,9 @@ interface MainTabFeature {
 3. **Step 3 各 Route 宿主自治**：`executeArchiveOperation()` 下沉进 archive 域（所需输入——当前目录、root、进度、取消——全部参数化或来自共享对象）；`archiveReader`/`archiveOps`/`crypto` 的创建点上移到 AppShell 顶层，RouteHost 自持所需对象引用。（进行中）
 4. **Step 4 AppShell 成型**：主函数收敛为"会话 + 对象创建 + Tab/Route 路由 + 组合"，目标 200-300 行。`FileBrowserApp.kt` 剩余的通用组件（密码输入框、进度对话框等）逐个认领归属文件。
 
-**速记族 / 网络服务族 / Config 域已按同一模式落地**（2026-09）：`NoteTabFeature.kt`（速记+书摘：controller 创建、密码对话框 overlay、退出持久化内聚；书摘向 transient/archive 域提供读写投影接口）；`NetworkServicesTabFeature.kt`（FTP/WebUI/家庭网络：三服务 manager、共享配置、5 个生命周期 effect 内聚，familyNetworkManager 作为共享服务暴露给公告转发流）；`ConfigTabFeature.kt`（设置项 prefs 镜像、四个设置对话框 overlay、导入导出 workflow 创建内聚，workflow 经接口暴露给 browser 域消费）。GIT_SHARE/GIT_PROJECTS/QUICK_CRYPTO/DICTIONARY/ABOUT 的 Route 已自治，`mainTabFeature` 适配即终态。全部平移 token diff=0。待收尾：DIRECTORY/RECENT（BrowserTab 域，含 FileBrowserScreen 迁移与 BrowserTabApi）。
+**速记族 / 网络服务族 / Config 域已按同一模式落地**（2026-09）：`NoteTabFeature.kt`（速记+书摘：controller 创建、密码对话框 overlay、退出持久化内聚；书摘向 transient/archive 域提供读写投影接口）；`NetworkServicesTabFeature.kt`（FTP/WebUI/家庭网络：三服务 manager、共享配置、5 个生命周期 effect 内聚，familyNetworkManager 作为共享服务暴露给公告转发流）；`ConfigTabFeature.kt`（设置项 prefs 镜像、四个设置对话框 overlay、导入导出 workflow 创建内聚，workflow 经接口暴露给 browser 域消费）。GIT_SHARE/GIT_PROJECTS/QUICK_CRYPTO/DICTIONARY/ABOUT 的 Route 已自治，`mainTabFeature` 适配即终态。全部平移 token diff=0。
+
+**BrowserTab 域收尾完成**（2026-09，批次 E）：`FileBrowserScreen.kt`（文件浏览器屏幕 + EXIF 元数据/外部打开/文件搜索等 51 个配套顶层符号自 FileBrowserApp.kt 平移，编译驱动收敛跨文件可见性，共享符号 internal 化）；`BrowserTabFeature.kt`（`rememberBrowserTabState` 工厂内聚 root 恢复/初始路径/过滤/隐藏/外开偏好五组 prefs 接线 + `browserTabFeature` 呈现工厂；`state` 投影目录域共享数据对象，宿主与各域命令式直呼）；`openRecentItemByType`/`buildRecentModel`/`RECENT_TYPE_*` 出口重排至 `RecentTabRoute.kt`（RECENT 域事实源）。全部 token 等价验证 + 真机目录/最近/打开链路验证通过。主函数 7480 → 3997 行。
 
 **播放器域已按终态模式落地**（2026-09，作为第二标杆）：`PlaybackScreen.kt`（重投影，实现不依赖状态对象）+ `PlayerTabState.kt`（`PlayerTabFeature` 接口 + private State + `@Composable` 工厂内聚接线/快捷方式恢复/域对话框 overlay）。主程序持 `MainTabFeature` 列表循环组合，`MainTabContentHost` 从 15 参数 content-lambda 路由改为 features 驱动，14 个 tab 平移 token diff=0。其余 tab 域（FTP、Config、速记等）按同一模式逐个工厂化。
 
@@ -262,6 +264,7 @@ interface MainTabFeature {
 
 - 2026-09：确立 MainTabFeature 呈现接口与关联判定规则（§4/§4.1）；播放器域按终态模式分离（PlaybackScreen.kt + PlayerTabState.kt 工厂），14 tab 迁移 features 驱动（token diff=0）。
 - 2026-09（二）：速记族、网络服务族、Config 域三批工厂化；主函数仅剩 7 个薄壳 tab 与 BrowserTab 域收尾。
+- 2026-09（三）：BrowserTab 域收尾（批次 E）：FileBrowserScreen 平移、rememberBrowserTabState/browserTabFeature 工厂、RECENT 出口重排；主函数降至 3997 行。
 
 | 日期 | 变更原因和内容 |
 | --- | --- |

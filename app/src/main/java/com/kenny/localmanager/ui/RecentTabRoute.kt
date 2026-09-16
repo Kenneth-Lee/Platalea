@@ -1,5 +1,15 @@
 package com.kenny.localmanager.ui
 
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.widget.Toast
+import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.player.PlaybackState
+import com.kenny.localmanager.player.ACTION_PLAY
+import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
+import com.kenny.localmanager.player.PlaybackService
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -181,6 +191,164 @@ fun RecentTabRoute(state: RecentTabRouteState) {
                     }
                 }
             }
+        }
+    }
+}
+
+
+// ===== 最近打开域逻辑（自 FileBrowserApp.kt 平移）=====
+
+internal const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
+
+
+internal const val RECENT_TYPE_HTML_VIEWER = "html_viewer"
+
+
+internal const val RECENT_TYPE_EPUB_RENDERER = "epub_renderer"
+
+
+internal const val RECENT_TYPE_PDF_VIEWER = "pdf_viewer"
+
+
+internal const val RECENT_TYPE_PLAYLIST = "playlist"
+
+
+internal const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
+
+
+private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
+    return DocumentFileModel(
+        name = name,
+        isDirectory = false,
+        uri = Uri.parse(uri),
+        lastModified = 0L,
+        size = 0L
+    )
+}
+
+
+internal fun openRecentItemByType(
+    context: Context,
+    item: RecentOpenItem,
+    currentPlaybackState: PlaybackState?,
+    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
+    switchMainTab: (MainTab) -> Unit,
+    onMdZipTarget: (DocumentFileModel) -> Unit,
+    onHtmlZipTarget: (DocumentFileModel) -> Unit,
+    onHtmlTarget: (DocumentFileModel) -> Unit,
+    onHtmlUrlTarget: (String) -> Unit,
+    onPicZipTarget: (DocumentFileModel) -> Unit,
+    onVidZipTarget: (DocumentFileModel) -> Unit,
+    onLlmZipTarget: (DocumentFileModel) -> Unit,
+    onTxtTarget: (DocumentFileModel) -> Unit,
+    onLlmTarget: (DocumentFileModel) -> Unit,
+    onEpubTarget: (DocumentFileModel) -> Unit,
+    onPdfTarget: (DocumentFileModel) -> Unit
+) {
+    when (item.type) {
+        RECENT_TYPE_PLAYLIST -> {
+            val playlistId = item.playlistId
+            if (playlistId.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_playlist_id), Toast.LENGTH_SHORT).show()
+                return
+            }
+            val alreadyPlayingSamePlaylist =
+                currentPlaybackState?.playlistId == playlistId && currentPlaybackState.isPlaying
+            if (!alreadyPlayingSamePlaylist) {
+                val intent = Intent(context, PlaybackService::class.java).apply {
+                    action = ACTION_PLAY
+                    putExtra(EXTRA_PLAYLIST_ID, playlistId)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent) else context.startService(intent)
+            }
+            recordRecentOpen(
+                RECENT_TYPE_PLAYLIST,
+                playlistId,
+                item.title,
+                null,
+                playlistId
+            )
+            switchMainTab(MainTab.PLAYER)
+        }
+
+        RECENT_TYPE_EXTERNAL_OPEN -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            val opened = launchExternalOpen(context, uri, null, item.title)
+            if (!opened) {
+                Toast.makeText(context, context.getString(R.string.recent_external_open_failed), Toast.LENGTH_SHORT).show()
+                return
+            }
+            recordRecentOpen(
+                RECENT_TYPE_EXTERNAL_OPEN,
+                item.key,
+                item.title,
+                uri,
+                null
+            )
+        }
+
+        RECENT_TYPE_ZIP_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            val model = buildRecentModel(uri, item.title)
+            when {
+                item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> onMdZipTarget(model)
+                item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
+                item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
+                item.title.endsWith(".vid.zip", ignoreCase = true) -> onVidZipTarget(model)
+                else -> {
+                    Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
+                    return
+                }
+            }
+        }
+
+        RECENT_TYPE_HTML_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            if (uri.startsWith("http://", ignoreCase = true) || uri.startsWith("https://", ignoreCase = true)) {
+                onHtmlUrlTarget(uri)
+            } else {
+                onHtmlTarget(buildRecentModel(uri, item.title))
+            }
+        }
+
+        RECENT_TYPE_EPUB_RENDERER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            val model = buildRecentModel(uri, item.title)
+            when {
+                item.title.endsWith(".llm.zip", ignoreCase = true) -> onLlmZipTarget(model)
+                item.title.endsWith(".txt", ignoreCase = true) -> onTxtTarget(model)
+                item.title.endsWith(".llm", ignoreCase = true) -> onLlmTarget(model)
+                else -> onEpubTarget(model)
+            }
+        }
+
+        RECENT_TYPE_PDF_VIEWER -> {
+            val uri = item.uri
+            if (uri.isNullOrBlank()) {
+                Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
+                return
+            }
+            onPdfTarget(buildRecentModel(uri, item.title))
+        }
+
+        else -> {
+            Toast.makeText(context, context.getString(R.string.recent_unknown_type, item.type), Toast.LENGTH_SHORT).show()
         }
     }
 }
