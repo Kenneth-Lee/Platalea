@@ -1277,7 +1277,7 @@ fun FileBrowserApp(
     // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
-    val browserTab = rememberBrowserTabState(context, prefs, initialDirUri)
+    val browserTab = rememberBrowserTabState(context, config.browser, initialDirUri)
 
     // Transient viewer / editor routes (short-lived feature flows)
     var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }

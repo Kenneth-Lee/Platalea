@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import com.kenny.localmanager.data.Preferences
 
 /**
  * BrowserTab 域呈现接口（MainTabFeature §4）：
@@ -25,24 +24,24 @@ internal interface BrowserTabFeature : MainTabFeature {
 @Composable
 internal fun rememberBrowserTabState(
     context: Context,
-    prefs: Preferences,
+    config: BrowserConfigView,
     initialDirUri: String?
 ): BrowserTabState {
-    val state = remember { BrowserTabState(context, prefs) }
+    val state = remember { BrowserTabState(context, config) }
     LaunchedEffect(Unit) {
         state.restoreRoot()
     }
     LaunchedEffect(state.rootUri, initialDirUri) {
         state.ensureCurrentUri(initialDirUri)
     }
-    LaunchedEffect(prefs) {
-        prefs.filterVisible.collect { state.filterVisible = it }
+    LaunchedEffect(config) {
+        config.filterVisible.collect { state.filterVisible = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.hideDotFiles.collect { state.hideDotFiles = it }
+    LaunchedEffect(config) {
+        config.hideDotFiles.collect { state.hideDotFiles = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.externalOpenByExtension.collect { state.preferredExternalPackages = it }
+    LaunchedEffect(config) {
+        config.externalOpenByExtension.collect { state.preferredExternalPackages = it }
     }
     return state
 }

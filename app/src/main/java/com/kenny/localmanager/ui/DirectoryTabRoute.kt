@@ -8,6 +8,7 @@ import com.kenny.localmanager.player.PlaybackState
 
 internal data class DirectoryTabRouteState(
     val modifier: Modifier = Modifier,
+    val config: BrowserConfigView,
     val currentUri: String,
     val refreshTrigger: Int,
     val dirCache: Map<String, CachedDir>,
@@ -125,6 +126,7 @@ internal fun DirectoryTabRoute(state: DirectoryTabRouteState) {
         onRequestImportConfig = state.onRequestImportConfig,
         onRequestImportStarDict = state.onRequestImportStarDict,
         playbackState = state.playbackState,
-        onOpenPlaybackScreen = state.onOpenPlaybackScreen
+        onOpenPlaybackScreen = state.onOpenPlaybackScreen,
+        config = state.config
     )
 }

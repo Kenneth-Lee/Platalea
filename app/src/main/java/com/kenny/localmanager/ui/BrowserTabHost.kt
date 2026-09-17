@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.deleteDocument
@@ -332,7 +331,7 @@ private suspend fun saveBatchEditableAudioAnnotation(
     context: Context,
     files: List<DocumentFileModel>,
     patch: EditableAudioAnnotation,
-    prefs: Preferences
+    config: BrowserConfigView
 ): List<String> {
     if (files.isEmpty()) return emptyList()
     val errors = mutableListOf<String>()
@@ -345,7 +344,7 @@ private suspend fun saveBatchEditableAudioAnnotation(
             saveEditableAudioAnnotationWithJaudiotagger(context, file.uri, merged, file.name)
         } else {
             runCatching {
-                prefs.setAudioMetaAnnotation(
+                config.setAudioMetaAnnotation(
                     file.uri.toString(),
                     AudioMetaAnnotation(
                         title = merged.title,
@@ -368,7 +367,7 @@ private suspend fun saveBatchEditableAudioAnnotation(
 private fun BatchPendingMetadataDialog(
     files: List<DocumentFileModel>,
     context: Context,
-    prefs: Preferences,
+    config: BrowserConfigView,
     onDismiss: () -> Unit,
     onSaved: () -> Unit
 ) {
@@ -533,7 +532,7 @@ private fun BatchPendingMetadataDialog(
                         val errors = withContext(Dispatchers.IO) {
                             when (batchKind) {
                                 DetailMetadataKind.IMAGE -> saveBatchEditableImageExif(context, files, imageForm)
-                                DetailMetadataKind.AUDIO -> saveBatchEditableAudioAnnotation(context, files, audioForm, prefs)
+                                DetailMetadataKind.AUDIO -> saveBatchEditableAudioAnnotation(context, files, audioForm, config)
                                 else -> emptyList()
                             }
                         }
@@ -565,7 +564,7 @@ private fun BatchPendingMetadataDialog(
  */
 internal class BrowserTabState(
     val context: Context,
-    val prefs: Preferences,
+    val config: BrowserConfigView,
 ) {
     // ===== 目录会话（单一所有权）=====
     var rootUri by mutableStateOf<String?>(null)
@@ -580,7 +579,7 @@ internal class BrowserTabState(
     }
 
     suspend fun restoreRoot() {
-        rootUri = prefs.rootUri.first()?.let { normalizeContentUriString(it) }
+        rootUri = config.rootUri.first()?.let { normalizeContentUriString(it) }
     }
 
     fun changeRoot(uri: String, refresh: Boolean = true) {
@@ -678,7 +677,7 @@ internal fun BrowserTabHost(
 ) {
     val context = state.context
     val scope = deps.scope
-    val prefs = state.prefs
+    val config = state.config
     val archiveReader = deps.archiveReader
     val archiveOps = deps.archiveOps
     val crypto = deps.crypto
@@ -842,6 +841,7 @@ internal fun BrowserTabHost(
                         DirectoryTabRoute(
                             DirectoryTabRouteState(
                                 modifier = Modifier.fillMaxSize(),
+                                config = config,
                                 currentUri = displayUri,
                                 refreshTrigger = refreshKey,
                                 dirCache = dirCache,
@@ -912,13 +912,13 @@ internal fun BrowserTabHost(
                                         if (rememberChoice) {
                                             val extension = fileExtensionKey(name)
                                             if (extension != null && !packageName.isNullOrBlank()) {
-                                                scope.launch { prefs.setExternalOpenPackageForExtension(extension, packageName) }
+                                                scope.launch { config.setExternalOpenPackageForExtension(extension, packageName) }
                                             }
                                         }
                                     } else {
                                         val extension = fileExtensionKey(name)
                                         if (!packageName.isNullOrBlank() && extension != null) {
-                                            scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                            scope.launch { config.clearExternalOpenPackageForExtension(extension) }
                                             Toast.makeText(context, context.getString(R.string.browser_external_app_unavailable), Toast.LENGTH_SHORT).show()
                                         } else {
                                             Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
@@ -929,7 +929,7 @@ internal fun BrowserTabHost(
                                 onClearExternalOpenPreference = { name ->
                                     val extension = fileExtensionKey(name)
                                     if (extension != null) {
-                                        scope.launch { prefs.clearExternalOpenPackageForExtension(extension) }
+                                        scope.launch { config.clearExternalOpenPackageForExtension(extension) }
                                     }
                                 },
                                 onOpenMarkdownView = { uri, name, encrypted ->
@@ -1132,7 +1132,7 @@ internal fun BrowserTabHost(
             BatchPendingMetadataDialog(
                 files = files,
                 context = context,
-                prefs = prefs,
+                config = config,
                 onDismiss = { pendingBatchDetails = null },
                 onSaved = { pendingBatchDetails = null }
             )

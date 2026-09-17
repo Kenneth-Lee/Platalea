@@ -114,7 +114,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.renameDocument
@@ -1081,6 +1080,7 @@ private fun FileSearchResultsDialog(
 @Composable
 internal fun FileBrowserScreen(
     modifier: Modifier = Modifier,
+    config: BrowserConfigView,
     currentUri: String,
     refreshTrigger: Int,
     dirCache: Map<String, CachedDir>,
@@ -1140,7 +1140,6 @@ internal fun FileBrowserScreen(
 ) {
     val directoryScrollMinItems = 30
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     var items by remember(currentUri) { mutableStateOf<List<DocumentFileModel>>(emptyList()) }
     var loading by remember(currentUri) { mutableStateOf(true) }
@@ -1429,14 +1428,14 @@ internal fun FileBrowserScreen(
     suspend fun persistDirectoryScrollMemory(uriToSave: String, itemsToSave: List<DocumentFileModel>, wasLoading: Boolean) {
         if (wasLoading) return
         if (itemsToSave.size < directoryScrollMinItems) {
-            prefs.removeDirectoryScrollMemory(uriToSave)
+            config.removeDirectoryScrollMemory(uriToSave)
             return
         }
         val maxIndex = (itemsToSave.size - 1).coerceAtLeast(0)
         val index = listState.firstVisibleItemIndex.coerceIn(0, maxIndex)
         val anchorItem = itemsToSave.getOrNull(index)
         val now = System.currentTimeMillis()
-        prefs.setDirectoryScrollMemory(
+        config.setDirectoryScrollMemory(
             DirectoryScrollMemory(
                 dirUri = uriToSave,
                 anchorUri = anchorItem?.uri?.toString(),
@@ -1456,7 +1455,7 @@ internal fun FileBrowserScreen(
         if (restoredForUri || loading) return@LaunchedEffect
         restoredForUri = true
         if (displayItems.size < directoryScrollMinItems) return@LaunchedEffect
-        val memory = withContext(Dispatchers.IO) { prefs.getDirectoryScrollMemory(currentUri) } ?: return@LaunchedEffect
+        val memory = withContext(Dispatchers.IO) { config.getDirectoryScrollMemory(currentUri) } ?: return@LaunchedEffect
         val fallbackMaxIndex = (displayItems.size - 1).coerceAtLeast(0)
         val anchorIndex = memory.anchorUri?.let { uri ->
             displayItems.indexOfFirst { it.uri.toString() == uri }
@@ -2628,7 +2627,7 @@ internal fun FileBrowserScreen(
             }
             val mergedRows = if (detailMetaKind == DetailMetadataKind.AUDIO) {
                 val annotation = withContext(Dispatchers.IO) {
-                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
+                    config.getAudioMetaAnnotation(detailTarget.uri.toString())
                 }
                 applyAudioMetaAnnotationRows(context, rows, annotation)
             } else {
@@ -2804,7 +2803,7 @@ internal fun FileBrowserScreen(
                                                 audioMetaSaveError = null
                                                 audioMetaValidation = EditableAudioAnnotationValidation()
                                                 val annotation = withContext(Dispatchers.IO) {
-                                                    prefs.getAudioMetaAnnotation(detailTarget.uri.toString())
+                                                    config.getAudioMetaAnnotation(detailTarget.uri.toString())
                                                 }
                                                 val fromFile = withContext(Dispatchers.IO) {
                                                     readEditableAudioAnnotation(context, detailTarget.uri)
@@ -3193,7 +3192,7 @@ internal fun FileBrowserScreen(
                                             audioMetaForm
                                         )
                                         if (writeError == null) {
-                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
+                                            config.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
                                         }
                                         writeError
                                     } else if (supportsJaudiotaggerWrite(detailTarget.name, mimeType)) {
@@ -3204,12 +3203,12 @@ internal fun FileBrowserScreen(
                                             detailTarget.name
                                         )
                                         if (writeError == null) {
-                                            prefs.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
+                                            config.setAudioMetaAnnotation(detailTarget.uri.toString(), null)
                                         }
                                         writeError
                                     } else {
                                         runCatching {
-                                            prefs.setAudioMetaAnnotation(
+                                            config.setAudioMetaAnnotation(
                                                 detailTarget.uri.toString(),
                                                 AudioMetaAnnotation(
                                                     title = audioMetaForm.title,

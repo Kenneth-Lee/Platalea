@@ -3,6 +3,8 @@ package com.kenny.localmanager.ui
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import com.kenny.localmanager.data.AudioMetaAnnotation
+import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.PlayerListBookmark
@@ -27,6 +29,9 @@ internal class ConfigService(context: Context) {
 
     /** 播放器功能域的配置投影：播放列表、最近列表 id、音频设置、列表书签。 */
     val player: PlayerConfigView = PlayerConfigViewImpl(prefs)
+
+    /** 目录功能域的配置投影：根目录、过滤/隐藏偏好、外开包映射、目录滚动记忆、音频元数据注解。 */
+    val browser: BrowserConfigView = BrowserConfigViewImpl(prefs)
 
     /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
     val legacy: Preferences = prefs
@@ -82,4 +87,37 @@ private class PlayerConfigViewImpl(private val prefs: Preferences) : PlayerConfi
     override suspend fun updatePlayerListBookmarkNote(bookmarkId: String, note: String) =
         prefs.updatePlayerListBookmarkNote(bookmarkId, note)
     override suspend fun deletePlayerListBookmark(bookmarkId: String) = prefs.deletePlayerListBookmark(bookmarkId)
+}
+
+/** 目录功能域的配置投影接口：由配置功能提供实现，目录域不感知存储。 */
+internal interface BrowserConfigView {
+    val rootUri: Flow<String?>
+    val filterVisible: Flow<Boolean>
+    val hideDotFiles: Flow<Boolean>
+    val externalOpenByExtension: Flow<Map<String, String>>
+
+    suspend fun setExternalOpenPackageForExtension(extension: String, packageName: String?)
+    suspend fun clearExternalOpenPackageForExtension(extension: String)
+    suspend fun getDirectoryScrollMemory(uri: String): DirectoryScrollMemory?
+    suspend fun setDirectoryScrollMemory(memory: DirectoryScrollMemory)
+    suspend fun removeDirectoryScrollMemory(uri: String)
+    suspend fun getAudioMetaAnnotation(uri: String): AudioMetaAnnotation?
+    suspend fun setAudioMetaAnnotation(uri: String, annotation: AudioMetaAnnotation?)
+}
+
+private class BrowserConfigViewImpl(private val prefs: Preferences) : BrowserConfigView {
+    override val rootUri get() = prefs.rootUri
+    override val filterVisible get() = prefs.filterVisible
+    override val hideDotFiles get() = prefs.hideDotFiles
+    override val externalOpenByExtension get() = prefs.externalOpenByExtension
+    override suspend fun setExternalOpenPackageForExtension(extension: String, packageName: String?) =
+        prefs.setExternalOpenPackageForExtension(extension, packageName)
+    override suspend fun clearExternalOpenPackageForExtension(extension: String) =
+        prefs.clearExternalOpenPackageForExtension(extension)
+    override suspend fun getDirectoryScrollMemory(uri: String): DirectoryScrollMemory? = prefs.getDirectoryScrollMemory(uri)
+    override suspend fun setDirectoryScrollMemory(memory: DirectoryScrollMemory) = prefs.setDirectoryScrollMemory(memory)
+    override suspend fun removeDirectoryScrollMemory(uri: String) = prefs.removeDirectoryScrollMemory(uri)
+    override suspend fun getAudioMetaAnnotation(uri: String): AudioMetaAnnotation? = prefs.getAudioMetaAnnotation(uri)
+    override suspend fun setAudioMetaAnnotation(uri: String, annotation: AudioMetaAnnotation?) =
+        prefs.setAudioMetaAnnotation(uri, annotation)
 }
