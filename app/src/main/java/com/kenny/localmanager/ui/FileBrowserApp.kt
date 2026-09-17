@@ -1444,7 +1444,7 @@ fun FileBrowserApp(
 
 
     val quickNoteTab = quickNoteTabFeature(
-        prefs = prefs,
+        config = config.quickNote,
         rootUri = browserTab.rootUri,
         isActive = currentMainTab == MainTab.QUICK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache

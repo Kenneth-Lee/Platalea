@@ -15,7 +15,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -245,8 +244,8 @@ fun rememberQuickNoteTabController(
 }
 
 @Composable
-fun QuickNoteTabRoute(
-    prefs: Preferences,
+internal fun QuickNoteTabRoute(
+    config: QuickNoteConfigView,
     controller: QuickNoteTabController
 ) {
     TabRouteContent(
@@ -254,7 +253,7 @@ fun QuickNoteTabRoute(
         loadingText = stringResource(R.string.quick_note_opening)
     ) { data ->
         QuickNoteScreen(
-            prefs = prefs,
+            config = config,
             loadedData = data,
             startWithAddDialog = controller.startWithAddDialog,
             inProgress = controller.inProgress,

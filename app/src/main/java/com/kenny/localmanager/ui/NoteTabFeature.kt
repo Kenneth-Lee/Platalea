@@ -4,7 +4,6 @@ import android.content.Context
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 
 /** 速记 tab 功能对象（接口面：呈现 + 跨域窄 API，实现不可见）。 */
 internal interface QuickNoteTabFeature : MainTabFeature {
@@ -30,7 +29,7 @@ internal interface BookNoteTabFeature : MainTabFeature {
  */
 @Composable
 internal fun quickNoteTabFeature(
-    prefs: Preferences,
+    config: QuickNoteConfigView,
     rootUri: String?,
     isActive: Boolean,
     markdownViewerSessionCache: MarkdownViewerSessionCache
@@ -40,7 +39,7 @@ internal fun quickNoteTabFeature(
         isActive = isActive,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
-    return QuickNoteTabState(prefs, controller)
+    return QuickNoteTabState(config, controller)
 }
 
 /** 书摘 tab 工厂。 */
@@ -59,12 +58,12 @@ internal fun bookNoteTabFeature(
 }
 
 private class QuickNoteTabState(
-    private val prefs: Preferences,
+    private val config: QuickNoteConfigView,
     private val controller: QuickNoteTabController
 ) : QuickNoteTabFeature {
     override val tab: MainTab get() = MainTab.QUICK_NOTE
     override val content: @Composable () -> Unit = {
-        QuickNoteTabRoute(prefs = prefs, controller = controller)
+        QuickNoteTabRoute(config = config, controller = controller)
     }
     override val overlay: (@Composable () -> Unit)? = {
         TabPasswordPromptDialog(

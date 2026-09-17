@@ -33,6 +33,9 @@ internal class ConfigService(context: Context) {
     /** 目录功能域的配置投影：根目录、过滤/隐藏偏好、外开包映射、目录滚动记忆、音频元数据注解。 */
     val browser: BrowserConfigView = BrowserConfigViewImpl(prefs)
 
+    /** 速记功能域的配置投影：最近使用分类。 */
+    val quickNote: QuickNoteConfigView = QuickNoteConfigViewImpl(prefs)
+
     /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
     val legacy: Preferences = prefs
 }
@@ -120,4 +123,17 @@ private class BrowserConfigViewImpl(private val prefs: Preferences) : BrowserCon
     override suspend fun getAudioMetaAnnotation(uri: String): AudioMetaAnnotation? = prefs.getAudioMetaAnnotation(uri)
     override suspend fun setAudioMetaAnnotation(uri: String, annotation: AudioMetaAnnotation?) =
         prefs.setAudioMetaAnnotation(uri, annotation)
+}
+
+
+/** 速记功能域的配置投影接口：由配置功能提供实现，速记域不感知存储。 */
+internal interface QuickNoteConfigView {
+    val quickNoteLastCategory: Flow<String?>
+
+    suspend fun setQuickNoteLastCategory(category: String?)
+}
+
+private class QuickNoteConfigViewImpl(private val prefs: Preferences) : QuickNoteConfigView {
+    override val quickNoteLastCategory get() = prefs.quickNoteLastCategory
+    override suspend fun setQuickNoteLastCategory(category: String?) = prefs.setQuickNoteLastCategory(category)
 }

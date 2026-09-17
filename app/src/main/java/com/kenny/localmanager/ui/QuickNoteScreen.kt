@@ -59,7 +59,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import kotlinx.coroutines.launch
 
 const val QUICK_NOTE_FILE_NAME: String = ".lm.note.md"
@@ -382,8 +381,8 @@ private val QUICK_NOTE_ENTRY_REGEX = Regex("^\\* \\[([xX ]?)\\]\\s?(.*)$")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun QuickNoteScreen(
-    prefs: Preferences,
+internal fun QuickNoteScreen(
+    config: QuickNoteConfigView,
     loadedData: QuickNoteLoadedData,
     startWithAddDialog: Boolean,
     inProgress: Boolean,
@@ -392,7 +391,7 @@ fun QuickNoteScreen(
     val composeContext = LocalContext.current
     val scope = rememberCoroutineScope()
     val clipboardManager = composeContext.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    val lastUsedCategory by prefs.quickNoteLastCategory.collectAsState(initial = null)
+    val lastUsedCategory by config.quickNoteLastCategory.collectAsState(initial = null)
     var entries by remember(loadedData.fileInfo.uri, loadedData.rawText) { mutableStateOf(loadedData.entries) }
     var editorState by remember(loadedData.fileInfo.uri, startWithAddDialog) {
         mutableStateOf(
@@ -567,7 +566,7 @@ fun QuickNoteScreen(
                     )
                     categoryExpandedStates[quickNoteCategoryKey(normalizedCategory)] = true
                     scope.launch {
-                        prefs.setQuickNoteLastCategory(normalizedCategory)
+                        config.setQuickNoteLastCategory(normalizedCategory)
                     }
                     entries + newEntry
                 } else {
