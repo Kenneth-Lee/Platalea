@@ -4,7 +4,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.family.FamilyNetworkManager
 import com.kenny.localmanager.ftp.FtpServerManager
 import kotlinx.coroutines.Dispatchers
@@ -43,7 +42,7 @@ internal class NetworkServicesTabs(
 @Composable
 internal fun networkServicesTabs(
     context: android.content.Context,
-    prefs: Preferences,
+    config: NetworkConfigView,
     activeMainTab: MainTab,
     rootUri: String?,
     displayUri: String,
@@ -54,13 +53,13 @@ internal fun networkServicesTabs(
     val ftpManager = remember { FtpServerManager(context) }
     val localShareManager = remember { FtpServerManager(context) }
     val familyNetworkManager = remember { FamilyNetworkManager(context) }
-    val networkServiceConfig = rememberNetworkServiceConfigState(prefs)
+    val networkServiceConfig = rememberNetworkServiceConfigState(config)
 
-    LaunchedEffect(prefs) {
-        val legacyExtra = prefs.familyNetworkExtraRoles.first()
+    LaunchedEffect(config) {
+        val legacyExtra = config.familyNetworkExtraRoles.first()
         if (!legacyExtra.isNullOrBlank()) {
             familyNetworkManager.migrateUserRolesFromLegacyConfig(legacyExtra)
-            prefs.setFamilyNetworkExtraRoles(null)
+            config.setFamilyNetworkExtraRoles(null)
         }
     }
     LaunchedEffect(activeMainTab) {

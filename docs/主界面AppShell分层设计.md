@@ -2,7 +2,7 @@
 
 ## 1. 设计目的
 
-分层改造的 Phase 3（批次 A-D）已经完成：打包阅读器、压缩向导、Crypto、待处理列表四批功能各自收敛成了独立文件与工作流对象，`FileBrowserApp.kt` 从 14874 行降到 11242 行。但检视改造后的主函数（2856-5075 行，2220 行的 Composable 作用域，60 个 remember、28 个 LaunchedEffect），会发现它仍然理解一切功能细节。三个具体的越界证据：
+分层改造的 Phase 3（批次 A-D）已经完成：打包阅读器、压缩向导、Crypto、待处理列表四批功能各自收敛成了独立文件与工作流对象，`FileBrowserApp.kt`（现 `PlataleaApp.kt`，主程序 2026-09 更名）从 14874 行降到 11242 行。但检视改造后的主函数（2856-5075 行，2220 行的 Composable 作用域，60 个 remember、28 个 LaunchedEffect），会发现它仍然理解一切功能细节。三个具体的越界证据：
 
 1. `pendingList`（待处理文件列表）住在主函数作用域。压缩向导和 Crypto 的执行块完成批量操作后直接调用 `finishPendingListAndReturn()`——两个与文件浏览无关的功能，直接操作文件浏览的内部状态。
 2. `executeArchiveOperation()`（258 行文件操作编排）住在主函数里。解压到哪、怎么压缩、进度怎么走，全是 archive 域的内部实现。
@@ -65,7 +65,7 @@
 
 | 对象 | 入口 | 来源（现状） |
 | --- | --- | --- |
-| 文件浏览 `BrowserTab` | 视图入口（读目录对象渲染） | `DirectoryTabRoute` 调用块、文件浏览器、待处理面板 |
+| 文件浏览 `BrowserTab` | 视图入口（读目录对象渲染） | `BrowserTabRoute` 调用块、浏览器屏幕、待处理面板 |
 | 打包阅读器 `ArchiveReader` | `open(kind, file)` | `ArchiveReaderWorkflowState`（已有） |
 | 压缩向导 `ArchiveOps` | `open(request)` | `ArchiveOperationWorkflowState`（已有） |
 | 加密操作 `Crypto` | `open(request)` | `CryptoWorkflowState`（已有） |
@@ -248,7 +248,7 @@ interface MainTabFeature {
 
 **速记族 / 网络服务族 / Config 域已按同一模式落地**（2026-09）：`NoteTabFeature.kt`（速记+书摘：controller 创建、密码对话框 overlay、退出持久化内聚；书摘向 transient/archive 域提供读写投影接口）；`NetworkServicesTabFeature.kt`（FTP/WebUI/家庭网络：三服务 manager、共享配置、5 个生命周期 effect 内聚，familyNetworkManager 作为共享服务暴露给公告转发流）；`ConfigTabFeature.kt`（设置项 prefs 镜像、四个设置对话框 overlay、导入导出 workflow 创建内聚，workflow 经接口暴露给 browser 域消费）。GIT_SHARE/GIT_PROJECTS/QUICK_CRYPTO/DICTIONARY/ABOUT 的 Route 已自治，`mainTabFeature` 适配即终态。全部平移 token diff=0。
 
-**BrowserTab 域收尾完成**（2026-09，批次 E）：`FileBrowserScreen.kt`（文件浏览器屏幕 + EXIF 元数据/外部打开/文件搜索等 51 个配套顶层符号自 FileBrowserApp.kt 平移，编译驱动收敛跨文件可见性，共享符号 internal 化）；`BrowserTabFeature.kt`（`rememberBrowserTabState` 工厂内聚 root 恢复/初始路径/过滤/隐藏/外开偏好五组 prefs 接线 + `browserTabFeature` 呈现工厂；`state` 投影目录域共享数据对象，宿主与各域命令式直呼）；`openRecentItemByType`/`buildRecentModel`/`RECENT_TYPE_*` 出口重排至 `RecentTabRoute.kt`（RECENT 域事实源）。全部 token 等价验证 + 真机目录/最近/打开链路验证通过。主函数 7480 → 3997 行。
+**BrowserTab 域收尾完成**（2026-09，批次 E）：`FileBrowserScreen.kt`（现 `BrowserScreen.kt`）（文件浏览器屏幕 + EXIF 元数据/外部打开/文件搜索等 51 个配套顶层符号自 FileBrowserApp.kt 平移，编译驱动收敛跨文件可见性，共享符号 internal 化）；`BrowserTabFeature.kt`（`rememberBrowserTabState` 工厂内聚 root 恢复/初始路径/过滤/隐藏/外开偏好五组 prefs 接线 + `browserTabFeature` 呈现工厂；`state` 投影目录域共享数据对象，宿主与各域命令式直呼）；`openRecentItemByType`/`buildRecentModel`/`RECENT_TYPE_*` 出口重排至 `RecentTabRoute.kt`（RECENT 域事实源）。全部 token 等价验证 + 真机目录/最近/打开链路验证通过。主函数 7480 → 3997 行。
 
 **播放器域已按终态模式落地**（2026-09，作为第二标杆）：`PlaybackScreen.kt`（重投影，实现不依赖状态对象）+ `PlayerTabState.kt`（`PlayerTabFeature` 接口 + private State + `@Composable` 工厂内聚接线/快捷方式恢复/域对话框 overlay）。主程序持 `MainTabFeature` 列表循环组合，`MainTabContentHost` 从 15 参数 content-lambda 路由改为 features 驱动，14 个 tab 平移 token diff=0。其余 tab 域（FTP、Config、速记等）按同一模式逐个工厂化。
 
@@ -272,3 +272,7 @@ interface MainTabFeature {
 | 日期 | 变更原因和内容 |
 | --- | --- |
 | 2026-09-14 | 初版：基于单活动原则建立全局对象协作模型，给出 AppShell 目标形态与四步迁移路径 |
+- 2026-09（四d）：命名统一（解决"主程序 vs 浏览 tab"交流歧义）。主程序 FileBrowserApp → PlataleaApp（函数/文件/MainActivity 调用点/logcat tag/平移来源注释）；浏览 tab 域三套前缀收敛为 Browser 系：FileBrowserScreen → BrowserScreen（+文件）、DirectoryTabRoute(State) → BrowserTabRoute(State)（+文件）；MainTab.DIRECTORY 保留（tab 身份与 UI 文案"目录"一致，域实现与 tab 身份两层各自一致）。编译+测试+打包全绿。
+- 2026-09（四e）：F4 网络域投影完成。NetworkConfigView（端口/口令/超时/本机服务开关/家庭网络三身份 7 读源 + 7 写方法 + legacy extraRoles 迁移读写）；NetworkServiceConfigState 与 remember 工厂全链 prefs→config（7 collect + 6 set）；networkServicesTabs 构造改 config.network（legacy 迁移块同改）；宿主接线完成。Preferences 类型从网络域两文件清除（FamilyNetworkScreen 内 PdfViewer 自建一处标注 F5 阅读器域待办）。真机验证：FTP tab 快照渲染（地址/运行中）、CONFIG 网络服务分区摘要（密码/开关/倒计时三快照）、用户名写入落盘（DataStore 二进制读证）+ 重启后经投影读回闭环。
+- 2026-09（四f）：F4 配置域 + git 域（配置面）投影完成。ConfigEditingView（4 通用设置 + EPUB TTS 5 项读写 + 统一导出/导入/播放列表检查三方法——导出成员资格在投影收口，data 层 ConfigExport 函数不再外漏给 UI）；GitConfigView（git 五成员读写，GitConfigDialog/PubkeyShareScreen 经 config.git 接入）。ConfigTabFeature/ConfigTabRoute（删自建 Preferences + 死代码 ConfigDialog 顺带删除）/ConfigImportExportWorkflow/两 git 对话框全部换投影，Preferences 类型清除。真机验证：过滤开关写落盘+重启读回、Git 配置对话框表单、导出配置全链（根目录生成 local_manager_config.json 后已彻底删除）。
+- 2026-09（四g）：F4 git 域（Git tab 本体）完成。GitConfigView 扩充 managedGitProjects 一读三写（项目列表持久化）；GitShareTabRoute（共享到 Git）/GitProjectsTabRoute（Git tab）/FileShareScreen 全部 prefs→config.git，三文件 internal 化，Preferences 类型清除；PlataleaApp 分享到 Git overlay 漏改的凭据读一并换投影。真机验证：Git tab 空态双提示（无基础配置/无受管项目，gitRepoUrl 与 managedGitProjects 两读链）+ GitShare tab .sysgit/share 列表渲染（FileShareScreen 凭据读路径）。

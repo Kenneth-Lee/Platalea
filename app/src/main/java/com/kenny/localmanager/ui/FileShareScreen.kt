@@ -49,7 +49,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.git.SharedFileInfo
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.commitAndPush
@@ -74,8 +73,8 @@ private sealed class ShareSyncState {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileShareScreen(
-    prefs: Preferences,
+internal fun FileShareScreen(
+    config: GitConfigView,
     rootUri: String?,
     showBackButton: Boolean = true,
     autoRefreshOnEnter: Boolean = true,
@@ -103,10 +102,10 @@ fun FileShareScreen(
 
     BackHandler { onDismiss() }
 
-    LaunchedEffect(prefs) {
-        repoUrl = prefs.gitRepoUrl.first() ?: ""
-        userName = prefs.gitUserName.first() ?: ""
-        httpsPassword = prefs.gitHttpsPassword.first() ?: ""
+    LaunchedEffect(config) {
+        repoUrl = config.gitRepoUrl.first() ?: ""
+        userName = config.gitUserName.first() ?: ""
+        httpsPassword = config.gitHttpsPassword.first() ?: ""
     }
 
     // 先读取本地 .sysgit/share 缓存，让 Tab 进入时可立即显示已有内容。

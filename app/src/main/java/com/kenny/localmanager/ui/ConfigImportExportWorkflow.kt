@@ -15,12 +15,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -29,17 +29,13 @@ import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigExportCategory
 import com.kenny.localmanager.data.ConfigPlaylistImportMode
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.configJsonCategories
 import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
-import com.kenny.localmanager.data.exportConfig
-import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -50,14 +46,14 @@ import kotlinx.coroutines.withContext
  * 一次导入或导出是短生命周期流程，结束后销毁全部状态。
  * 由 AppShell 持有实例，通过 [rememberConfigImportExportWorkflow] 创建；
  * 触发入口：
- * - DirectoryTab 选中导出文件 → [startImportFromJson]
+ * - BrowserTab 选中导出文件 → [startImportFromJson]
  * - ConfigTab 导出按钮 → [openExportDialog]
  * 工作流写盘后通过 onConfigFileWritten 通知目录刷新。
  */
 @Stable
 class ConfigImportExportWorkflowState internal constructor(
     private val context: Context,
-    private val prefs: Preferences,
+    private val config: ConfigEditingView,
     private val scope: CoroutineScope,
     private val rootUriProvider: () -> String?,
     private val onConfigFileWritten: () -> Unit
@@ -158,7 +154,7 @@ class ConfigImportExportWorkflowState internal constructor(
         val jsonString = pendingImportJson ?: return
         val selectedCategories = pendingImportSelectedCategories
         scope.launch {
-            val hasExistingPlaylists = withContext(Dispatchers.IO) { prefs.playlists.first().isNotEmpty() }
+            val hasExistingPlaylists = withContext(Dispatchers.IO) { config.hasExistingPlaylists() }
             val playlistCount = if (ConfigExportCategory.MUSIC in selectedCategories) configJsonPlaylistCount(jsonString) else 0
             pendingImportPlaylistCount = playlistCount
             if (playlistCount > 0 && hasExistingPlaylists) {
@@ -176,9 +172,7 @@ class ConfigImportExportWorkflowState internal constructor(
         importKeys: Boolean,
         categories: Set<ConfigExportCategory>
     ) {
-        val ok = importConfig(
-            context,
-            prefs,
+        val ok = config.importConfigJson(
             jsonString,
             importKeys = importKeys,
             playlistImportMode = pendingImportPlaylistMode,
@@ -232,7 +226,7 @@ class ConfigImportExportWorkflowState internal constructor(
         if (categories.isEmpty()) return ConfigExportResult.FAILED
         val targetRoot = rootUriProvider()?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
         val targetUri = android.net.Uri.parse(targetRoot)
-        val jsonBytes = exportConfig(context, prefs, categories).toByteArray(Charsets.UTF_8)
+        val jsonBytes = config.exportConfigJson(categories).toByteArray(Charsets.UTF_8)
         val existing = findChildByName(context, targetUri, fileName)
         if (existing != null) return ConfigExportResult.FILE_EXISTS
         return if (createFileWithBytes(
@@ -248,15 +242,15 @@ class ConfigImportExportWorkflowState internal constructor(
 
 /** 创建配置导入 / 导出工作流状态。rootUri 变化不影响进行中的流程（导出时实时读取）。 */
 @Composable
-fun rememberConfigImportExportWorkflow(
-    prefs: Preferences,
+internal fun rememberConfigImportExportWorkflow(
+    config: ConfigEditingView,
     rootUriProvider: () -> String?,
     onConfigFileWritten: () -> Unit
 ): ConfigImportExportWorkflowState {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    return remember(prefs, context) {
-        ConfigImportExportWorkflowState(context, prefs, scope, rootUriProvider, onConfigFileWritten)
+    return remember(config, context) {
+        ConfigImportExportWorkflowState(context, config, scope, rootUriProvider, onConfigFileWritten)
     }
 }
 

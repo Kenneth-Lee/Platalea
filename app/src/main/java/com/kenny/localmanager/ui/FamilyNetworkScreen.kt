@@ -1265,6 +1265,7 @@ fun FamilyNetworkScreen(
         PdfViewerScreen(
             uri = uri,
             fileName = name,
+            // [F5 待办] PdfViewer 阅读器偏好/进度自建 Preferences——属阅读器域投影，非网络域
             prefs = Preferences(context),
             bookNoteLoadedData = null,
             bookNoteEntries = emptyList(),

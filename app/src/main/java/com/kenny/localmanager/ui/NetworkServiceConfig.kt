@@ -9,7 +9,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import com.kenny.localmanager.data.Preferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -20,12 +19,12 @@ import kotlinx.coroutines.launch
  * 属于网络服务域，不再散落在 AppShell 顶层。AppShell 只保留对
  * FamilyNetworkManager.configure(...) 的编排副作用。
  *
- * 状态来源：Preferences 中的各 Flow（读取）；
+ * 状态来源：网络域配置投影 NetworkConfigView（读取）；
  * 写入：同步更新本地快照并异步落盘，ConfigTab 是唯一的编辑入口。
  */
 @Stable
 class NetworkServiceConfigState internal constructor(
-    private val prefs: Preferences,
+    private val config: NetworkConfigView,
     private val scope: CoroutineScope
 ) {
     var ftpPort by mutableIntStateOf(2121)
@@ -45,46 +44,46 @@ class NetworkServiceConfigState internal constructor(
 
     fun setFtpPassword(password: String?) {
         ftpPassword = password
-        scope.launch { prefs.setFtpPassword(password) }
+        scope.launch { config.setFtpPassword(password) }
     }
 
     fun setNetworkServiceTimeoutMinutes(minutes: Int) {
         networkServiceTimeoutMinutes = minutes
-        scope.launch { prefs.setNetworkServiceTimeoutMinutes(minutes) }
+        scope.launch { config.setNetworkServiceTimeoutMinutes(minutes) }
     }
 
     fun setLocalNetworkServiceEnabled(enabled: Boolean) {
         localNetworkServiceEnabled = enabled
-        scope.launch { prefs.setLocalNetworkServiceEnabled(enabled) }
+        scope.launch { config.setLocalNetworkServiceEnabled(enabled) }
     }
 
     fun setFamilyNetworkUserName(name: String) {
         familyNetworkUserName = name
-        scope.launch { prefs.setFamilyNetworkUserName(name.ifBlank { null }) }
+        scope.launch { config.setFamilyNetworkUserName(name.ifBlank { null }) }
     }
 
     fun setFamilyNetworkAvatarId(avatarId: String) {
         familyNetworkAvatarId = avatarId
-        scope.launch { prefs.setFamilyNetworkAvatarId(avatarId.ifBlank { null }) }
+        scope.launch { config.setFamilyNetworkAvatarId(avatarId.ifBlank { null }) }
     }
 
     fun setFamilyNetworkHostName(name: String) {
         familyNetworkHostName = name
-        scope.launch { prefs.setFamilyNetworkHostName(name.ifBlank { null }) }
+        scope.launch { config.setFamilyNetworkHostName(name.ifBlank { null }) }
     }
 }
 
-/** 创建网络服务配置状态并订阅 Preferences 变化。 */
+/** 创建网络服务配置状态并订阅网络域配置投影变化。 */
 @Composable
-fun rememberNetworkServiceConfigState(prefs: Preferences): NetworkServiceConfigState {
+internal fun rememberNetworkServiceConfigState(config: NetworkConfigView): NetworkServiceConfigState {
     val scope = rememberCoroutineScope()
-    val state = remember(prefs) { NetworkServiceConfigState(prefs, scope) }
-    LaunchedEffect(state) { prefs.ftpPort.collect { state.ftpPort = it } }
-    LaunchedEffect(state) { prefs.ftpPassword.collect { state.ftpPassword = it } }
-    LaunchedEffect(state) { prefs.networkServiceTimeoutMinutes.collect { state.networkServiceTimeoutMinutes = it } }
-    LaunchedEffect(state) { prefs.localNetworkServiceEnabled.collect { state.localNetworkServiceEnabled = it } }
-    LaunchedEffect(state) { prefs.familyNetworkUserName.collect { state.familyNetworkUserName = it.orEmpty() } }
-    LaunchedEffect(state) { prefs.familyNetworkAvatarId.collect { state.familyNetworkAvatarId = it.orEmpty() } }
-    LaunchedEffect(state) { prefs.familyNetworkHostName.collect { state.familyNetworkHostName = it.orEmpty() } }
+    val state = remember(config) { NetworkServiceConfigState(config, scope) }
+    LaunchedEffect(state) { config.ftpPort.collect { state.ftpPort = it } }
+    LaunchedEffect(state) { config.ftpPassword.collect { state.ftpPassword = it } }
+    LaunchedEffect(state) { config.networkServiceTimeoutMinutes.collect { state.networkServiceTimeoutMinutes = it } }
+    LaunchedEffect(state) { config.localNetworkServiceEnabled.collect { state.localNetworkServiceEnabled = it } }
+    LaunchedEffect(state) { config.familyNetworkUserName.collect { state.familyNetworkUserName = it.orEmpty() } }
+    LaunchedEffect(state) { config.familyNetworkAvatarId.collect { state.familyNetworkAvatarId = it.orEmpty() } }
+    LaunchedEffect(state) { config.familyNetworkHostName.collect { state.familyNetworkHostName = it.orEmpty() } }
     return state
 }

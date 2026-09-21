@@ -24,19 +24,18 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.git.cloneToTree
 import com.kenny.localmanager.git.deleteLocalGitCache
 import com.kenny.localmanager.git.deleteSysgitFromTree
@@ -53,8 +52,8 @@ private sealed class SyncStatus {
 }
 
 @Composable
-fun GitConfigDialog(
-    prefs: Preferences,
+internal fun GitConfigDialog(
+    config: GitConfigView,
     rootUri: String?,
     onDismiss: () -> Unit
 ) {
@@ -75,12 +74,12 @@ fun GitConfigDialog(
     val syncLogs = remember { mutableStateListOf<String>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    LaunchedEffect(prefs) {
-        repoUrl = prefs.gitRepoUrl.first() ?: ""
-        userName = prefs.gitUserName.first() ?: ""
-        userEmail = prefs.gitUserEmail.first() ?: ""
-        httpsPassword = prefs.gitHttpsPassword.first() ?: ""
-        configApplied = prefs.gitConfigApplied.first()
+    LaunchedEffect(config) {
+        repoUrl = config.gitRepoUrl.first() ?: ""
+        userName = config.gitUserName.first() ?: ""
+        userEmail = config.gitUserEmail.first() ?: ""
+        httpsPassword = config.gitHttpsPassword.first() ?: ""
+        configApplied = config.gitConfigApplied.first()
         configDirty = false
     }
 
@@ -91,10 +90,10 @@ fun GitConfigDialog(
         newHttpsPassword: String = httpsPassword
     ) {
         scope.launch {
-            prefs.setGitRepoUrl(newRepoUrl)
-            prefs.setGitUserName(newUserName)
-            prefs.setGitUserEmail(newUserEmail)
-            prefs.setGitHttpsPassword(newHttpsPassword)
+            config.setGitRepoUrl(newRepoUrl)
+            config.setGitUserName(newUserName)
+            config.setGitUserEmail(newUserEmail)
+            config.setGitHttpsPassword(newHttpsPassword)
         }
     }
 
@@ -102,7 +101,7 @@ fun GitConfigDialog(
         configDirty = true
         if (configApplied) {
             configApplied = false
-            scope.launch { prefs.setGitConfigApplied(false) }
+            scope.launch { config.setGitConfigApplied(false) }
         }
     }
 
@@ -135,7 +134,7 @@ fun GitConfigDialog(
                 syncStatus = SyncStatus.Success(result.getOrNull() ?: syncSuccessDefault)
                 configApplied = true
                 configDirty = false
-                prefs.setGitConfigApplied(true)
+                config.setGitConfigApplied(true)
             } else {
                 val errMsg = result.exceptionOrNull()?.message ?: syncFailedDefault
                 syncStatus = SyncStatus.Error(errMsg)
@@ -156,7 +155,7 @@ fun GitConfigDialog(
             configApplied = false
             syncStatus = SyncStatus.Idle
             syncLogs.clear()
-            prefs.setGitConfigApplied(false)
+            config.setGitConfigApplied(false)
             Toast.makeText(context, context.getString(R.string.git_config_local_deleted), Toast.LENGTH_SHORT).show()
         }
         showDeleteConfirm = false

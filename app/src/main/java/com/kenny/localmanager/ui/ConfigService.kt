@@ -3,13 +3,20 @@ package com.kenny.localmanager.ui
 import android.content.Context
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import android.content.Context as AndroidContext
 import com.kenny.localmanager.data.AudioMetaAnnotation
+import com.kenny.localmanager.data.ConfigExportCategory
+import com.kenny.localmanager.data.ManagedGitProject
+import com.kenny.localmanager.data.ConfigPlaylistImportMode
+import com.kenny.localmanager.data.exportConfig
+import com.kenny.localmanager.data.importConfig
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Preferences
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 
 /**
  * 配置功能（域服务）：持久配置的唯一创建入口与各功能域的配置投影。
@@ -35,6 +42,15 @@ internal class ConfigService(context: Context) {
 
     /** 速记功能域的配置投影：最近使用分类。 */
     val quickNote: QuickNoteConfigView = QuickNoteConfigViewImpl(prefs)
+
+    /** 网络服务功能域（FTP/WebUI/家庭网络）的配置投影：端口、口令、超时、开关与家庭网络身份。 */
+    val network: NetworkConfigView = NetworkConfigViewImpl(prefs)
+
+    /** 配置功能自身的编辑投影：CONFIG tab 的设置项编辑面 + 统一导入导出入口（成员资格事实源）。 */
+    val editing: ConfigEditingView = ConfigEditingViewImpl(context, prefs)
+
+    /** Git 功能域的配置投影：仓库地址、身份、凭据与已配置标记。 */
+    val git: GitConfigView = GitConfigViewImpl(prefs)
 
     /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
     val legacy: Preferences = prefs
@@ -136,4 +152,149 @@ internal interface QuickNoteConfigView {
 private class QuickNoteConfigViewImpl(private val prefs: Preferences) : QuickNoteConfigView {
     override val quickNoteLastCategory get() = prefs.quickNoteLastCategory
     override suspend fun setQuickNoteLastCategory(category: String?) = prefs.setQuickNoteLastCategory(category)
+}
+
+
+/** 网络服务功能域的配置投影接口：由配置功能提供实现，网络域不感知存储。 */
+internal interface NetworkConfigView {
+    val ftpPort: Flow<Int>
+    val ftpPassword: Flow<String?>
+    val networkServiceTimeoutMinutes: Flow<Int>
+    val localNetworkServiceEnabled: Flow<Boolean>
+    val familyNetworkUserName: Flow<String?>
+    val familyNetworkAvatarId: Flow<String?>
+    val familyNetworkHostName: Flow<String?>
+    val familyNetworkExtraRoles: Flow<String?>
+
+    suspend fun setFtpPassword(password: String?)
+    suspend fun setNetworkServiceTimeoutMinutes(minutes: Int)
+    suspend fun setLocalNetworkServiceEnabled(enabled: Boolean)
+    suspend fun setFamilyNetworkUserName(name: String?)
+    suspend fun setFamilyNetworkAvatarId(avatarId: String?)
+    suspend fun setFamilyNetworkHostName(name: String?)
+    suspend fun setFamilyNetworkExtraRoles(config: String?)
+}
+
+private class NetworkConfigViewImpl(private val prefs: Preferences) : NetworkConfigView {
+    override val ftpPort get() = prefs.ftpPort
+    override val ftpPassword get() = prefs.ftpPassword
+    override val networkServiceTimeoutMinutes get() = prefs.networkServiceTimeoutMinutes
+    override val localNetworkServiceEnabled get() = prefs.localNetworkServiceEnabled
+    override val familyNetworkUserName get() = prefs.familyNetworkUserName
+    override val familyNetworkAvatarId get() = prefs.familyNetworkAvatarId
+    override val familyNetworkHostName get() = prefs.familyNetworkHostName
+    override val familyNetworkExtraRoles get() = prefs.familyNetworkExtraRoles
+    override suspend fun setFtpPassword(password: String?) = prefs.setFtpPassword(password)
+    override suspend fun setNetworkServiceTimeoutMinutes(minutes: Int) = prefs.setNetworkServiceTimeoutMinutes(minutes)
+    override suspend fun setLocalNetworkServiceEnabled(enabled: Boolean) = prefs.setLocalNetworkServiceEnabled(enabled)
+    override suspend fun setFamilyNetworkUserName(name: String?) = prefs.setFamilyNetworkUserName(name)
+    override suspend fun setFamilyNetworkAvatarId(avatarId: String?) = prefs.setFamilyNetworkAvatarId(avatarId)
+    override suspend fun setFamilyNetworkHostName(name: String?) = prefs.setFamilyNetworkHostName(name)
+    override suspend fun setFamilyNetworkExtraRoles(config: String?) = prefs.setFamilyNetworkExtraRoles(config)
+}
+
+
+/**
+ * 配置功能自身的编辑投影：CONFIG tab 是配置数据的一扇编辑窗口（各域消费自己的窄投影）。
+ * 统一导出/导入在此收口——导出文件成员资格即配置域成员资格（见 ConfigExport.kt）。
+ */
+internal interface ConfigEditingView {
+    // 通用设置（browser/阅读器域消费，CONFIG tab 编辑）
+    val filterVisible: Flow<Boolean>
+    val hideDotFiles: Flow<Boolean>
+    val startupDecryptKey: Flow<Boolean>
+    val viewerPreviewBytes: Flow<Int>
+    suspend fun setFilterVisible(visible: Boolean)
+    suspend fun setHideDotFiles(enabled: Boolean)
+    suspend fun setStartupDecryptKey(enabled: Boolean)
+    suspend fun setViewerPreviewBytes(bytes: Int)
+
+    // EPUB 离线朗读设置（阅读器域消费，CONFIG tab 编辑）
+    val epubTtsEnginePackage: Flow<String?>
+    val epubTtsVoiceName: Flow<String?>
+    val epubTtsSpeedPercent: Flow<Int>
+    val epubTtsAutoNextChapter: Flow<Boolean>
+    suspend fun setEpubTtsEnginePackage(packageName: String?)
+    suspend fun setEpubTtsVoiceName(voiceName: String?)
+    suspend fun setEpubTtsSpeedPercent(speedPercent: Int)
+    suspend fun setEpubTtsAutoNextChapter(enabled: Boolean)
+
+    // 统一导入导出（配置域服务核心）
+    suspend fun exportConfigJson(categories: Set<ConfigExportCategory>): String
+    suspend fun importConfigJson(
+        jsonString: String,
+        importKeys: Boolean,
+        playlistImportMode: ConfigPlaylistImportMode,
+        categories: Set<ConfigExportCategory>
+    ): Boolean
+    suspend fun hasExistingPlaylists(): Boolean
+}
+
+private class ConfigEditingViewImpl(
+    private val context: AndroidContext,
+    private val prefs: Preferences
+) : ConfigEditingView {
+    override val filterVisible get() = prefs.filterVisible
+    override val hideDotFiles get() = prefs.hideDotFiles
+    override val startupDecryptKey get() = prefs.startupDecryptKey
+    override val viewerPreviewBytes get() = prefs.viewerPreviewBytes
+    override suspend fun setFilterVisible(visible: Boolean) = prefs.setFilterVisible(visible)
+    override suspend fun setHideDotFiles(enabled: Boolean) = prefs.setHideDotFiles(enabled)
+    override suspend fun setStartupDecryptKey(enabled: Boolean) = prefs.setStartupDecryptKey(enabled)
+    override suspend fun setViewerPreviewBytes(bytes: Int) = prefs.setViewerPreviewBytes(bytes)
+
+    override val epubTtsEnginePackage get() = prefs.epubTtsEnginePackage
+    override val epubTtsVoiceName get() = prefs.epubTtsVoiceName
+    override val epubTtsSpeedPercent get() = prefs.epubTtsSpeedPercent
+    override val epubTtsAutoNextChapter get() = prefs.epubTtsAutoNextChapter
+    override suspend fun setEpubTtsEnginePackage(packageName: String?) = prefs.setEpubTtsEnginePackage(packageName)
+    override suspend fun setEpubTtsVoiceName(voiceName: String?) = prefs.setEpubTtsVoiceName(voiceName)
+    override suspend fun setEpubTtsSpeedPercent(speedPercent: Int) = prefs.setEpubTtsSpeedPercent(speedPercent)
+    override suspend fun setEpubTtsAutoNextChapter(enabled: Boolean) = prefs.setEpubTtsAutoNextChapter(enabled)
+
+    override suspend fun exportConfigJson(categories: Set<ConfigExportCategory>): String =
+        exportConfig(context, prefs, categories)
+    override suspend fun importConfigJson(
+        jsonString: String,
+        importKeys: Boolean,
+        playlistImportMode: ConfigPlaylistImportMode,
+        categories: Set<ConfigExportCategory>
+    ): Boolean = importConfig(context, prefs, jsonString, importKeys, playlistImportMode, categories)
+    override suspend fun hasExistingPlaylists(): Boolean = prefs.playlists.first().isNotEmpty()
+}
+
+/** Git 功能域的配置投影接口：由配置功能提供实现，git 域不感知存储。 */
+internal interface GitConfigView {
+    val gitRepoUrl: Flow<String?>
+    val gitUserName: Flow<String?>
+    val gitUserEmail: Flow<String?>
+    val gitHttpsPassword: Flow<String?>
+    val gitConfigApplied: Flow<Boolean>
+    val managedGitProjects: Flow<List<ManagedGitProject>>
+
+    suspend fun setGitRepoUrl(url: String?)
+    suspend fun setGitUserName(name: String?)
+    suspend fun setGitUserEmail(email: String?)
+    suspend fun setGitHttpsPassword(password: String?)
+    suspend fun setGitConfigApplied(applied: Boolean)
+    suspend fun addManagedGitProject(project: ManagedGitProject)
+    suspend fun updateManagedGitProject(project: ManagedGitProject)
+    suspend fun removeManagedGitProject(id: String)
+}
+
+private class GitConfigViewImpl(private val prefs: Preferences) : GitConfigView {
+    override val gitRepoUrl get() = prefs.gitRepoUrl
+    override val gitUserName get() = prefs.gitUserName
+    override val gitUserEmail get() = prefs.gitUserEmail
+    override val gitHttpsPassword get() = prefs.gitHttpsPassword
+    override val gitConfigApplied get() = prefs.gitConfigApplied
+    override val managedGitProjects get() = prefs.managedGitProjects
+    override suspend fun setGitRepoUrl(url: String?) = prefs.setGitRepoUrl(url)
+    override suspend fun setGitUserName(name: String?) = prefs.setGitUserName(name)
+    override suspend fun setGitUserEmail(email: String?) = prefs.setGitUserEmail(email)
+    override suspend fun setGitHttpsPassword(password: String?) = prefs.setGitHttpsPassword(password)
+    override suspend fun setGitConfigApplied(applied: Boolean) = prefs.setGitConfigApplied(applied)
+    override suspend fun addManagedGitProject(project: ManagedGitProject) = prefs.addManagedGitProject(project)
+    override suspend fun updateManagedGitProject(project: ManagedGitProject) = prefs.updateManagedGitProject(project)
+    override suspend fun removeManagedGitProject(id: String) = prefs.removeManagedGitProject(id)
 }

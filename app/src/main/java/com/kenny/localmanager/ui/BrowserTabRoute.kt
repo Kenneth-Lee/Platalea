@@ -6,7 +6,7 @@ import androidx.compose.ui.Modifier
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.player.PlaybackState
 
-internal data class DirectoryTabRouteState(
+internal data class BrowserTabRouteState(
     val modifier: Modifier = Modifier,
     val config: BrowserConfigView,
     val currentUri: String,
@@ -68,8 +68,8 @@ internal data class DirectoryTabRouteState(
 )
 
 @Composable
-internal fun DirectoryTabRoute(state: DirectoryTabRouteState) {
-    FileBrowserScreen(
+internal fun BrowserTabRoute(state: BrowserTabRouteState) {
+    BrowserScreen(
         modifier = state.modifier,
         currentUri = state.currentUri,
         refreshTrigger = state.refreshTrigger,

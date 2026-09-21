@@ -5,13 +5,12 @@ import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import com.kenny.localmanager.R
 import com.kenny.localmanager.SHORTCUT_TAB_PLAYER
 import com.kenny.localmanager.SHORTCUT_TAB_QUICK_NOTE
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.requestPinnedTabShortcut
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import kotlinx.coroutines.CoroutineScope
@@ -33,19 +32,20 @@ internal interface ConfigTabFeature : MainTabFeature {
 @Composable
 internal fun configTabFeature(
     context: Context,
-    prefs: Preferences,
+    config: ConfigEditingView,
+    gitConfig: GitConfigView,
     scope: CoroutineScope,
     networkConfig: NetworkServiceConfigState,
     browserRootUri: () -> String?,
     onFilesChanged: () -> Unit
 ): ConfigTabFeature {
     val importExport = rememberConfigImportExportWorkflow(
-        prefs = prefs,
+        config = config,
         rootUriProvider = { browserRootUri() },
         onConfigFileWritten = { onFilesChanged() }
     )
     val state = remember {
-        ConfigTabState(context, prefs, scope, networkConfig, browserRootUri, onFilesChanged, importExport)
+        ConfigTabState(context, config, gitConfig, scope, networkConfig, browserRootUri, onFilesChanged, importExport)
     }
     LaunchedEffect(state) {
         state.observePrefs()
@@ -55,7 +55,8 @@ internal fun configTabFeature(
 
 private class ConfigTabState(
     private val context: Context,
-    private val prefs: Preferences,
+    private val config: ConfigEditingView,
+    private val gitConfig: GitConfigView,
     private val scope: CoroutineScope,
     private val networkConfig: NetworkServiceConfigState,
     private val browserRootUri: () -> String?,
@@ -76,16 +77,16 @@ private class ConfigTabState(
 
     fun observePrefs() {
         scope.launch {
-            prefs.filterVisible.collect { filterVisible = it }
+            config.filterVisible.collect { filterVisible = it }
         }
         scope.launch {
-            prefs.hideDotFiles.collect { hideDotFiles = it }
+            config.hideDotFiles.collect { hideDotFiles = it }
         }
         scope.launch {
-            prefs.startupDecryptKey.collect { startupDecryptKey = it }
+            config.startupDecryptKey.collect { startupDecryptKey = it }
         }
         scope.launch {
-            prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
+            config.viewerPreviewBytes.collect { viewerPreviewBytes = it }
         }
     }
 
@@ -93,17 +94,18 @@ private class ConfigTabState(
     override val content: @Composable () -> Unit = {
         ConfigTabRoute(
             ConfigTabRouteState(
+                config = config,
                 filterVisible = filterVisible,
-                onFilterVisibleChange = { scope.launch { prefs.setFilterVisible(it) } },
+                onFilterVisibleChange = { scope.launch { config.setFilterVisible(it) } },
                 hideDotFiles = hideDotFiles,
-                onHideDotFilesChange = { scope.launch { prefs.setHideDotFiles(it) } },
+                onHideDotFilesChange = { scope.launch { config.setHideDotFiles(it) } },
                 startupDecryptKey = startupDecryptKey,
                 onStartupDecryptKeyChange = { enabled ->
-                    scope.launch { prefs.setStartupDecryptKey(enabled) }
+                    scope.launch { config.setStartupDecryptKey(enabled) }
                     if (!enabled) SecretKeyPasswordCache.clear()
                 },
                 viewerPreviewBytes = viewerPreviewBytes,
-                onViewerPreviewBytesChange = { scope.launch { prefs.setViewerPreviewBytes(it) } },
+                onViewerPreviewBytesChange = { scope.launch { config.setViewerPreviewBytes(it) } },
                 ftpPassword = networkConfig.ftpPassword ?: "",
                 onFtpPasswordChange = { s -> networkConfig.setFtpPassword(s.ifBlank { null }) },
                 networkServiceTimeoutMinutes = networkConfig.networkServiceTimeoutMinutes,
@@ -146,7 +148,7 @@ private class ConfigTabState(
         }
         if (showGitConfigDialog) {
             GitConfigDialog(
-                prefs = prefs,
+                config = gitConfig,
                 rootUri = browserRootUri()?.let { normalizeContentUriString(it) },
                 onDismiss = {
                     showGitConfigDialog = false
@@ -167,7 +169,7 @@ private class ConfigTabState(
         }
         if (showPubkeyShareScreen) {
             PubkeyShareScreen(
-                prefs = prefs,
+                config = gitConfig,
                 rootUri = browserRootUri()?.let { normalizeContentUriString(it) },
                 onDismiss = {
                     showPubkeyShareScreen = false

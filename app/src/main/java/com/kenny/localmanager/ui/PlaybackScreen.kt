@@ -487,7 +487,7 @@ internal fun PlaybackScreen(
             val groups = runCatching {
                 findDuplicateSongGroups(context, pl, trackMetadataCache)
             }.getOrElse { error ->
-                Log.e("FileBrowserApp", "Failed to scan duplicate songs for playlist=${pl.id}", error)
+                Log.e("PlataleaApp", "Failed to scan duplicate songs for playlist=${pl.id}", error)
                 Toast.makeText(
                     context,
                     context.getString(R.string.player_duplicate_tracks_scan_failed, error.message ?: error.javaClass.simpleName),

@@ -196,7 +196,7 @@ fun RecentTabRoute(state: RecentTabRouteState) {
 }
 
 
-// ===== 最近打开域逻辑（自 FileBrowserApp.kt 平移）=====
+// ===== 最近打开域逻辑（自主程序 PlataleaApp 平移）=====
 
 internal const val RECENT_TYPE_ZIP_VIEWER = "zip_viewer"
 

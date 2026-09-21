@@ -13,22 +13,18 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -36,22 +32,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import android.widget.Toast
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -83,7 +75,8 @@ private fun avatarColorLabelRes(colorId: String): Int = when (colorId) {
     else -> R.string.common_unknown_error
 }
 
-data class ConfigTabRouteState(
+internal data class ConfigTabRouteState(
+    val config: ConfigEditingView,
     val filterVisible: Boolean,
     val onFilterVisibleChange: (Boolean) -> Unit,
     val hideDotFiles: Boolean,
@@ -113,8 +106,9 @@ data class ConfigTabRouteState(
 )
 
 @Composable
-fun ConfigTabRoute(state: ConfigTabRouteState) {
+internal fun ConfigTabRoute(state: ConfigTabRouteState) {
     ConfigPanel(
+        config = state.config,
         filterVisible = state.filterVisible,
         onFilterVisibleChange = state.onFilterVisibleChange,
         hideDotFiles = state.hideDotFiles,
@@ -148,6 +142,7 @@ fun ConfigTabRoute(state: ConfigTabRouteState) {
 
 @Composable
 private fun ConfigPanel(
+    config: ConfigEditingView,
     filterVisible: Boolean,
     onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
@@ -178,7 +173,6 @@ private fun ConfigPanel(
     onClose: (() -> Unit)?
 ) {
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     var localViewerPreviewBytes by remember { mutableStateOf(viewerPreviewBytes.toString()) }
     var localFtpPassword by remember { mutableStateOf(ftpPassword) }
@@ -193,10 +187,10 @@ private fun ConfigPanel(
     var showEpubTtsVoiceDialog by remember { mutableStateOf(false) }
     var epubTtsEngines by remember { mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList()) }
     var epubTtsLoading by remember { mutableStateOf(false) }
-    val selectedEpubTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
-    val selectedEpubTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
-    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
-    val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
+    val selectedEpubTtsEnginePackage by config.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedEpubTtsVoiceName by config.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by config.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val epubTtsAutoNextChapter by config.epubTtsAutoNextChapter.collectAsState(initial = true)
     val preferredTtsLocale = remember { preferredEpubTtsLocale(null) }
     val effectiveEpubTtsEngine = remember(epubTtsEngines, selectedEpubTtsEnginePackage) {
         epubTtsEngines.firstOrNull { it.packageName == selectedEpubTtsEnginePackage }
@@ -611,7 +605,7 @@ private fun ConfigPanel(
                             value = epubTtsSpeedPercent.toFloat(),
                             onValueChange = { value ->
                                 scope.launch {
-                                    prefs.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
+                                    config.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
                                 }
                             },
                             valueRange = 50f..300f,
@@ -637,7 +631,7 @@ private fun ConfigPanel(
                             checked = epubTtsAutoNextChapter,
                             onCheckedChange = { enabled ->
                                 scope.launch {
-                                    prefs.setEpubTtsAutoNextChapter(enabled)
+                                    config.setEpubTtsAutoNextChapter(enabled)
                                 }
                             }
                         )
@@ -689,8 +683,8 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                prefs.setEpubTtsEnginePackage(engine.packageName)
-                                                prefs.setEpubTtsVoiceName(null)
+                                                config.setEpubTtsEnginePackage(engine.packageName)
+                                                config.setEpubTtsVoiceName(null)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_engine, engine.label), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsEngineDialog = false
@@ -791,7 +785,7 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                prefs.setEpubTtsVoiceName(null)
+                                                config.setEpubTtsVoiceName(null)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsVoiceDialog = false
@@ -826,7 +820,7 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                prefs.setEpubTtsVoiceName(voice.name)
+                                                config.setEpubTtsVoiceName(voice.name)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_voice, voice.label), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsVoiceDialog = false
@@ -993,74 +987,3 @@ private fun ConfigPanel(
     }
 }
 
-@Composable
-fun ConfigDialog(
-    onDismiss: () -> Unit,
-    filterVisible: Boolean,
-    onFilterVisibleChange: (Boolean) -> Unit,
-    hideDotFiles: Boolean,
-    onHideDotFilesChange: (Boolean) -> Unit,
-    startupDecryptKey: Boolean,
-    onStartupDecryptKeyChange: (Boolean) -> Unit,
-    viewerPreviewBytes: Int,
-    onViewerPreviewBytesChange: (Int) -> Unit,
-    ftpPassword: String,
-    onFtpPasswordChange: (String) -> Unit,
-    networkServiceTimeoutMinutes: Int,
-    onNetworkServiceTimeoutMinutesChange: (Int) -> Unit,
-    localNetworkServiceEnabled: Boolean,
-    onLocalNetworkServiceEnabledChange: (Boolean) -> Unit,
-    familyNetworkUserName: String,
-    onFamilyNetworkUserNameChange: (String) -> Unit,
-    familyNetworkAvatarId: String,
-    onFamilyNetworkAvatarIdChange: (String) -> Unit,
-    familyNetworkHostName: String,
-    onFamilyNetworkHostNameChange: (String) -> Unit,
-    familyNetworkDownloadChunkKb: Int,
-    onFamilyNetworkDownloadChunkKbChange: (Int) -> Unit,
-    onOpenGitConfig: () -> Unit,
-    onManageKeys: () -> Unit,
-    onOpenCacheManagement: () -> Unit,
-    onExportConfig: () -> Unit,
-    onCreatePlayerShortcut: () -> Unit,
-    onCreateQuickNoteShortcut: () -> Unit
-) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            ConfigPanel(
-                filterVisible = filterVisible,
-                onFilterVisibleChange = onFilterVisibleChange,
-                hideDotFiles = hideDotFiles,
-                onHideDotFilesChange = onHideDotFilesChange,
-                startupDecryptKey = startupDecryptKey,
-                onStartupDecryptKeyChange = onStartupDecryptKeyChange,
-                viewerPreviewBytes = viewerPreviewBytes,
-                onViewerPreviewBytesChange = onViewerPreviewBytesChange,
-                ftpPassword = ftpPassword,
-                onFtpPasswordChange = onFtpPasswordChange,
-                networkServiceTimeoutMinutes = networkServiceTimeoutMinutes,
-                onNetworkServiceTimeoutMinutesChange = onNetworkServiceTimeoutMinutesChange,
-                localNetworkServiceEnabled = localNetworkServiceEnabled,
-                onLocalNetworkServiceEnabledChange = onLocalNetworkServiceEnabledChange,
-                familyNetworkUserName = familyNetworkUserName,
-                onFamilyNetworkUserNameChange = onFamilyNetworkUserNameChange,
-                familyNetworkAvatarId = familyNetworkAvatarId,
-                onFamilyNetworkAvatarIdChange = onFamilyNetworkAvatarIdChange,
-                familyNetworkHostName = familyNetworkHostName,
-                onFamilyNetworkHostNameChange = onFamilyNetworkHostNameChange,
-                onOpenGitConfig = onOpenGitConfig,
-                onManageKeys = onManageKeys,
-                onOpenCacheManagement = onOpenCacheManagement,
-                onExportConfig = onExportConfig,
-                onCreatePlayerShortcut = onCreatePlayerShortcut,
-                onCreateQuickNoteShortcut = onCreateQuickNoteShortcut,
-                showCloseButton = true,
-                onClose = onDismiss
-            )
-        }
-    }
-}

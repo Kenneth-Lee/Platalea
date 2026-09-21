@@ -13,7 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import com.kenny.localmanager.diagnostics.CrashReportStore
-import com.kenny.localmanager.ui.FileBrowserApp
+import com.kenny.localmanager.ui.PlataleaApp
 import com.kenny.localmanager.ui.theme.LocalManagerTheme
 
 class MainActivity : ComponentActivity() {
@@ -44,7 +44,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    FileBrowserApp(initialFileUri = state, initialLaunchTarget = launchTargetState.value)
+                    PlataleaApp(initialFileUri = state, initialLaunchTarget = launchTargetState.value)
                 }
             }
         }

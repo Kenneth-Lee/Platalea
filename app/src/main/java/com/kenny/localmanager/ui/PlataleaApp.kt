@@ -1264,7 +1264,7 @@ private fun humanReadableRootUri(uriString: String): String {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FileBrowserApp(
+fun PlataleaApp(
     initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
     initialLaunchTarget: String? = null
 ) {
@@ -1582,7 +1582,7 @@ fun FileBrowserApp(
         // 网络服务域（FTP / WebUI / 家庭网络）：三服务对象 + 共享配置 + 生命周期接线全部内聚于工厂
         val networkServices = networkServicesTabs(
             context = context,
-            prefs = prefs,
+            config = config.network,
             activeMainTab = currentMainTab ?: MainTab.DIRECTORY,
             rootUri = browserTab.rootUri,
             displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!,
@@ -1593,7 +1593,8 @@ fun FileBrowserApp(
         // Config 域：设置 tab 功能对象（设置项镜像、对话框群、导入导出 workflow 内聚于工厂）
         val configTab = configTabFeature(
             context = context,
-            prefs = prefs,
+            config = config.editing,
+            gitConfig = config.git,
             scope = scope,
             networkConfig = networkServices.config,
             browserRootUri = { browserTab.rootUri },
@@ -2069,7 +2070,7 @@ fun FileBrowserApp(
                 {
                         GitShareTabRoute(
                             GitShareTabRouteState(
-                                prefs = prefs,
+                                config = config.git,
                                 rootUri = browserTab.rootUri,
                                 onRequestExitApp = { requestExitApp() }
                             )
@@ -2081,7 +2082,7 @@ fun FileBrowserApp(
                 {
                         GitProjectsTabRoute(
                             GitProjectsTabRouteState(
-                                prefs = prefs,
+                                config = config.git,
                                 rootUri = browserTab.rootUri
                             )
                         )
@@ -2222,9 +2223,9 @@ fun FileBrowserApp(
                         shareGitInProgress = true
                         shareGitDone = false
                         scope.launch {
-                            val repoUrl = prefs.gitRepoUrl.first() ?: ""
-                            val userName = prefs.gitUserName.first() ?: ""
-                            val httpsPassword = prefs.gitHttpsPassword.first() ?: ""
+                            val repoUrl = config.git.gitRepoUrl.first() ?: ""
+                            val userName = config.git.gitUserName.first() ?: ""
+                            val httpsPassword = config.git.gitHttpsPassword.first() ?: ""
                             if (repoUrl.isBlank()) {
                                 shareGitLogs.add(context.getString(R.string.browser_share_git_error_configure))
                                 shareGitInProgress = false

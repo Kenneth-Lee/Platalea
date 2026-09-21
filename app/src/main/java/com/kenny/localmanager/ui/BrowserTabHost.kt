@@ -70,7 +70,7 @@ import java.util.Locale
 // 导航开关（showPendingList 等 Route 事实）由宿主持有、经 state 注入；内容实现全部内聚本文件。
 // 批量操作的发起经共享对象直呼（archiveOps/crypto...），跨域弹窗请求经出口回调上交宿主。
 
-// 批量操作执行 helper（原 FileBrowserApp 顶层平移）
+// 批量操作执行 helper（原主程序顶层平移）
 private fun doCopyPendingToCurrentDir(
     context: Context,
     scope: kotlinx.coroutines.CoroutineScope,
@@ -838,8 +838,8 @@ internal fun BrowserTabHost(
         }
 
     // —— 待处理面板（原宿主平移；显示开关 showPendingList 为宿主持有的 Route 事实）——
-                        DirectoryTabRoute(
-                            DirectoryTabRouteState(
+                        BrowserTabRoute(
+                            BrowserTabRouteState(
                                 modifier = Modifier.fillMaxSize(),
                                 config = config,
                                 currentUri = displayUri,
@@ -981,7 +981,7 @@ internal fun BrowserTabHost(
                                     onShareToGit(model)
                                 },
                                 onForwardToBulletin = { items ->
-                                    if (items.isEmpty()) return@DirectoryTabRouteState
+                                    if (items.isEmpty()) return@BrowserTabRouteState
                                     onForwardToBulletin(BulletinForwardPayload.Files(items))
                                 },
                                 onUnzipRequest = { archiveOps.open(ArchiveOperationRequest.Unzip(it)) },

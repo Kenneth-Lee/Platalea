@@ -402,7 +402,7 @@ private fun Context.hasPrivatePlaybackOutput(): Boolean {
             val outputs = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
             val privateOutputs = outputs.filter { it.isPrivatePlaybackCandidate() }
             Log.i(
-                "FileBrowserApp",
+                "PlataleaApp",
                 "Shortcut autoplay route check: private=${privateOutputs.map { it.debugLabel() }}, all=${outputs.map { it.debugLabel() }}"
             )
             privateOutputs.isNotEmpty()
@@ -456,7 +456,7 @@ private fun AudioDeviceInfo.debugLabel(): String {
     return "$typeName(id=$id,name=${getProductName()})"
 }
 
-// ===== 播放列表持久化编排（自 FileBrowserApp.kt 平移；配置经 PlayerConfigView）=====
+// ===== 播放列表持久化编排（自主程序 PlataleaApp 平移；配置经 PlayerConfigView）=====
 
 private fun notifyPlaybackTrackRemoved(context: Context, playlistId: String, removedIndex: Int) {
     val intent = Intent(context, PlaybackService::class.java).apply {

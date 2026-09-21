@@ -1,18 +1,17 @@
 package com.kenny.localmanager.ui
 
 import androidx.compose.runtime.Composable
-import com.kenny.localmanager.data.Preferences
 
-data class GitShareTabRouteState(
-    val prefs: Preferences,
+internal data class GitShareTabRouteState(
+    val config: GitConfigView,
     val rootUri: String?,
     val onRequestExitApp: () -> Unit
 )
 
 @Composable
-fun GitShareTabRoute(state: GitShareTabRouteState) {
+internal fun GitShareTabRoute(state: GitShareTabRouteState) {
     FileShareScreen(
-        prefs = state.prefs,
+        config = state.config,
         rootUri = state.rootUri?.let { normalizeContentUriString(it) },
         showBackButton = false,
         autoRefreshOnEnter = false,

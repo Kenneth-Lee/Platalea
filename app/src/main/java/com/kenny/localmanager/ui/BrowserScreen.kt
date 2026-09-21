@@ -1078,7 +1078,7 @@ private fun FileSearchResultsDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun FileBrowserScreen(
+internal fun BrowserScreen(
     modifier: Modifier = Modifier,
     config: BrowserConfigView,
     currentUri: String,
@@ -1632,7 +1632,7 @@ internal fun FileBrowserScreen(
                                 leadingIcon = { Icon(Icons.Default.Warning, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
-                                    throw IllegalStateException("debug crash trigger from FileBrowserApp")
+                                    throw IllegalStateException("debug crash trigger from PlataleaApp")
                                 }
                             )
                         }

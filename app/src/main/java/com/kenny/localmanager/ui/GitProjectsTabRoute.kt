@@ -50,7 +50,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ManagedGitProject
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.resolvePathUnderRoot
 import com.kenny.localmanager.git.deriveRepoUrlFromBaseRepo
 import com.kenny.localmanager.git.getManagedProjectCurrentBranch
@@ -66,8 +65,8 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
-data class GitProjectsTabRouteState(
-    val prefs: Preferences,
+internal data class GitProjectsTabRouteState(
+    val config: GitConfigView,
     val rootUri: String?
 )
 
@@ -79,14 +78,14 @@ private sealed interface ManagedGitSyncState {
 }
 
 @Composable
-fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
+internal fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val baseRepoUrl by state.prefs.gitRepoUrl.collectAsState(initial = null)
-    val gitUserName by state.prefs.gitUserName.collectAsState(initial = null)
-    val gitUserEmail by state.prefs.gitUserEmail.collectAsState(initial = null)
-    val gitHttpsPassword by state.prefs.gitHttpsPassword.collectAsState(initial = null)
-    val managedProjects by state.prefs.managedGitProjects.collectAsState(initial = emptyList())
+    val baseRepoUrl by state.config.gitRepoUrl.collectAsState(initial = null)
+    val gitUserName by state.config.gitUserName.collectAsState(initial = null)
+    val gitUserEmail by state.config.gitUserEmail.collectAsState(initial = null)
+    val gitHttpsPassword by state.config.gitHttpsPassword.collectAsState(initial = null)
+    val managedProjects by state.config.managedGitProjects.collectAsState(initial = emptyList())
 
     val syncFailedDefault = stringResource(R.string.git_sync_failed_default)
     val createSuccessDefault = stringResource(R.string.git_projects_create_success)
@@ -231,7 +230,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                     lastSyncAt = now,
                     lastPushAt = 0L
                 )
-                state.prefs.addManagedGitProject(project)
+                state.config.addManagedGitProject(project)
                 val message = result.getOrNull() ?: createSuccessDefault
                 syncState = ManagedGitSyncState.Success(message)
                 appendLog(message)
@@ -277,7 +276,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                 }
                 syncState = ManagedGitSyncState.Success(message)
                 appendLog(message)
-                state.prefs.updateManagedGitProject(project.copy(branchName = currentBranch, lastSyncAt = System.currentTimeMillis()))
+                state.config.updateManagedGitProject(project.copy(branchName = currentBranch, lastSyncAt = System.currentTimeMillis()))
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             } else {
                 syncState = ManagedGitSyncState.Error(message)
@@ -346,7 +345,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
             if (result.isSuccess) {
                 syncState = ManagedGitSyncState.Success(message)
                 appendLog(message)
-                state.prefs.updateManagedGitProject(project.copy(branchName = branchName, lastSyncAt = System.currentTimeMillis()))
+                state.config.updateManagedGitProject(project.copy(branchName = branchName, lastSyncAt = System.currentTimeMillis()))
                 Toast.makeText(context, message, Toast.LENGTH_LONG).show()
             } else {
                 syncState = ManagedGitSyncState.Error(message)
@@ -566,7 +565,7 @@ fun GitProjectsTabRoute(state: GitProjectsTabRouteState) {
                     onClick = {
                         pendingDelete = null
                         scope.launch {
-                            state.prefs.removeManagedGitProject(project.id)
+                            state.config.removeManagedGitProject(project.id)
                         }
                     }
                 ) {
