@@ -52,6 +52,9 @@ internal class ConfigService(context: Context) {
     /** Git 功能域的配置投影：仓库地址、身份、凭据与已配置标记。 */
     val git: GitConfigView = GitConfigViewImpl(prefs)
 
+    /** 词典功能域的配置投影：查询历史。 */
+    val dictionary: DictionaryConfigView = DictionaryConfigViewImpl(prefs)
+
     /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
     val legacy: Preferences = prefs
 }
@@ -297,4 +300,18 @@ private class GitConfigViewImpl(private val prefs: Preferences) : GitConfigView 
     override suspend fun addManagedGitProject(project: ManagedGitProject) = prefs.addManagedGitProject(project)
     override suspend fun updateManagedGitProject(project: ManagedGitProject) = prefs.updateManagedGitProject(project)
     override suspend fun removeManagedGitProject(id: String) = prefs.removeManagedGitProject(id)
+}
+
+
+/** 词典功能域的配置投影接口：查询历史记录。 */
+internal interface DictionaryConfigView {
+    val dictQueryHistory: Flow<List<String>>
+    suspend fun recordDictQuery(query: String)
+    suspend fun clearDictQueryHistory()
+}
+
+private class DictionaryConfigViewImpl(private val prefs: Preferences) : DictionaryConfigView {
+    override val dictQueryHistory get() = prefs.dictQueryHistory
+    override suspend fun recordDictQuery(query: String) = prefs.recordDictQuery(query)
+    override suspend fun clearDictQueryHistory() = prefs.clearDictQueryHistory()
 }

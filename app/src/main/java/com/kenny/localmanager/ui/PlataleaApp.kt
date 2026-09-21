@@ -2101,6 +2101,7 @@ fun PlataleaApp(
                 {
                         DictionaryTabRoute(
                             DictionaryTabRouteState(
+                                config = config.dictionary,
                                 onRequestExitApp = { requestExitApp() }
                             )
                         )

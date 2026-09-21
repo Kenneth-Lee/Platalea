@@ -2,11 +2,12 @@ package com.kenny.localmanager.ui
 
 import androidx.compose.runtime.Composable
 
-data class DictionaryTabRouteState(
+internal data class DictionaryTabRouteState(
+    val config: DictionaryConfigView,
     val onRequestExitApp: () -> Unit
 )
 
 @Composable
-fun DictionaryTabRoute(state: DictionaryTabRouteState) {
-    DictionaryScreen(showBackButton = false, onBack = state.onRequestExitApp)
+internal fun DictionaryTabRoute(state: DictionaryTabRouteState) {
+    DictionaryScreen(config = state.config, showBackButton = false, onBack = state.onRequestExitApp)
 }

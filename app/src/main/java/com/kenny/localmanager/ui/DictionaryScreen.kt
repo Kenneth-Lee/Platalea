@@ -54,7 +54,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.dict.StarDictLoaded
 import com.kenny.localmanager.dict.StarDictSummary
 import com.kenny.localmanager.dict.StarDictWord
@@ -69,15 +68,15 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun DictionaryScreen(
+internal fun DictionaryScreen(
+    config: DictionaryConfigView,
     showBackButton: Boolean = true,
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val prefs = remember(context) { Preferences(context) }
     val clipboardManager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-    val queryHistory by prefs.dictQueryHistory.collectAsState(initial = emptyList())
+    val queryHistory by config.dictQueryHistory.collectAsState(initial = emptyList())
 
     var dictionaries by remember { mutableStateOf<List<StarDictSummary>>(emptyList()) }
     var selectedDictId by remember { mutableStateOf<String?>(null) }
@@ -136,7 +135,7 @@ fun DictionaryScreen(
         results = hits
         searchError = err
         scope.launch(Dispatchers.IO) {
-            prefs.recordDictQuery(normalizedQuery)
+            config.recordDictQuery(normalizedQuery)
         }
     }
 
@@ -211,7 +210,7 @@ fun DictionaryScreen(
                         )
                         TextButton(onClick = {
                             scope.launch(Dispatchers.IO) {
-                                prefs.clearDictQueryHistory()
+                                config.clearDictQueryHistory()
                             }
                         }) {
                             Text(stringResource(R.string.dict_clear_history))
