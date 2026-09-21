@@ -8996,9 +8996,10 @@ private val EPUB_TTS_BOOTSTRAP_JS = """
         var docEl = document.documentElement;
         var body = document.body;
         var viewHeight = window.innerHeight || docEl.clientHeight || 0;
-        var docHeight = Math.max(docEl.scrollHeight, body.scrollHeight, docEl.offsetHeight, body.offsetHeight, viewHeight);
+        // 与滚动比例报告（onScrollChanged 的 JS）同源：documentElement.scrollHeight 优先，
+        // 否则段落 topRatio 分母偏大（body.offsetHeight 含边距时），起点解析整体前移、长章末尾段落被挤到低比例区。
+        var docHeight = docEl.scrollHeight || body.scrollHeight || docEl.offsetHeight || body.offsetHeight || viewHeight;
         var maxScroll = Math.max(1, docHeight - viewHeight);
-
         return ordered.map(function(entry, index) {
             var text = normalizeText(entry.parts.join(' '));
             if (!text) {
@@ -9013,7 +9014,8 @@ private val EPUB_TTS_BOOTSTRAP_JS = """
                 text: text,
                 topRatio: topRatio
             };
-        }).filter(function(item) { return !!item; });
+        }).filter(function(item) { return !!item; })
+        .sort(function(a, b) { return a.topRatio - b.topRatio; });
     }
 
     function clearHighlight() {
@@ -9127,7 +9129,8 @@ private fun setEpubTtsHighlight(view: WebView?, domId: String?, scrollToSegment:
 
 private fun resolveTtsStartSegmentIndex(segments: List<EpubTtsSegment>, currentScrollRatio: Float): Int {
     if (segments.isEmpty()) return 0
-    val lastBeforeOrAtCurrent = segments.indexOfLast { it.topRatio <= currentScrollRatio + 0.01f }
+    // 容差仅消浮点噪声（0.001）：长章节中 1% 比例差可达数屏，大容差会把起点推后多屏段落。
+    val lastBeforeOrAtCurrent = segments.indexOfLast { it.topRatio <= currentScrollRatio + 0.001f }
     return if (lastBeforeOrAtCurrent >= 0) lastBeforeOrAtCurrent else 0
 }
 
@@ -9830,7 +9833,7 @@ private class GestureWebView(
             try {
                 val ratio = result.trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: 0f
                 // 只在比例变化超过 1% 时才报告，避免频繁更新
-                if (kotlin.math.abs(ratio - lastReportedRatio) > 0.01f) {
+                if (kotlin.math.abs(ratio - lastReportedRatio) > 0.01f || ratio <= 0.001f || ratio >= 0.999f) {
                     lastReportedRatio = ratio
                     onScrollRatioChange?.invoke(ratio)
                 }
