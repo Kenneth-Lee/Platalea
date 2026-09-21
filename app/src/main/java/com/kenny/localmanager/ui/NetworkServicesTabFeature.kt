@@ -43,6 +43,7 @@ internal class NetworkServicesTabs(
 internal fun networkServicesTabs(
     context: android.content.Context,
     config: NetworkConfigView,
+    readerConfig: ReaderConfigView,
     activeMainTab: MainTab,
     rootUri: String?,
     displayUri: String,
@@ -137,6 +138,7 @@ internal fun networkServicesTabs(
             override val tab: MainTab get() = MainTab.FAMILY_NETWORK
             override val content: @Composable () -> Unit = {
                 FamilyNetworkScreen(
+                    readerConfig = readerConfig,
                     manager = familyNetworkManager,
                     networkPassword = networkServiceConfig.ftpPassword,
                     localServiceEnabled = networkServiceConfig.localNetworkServiceEnabled,

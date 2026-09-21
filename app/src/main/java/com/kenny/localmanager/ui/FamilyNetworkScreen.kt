@@ -101,7 +101,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.family.BulletinAttachmentKind
@@ -174,7 +173,8 @@ private class BoardListUiState {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun FamilyNetworkScreen(
+internal fun FamilyNetworkScreen(
+    readerConfig: ReaderConfigView,
     manager: FamilyNetworkManager,
     networkPassword: String?,
     localServiceEnabled: Boolean,
@@ -1227,6 +1227,7 @@ fun FamilyNetworkScreen(
 
     attachmentMarkdownFile?.let { (uri, name, encrypted) ->
         MarkdownViewerScreen(
+            config = readerConfig,
             initialFileUri = uri,
             initialFileName = name,
             isEncrypted = encrypted,
@@ -1252,6 +1253,7 @@ fun FamilyNetworkScreen(
 
     attachmentHtmlLocation?.let { location ->
         HtmlViewerScreen(
+            config = readerConfig,
             initialLocation = location,
             onBack = {
                 attachmentHtmlLocation = null
@@ -1263,10 +1265,9 @@ fun FamilyNetworkScreen(
     attachmentPdfFile?.let { (uri, name) ->
         BackHandler { attachmentPdfFile = null }
         PdfViewerScreen(
+            config = readerConfig,
             uri = uri,
             fileName = name,
-            // [F5 待办] PdfViewer 阅读器偏好/进度自建 Preferences——属阅读器域投影，非网络域
-            prefs = Preferences(context),
             bookNoteLoadedData = null,
             bookNoteEntries = emptyList(),
             bookNoteInProgress = false,

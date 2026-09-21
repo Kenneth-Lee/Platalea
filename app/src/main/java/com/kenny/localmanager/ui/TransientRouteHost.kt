@@ -3,7 +3,6 @@ package com.kenny.localmanager.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import com.kenny.localmanager.data.Preferences
 
 /**
  * 临时 Route（TransientRoute）：一次性的全屏查看流程。
@@ -84,7 +83,7 @@ internal fun htmlViewerRouteFromUrl(url: String): TransientRoute.HtmlViewer =
 @Composable
 internal fun TransientViewerRouteHost(
     route: TransientRoute,
-    prefs: Preferences,
+    config: ReaderConfigView,
     markdownViewerSessionCache: MarkdownViewerSessionCache,
     bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
@@ -94,6 +93,7 @@ internal fun TransientViewerRouteHost(
         is TransientRoute.MarkdownViewer -> {
             BackHandler { onRouteChange(null) }
             MarkdownViewerScreen(
+                config = config,
                 initialFileUri = route.uri,
                 initialFileName = route.fileName,
                 isEncrypted = route.isEncrypted,
@@ -123,6 +123,7 @@ internal fun TransientViewerRouteHost(
             }
             BackHandler { onRouteChange(null) }
             HtmlViewerScreen(
+                config = config,
                 initialLocation = route.state.location,
                 onBack = { onRouteChange(null) }
             )
@@ -139,9 +140,9 @@ internal fun TransientViewerRouteHost(
             }
             BackHandler { onRouteChange(null) }
             PdfViewerScreen(
+                config = config,
                 uri = route.uri,
                 fileName = route.fileName,
-                prefs = prefs,
                 bookNoteLoadedData = bookNote.bookNoteData,
                 bookNoteEntries = bookNote.bookNoteEntries,
                 bookNoteInProgress = bookNote.bookNoteInProgress,

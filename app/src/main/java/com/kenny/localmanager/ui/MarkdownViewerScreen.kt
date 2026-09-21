@@ -119,7 +119,6 @@ import androidx.documentfile.provider.DocumentFile
 import androidx.core.text.HtmlCompat
 import org.json.JSONObject
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDirectoryToOpen
 import com.kenny.localmanager.file.listHtmlZipContentFiles
@@ -2884,7 +2883,8 @@ private fun EpubFullTextSearchDialog(
 /** 独立 Markdown 渲染查看器：支持内链（同应用内打开、可退回）、外链（仅提示用浏览器打开）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MarkdownViewerScreen(
+internal fun MarkdownViewerScreen(
+    config: ReaderConfigView,
     initialFileUri: String,
     initialFileName: String,
     isEncrypted: Boolean,
@@ -2893,7 +2893,6 @@ fun MarkdownViewerScreen(
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     var backStack by remember { mutableStateOf(listOf<Triple<String, String, Boolean>>()) }
     var currentUri by remember { mutableStateOf(initialFileUri) }
@@ -2917,9 +2916,10 @@ fun MarkdownViewerScreen(
     var showReaderSettingsDialog by remember { mutableStateOf(false) }
     var autoScrolling by remember { mutableStateOf(false) }
     var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
-    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
-    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
+    val readerBackgroundColor by config.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by config.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
+        config = config,
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "$currentUri:$currentEncrypted",
         documentTitle = currentName,
@@ -3157,8 +3157,8 @@ fun MarkdownViewerScreen(
             onDismiss = { showReaderSettingsDialog = false },
             onApply = { backgroundKey, countdownSeconds, _ ->
                 scope.launch {
-                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
-                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                    config.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    config.setReaderAutoScrollCountdownSeconds(countdownSeconds)
                 }
                 showReaderSettingsDialog = false
             },
@@ -3525,7 +3525,8 @@ private fun ImmersiveReaderFullscreenEffect(
 /** 密码保护文件查看器：从内存中的解密字节直接渲染 md/rst，不产生本地文件。退出时清除 WebView 缓存。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PassContentViewerScreen(
+internal fun PassContentViewerScreen(
+    config: ReaderConfigView,
     innerFileName: String,
     decryptedBytes: ByteArray,
     onBack: () -> Unit
@@ -3538,6 +3539,7 @@ fun PassContentViewerScreen(
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
     val ttsController = rememberStandaloneWebViewTtsController(
+        config = config,
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "pass:$innerFileName:${decryptedBytes.size}",
         documentTitle = innerFileName,
@@ -3870,7 +3872,8 @@ fun PassContentViewerScreen(
 /** .md.zip 压缩 Markdown 查看器：从本地缓存目录中读取 md/rst 并渲染，支持本地图片等资源。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MdZipViewerScreen(
+internal fun MdZipViewerScreen(
+    config: ReaderConfigView,
     initialTargetFile: File?,  // null 表示未找到可渲染文件
     contentDir: File,
     zipFileName: String,
@@ -3894,7 +3897,6 @@ fun MdZipViewerScreen(
     var autoScrollPendingNextFile by remember { mutableStateOf<File?>(null) }
     var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
     KeepScreenOnEffect(enabled = autoScrolling)
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
@@ -3915,9 +3917,10 @@ fun MdZipViewerScreen(
     var regexFindUiState by remember { mutableStateOf(RegexFindUiState()) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var showReaderSettingsDialog by remember { mutableStateOf(false) }
-    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
-    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
+    val readerBackgroundColor by config.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by config.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
+        config = config,
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "mdzip:${currentFile.absolutePath}",
         documentTitle = currentFile.name,
@@ -4654,7 +4657,8 @@ private const val HTMLZIP_DEBUG = "HtmlZipViewer"
 /** .html.zip 查看器：解压到缓存后用 WebView 渲染 index.html，支持目录内跳转与 cache 资源。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HtmlZipViewerScreen(
+internal fun HtmlZipViewerScreen(
+    config: ReaderConfigView,
     initialIndexFile: File?,
     contentDir: File,
     zipFileName: String,
@@ -4676,7 +4680,6 @@ fun HtmlZipViewerScreen(
     var autoScrollPendingNextFile by remember { mutableStateOf<File?>(null) }
     var autoScrollCountdownSecondsLeft by remember { mutableStateOf(0) }
     KeepScreenOnEffect(enabled = autoScrolling)
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var pendingExternalUrl by remember { mutableStateOf<String?>(null) }
@@ -4686,9 +4689,10 @@ fun HtmlZipViewerScreen(
     var showMoreMenu by remember { mutableStateOf(false) }
     var showReaderSettingsDialog by remember { mutableStateOf(false) }
     var currentPageToken by remember { mutableStateOf(initialIndexFile.absolutePath) }
-    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
-    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
+    val readerBackgroundColor by config.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by config.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsController = rememberStandaloneWebViewTtsController(
+        config = config,
         preferredLocale = remember { Locale.getDefault() },
         contentToken = "htmlzip:${currentPageToken.substringBefore('#')}",
         documentTitle = zipFileName,
@@ -4786,8 +4790,8 @@ fun HtmlZipViewerScreen(
             onDismiss = { showReaderSettingsDialog = false },
             onApply = { backgroundKey, countdownSeconds, _ ->
                 scope.launch {
-                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
-                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                    config.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    config.setReaderAutoScrollCountdownSeconds(countdownSeconds)
                 }
                 showReaderSettingsDialog = false
             },
@@ -5041,7 +5045,8 @@ private class RemoteHtmlWebViewClient(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HtmlViewerScreen(
+internal fun HtmlViewerScreen(
+    config: ReaderConfigView,
     initialLocation: HtmlViewerLocation,
     onBack: () -> Unit
 ) {
@@ -5063,6 +5068,7 @@ fun HtmlViewerScreen(
     var currentPageToken by remember { mutableStateOf(initialLocation.localFileUri ?: initialLocation.initialUrl) }
 
     val ttsController = rememberStandaloneWebViewTtsController(
+        config = config,
         preferredLocale = remember { Locale.getDefault() },
         contentToken = currentPageToken,
         documentTitle = currentLocation.title,
@@ -5618,7 +5624,8 @@ private const val EPUB_DEBUG = "EpubViewer"
 /** EPUB 电子书查看器：支持章节导航、目录、缩放、收藏夹。 */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun EpubViewerScreen(
+internal fun EpubViewerScreen(
+    config: ReaderConfigView,
     extractResult: EpubExtractResult,
     zipFileName: String,
     epubUri: Uri,
@@ -5631,7 +5638,6 @@ fun EpubViewerScreen(
     logDebug: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val webViewRef = remember { mutableStateOf<WebView?>(null) }
     var scalePercent by remember { mutableStateOf(100) }
@@ -5686,15 +5692,15 @@ fun EpubViewerScreen(
     val preferredTtsLocale = remember(extractResult.bookInfo.language) {
         preferredEpubTtsLocale(extractResult.bookInfo.language)
     }
-    val selectedTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
-    val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
-    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
-    val epubTtsAutoNextChapter by prefs.epubTtsAutoNextChapter.collectAsState(initial = true)
-    val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
-    val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
-    val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
-    val readerBackgroundColor by prefs.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
-    val autoScrollCountdownSeconds by prefs.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
+    val selectedTtsEnginePackage by config.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedTtsVoiceName by config.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by config.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val epubTtsAutoNextChapter by config.epubTtsAutoNextChapter.collectAsState(initial = true)
+    val hideReaderFloatingNextButton by config.hideReaderFloatingNextButton.collectAsState(initial = false)
+    val floatingButtonXPercent by config.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
+    val floatingButtonYPercent by config.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
+    val readerBackgroundColor by config.readerBackgroundColor.collectAsState(initial = READER_BG_COLOR_ORIGINAL)
+    val autoScrollCountdownSeconds by config.readerAutoScrollCountdownSeconds.collectAsState(initial = READER_AUTO_SCROLL_COUNTDOWN_DEFAULT_SECONDS)
     val ttsSession = remember { EpubTtsSession(context) }
 
     fun revealTransientTopMenu() {
@@ -5722,8 +5728,8 @@ fun EpubViewerScreen(
     var dictLookupResult by remember { mutableStateOf<DictLookupResult?>(null) }
     var dictLoaded by remember { mutableStateOf<StarDictLoaded?>(null) }
     var dictLoading by remember { mutableStateOf(false) }
-    val dictAreaExpanded by prefs.epubDictAreaExpanded.collectAsState(initial = false)
-    val persistedDictLookupWords by prefs.epubDictLookupWords.collectAsState(initial = emptyList())
+    val dictAreaExpanded by config.epubDictAreaExpanded.collectAsState(initial = false)
+    val persistedDictLookupWords by config.epubDictLookupWords.collectAsState(initial = emptyList())
     // 词典查询历史记录（用于回退）
     var dictHistory by remember { mutableStateOf<List<DictLookupResult>>(emptyList()) }
     var dictLookupHistoryRestored by remember { mutableStateOf(false) }
@@ -5845,7 +5851,7 @@ fun EpubViewerScreen(
             dictLookupResult?.word?.let { if (it.isNotBlank()) add(it) }
         }
         scope.launch {
-            prefs.setEpubDictLookupWords(words)
+            config.setEpubDictLookupWords(words)
         }
     }
 
@@ -6165,7 +6171,7 @@ fun EpubViewerScreen(
 
     LaunchedEffect(epubUri) {
         val restored = withContext(Dispatchers.IO) {
-            prefs.getEpubZoomPercentForUri(epubUri.toString())
+            config.getEpubZoomPercentForUri(epubUri.toString())
         }
         if (restored != null) {
             scalePercent = restored
@@ -6176,7 +6182,7 @@ fun EpubViewerScreen(
     LaunchedEffect(scalePercentLoaded, scalePercent, epubUri) {
         if (!scalePercentLoaded) return@LaunchedEffect
         withContext(Dispatchers.IO) {
-            prefs.setEpubZoomPercentForUri(epubUri.toString(), scalePercent)
+            config.setEpubZoomPercentForUri(epubUri.toString(), scalePercent)
         }
     }
 
@@ -6751,8 +6757,8 @@ fun EpubViewerScreen(
         onSelectEngine = { engine ->
             scope.launch {
                 runCatching {
-                    prefs.setEpubTtsEnginePackage(engine.packageName)
-                    prefs.setEpubTtsVoiceName(null)
+                    config.setEpubTtsEnginePackage(engine.packageName)
+                    config.setEpubTtsVoiceName(null)
                 }.onSuccess {
                     ttsSession.shutdown()
                     publishTtsStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
@@ -6770,7 +6776,7 @@ fun EpubViewerScreen(
         onSelectDefaultVoice = {
             scope.launch {
                 runCatching {
-                    prefs.setEpubTtsVoiceName(null)
+                    config.setEpubTtsVoiceName(null)
                 }.onSuccess {
                     ttsSession.shutdown()
                     publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
@@ -6788,7 +6794,7 @@ fun EpubViewerScreen(
         onSelectVoice = { voice ->
             scope.launch {
                 runCatching {
-                    prefs.setEpubTtsVoiceName(voice.name)
+                    config.setEpubTtsVoiceName(voice.name)
                 }.onSuccess {
                     ttsSession.shutdown()
                     publishTtsStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
@@ -7256,9 +7262,9 @@ fun EpubViewerScreen(
             onDismiss = { showReaderSettingsDialog = false },
             onApply = { backgroundKey, countdownSeconds, floatingNextButtonVisible ->
                 scope.launch {
-                    prefs.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
-                    prefs.setReaderAutoScrollCountdownSeconds(countdownSeconds)
-                    prefs.setHideReaderFloatingNextButton(!floatingNextButtonVisible)
+                    config.setReaderBackgroundColor(normalizeReaderBackgroundColorKey(backgroundKey))
+                    config.setReaderAutoScrollCountdownSeconds(countdownSeconds)
+                    config.setHideReaderFloatingNextButton(!floatingNextButtonVisible)
                 }
                 showReaderSettingsDialog = false
             },
@@ -7432,7 +7438,7 @@ fun EpubViewerScreen(
                                     val appliedScalePercent = scalePercent
                                     webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
                                     scope.launch(Dispatchers.IO) {
-                                        prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                                        config.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
                                     }
                                 },
                                 leadingIcon = { Icon(Icons.Default.ZoomIn, contentDescription = null) }
@@ -7445,7 +7451,7 @@ fun EpubViewerScreen(
                                     val appliedScalePercent = scalePercent
                                     webViewRef.value?.evaluateJavascript("document.body.style.zoom = ${appliedScalePercent / 100.0}", null)
                                     scope.launch(Dispatchers.IO) {
-                                        prefs.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
+                                        config.setEpubZoomPercentForUri(epubUri.toString(), appliedScalePercent)
                                     }
                                 },
                                 leadingIcon = { Icon(Icons.Default.ZoomOut, contentDescription = null) }
@@ -7564,7 +7570,7 @@ fun EpubViewerScreen(
                                     IconButton(
                                         onClick = {
                                             scope.launch {
-                                                prefs.setEpubDictAreaExpanded(!dictAreaExpanded)
+                                                config.setEpubDictAreaExpanded(!dictAreaExpanded)
                                             }
                                         },
                                         modifier = Modifier.size(32.dp)
@@ -7931,7 +7937,7 @@ fun EpubViewerScreen(
                             initialYPercent = floatingButtonYPercent,
                             onPositionChangePercent = { xPercent, yPercent ->
                                 scope.launch {
-                                    prefs.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
+                                    config.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
                                 }
                             }
                         )
@@ -8512,7 +8518,7 @@ private fun OfflineTtsEngineVoiceDialogs(
 
 private class StandaloneWebViewTtsController(
     private val context: Context,
-    private val prefs: Preferences,
+    private val config: ReaderConfigView,
     private val scope: CoroutineScope,
     private val preferredLocale: Locale
 ) {
@@ -8614,8 +8620,8 @@ private class StandaloneWebViewTtsController(
     fun selectEngine(engine: EpubOfflineTtsEngine) {
         scope.launch {
             runCatching {
-                prefs.setEpubTtsEnginePackage(engine.packageName)
-                prefs.setEpubTtsVoiceName(null)
+                config.setEpubTtsEnginePackage(engine.packageName)
+                config.setEpubTtsVoiceName(null)
             }.onSuccess {
                 ttsSession.shutdown()
                 publishStatus(context.getString(R.string.epub_tts_selected_engine, engine.label))
@@ -8634,7 +8640,7 @@ private class StandaloneWebViewTtsController(
     fun selectDefaultVoice() {
         scope.launch {
             runCatching {
-                prefs.setEpubTtsVoiceName(null)
+                config.setEpubTtsVoiceName(null)
             }.onSuccess {
                 ttsSession.shutdown()
                 publishStatus(context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)))
@@ -8653,7 +8659,7 @@ private class StandaloneWebViewTtsController(
     fun selectVoice(voice: EpubOfflineTtsVoice) {
         scope.launch {
             runCatching {
-                prefs.setEpubTtsVoiceName(voice.name)
+                config.setEpubTtsVoiceName(voice.name)
             }.onSuccess {
                 ttsSession.shutdown()
                 publishStatus(context.getString(R.string.epub_tts_selected_voice, voice.label))
@@ -8776,6 +8782,7 @@ private class StandaloneWebViewTtsController(
 
 @Composable
 private fun rememberStandaloneWebViewTtsController(
+    config: ReaderConfigView,
     preferredLocale: Locale,
     contentToken: String,
     documentTitle: String,
@@ -8783,14 +8790,13 @@ private fun rememberStandaloneWebViewTtsController(
     scrollRatioProvider: () -> Float
 ): StandaloneWebViewTtsController {
     val context = LocalContext.current
-    val prefs = remember { Preferences(context) }
     val scope = rememberCoroutineScope()
     val controller = remember(preferredLocale) {
-        StandaloneWebViewTtsController(context, prefs, scope, preferredLocale)
+        StandaloneWebViewTtsController(context, config, scope, preferredLocale)
     }
-    val selectedTtsEnginePackage by prefs.epubTtsEnginePackage.collectAsState(initial = null)
-    val selectedTtsVoiceName by prefs.epubTtsVoiceName.collectAsState(initial = null)
-    val epubTtsSpeedPercent by prefs.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val selectedTtsEnginePackage by config.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedTtsVoiceName by config.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by config.epubTtsSpeedPercent.collectAsState(initial = 100)
 
     controller.bind(
         documentTitleProvider = { documentTitle },
@@ -9911,10 +9917,10 @@ data class PdfPageData(
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
-fun PdfViewerScreen(
+internal fun PdfViewerScreen(
+    config: ReaderConfigView,
     uri: String,
     fileName: String,
-    prefs: Preferences,
     bookNoteLoadedData: BookNoteLoadedData?,
     bookNoteEntries: List<BookNoteEntry>,
     bookNoteInProgress: Boolean,
@@ -9938,9 +9944,9 @@ fun PdfViewerScreen(
     var isLoading by remember { mutableStateOf(true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
     var pageInfo by remember { mutableStateOf<Pair<Int, Int>?>(null) } // 原始页面宽高
-    val hideReaderFloatingNextButton by prefs.hideReaderFloatingNextButton.collectAsState(initial = false)
-    val floatingButtonXPercent by prefs.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
-    val floatingButtonYPercent by prefs.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
+    val hideReaderFloatingNextButton by config.hideReaderFloatingNextButton.collectAsState(initial = false)
+    val floatingButtonXPercent by config.readerFloatingNextButtonXPercent.collectAsState(initial = 100)
+    val floatingButtonYPercent by config.readerFloatingNextButtonYPercent.collectAsState(initial = 82)
     var showBookmarks by remember { mutableStateOf(false) }
     var showAddBookmark by remember { mutableStateOf(false) }
     var showGoToPage by remember { mutableStateOf(false) }
@@ -10039,9 +10045,9 @@ fun PdfViewerScreen(
             if (result != null && result.first > 0) {
                 pageCount = result.first
                 pageInfo = Pair(result.second, result.third)
-                val savedPage = prefs.getPdfLastPageForUri(uri)?.coerceIn(0, result.first - 1) ?: 0
+                val savedPage = config.getPdfLastPageForUri(uri)?.coerceIn(0, result.first - 1) ?: 0
                 currentPage = savedPage
-                val savedZoom = prefs.getPdfZoomPercentForUri(uri)?.coerceIn(50, 300) ?: 100
+                val savedZoom = config.getPdfZoomPercentForUri(uri)?.coerceIn(50, 300) ?: 100
                 zoom = (savedZoom / 100f).coerceIn(0.5f, 3f)
                 zoomLoaded = true
                 initialPageLoaded = true
@@ -10061,13 +10067,13 @@ fun PdfViewerScreen(
 
     LaunchedEffect(uri, currentPage, initialPageLoaded) {
         if (initialPageLoaded) {
-            prefs.setPdfLastPageForUri(uri, currentPage)
+            config.setPdfLastPageForUri(uri, currentPage)
         }
     }
 
     LaunchedEffect(uri, zoom, zoomLoaded) {
         if (zoomLoaded) {
-            prefs.setPdfZoomPercentForUri(uri, (zoom * 100f).roundToInt())
+            config.setPdfZoomPercentForUri(uri, (zoom * 100f).roundToInt())
         }
     }
 
@@ -10523,7 +10529,7 @@ fun PdfViewerScreen(
                                     onClick = {
                                         closeMoreMenuForAction()
                                         scope.launch {
-                                            prefs.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
+                                            config.setHideReaderFloatingNextButton(!hideReaderFloatingNextButton)
                                         }
                                     },
                                     leadingIcon = {
@@ -10689,7 +10695,7 @@ fun PdfViewerScreen(
                                 initialYPercent = floatingButtonYPercent,
                                 onPositionChangePercent = { xPercent, yPercent ->
                                     scope.launch {
-                                        prefs.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
+                                        config.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
                                     }
                                 }
                             )

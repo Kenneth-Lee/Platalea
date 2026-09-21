@@ -24,6 +24,7 @@ import java.io.File
 @Composable
 internal fun ArchiveViewerRouteHost(
     workflow: ArchiveReaderWorkflowState,
+    readerConfig: ReaderConfigView,
     markdownViewerSessionCache: MarkdownViewerSessionCache,
     bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
@@ -70,6 +71,7 @@ internal fun ArchiveViewerRouteHost(
             }
             BackHandler { close() }
             MdZipViewerScreen(
+                config = readerConfig,
                 initialTargetFile = state.targetFile,
                 contentDir = state.contentDir,
                 zipFileName = state.zipFileName,
@@ -100,6 +102,7 @@ internal fun ArchiveViewerRouteHost(
             }
             BackHandler { close() }
             HtmlZipViewerScreen(
+                config = readerConfig,
                 initialIndexFile = state.indexFile,
                 contentDir = state.contentDir,
                 zipFileName = state.zipFileName,
@@ -129,6 +132,7 @@ internal fun ArchiveViewerRouteHost(
             }
             BackHandler { close() }
             EpubViewerScreen(
+                config = readerConfig,
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,

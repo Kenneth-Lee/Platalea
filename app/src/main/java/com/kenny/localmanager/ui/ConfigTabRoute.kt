@@ -77,6 +77,7 @@ private fun avatarColorLabelRes(colorId: String): Int = when (colorId) {
 
 internal data class ConfigTabRouteState(
     val config: ConfigEditingView,
+    val readerConfig: ReaderConfigView,
     val filterVisible: Boolean,
     val onFilterVisibleChange: (Boolean) -> Unit,
     val hideDotFiles: Boolean,
@@ -109,6 +110,7 @@ internal data class ConfigTabRouteState(
 internal fun ConfigTabRoute(state: ConfigTabRouteState) {
     ConfigPanel(
         config = state.config,
+        readerConfig = state.readerConfig,
         filterVisible = state.filterVisible,
         onFilterVisibleChange = state.onFilterVisibleChange,
         hideDotFiles = state.hideDotFiles,
@@ -143,6 +145,7 @@ internal fun ConfigTabRoute(state: ConfigTabRouteState) {
 @Composable
 private fun ConfigPanel(
     config: ConfigEditingView,
+    readerConfig: ReaderConfigView,
     filterVisible: Boolean,
     onFilterVisibleChange: (Boolean) -> Unit,
     hideDotFiles: Boolean,
@@ -187,10 +190,10 @@ private fun ConfigPanel(
     var showEpubTtsVoiceDialog by remember { mutableStateOf(false) }
     var epubTtsEngines by remember { mutableStateOf<List<EpubOfflineTtsEngine>>(emptyList()) }
     var epubTtsLoading by remember { mutableStateOf(false) }
-    val selectedEpubTtsEnginePackage by config.epubTtsEnginePackage.collectAsState(initial = null)
-    val selectedEpubTtsVoiceName by config.epubTtsVoiceName.collectAsState(initial = null)
-    val epubTtsSpeedPercent by config.epubTtsSpeedPercent.collectAsState(initial = 100)
-    val epubTtsAutoNextChapter by config.epubTtsAutoNextChapter.collectAsState(initial = true)
+    val selectedEpubTtsEnginePackage by readerConfig.epubTtsEnginePackage.collectAsState(initial = null)
+    val selectedEpubTtsVoiceName by readerConfig.epubTtsVoiceName.collectAsState(initial = null)
+    val epubTtsSpeedPercent by readerConfig.epubTtsSpeedPercent.collectAsState(initial = 100)
+    val epubTtsAutoNextChapter by readerConfig.epubTtsAutoNextChapter.collectAsState(initial = true)
     val preferredTtsLocale = remember { preferredEpubTtsLocale(null) }
     val effectiveEpubTtsEngine = remember(epubTtsEngines, selectedEpubTtsEnginePackage) {
         epubTtsEngines.firstOrNull { it.packageName == selectedEpubTtsEnginePackage }
@@ -605,7 +608,7 @@ private fun ConfigPanel(
                             value = epubTtsSpeedPercent.toFloat(),
                             onValueChange = { value ->
                                 scope.launch {
-                                    config.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
+                                    readerConfig.setEpubTtsSpeedPercent(value.toInt().coerceIn(50, 300))
                                 }
                             },
                             valueRange = 50f..300f,
@@ -631,7 +634,7 @@ private fun ConfigPanel(
                             checked = epubTtsAutoNextChapter,
                             onCheckedChange = { enabled ->
                                 scope.launch {
-                                    config.setEpubTtsAutoNextChapter(enabled)
+                                    readerConfig.setEpubTtsAutoNextChapter(enabled)
                                 }
                             }
                         )
@@ -683,8 +686,8 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                config.setEpubTtsEnginePackage(engine.packageName)
-                                                config.setEpubTtsVoiceName(null)
+                                                readerConfig.setEpubTtsEnginePackage(engine.packageName)
+                                                readerConfig.setEpubTtsVoiceName(null)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_engine, engine.label), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsEngineDialog = false
@@ -785,7 +788,7 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                config.setEpubTtsVoiceName(null)
+                                                readerConfig.setEpubTtsVoiceName(null)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_voice, context.getString(R.string.epub_tts_voice_default_choice)), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsVoiceDialog = false
@@ -820,7 +823,7 @@ private fun ConfigPanel(
                                     onClick = {
                                         scope.launch {
                                             runCatching {
-                                                config.setEpubTtsVoiceName(voice.name)
+                                                readerConfig.setEpubTtsVoiceName(voice.name)
                                             }.onSuccess {
                                                 Toast.makeText(context, context.getString(R.string.epub_tts_selected_voice, voice.label), Toast.LENGTH_SHORT).show()
                                                 showEpubTtsVoiceDialog = false

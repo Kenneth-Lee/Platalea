@@ -1583,6 +1583,7 @@ fun PlataleaApp(
         val networkServices = networkServicesTabs(
             context = context,
             config = config.network,
+            readerConfig = config.reader,
             activeMainTab = currentMainTab ?: MainTab.DIRECTORY,
             rootUri = browserTab.rootUri,
             displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!,
@@ -1595,6 +1596,7 @@ fun PlataleaApp(
             context = context,
             config = config.editing,
             gitConfig = config.git,
+            readerConfig = config.reader,
             scope = scope,
             networkConfig = networkServices.config,
             browserRootUri = { browserTab.rootUri },
@@ -2542,7 +2544,7 @@ fun PlataleaApp(
         transientRoute != null -> {
             TransientViewerRouteHost(
                 route = transientRoute!!,
-                prefs = prefs,
+                config = config.reader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 bookNote = bookNoteTab,
                 recordRecentOpen = { type, key, title, uri, playlistId ->
@@ -2561,6 +2563,7 @@ fun PlataleaApp(
             // Archive 阅读器域：解压完成后的全屏查看器（渲染与退出善后在 ArchiveViewerRouteHost）
             ArchiveViewerRouteHost(
                 workflow = archiveReader,
+                readerConfig = config.reader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 bookNote = bookNoteTab,
                 recordRecentOpen = { type, key, title, uri, playlistId ->
@@ -2582,6 +2585,7 @@ fun PlataleaApp(
             val content = crypto.passContent!!
             BackHandler { crypto.closePassContent() }
             PassContentViewerScreen(
+                config = config.reader,
                 innerFileName = content.innerFileName,
                 decryptedBytes = content.decryptedBytes,
                 onBack = { crypto.closePassContent() }

@@ -34,6 +34,7 @@ internal fun configTabFeature(
     context: Context,
     config: ConfigEditingView,
     gitConfig: GitConfigView,
+    readerConfig: ReaderConfigView,
     scope: CoroutineScope,
     networkConfig: NetworkServiceConfigState,
     browserRootUri: () -> String?,
@@ -45,7 +46,7 @@ internal fun configTabFeature(
         onConfigFileWritten = { onFilesChanged() }
     )
     val state = remember {
-        ConfigTabState(context, config, gitConfig, scope, networkConfig, browserRootUri, onFilesChanged, importExport)
+        ConfigTabState(context, config, gitConfig, readerConfig, scope, networkConfig, browserRootUri, onFilesChanged, importExport)
     }
     LaunchedEffect(state) {
         state.observePrefs()
@@ -57,6 +58,7 @@ private class ConfigTabState(
     private val context: Context,
     private val config: ConfigEditingView,
     private val gitConfig: GitConfigView,
+    private val readerConfig: ReaderConfigView,
     private val scope: CoroutineScope,
     private val networkConfig: NetworkServiceConfigState,
     private val browserRootUri: () -> String?,
@@ -95,6 +97,7 @@ private class ConfigTabState(
         ConfigTabRoute(
             ConfigTabRouteState(
                 config = config,
+                readerConfig = readerConfig,
                 filterVisible = filterVisible,
                 onFilterVisibleChange = { scope.launch { config.setFilterVisible(it) } },
                 hideDotFiles = hideDotFiles,

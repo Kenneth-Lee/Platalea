@@ -55,6 +55,9 @@ internal class ConfigService(context: Context) {
     /** 词典功能域的配置投影：查询历史。 */
     val dictionary: DictionaryConfigView = DictionaryConfigViewImpl(prefs)
 
+    /** 阅读器功能域的配置投影：阅读器偏好、EPUB 朗读与词典、进度缩放（CONFIG tab 经此编辑 EPUB 朗读）。 */
+    val reader: ReaderConfigView = ReaderConfigViewImpl(prefs)
+
     /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
     val legacy: Preferences = prefs
 }
@@ -212,16 +215,6 @@ internal interface ConfigEditingView {
     suspend fun setStartupDecryptKey(enabled: Boolean)
     suspend fun setViewerPreviewBytes(bytes: Int)
 
-    // EPUB 离线朗读设置（阅读器域消费，CONFIG tab 编辑）
-    val epubTtsEnginePackage: Flow<String?>
-    val epubTtsVoiceName: Flow<String?>
-    val epubTtsSpeedPercent: Flow<Int>
-    val epubTtsAutoNextChapter: Flow<Boolean>
-    suspend fun setEpubTtsEnginePackage(packageName: String?)
-    suspend fun setEpubTtsVoiceName(voiceName: String?)
-    suspend fun setEpubTtsSpeedPercent(speedPercent: Int)
-    suspend fun setEpubTtsAutoNextChapter(enabled: Boolean)
-
     // 统一导入导出（配置域服务核心）
     suspend fun exportConfigJson(categories: Set<ConfigExportCategory>): String
     suspend fun importConfigJson(
@@ -245,15 +238,6 @@ private class ConfigEditingViewImpl(
     override suspend fun setHideDotFiles(enabled: Boolean) = prefs.setHideDotFiles(enabled)
     override suspend fun setStartupDecryptKey(enabled: Boolean) = prefs.setStartupDecryptKey(enabled)
     override suspend fun setViewerPreviewBytes(bytes: Int) = prefs.setViewerPreviewBytes(bytes)
-
-    override val epubTtsEnginePackage get() = prefs.epubTtsEnginePackage
-    override val epubTtsVoiceName get() = prefs.epubTtsVoiceName
-    override val epubTtsSpeedPercent get() = prefs.epubTtsSpeedPercent
-    override val epubTtsAutoNextChapter get() = prefs.epubTtsAutoNextChapter
-    override suspend fun setEpubTtsEnginePackage(packageName: String?) = prefs.setEpubTtsEnginePackage(packageName)
-    override suspend fun setEpubTtsVoiceName(voiceName: String?) = prefs.setEpubTtsVoiceName(voiceName)
-    override suspend fun setEpubTtsSpeedPercent(speedPercent: Int) = prefs.setEpubTtsSpeedPercent(speedPercent)
-    override suspend fun setEpubTtsAutoNextChapter(enabled: Boolean) = prefs.setEpubTtsAutoNextChapter(enabled)
 
     override suspend fun exportConfigJson(categories: Set<ConfigExportCategory>): String =
         exportConfig(context, prefs, categories)
@@ -314,4 +298,79 @@ private class DictionaryConfigViewImpl(private val prefs: Preferences) : Diction
     override val dictQueryHistory get() = prefs.dictQueryHistory
     override suspend fun recordDictQuery(query: String) = prefs.recordDictQuery(query)
     override suspend fun clearDictQueryHistory() = prefs.clearDictQueryHistory()
+}
+
+
+/** 阅读器功能域的配置投影接口：Markdown/打包阅读器/EPUB/PDF 全部读经此，不感知存储。 */
+internal interface ReaderConfigView {
+    // 阅读器通用偏好
+    val readerBackgroundColor: Flow<String>
+    val readerAutoScrollCountdownSeconds: Flow<Int>
+    suspend fun setReaderBackgroundColor(colorKey: String?)
+    suspend fun setReaderAutoScrollCountdownSeconds(seconds: Int)
+
+    // 浮动下一页按钮（EPUB/PDF）
+    val hideReaderFloatingNextButton: Flow<Boolean>
+    val readerFloatingNextButtonXPercent: Flow<Int>
+    val readerFloatingNextButtonYPercent: Flow<Int>
+    suspend fun setHideReaderFloatingNextButton(enabled: Boolean)
+    suspend fun setReaderFloatingNextButtonPositionPercent(xPercent: Int, yPercent: Int)
+
+    // EPUB 离线朗读（CONFIG tab 编辑入口也经本投影）
+    val epubTtsEnginePackage: Flow<String?>
+    val epubTtsVoiceName: Flow<String?>
+    val epubTtsSpeedPercent: Flow<Int>
+    val epubTtsAutoNextChapter: Flow<Boolean>
+    suspend fun setEpubTtsEnginePackage(packageName: String?)
+    suspend fun setEpubTtsVoiceName(voiceName: String?)
+    suspend fun setEpubTtsSpeedPercent(speedPercent: Int)
+    suspend fun setEpubTtsAutoNextChapter(enabled: Boolean)
+
+    // EPUB 内嵌词典
+    val epubDictAreaExpanded: Flow<Boolean>
+    val epubDictLookupWords: Flow<List<String>>
+    suspend fun setEpubDictAreaExpanded(expanded: Boolean)
+    suspend fun setEpubDictLookupWords(words: List<String>)
+
+    // 阅读进度与缩放（URI 键控）
+    suspend fun getEpubZoomPercentForUri(uri: String): Int?
+    suspend fun setEpubZoomPercentForUri(uri: String, percent: Int)
+    suspend fun getPdfLastPageForUri(uri: String): Int?
+    suspend fun setPdfLastPageForUri(uri: String, pageIndex: Int)
+    suspend fun getPdfZoomPercentForUri(uri: String): Int?
+    suspend fun setPdfZoomPercentForUri(uri: String, percent: Int)
+}
+
+private class ReaderConfigViewImpl(private val prefs: Preferences) : ReaderConfigView {
+    override val readerBackgroundColor get() = prefs.readerBackgroundColor
+    override val readerAutoScrollCountdownSeconds get() = prefs.readerAutoScrollCountdownSeconds
+    override suspend fun setReaderBackgroundColor(colorKey: String?) = prefs.setReaderBackgroundColor(colorKey)
+    override suspend fun setReaderAutoScrollCountdownSeconds(seconds: Int) = prefs.setReaderAutoScrollCountdownSeconds(seconds)
+
+    override val hideReaderFloatingNextButton get() = prefs.hideReaderFloatingNextButton
+    override val readerFloatingNextButtonXPercent get() = prefs.readerFloatingNextButtonXPercent
+    override val readerFloatingNextButtonYPercent get() = prefs.readerFloatingNextButtonYPercent
+    override suspend fun setHideReaderFloatingNextButton(enabled: Boolean) = prefs.setHideReaderFloatingNextButton(enabled)
+    override suspend fun setReaderFloatingNextButtonPositionPercent(xPercent: Int, yPercent: Int) = prefs.setReaderFloatingNextButtonPositionPercent(xPercent, yPercent)
+
+    override val epubTtsEnginePackage get() = prefs.epubTtsEnginePackage
+    override val epubTtsVoiceName get() = prefs.epubTtsVoiceName
+    override val epubTtsSpeedPercent get() = prefs.epubTtsSpeedPercent
+    override val epubTtsAutoNextChapter get() = prefs.epubTtsAutoNextChapter
+    override suspend fun setEpubTtsEnginePackage(packageName: String?) = prefs.setEpubTtsEnginePackage(packageName)
+    override suspend fun setEpubTtsVoiceName(voiceName: String?) = prefs.setEpubTtsVoiceName(voiceName)
+    override suspend fun setEpubTtsSpeedPercent(speedPercent: Int) = prefs.setEpubTtsSpeedPercent(speedPercent)
+    override suspend fun setEpubTtsAutoNextChapter(enabled: Boolean) = prefs.setEpubTtsAutoNextChapter(enabled)
+
+    override val epubDictAreaExpanded get() = prefs.epubDictAreaExpanded
+    override val epubDictLookupWords get() = prefs.epubDictLookupWords
+    override suspend fun setEpubDictAreaExpanded(expanded: Boolean) = prefs.setEpubDictAreaExpanded(expanded)
+    override suspend fun setEpubDictLookupWords(words: List<String>) = prefs.setEpubDictLookupWords(words)
+
+    override suspend fun getEpubZoomPercentForUri(uri: String): Int? = prefs.getEpubZoomPercentForUri(uri)
+    override suspend fun setEpubZoomPercentForUri(uri: String, percent: Int) = prefs.setEpubZoomPercentForUri(uri, percent)
+    override suspend fun getPdfLastPageForUri(uri: String): Int? = prefs.getPdfLastPageForUri(uri)
+    override suspend fun setPdfLastPageForUri(uri: String, pageIndex: Int) = prefs.setPdfLastPageForUri(uri, pageIndex)
+    override suspend fun getPdfZoomPercentForUri(uri: String): Int? = prefs.getPdfZoomPercentForUri(uri)
+    override suspend fun setPdfZoomPercentForUri(uri: String, percent: Int) = prefs.setPdfZoomPercentForUri(uri, percent)
 }
