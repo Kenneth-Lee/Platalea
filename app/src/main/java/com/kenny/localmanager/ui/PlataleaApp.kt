@@ -1205,7 +1205,7 @@ internal fun pathFromRoot(context: Context, rootUri: String?, currentUri: String
     return "/" + parts.joinToString("/")
 }
 
-private fun humanReadableRootUri(uriString: String): String {
+internal fun humanReadableRootUri(uriString: String): String {
     val normalized = normalizeContentUriString(uriString)
     return runCatching {
         val uri = Uri.parse(normalized)
@@ -1247,9 +1247,9 @@ fun PlataleaApp(
     val browserTab = rememberBrowserTabState(context, config.browser, initialDirUri)
 
     // Transient viewer / editor routes (short-lived feature flows)
-    var pendingSaveFileUri by remember { mutableStateOf<String?>(null) }
-    var showOverwriteConfirm by remember { mutableStateOf<Pair<String, String>?>(null) } // (sourceUri, fileName)
-    var saveInProgress by remember { mutableStateOf(false) }
+    // Browser 域工作流：根目录切换（最近根/换根确认）与外源保存（覆盖确认）
+    val rootSwitch = rememberRootSwitchWorkflow(context, browserTab)
+    val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
@@ -1299,7 +1299,7 @@ fun PlataleaApp(
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
         initialFileUri.value = null
-        pendingSaveFileUri = uriStr
+        browserSave.offer(uriStr)
     }
 
     // App 级 Tab 命令入口：所有跨域"切到某 Tab"的请求统一走这里，避免各处直接改 currentMainTab
@@ -1434,53 +1434,15 @@ fun PlataleaApp(
             )
             val normalized = normalizeContentUriString(uri.toString())
             val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
-            scope.launch {
-                config.browser.recordRecentRootSwitch(previousRoot, normalized)
-                config.browser.setRootUri(normalized)
-            }
-            browserTab.backStack.clear()
-            browserTab.changeRoot(normalized, refresh = false)
-            initialDirUri = normalized
+            rootSwitch.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
         }
     }
 
-    LaunchedEffect(pendingSaveFileUri, browserTab.rootUri) {
-        val sourceUriStr = pendingSaveFileUri ?: return@LaunchedEffect
-        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) } ?: return@LaunchedEffect
-        if (showOverwriteConfirm != null || saveInProgress) return@LaunchedEffect
-        val ctx = context
-        val sourceUri = Uri.parse(sourceUriStr)
-        val sourceDoc = DocumentFile.fromSingleUri(ctx, sourceUri) ?: run {
-            pendingSaveFileUri = null
-            Toast.makeText(ctx, ctx.getString(R.string.browser_cannot_read_file), Toast.LENGTH_SHORT).show()
-            return@LaunchedEffect
-        }
-        val fileName = sourceDoc.name ?: run {
-            pendingSaveFileUri = null
-            Toast.makeText(ctx, ctx.getString(R.string.browser_cannot_get_filename), Toast.LENGTH_SHORT).show()
-            return@LaunchedEffect
-        }
-        val targetUri = Uri.parse(targetRoot)
-        val existingUri = findChildByName(ctx, targetUri, fileName)
-        if (existingUri != null) {
-            showOverwriteConfirm = sourceUriStr to fileName
-        } else {
-            saveInProgress = true
-            val treeUri = Uri.parse(targetRoot)
-            val copied = withContext(Dispatchers.IO) {
-                copyDocumentTo(ctx, sourceUri, targetUri, treeUri)
-            }
-            saveInProgress = false
-            pendingSaveFileUri = null
-            if (copied != null) {
-                val dir = normalizeContentUriString(targetRoot)
-                initialDirUri = dir
-                browserTab.navigateTo(dir)
-                saveCompletedToken++
-                Toast.makeText(ctx, ctx.getString(R.string.browser_saved_to_current_dir), Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(ctx, ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
-            }
+    LaunchedEffect(browserSave.pendingSaveFileUri, browserTab.rootUri) {
+        browserSave.consumeIfReady { dir ->
+            initialDirUri = dir
+            browserTab.navigateTo(dir)
+            saveCompletedToken++
         }
     }
 
@@ -1520,8 +1482,6 @@ fun PlataleaApp(
             }
         }
 
-        var showChangeRootConfirm by remember { mutableStateOf(false) }
-        var showRootSwitchDialog by remember { mutableStateOf(false) }
         var quickMaskOp by remember { mutableStateOf<DocumentFileModel?>(null) }
         var quickObfuscatePassword by remember { mutableStateOf("") }
         var quickObfuscatePasswordConfirm by remember { mutableStateOf("") }
@@ -1536,14 +1496,8 @@ fun PlataleaApp(
         var progressCancelAction by remember { mutableStateOf<(() -> Unit)?>(null) }
 
         // DirectoryRoot derived UI state
-        var cachedTrashUri by remember { mutableStateOf<Uri?>(null) }
         LaunchedEffect(browserTab.rootUri) {
-            cachedTrashUri = browserTab.rootUri?.let { r ->
-                withContext(Dispatchers.IO) {
-                    val root = Uri.parse(normalizeContentUriString(r))
-                    getTrashUriIfExists(context, root, root)
-                }
-            }
+            rootSwitch.refreshTrashUri(browserTab.rootUri)
         }
 
         // 网络服务域（FTP / WebUI / 家庭网络）：三服务对象 + 共享配置 + 生命周期接线全部内聚于工厂
@@ -1602,7 +1556,7 @@ fun PlataleaApp(
                     val guarded = crypto.request is CryptoRequest.PassView || crypto.request is CryptoRequest.PassEdit
                     if (!guarded || !crypto.inProgress) crypto.close()
                 }
-                showChangeRootConfirm -> showChangeRootConfirm = false
+                rootSwitch.showChangeRootConfirm -> rootSwitch.dismissChangeRootConfirm()
                 configTab.hasOpenConfigDialog -> configTab.closeTopConfigDialog()
                 browserTab.showPendingDeleteConfirm -> browserTab.showPendingDeleteConfirm = false
                 browserTab.showPendingList -> browserTab.showPendingList = false
@@ -1942,7 +1896,7 @@ fun PlataleaApp(
 
 
         Column(Modifier.fillMaxSize()) {
-            if (crypto.pubEncryptInProgress || saveInProgress) {
+            if (crypto.pubEncryptInProgress || browserSave.inProgress) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(stringResource(R.string.viewer_saving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
             }
@@ -1957,11 +1911,11 @@ fun PlataleaApp(
             markdownViewerSessionCache = markdownViewerSessionCache,
             playbackState = playerTab.playbackState,
             initialDirUri = initialDirUri,
-            cachedTrashUri = cachedTrashUri,
+            cachedTrashUri = rootSwitch.cachedTrashUri,
             finishPendingListAndReturn = finishPendingListAndReturn,
             setTransientRoute = { transientRoute = it },
             recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
-            onChangeRoot = { showRootSwitchDialog = true },
+            onChangeRoot = rootSwitch::open,
             onShowFileDetail = { showFileDetail = it },
             onQuickMask = { model ->
                 quickMaskOp = model
@@ -2106,72 +2060,12 @@ fun PlataleaApp(
             )
         }
         // Config 域：配置导入 / 导出工作流对话框（状态与逻辑在 ConfigImportExportWorkflowState 中）
-        if (showRootSwitchDialog) {
-            AlertDialog(
-                onDismissRequest = { showRootSwitchDialog = false },
-                title = { Text(context.getString(R.string.root_switch_title)) },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(context.getString(R.string.root_switch_hint))
-                        if (recentRootUris.isEmpty()) {
-                            Text(context.getString(R.string.root_switch_empty), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        } else {
-                            recentRootUris.forEach { recentUri ->
-                                val displayName = humanReadableRootUri(recentUri)
-                                OutlinedButton(
-                                    onClick = {
-                                        val normalized = normalizeContentUriString(recentUri)
-                                        val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
-                                        showRootSwitchDialog = false
-                                        if (previousRoot == normalized) return@OutlinedButton
-                                        scope.launch {
-                                            config.browser.recordRecentRootSwitch(previousRoot, normalized)
-                                            config.browser.setRootUri(normalized)
-                                        }
-                                        browserTab.changeRoot(normalized)
-                                        initialDirUri = normalized
-                                    },
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Text(
-                                        displayName,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                            }
-                        }
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        showRootSwitchDialog = false
-                        val r = browserTab.rootUri
-                        if (r == null) {
-                            treeLauncher.launch(null)
-                            return@Button
-                        }
-                        scope.launch {
-                            val count = withContext(Dispatchers.IO) {
-                                cachedTrashUri?.let { trash ->
-                                    val doc = if (trash.toString().contains("/tree/")) {
-                                        DocumentFile.fromTreeUri(context, trash)
-                                    } else {
-                                        DocumentFile.fromSingleUri(context, trash)
-                                    }
-                                    doc?.listFilesSafe()?.size ?: 0
-                                } ?: 0
-                            }
-                            withContext(Dispatchers.Main.immediate) {
-                                if (count > 0) showChangeRootConfirm = true
-                                else treeLauncher.launch(null)
-                            }
-                        }
-                    }) { Text(stringResource(R.string.browser_select_new_root)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showRootSwitchDialog = false }) { Text(stringResource(R.string.common_cancel)) }
-                }
+        if (rootSwitch.showRootSwitchDialog) {
+            RootSwitchDialog(
+                recentRootUris = recentRootUris,
+                workflow = rootSwitch,
+                onPickRoot = { rootUri -> rootSwitch.pickRecentRoot(rootUri) { initialDirUri = it } },
+                onLaunchPicker = { treeLauncher.launch(null) }
             )
         }
         // 共享文件到 Git
@@ -2378,35 +2272,26 @@ fun PlataleaApp(
             onConfirm = { executeArchiveOperation() }
         )
 
-        if (showChangeRootConfirm && browserTab.rootUri != null) {
+        if (rootSwitch.showChangeRootConfirm && browserTab.rootUri != null) {
             val r = browserTab.rootUri!!
             val root = Uri.parse(normalizeContentUriString(r))
-            AlertDialog(
-                onDismissRequest = { showChangeRootConfirm = false },
-                title = { Text(stringResource(R.string.browser_change_root_title)) },
-                text = { Text(stringResource(R.string.browser_change_root_trash_prompt)) },
-                confirmButton = {
-                    Button(onClick = {
-                        scope.launch {
-                            showChangeRootConfirm = false
-                            runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
-                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
-                                treeLauncher.launch(null)
-                                browserTab.refresh()
-                            }
-                        }
-                    }) { Text(stringResource(R.string.browser_empty_then_change)) }
-                },
-                dismissButton = {
-                    Row {
-                        TextButton(onClick = {
-                            showChangeRootConfirm = false
+            ChangeRootConfirmDialog(
+                onEmptyAndChange = {
+                    scope.launch {
+                        rootSwitch.dismissChangeRootConfirm()
+                        runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
+                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                            if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
                             treeLauncher.launch(null)
-                        }) { Text(stringResource(R.string.browser_change_directly)) }
-                        TextButton(onClick = { showChangeRootConfirm = false }) { Text(stringResource(R.string.common_cancel)) }
+                            browserTab.refresh()
+                        }
                     }
-                }
+                },
+                onChangeDirectly = {
+                    rootSwitch.dismissChangeRootConfirm()
+                    treeLauncher.launch(null)
+                },
+                onCancel = rootSwitch::dismissChangeRootConfirm
             )
         }
     }
@@ -2479,7 +2364,7 @@ fun PlataleaApp(
                 }
             }
         }
-        browserTab.rootUri == null && initialDirUri == null && showOverwriteConfirm == null -> {
+        browserTab.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> {
             var lastBackPressTime by remember { mutableStateOf(0L) }
             BackHandler {
                 val now = System.currentTimeMillis()
@@ -2495,7 +2380,7 @@ fun PlataleaApp(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        if (pendingSaveFileUri != null) stringResource(R.string.browser_external_open_save_prompt) else stringResource(R.string.browser_select_root_prompt),
+                        if (browserSave.pendingSaveFileUri != null) stringResource(R.string.browser_external_open_save_prompt) else stringResource(R.string.browser_select_root_prompt),
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onBackground
                     )
@@ -2503,7 +2388,7 @@ fun PlataleaApp(
                     Button(onClick = { treeLauncher.launch(null) }) {
                         Icon(Icons.Default.FolderOpen, contentDescription = null, Modifier.size(20.dp))
                         Spacer(Modifier.size(8.dp))
-                        Text(if (pendingSaveFileUri != null) stringResource(R.string.browser_select_save_location) else stringResource(R.string.browser_select_root_button))
+                        Text(if (browserSave.pendingSaveFileUri != null) stringResource(R.string.browser_select_save_location) else stringResource(R.string.browser_select_root_button))
                     }
                 }
             }
@@ -2614,54 +2499,23 @@ fun PlataleaApp(
             }
         )
     }
-    showOverwriteConfirm?.let { (sourceUriStr, fileName) ->
-        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) } ?: return@let
-        AlertDialog(
-            onDismissRequest = {
-                showOverwriteConfirm = null
-                pendingSaveFileUri = null
-                initialDirUri = targetRoot
+    browserSave.overwriteConfirm?.let { (_, fileName) ->
+        OverwriteSaveConfirmDialog(
+            fileName = fileName,
+            onOverwrite = {
+                browserSave.confirmOverwrite { dir ->
+                    initialDirUri = dir
+                    browserTab.navigateTo(dir)
+                    saveCompletedToken++
+                }
             },
-            title = { Text(stringResource(R.string.browser_file_exists_title)) },
-            text = { Text(stringResource(R.string.browser_file_exists_overwrite, fileName)) },
-            confirmButton = {
-                Button(onClick = {
-                    val ctx = context
-                    scope.launch {
-                        saveInProgress = true
-                        val targetUri = Uri.parse(targetRoot)
-                        val existingUri = findChildByName(ctx, targetUri, fileName)
-                        if (existingUri != null) ctx.contentResolver.deleteDocument(existingUri)
-                        val copied = withContext(Dispatchers.IO) {
-                            copyDocumentTo(ctx, Uri.parse(sourceUriStr), targetUri, targetUri)
-                        }
-                        saveInProgress = false
-                        showOverwriteConfirm = null
-                        pendingSaveFileUri = null
-                        if (copied != null) {
-                            val dir = normalizeContentUriString(targetRoot)
-                            initialDirUri = dir
-                            browserTab.navigateTo(dir)
-                            saveCompletedToken++
-                            Toast.makeText(ctx, ctx.getString(R.string.browser_overwrite_save), Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(ctx, ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }) { Text(stringResource(R.string.file_share_overwrite_action)) }
-            },
-                dismissButton = {
-                    TextButton(onClick = {
-                        showOverwriteConfirm = null
-                        pendingSaveFileUri = null
-                        initialDirUri = normalizeContentUriString(targetRoot)
-                    }) { Text(stringResource(R.string.browser_do_not_overwrite)) }
+            onSkip = {
+                browserSave.skipOverwrite { dir -> initialDirUri = dir }
             }
         )
     }
 }
 
-/** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
 
 
 /** 密码保护解密后的内容，暂存于内存中供渲染。 */
