@@ -1,5 +1,6 @@
 package com.kenny.localmanager.ui
 
+import android.content.Context
 import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -7,6 +8,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.createFileWithBytes
+import com.kenny.localmanager.file.deleteDocument
+import com.kenny.localmanager.gpg.GpgHelper
+import com.kenny.localmanager.gpg.findPublicKeyRing
+import com.kenny.localmanager.gpg.loadPublicKeyRings
+import com.kenny.localmanager.gpg.loadSecretKeyRings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Crypto 域（GPG / 密码保护文件）的工作流状态。
@@ -101,6 +110,25 @@ internal class CryptoWorkflowState {
 
 @Composable
 internal fun rememberCryptoWorkflow(): CryptoWorkflowState = remember { CryptoWorkflowState() }
+
+/**
+ * PassEdit 保存执行：以默认密钥对的公钥重新加密新内容并写回（先删旧文件再建新文件）。
+ * 供宿主在 PassEditScreen 的 onSave 回调中调用（scope 由宿主持有）。
+ */
+internal suspend fun savePassEditReencrypted(
+    context: Context,
+    state: PassEditState,
+    newBytes: ByteArray,
+): Boolean = withContext(Dispatchers.IO) {
+    val secRings = loadSecretKeyRings(context) ?: return@withContext false
+    val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID ?: return@withContext false
+    val pubRings = loadPublicKeyRings(context) ?: return@withContext false
+    val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId) ?: return@withContext false
+    val encrypted = GpgHelper.encryptWithPublicKey(newBytes, pubKeyRing, state.fileModel.name) ?: return@withContext false
+    try { context.contentResolver.deleteDocument(state.fileModel.uri) } catch (_: Exception) { }
+    createFileWithBytes(
+        context, Uri.parse(state.dirUri), state.treeUri, state.fileModel.name, "application/octet-stream", encrypted)
+}
 
 /** Crypto 域请求：pass 三入口 + GPG 操作（单文件/批量 × 加密/解密）。 */
 internal sealed class CryptoRequest {

@@ -777,14 +777,14 @@ data class DictLookupResult(
 
 class MarkdownViewerSessionCache(
     private val maxEntries: Int = STANDALONE_MD_CACHE_LIMIT
-) {
+) : ViewerSessions {
     private val signatureMap: MutableMap<String, String> = mutableMapOf()
     val htmlCache: MutableMap<String, String> = mutableMapOf()
     val webViewMap: MutableMap<String, WebView> = mutableMapOf()
     val pageReadyMap: MutableMap<String, Boolean> = mutableMapOf()
     private val accessOrder = mutableListOf<String>()
 
-    fun getHtml(key: String, signature: String): String? {
+    override fun getHtml(key: String, signature: String): String? {
         if (signatureMap[key] != signature) {
             invalidate(key)
             return null
@@ -792,35 +792,39 @@ class MarkdownViewerSessionCache(
         return htmlCache[key]?.also { touch(key) }
     }
 
-    fun putHtml(key: String, html: String, signature: String) {
+    override fun putHtml(key: String, html: String, signature: String) {
         signatureMap[key] = signature
         htmlCache[key] = html
         touch(key)
     }
 
-    fun getWebView(key: String): WebView? = webViewMap[key]?.also { touch(key) }
+    override fun getWebView(key: String): WebView? = webViewMap[key]?.also { touch(key) }
 
-    fun putWebView(key: String, webView: WebView) {
+    override fun putWebView(key: String, webView: WebView) {
         webViewMap[key] = webView
         touch(key)
     }
 
-    fun setPageReady(key: String, ready: Boolean) {
+    override fun peekHtml(key: String): String? = htmlCache[key]
+
+    override fun isPageReady(key: String): Boolean = pageReadyMap[key] == true
+
+    override fun setPageReady(key: String, ready: Boolean) {
         pageReadyMap[key] = ready
         touch(key)
     }
 
-    fun clear() {
+    override fun clear() {
         accessOrder.toList().forEach { evict(it) }
         accessOrder.clear()
     }
 
-    fun invalidate(key: String) {
+    override fun invalidate(key: String) {
         accessOrder.remove(key)
         evict(key)
     }
 
-    fun invalidateByUri(uri: String) {
+    override fun invalidateByUri(uri: String) {
         accessOrder.toList()
             .filter { it.startsWith("$uri:") }
             .forEach { invalidate(it) }
@@ -2888,7 +2892,7 @@ internal fun MarkdownViewerScreen(
     initialFileUri: String,
     initialFileName: String,
     isEncrypted: Boolean,
-    sessionCache: MarkdownViewerSessionCache,
+    sessionCache: ViewerSessions,
     onBack: () -> Unit,
     onOpenFile: (uri: String, name: String, encrypted: Boolean) -> Unit
 ) {
@@ -2989,7 +2993,7 @@ internal fun MarkdownViewerScreen(
         sessionCache.getHtml(cacheKey, cacheSignature)?.let { cached ->
             htmlContent = cached
             loading = false
-            pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+            pageLoading = sessionCache.isPageReady(cacheKey).not()
             loadingMessage = if (pageLoading) context.getString(R.string.md_viewer_restore_page_scripts) else context.getString(R.string.md_viewer_reuse_cached_page)
             Log.d(MD_DEBUG, "[加载] 使用缓存 currentUri=$currentUri")
             return@LaunchedEffect
@@ -3033,7 +3037,7 @@ internal fun MarkdownViewerScreen(
         }
         htmlContent = renderedHtml
         sessionCache.putHtml(cacheKey, renderedHtml, cacheSignature)
-        pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+        pageLoading = sessionCache.isPageReady(cacheKey).not()
         loadingMessage = if (pageLoading) context.getString(R.string.md_viewer_init_page_scripts) else context.getString(R.string.md_viewer_load_done_showing)
         Log.d(MD_DEBUG, "[加载] 成功 currentUri=$currentUri 长度=${trimmed.length} isRst=$isRst")
         loading = false
@@ -3379,11 +3383,11 @@ internal fun MarkdownViewerScreen(
                         (fg.red * 255).toInt(), (fg.green * 255).toInt(), (fg.blue * 255).toInt()
                     )
                     val pages = (backStack + Triple(currentUri, currentName, currentEncrypted))
-                        .filter { (u, _, e) -> (sessionCache.htmlCache["$u:$e"] != null || u == currentUri) && (u != currentUri || htmlContent != null) }
+                        .filter { (u, _, e) -> (sessionCache.peekHtml("$u:$e") != null || u == currentUri) && (u != currentUri || htmlContent != null) }
                     for (page in pages) {
                         val (uri, _, encrypted) = page
                         val cacheKey = "$uri:$encrypted"
-                        val content = sessionCache.htmlCache[cacheKey] ?: if (uri == currentUri) htmlContent!! else continue
+                        val content = sessionCache.peekHtml(cacheKey) ?: if (uri == currentUri) htmlContent!! else continue
                         val isCurrent = uri == currentUri
                         androidx.compose.runtime.key(uri) {
                             Box(
@@ -3437,7 +3441,7 @@ internal fun MarkdownViewerScreen(
                                     update = { webView ->
                                         if (isCurrent) {
                                             webViewRef.value = webView
-                                            pageLoading = sessionCache.pageReadyMap[cacheKey] != true
+                                            pageLoading = sessionCache.isPageReady(cacheKey).not()
                                             webView.evaluateJavascript("document.body.style.zoom = ${scalePercent / 100.0}", null)
                                         }
                                     }
@@ -3877,7 +3881,7 @@ internal fun MdZipViewerScreen(
     initialTargetFile: File?,  // null 表示未找到可渲染文件
     contentDir: File,
     zipFileName: String,
-    sessionCache: MarkdownViewerSessionCache,
+    sessionCache: ViewerSessions,
     onBack: () -> Unit,
     logDebug: ((String) -> Unit)? = null
 ) {

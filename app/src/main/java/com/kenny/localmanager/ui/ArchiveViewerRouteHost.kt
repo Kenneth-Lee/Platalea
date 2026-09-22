@@ -25,7 +25,7 @@ import java.io.File
 internal fun ArchiveViewerRouteHost(
     workflow: ArchiveReaderWorkflowState,
     readerConfig: ReaderConfigView,
-    markdownViewerSessionCache: MarkdownViewerSessionCache,
+    markdownViewerSessionCache: ViewerSessions,
     bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onSavePicZipImage: suspend (File, String) -> Boolean,    onEncryptedExitRequest: (EncryptedCacheExitDialogState) -> Unit

@@ -84,7 +84,7 @@ internal fun htmlViewerRouteFromUrl(url: String): TransientRoute.HtmlViewer =
 internal fun TransientViewerRouteHost(
     route: TransientRoute,
     config: ReaderConfigView,
-    markdownViewerSessionCache: MarkdownViewerSessionCache,
+    markdownViewerSessionCache: ViewerSessions,
     bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onRouteChange: (TransientRoute?) -> Unit

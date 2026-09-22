@@ -218,7 +218,7 @@ internal fun FamilyNetworkScreen(
     var aiManagerError by remember { mutableStateOf<String?>(null) }
     var messageForwardSelectionMode by remember { mutableStateOf(false) }
     var selectedForwardMessageIds by remember { mutableStateOf(setOf<String>()) }
-    val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
+    val markdownViewerSessionCache = rememberLocalViewerSessions()
     var attachmentViewerFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var attachmentMarkdownFile by remember { mutableStateOf<Triple<String, String, Boolean>?>(null) }
     var attachmentHtmlLocation by remember { mutableStateOf<HtmlViewerLocation?>(null) }

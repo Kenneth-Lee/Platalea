@@ -37,10 +37,10 @@ data class QuickNoteTabController(
 }
 
 @Composable
-fun rememberQuickNoteTabController(
+internal fun rememberQuickNoteTabController(
     rootUri: String?,
     isActive: Boolean,
-    markdownViewerSessionCache: MarkdownViewerSessionCache
+    markdownViewerSessionCache: ViewerSessions
 ): QuickNoteTabController {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()

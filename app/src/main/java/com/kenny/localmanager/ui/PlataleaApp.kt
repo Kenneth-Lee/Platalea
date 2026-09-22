@@ -94,7 +94,6 @@ import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.createFileWithBytes
-import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDisplayName
 import com.kenny.localmanager.file.emptyTrash
@@ -108,10 +107,7 @@ import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.UnzipResult
 import com.kenny.localmanager.player.TrackMetadata
 import com.kenny.localmanager.gpg.GpgHelper
-import com.kenny.localmanager.gpg.findPublicKeyRing
 import com.kenny.localmanager.gpg.getGpgKeyDir
-import com.kenny.localmanager.gpg.loadPublicKeyRings
-import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
 import com.mpatric.mp3agic.ID3v24Tag
 import com.mpatric.mp3agic.Mp3File
@@ -1238,7 +1234,7 @@ fun PlataleaApp(
     val quickObfuscate = rememberQuickObfuscateWorkflow(context)
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
-    val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
+    val markdownViewerSessionCache = rememberViewerSessions(browserTab.rootUri)
     // Crypto 域（GPG 加解密 / .pass 保护查看编辑）单槽工作流状态
     val crypto = rememberCryptoWorkflow()
     var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
@@ -1278,9 +1274,6 @@ fun PlataleaApp(
     }
     LaunchedEffect(config.browser) {
         config.browser.recentRootUris.collect { recentRootUris = it }
-    }
-    LaunchedEffect(browserTab.rootUri) {
-        markdownViewerSessionCache.clear()
     }
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
@@ -2247,19 +2240,8 @@ fun PlataleaApp(
                 initialDecryptedBytes = state.decryptedBytes,
                 onSave = { newBytes ->
                     val ctx = context
-                    val fileModel = state.fileModel
-                    val dirUri = state.dirUri
-                    val treeUri = state.treeUri
                     scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            val secRings = loadSecretKeyRings(ctx) ?: return@withContext false
-                            val defaultKeyId = secRings.iterator().asSequence().firstOrNull()?.publicKey?.keyID ?: return@withContext false
-                            val pubRings = loadPublicKeyRings(ctx) ?: return@withContext false
-                            val pubKeyRing = findPublicKeyRing(pubRings, defaultKeyId) ?: return@withContext false
-                            val encrypted = GpgHelper.encryptWithPublicKey(newBytes, pubKeyRing, fileModel.name) ?: return@withContext false
-                            try { ctx.contentResolver.deleteDocument(fileModel.uri) } catch (_: Exception) { }
-                            createFileWithBytes(ctx, Uri.parse(dirUri), treeUri, fileModel.name, "application/octet-stream", encrypted)
-                        }
+                        val ok = savePassEditReencrypted(ctx, state, newBytes)
                         crypto.closePassEdit()
                         browserTab.refresh()
                         Toast.makeText(ctx, if (ok) ctx.getString(R.string.browser_saved_and_reencrypted) else ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()

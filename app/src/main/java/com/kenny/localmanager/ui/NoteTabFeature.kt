@@ -32,7 +32,7 @@ internal fun quickNoteTabFeature(
     config: QuickNoteConfigView,
     rootUri: String?,
     isActive: Boolean,
-    markdownViewerSessionCache: MarkdownViewerSessionCache
+    markdownViewerSessionCache: ViewerSessions
 ): QuickNoteTabFeature {
     val controller = rememberQuickNoteTabController(
         rootUri = rootUri,
@@ -47,7 +47,7 @@ internal fun quickNoteTabFeature(
 internal fun bookNoteTabFeature(
     rootUri: String?,
     isActive: Boolean,
-    markdownViewerSessionCache: MarkdownViewerSessionCache
+    markdownViewerSessionCache: ViewerSessions
 ): BookNoteTabFeature {
     val controller = rememberBookNoteTabController(
         rootUri = rootUri,

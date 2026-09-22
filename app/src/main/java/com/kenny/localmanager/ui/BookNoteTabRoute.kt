@@ -38,10 +38,10 @@ data class BookNoteTabController(
 }
 
 @Composable
-fun rememberBookNoteTabController(
+internal fun rememberBookNoteTabController(
     rootUri: String?,
     isActive: Boolean,
-    markdownViewerSessionCache: MarkdownViewerSessionCache
+    markdownViewerSessionCache: ViewerSessions
 ): BookNoteTabController {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -237,7 +237,7 @@ fun rememberBookNoteTabController(
 }
 
 @Composable
-fun BookNoteTabRoute(controller: BookNoteTabController) {
+internal fun BookNoteTabRoute(controller: BookNoteTabController) {
     TabRouteContent(
         controller = controller,
         loadingText = stringResource(R.string.book_note_opening)

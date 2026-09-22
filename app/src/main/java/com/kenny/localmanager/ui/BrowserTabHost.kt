@@ -649,7 +649,7 @@ internal class BrowserTabHostDependencies(
     val archiveOps: ArchiveOperationWorkflowState,
     val crypto: CryptoWorkflowState,
     val configImportExportWorkflow: ConfigImportExportWorkflowState,
-    val markdownViewerSessionCache: MarkdownViewerSessionCache,
+    val markdownViewerSessionCache: ViewerSessions,
     val playbackState: PlaybackState?,
     val initialDirUri: String?,
     val cachedTrashUri: Uri?,
