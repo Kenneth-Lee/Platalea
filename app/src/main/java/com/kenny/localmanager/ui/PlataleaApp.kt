@@ -1250,6 +1250,8 @@ fun PlataleaApp(
     // Browser 域工作流：根目录切换（最近根/换根确认）与外源保存（覆盖确认）
     val rootSwitch = rememberRootSwitchWorkflow(context, browserTab)
     val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
+    // Git 域分享工作流（分享到 Git 仓库：确认→同步→复制→推送）
+    val gitShare = rememberGitShareWorkflow(context, config.git)
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
@@ -1524,10 +1526,6 @@ fun PlataleaApp(
             onFilesChanged = { browserTab.refresh() }
         )
         // Git 分享临时流程（目录文件共享到 Git 仓库）
-        var shareFileToGitTarget by remember { mutableStateOf<DocumentFileModel?>(null) }
-        val shareGitLogs = remember { mutableStateListOf<String>() }
-        var shareGitInProgress by remember { mutableStateOf(false) }
-        var shareGitDone by remember { mutableStateOf(false) }
 
         // Archive 操作向导域：解压 / 压缩向导（表单状态在 ArchiveOperationWorkflowState，执行编排留宿主）
         val archiveOps = rememberArchiveOperationWorkflow(context, scope)
@@ -1922,7 +1920,7 @@ fun PlataleaApp(
                 quickObfuscatePassword = ""
                 quickObfuscatePasswordConfirm = ""
             },
-            onShareToGit = { model -> shareFileToGitTarget = model },
+            onShareToGit = gitShare::request,
             onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
             onBatchMask = { list -> batchMaskOp = list },
             onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
@@ -2069,120 +2067,7 @@ fun PlataleaApp(
             )
         }
         // 共享文件到 Git
-        shareFileToGitTarget?.let { model ->
-            AlertDialog(
-                onDismissRequest = { shareFileToGitTarget = null },
-                title = { Text(stringResource(R.string.browser_share_to_git_title)) },
-                text = { Text(stringResource(R.string.browser_share_to_git_confirm, model.name)) },
-                confirmButton = {
-                    TextButton(onClick = {
-                        val target = model
-                        shareFileToGitTarget = null
-                        val r = browserTab.rootUri?.let { normalizeContentUriString(it) }
-                        if (r == null) {
-                            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
-                            return@TextButton
-                        }
-                        shareGitLogs.clear()
-                        shareGitInProgress = true
-                        shareGitDone = false
-                        scope.launch {
-                            val repoUrl = config.git.gitRepoUrl.first() ?: ""
-                            val userName = config.git.gitUserName.first() ?: ""
-                            val httpsPassword = config.git.gitHttpsPassword.first() ?: ""
-                            if (repoUrl.isBlank()) {
-                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_configure))
-                                shareGitInProgress = false
-                                shareGitDone = true
-                                return@launch
-                            }
-                            // 同步
-                            shareGitLogs.add(context.getString(R.string.browser_share_git_syncing))
-                            val syncResult = withContext(Dispatchers.IO) {
-                                cloneToTree(context, r, repoUrl,
-                                    userName = userName.ifBlank { null },
-                                    httpsPassword = httpsPassword.ifBlank { null },
-                                    log = { msg -> shareGitLogs.add(msg) })
-                            }
-                            if (syncResult.isFailure) {
-                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_sync, syncResult.exceptionOrNull()?.message ?: ""))
-                                shareGitInProgress = false
-                                shareGitDone = true
-                                return@launch
-                            }
-                            // 复制到 share
-                            shareGitLogs.add(context.getString(R.string.browser_share_git_copying))
-                            val copied = withContext(Dispatchers.IO) {
-                                copyFileToShare(context, r, target.uri, target.name)
-                            }
-                            if (!copied) {
-                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_copy))
-                                shareGitInProgress = false
-                                shareGitDone = true
-                                return@launch
-                            }
-                            shareGitLogs.add(context.getString(R.string.browser_share_git_copied))
-                            // 提交推送
-                            shareGitLogs.add(context.getString(R.string.browser_git_committing_pushing))
-                            val pushResult = withContext(Dispatchers.IO) {
-                                commitAndPush(context, r, repoUrl,
-                                    commitMessage = context.getString(R.string.browser_share_git_commit_message, target.name),
-                                    userName = userName.ifBlank { null },
-                                    httpsPassword = httpsPassword.ifBlank { null },
-                                    log = { msg -> shareGitLogs.add(msg) })
-                            }
-                            if (pushResult.isSuccess) {
-                                shareGitLogs.add(context.getString(R.string.browser_share_git_success))
-                            } else {
-                                shareGitLogs.add(context.getString(R.string.browser_share_git_error_push, pushResult.exceptionOrNull()?.message ?: ""))
-                            }
-                            shareGitInProgress = false
-                            shareGitDone = true
-                        }
-                    }) { Text(stringResource(R.string.browser_share_action)) }
-                },
-                dismissButton = {
-                    TextButton(onClick = { shareFileToGitTarget = null }) { Text(stringResource(R.string.common_cancel)) }
-                }
-            )
-        }
-        // 共享到 Git 日志窗口
-        if (shareGitLogs.isNotEmpty() && (shareGitInProgress || shareGitDone)) {
-            AlertDialog(
-                onDismissRequest = { if (!shareGitInProgress) { shareGitDone = false; shareGitLogs.clear() } },
-                title = { Text(stringResource(R.string.browser_share_to_git_title)) },
-                text = {
-                    val logScrollState = rememberScrollState()
-                    LaunchedEffect(shareGitLogs.size) {
-                        logScrollState.animateScrollTo(logScrollState.maxValue)
-                    }
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 200.dp)
-                            .verticalScroll(logScrollState)
-                    ) {
-                        for (line in shareGitLogs) {
-                            Text(
-                                line,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (line.startsWith(context.getString(R.string.browser_error_prefix)) || line.startsWith(context.getString(R.string.browser_debug_prefix)))
-                                    MaterialTheme.colorScheme.error
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                confirmButton = {
-                    if (shareGitInProgress) {
-                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                    } else {
-                        TextButton(onClick = { shareGitDone = false; shareGitLogs.clear() }) { Text(stringResource(R.string.common_close)) }
-                    }
-                }
-            )
-        }
+        GitShareDialogs(workflow = gitShare, rootUri = browserTab.rootUri)
         quickMaskOp?.let { model ->
             QuickObfuscatePasswordDialog(
                 isMasked = isQuickObfuscatedFileName(model.name),
