@@ -15,6 +15,7 @@ import com.kenny.localmanager.data.PlayerAudioSettings
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.PlayerListBookmark
 import com.kenny.localmanager.data.Preferences
+import com.kenny.localmanager.data.RecentOpenItem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 
@@ -26,9 +27,6 @@ import kotlinx.coroutines.flow.first
  * - 各功能域消费自己的窄投影（[player] 等），不感知存储实现（Preferences/DataStore）；
  * - 投影成员资格判据：进入统一导出文件的配置由配置功能管理；
  *   不导出的功能内部状态（后退栈、草稿缓存等）留在各功能域内部。
- *
- * 迁移期（F4 批次）：尚未换投影的功能域经 [legacy] 取用原始 Preferences，
- * 逐域替换完成后删除该过渡面。
  */
 internal class ConfigService(context: Context) {
 
@@ -58,8 +56,8 @@ internal class ConfigService(context: Context) {
     /** 阅读器功能域的配置投影：阅读器偏好、EPUB 朗读与词典、进度缩放（CONFIG tab 经此编辑 EPUB 朗读）。 */
     val reader: ReaderConfigView = ReaderConfigViewImpl(prefs)
 
-    /** 过渡面（F4 移除）：未迁移功能域的原始访问。 */
-    val legacy: Preferences = prefs
+    /** 主界面 AppShell 域的配置投影：Tab 记忆与最近打开记录（RECENT tab 数据源）。 */
+    val shell: ShellConfigView = ShellConfigViewImpl(prefs)
 }
 
 @Composable
@@ -120,9 +118,12 @@ internal interface BrowserConfigView {
     val filterVisible: Flow<Boolean>
     val hideDotFiles: Flow<Boolean>
     val externalOpenByExtension: Flow<Map<String, String>>
+    val recentRootUris: Flow<List<String>>
 
     suspend fun setExternalOpenPackageForExtension(extension: String, packageName: String?)
     suspend fun clearExternalOpenPackageForExtension(extension: String)
+    suspend fun setRootUri(uri: String?)
+    suspend fun recordRecentRootSwitch(fromUri: String?, toUri: String?)
     suspend fun getDirectoryScrollMemory(uri: String): DirectoryScrollMemory?
     suspend fun setDirectoryScrollMemory(memory: DirectoryScrollMemory)
     suspend fun removeDirectoryScrollMemory(uri: String)
@@ -135,10 +136,13 @@ private class BrowserConfigViewImpl(private val prefs: Preferences) : BrowserCon
     override val filterVisible get() = prefs.filterVisible
     override val hideDotFiles get() = prefs.hideDotFiles
     override val externalOpenByExtension get() = prefs.externalOpenByExtension
+    override val recentRootUris get() = prefs.recentRootUris
     override suspend fun setExternalOpenPackageForExtension(extension: String, packageName: String?) =
         prefs.setExternalOpenPackageForExtension(extension, packageName)
     override suspend fun clearExternalOpenPackageForExtension(extension: String) =
         prefs.clearExternalOpenPackageForExtension(extension)
+    override suspend fun setRootUri(uri: String?) = prefs.setRootUri(uri)
+    override suspend fun recordRecentRootSwitch(fromUri: String?, toUri: String?) = prefs.recordRecentRootSwitch(fromUri, toUri)
     override suspend fun getDirectoryScrollMemory(uri: String): DirectoryScrollMemory? = prefs.getDirectoryScrollMemory(uri)
     override suspend fun setDirectoryScrollMemory(memory: DirectoryScrollMemory) = prefs.setDirectoryScrollMemory(memory)
     override suspend fun removeDirectoryScrollMemory(uri: String) = prefs.removeDirectoryScrollMemory(uri)
@@ -373,4 +377,36 @@ private class ReaderConfigViewImpl(private val prefs: Preferences) : ReaderConfi
     override suspend fun setPdfLastPageForUri(uri: String, pageIndex: Int) = prefs.setPdfLastPageForUri(uri, pageIndex)
     override suspend fun getPdfZoomPercentForUri(uri: String): Int? = prefs.getPdfZoomPercentForUri(uri)
     override suspend fun setPdfZoomPercentForUri(uri: String, percent: Int) = prefs.setPdfZoomPercentForUri(uri, percent)
+}
+
+/** 主界面 AppShell 域的配置投影接口：Tab 恢复记忆与最近打开记录，AppShell 不感知存储。 */
+internal interface ShellConfigView {
+    val lastMainTab: Flow<String>
+    val lastNonServerMainTab: Flow<String>
+    val recentOpenItems: Flow<List<RecentOpenItem>>
+
+    suspend fun setLastMainTab(tab: String)
+    suspend fun setLastNonServerMainTab(tab: String)
+    suspend fun addRecentOpenItem(
+        type: String,
+        key: String,
+        title: String,
+        uri: String? = null,
+        playlistId: String? = null
+    )
+    suspend fun removeRecentOpenItem(type: String, key: String)
+    suspend fun clearRecentOpenItems()
+}
+
+private class ShellConfigViewImpl(private val prefs: Preferences) : ShellConfigView {
+    override val lastMainTab get() = prefs.lastMainTab
+    override val lastNonServerMainTab get() = prefs.lastNonServerMainTab
+    override val recentOpenItems get() = prefs.recentOpenItems
+    override suspend fun setLastMainTab(tab: String) = prefs.setLastMainTab(tab)
+    override suspend fun setLastNonServerMainTab(tab: String) = prefs.setLastNonServerMainTab(tab)
+    override suspend fun addRecentOpenItem(
+        type: String, key: String, title: String, uri: String?, playlistId: String?
+    ) = prefs.addRecentOpenItem(type = type, key = key, title = title, uri = uri, playlistId = playlistId)
+    override suspend fun removeRecentOpenItem(type: String, key: String) = prefs.removeRecentOpenItem(type, key)
+    override suspend fun clearRecentOpenItems() = prefs.clearRecentOpenItems()
 }

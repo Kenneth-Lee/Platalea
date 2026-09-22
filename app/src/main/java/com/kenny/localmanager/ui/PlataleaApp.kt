@@ -102,7 +102,6 @@ import android.provider.DocumentsContract
 import android.webkit.MimeTypeMap
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Playlist
-import com.kenny.localmanager.data.Preferences
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.file.DocumentFileModel
@@ -1269,9 +1268,8 @@ fun PlataleaApp(
     initialLaunchTarget: String? = null
 ) {
     val context = LocalContext.current
-    // 配置功能（域服务）：持久配置唯一创建入口；各域经窄投影消费（F4 批次逐域替换 legacy）
+    // 配置功能（域服务）：持久配置唯一创建入口；各域经窄投影消费，不感知存储实现
     val config = rememberConfigService(context)
-    val prefs = config.legacy
 
     // AppShell + DirectoryRoot state (long-lived while the app shell is active)
     // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
@@ -1306,8 +1304,8 @@ fun PlataleaApp(
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
     var unlockedByStartup by remember { mutableStateOf(false) }
-    LaunchedEffect(prefs) {
-        prefs.startupDecryptKey.collect { startupDecryptKeyEnabled = it }
+    LaunchedEffect(config.editing) {
+        config.editing.startupDecryptKey.collect { startupDecryptKeyEnabled = it }
     }
     LaunchedEffect(Unit) {
         hasSecretKeyFile = withContext(Dispatchers.IO) {
@@ -1317,14 +1315,14 @@ fun PlataleaApp(
     val showUnlockGate = startupDecryptKeyEnabled && hasSecretKeyFile && !unlockedByStartup
 
     var viewerPreviewBytes by remember { mutableStateOf(4096) }
-    LaunchedEffect(prefs) {
-        prefs.viewerPreviewBytes.collect { viewerPreviewBytes = it }
+    LaunchedEffect(config.editing) {
+        config.editing.viewerPreviewBytes.collect { viewerPreviewBytes = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.recentOpenItems.collect { recentOpenItems = it }
+    LaunchedEffect(config.shell) {
+        config.shell.recentOpenItems.collect { recentOpenItems = it }
     }
-    LaunchedEffect(prefs) {
-        prefs.recentRootUris.collect { recentRootUris = it }
+    LaunchedEffect(config.browser) {
+        config.browser.recentRootUris.collect { recentRootUris = it }
     }
     LaunchedEffect(browserTab.rootUri) {
         markdownViewerSessionCache.clear()
@@ -1341,12 +1339,12 @@ fun PlataleaApp(
             val previousTab = previousTab
             if (tab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
                 if (previousTab != null && previousTab.exitRestorePolicy == TabExitRestorePolicy.PERSISTENT) {
-                    prefs.setLastNonServerMainTab(previousTab.key)
+                    config.shell.setLastNonServerMainTab(previousTab.key)
                 }
             } else {
-                prefs.setLastNonServerMainTab(tab.key)
+                config.shell.setLastNonServerMainTab(tab.key)
             }
-            prefs.setLastMainTab(tab.key)
+            config.shell.setLastMainTab(tab.key)
         }
     }
 
@@ -1361,7 +1359,7 @@ fun PlataleaApp(
         switchMainTab(tab)
     }
 
-    LaunchedEffect(prefs, initialLaunchTarget) {
+    LaunchedEffect(config.shell, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
             Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
             withContext(Dispatchers.IO) {
@@ -1372,8 +1370,8 @@ fun PlataleaApp(
             return@LaunchedEffect
         }
         val launchTab = MainTab.fromLaunchTarget(initialLaunchTarget)
-        val savedTab = MainTab.fromKey(prefs.lastMainTab.first())
-        val savedNonServerTab = MainTab.fromKey(prefs.lastNonServerMainTab.first())
+        val savedTab = MainTab.fromKey(config.shell.lastMainTab.first())
+        val savedNonServerTab = MainTab.fromKey(config.shell.lastNonServerMainTab.first())
         val restoreTab = if (launchTab != null) {
             launchTab
         } else if (savedTab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
@@ -1392,7 +1390,7 @@ fun PlataleaApp(
         playlistId: String? = null
     ) {
         scope.launch {
-            prefs.addRecentOpenItem(
+            config.shell.addRecentOpenItem(
                 type = type,
                 key = key,
                 title = title,
@@ -1468,8 +1466,8 @@ fun PlataleaApp(
             val normalized = normalizeContentUriString(uri.toString())
             val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
             scope.launch {
-                prefs.recordRecentRootSwitch(previousRoot, normalized)
-                prefs.setRootUri(normalized)
+                config.browser.recordRecentRootSwitch(previousRoot, normalized)
+                config.browser.setRootUri(normalized)
             }
             browserTab.backStack.clear()
             browserTab.changeRoot(normalized, refresh = false)
@@ -2052,12 +2050,12 @@ fun PlataleaApp(
                     },
                         onDeleteRecentItem = { item ->
                         scope.launch {
-                            prefs.removeRecentOpenItem(item.type, item.key)
+                            config.shell.removeRecentOpenItem(item.type, item.key)
                         }
                     },
                         onClearRecentItems = {
                             scope.launch {
-                                prefs.clearRecentOpenItems()
+                                config.shell.clearRecentOpenItems()
                             }
                         }
                     )
@@ -2158,8 +2156,8 @@ fun PlataleaApp(
                                         showRootSwitchDialog = false
                                         if (previousRoot == normalized) return@OutlinedButton
                                         scope.launch {
-                                            prefs.recordRecentRootSwitch(previousRoot, normalized)
-                                            prefs.setRootUri(normalized)
+                                            config.browser.recordRecentRootSwitch(previousRoot, normalized)
+                                            config.browser.setRootUri(normalized)
                                         }
                                         browserTab.changeRoot(normalized)
                                         initialDirUri = normalized
