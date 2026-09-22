@@ -1,6 +1,5 @@
 package com.kenny.localmanager.ui
 
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
@@ -14,9 +13,6 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,7 +21,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -73,8 +68,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -85,13 +78,10 @@ import kotlinx.coroutines.flow.collect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
 import androidx.exifinterface.media.ExifInterface
 import org.json.JSONObject
@@ -103,16 +93,11 @@ import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.file.DocumentFileModel
-import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getDisplayName
 import com.kenny.localmanager.file.emptyTrash
-import com.kenny.localmanager.file.getTrashUriIfExists
-import com.kenny.localmanager.file.quickToggleObfuscation
-import com.kenny.localmanager.file.isQuickObfuscatedFileName
-import com.kenny.localmanager.file.listFilesSafe
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
 import com.kenny.localmanager.file.ArchiveCompressionFormat
@@ -128,9 +113,6 @@ import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
 import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import com.kenny.localmanager.git.cloneToTree
-import com.kenny.localmanager.git.commitAndPush
-import com.kenny.localmanager.git.copyFileToShare
 import com.mpatric.mp3agic.ID3v24Tag
 import com.mpatric.mp3agic.Mp3File
 import org.jaudiotagger.audio.AudioFileIO
@@ -1252,6 +1234,8 @@ fun PlataleaApp(
     val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
     // Git 域分享工作流（分享到 Git 仓库：确认→同步→复制→推送）
     val gitShare = rememberGitShareWorkflow(context, config.git)
+    // Crypto 域快速遮罩工作流（单文件/批量）
+    val quickObfuscate = rememberQuickObfuscateWorkflow(context)
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = remember { MarkdownViewerSessionCache() }
@@ -1484,14 +1468,6 @@ fun PlataleaApp(
             }
         }
 
-        var quickMaskOp by remember { mutableStateOf<DocumentFileModel?>(null) }
-        var quickObfuscatePassword by remember { mutableStateOf("") }
-        var quickObfuscatePasswordConfirm by remember { mutableStateOf("") }
-        var quickObfuscateInProgress by remember { mutableStateOf(false) }
-        var batchMaskOp by remember { mutableStateOf<List<DocumentFileModel>?>(null) }
-        var batchObfuscatePassword by remember { mutableStateOf("") }
-        var batchObfuscatePasswordConfirm by remember { mutableStateOf("") }
-        var batchObfuscateInProgress by remember { mutableStateOf(false) }
 
         // Long-running operation status
         var progressOp by remember { mutableStateOf<OperationProgress?>(null) }
@@ -1547,8 +1523,8 @@ fun PlataleaApp(
                 progressOp != null -> {
                     progressCancelAction?.invoke()
                 }
-                batchMaskOp != null -> { batchMaskOp = null; batchObfuscatePassword = ""; batchObfuscatePasswordConfirm = "" }
-                quickMaskOp != null -> { quickMaskOp = null; quickObfuscatePassword = ""; quickObfuscatePasswordConfirm = "" }
+                quickObfuscate.batchTarget != null -> quickObfuscate.resetIfBatchActive()
+                quickObfuscate.quickTarget != null -> quickObfuscate.resetIfQuickActive()
                 crypto.passEdit != null -> crypto.closePassEdit()
                 crypto.request != null -> {
                     val guarded = crypto.request is CryptoRequest.PassView || crypto.request is CryptoRequest.PassEdit
@@ -1915,14 +1891,10 @@ fun PlataleaApp(
             recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
             onChangeRoot = rootSwitch::open,
             onShowFileDetail = { showFileDetail = it },
-            onQuickMask = { model ->
-                quickMaskOp = model
-                quickObfuscatePassword = ""
-                quickObfuscatePasswordConfirm = ""
-            },
+            onQuickMask = quickObfuscate::requestQuick,
             onShareToGit = gitShare::request,
             onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
-            onBatchMask = { list -> batchMaskOp = list },
+            onBatchMask = quickObfuscate::requestBatch,
             onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
             onAddDirectoryToPlayback = { uri, name -> playerTab.requestCreateDirectoryPlaylist(uri, name) },
             onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
@@ -2068,76 +2040,15 @@ fun PlataleaApp(
         }
         // 共享文件到 Git
         GitShareDialogs(workflow = gitShare, rootUri = browserTab.rootUri)
-        quickMaskOp?.let { model ->
-            QuickObfuscatePasswordDialog(
-                isMasked = isQuickObfuscatedFileName(model.name),
-                fileName = model.name,
-                password = quickObfuscatePassword,
-                confirmPassword = quickObfuscatePasswordConfirm,
-                inProgress = quickObfuscateInProgress,
-                onPasswordChange = { quickObfuscatePassword = it },
-                onConfirmPasswordChange = { quickObfuscatePasswordConfirm = it },
-                onConfirm = { pwd ->
-                    quickObfuscateInProgress = true
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) {
-                            quickToggleObfuscation(context, model.uri, pwd.toCharArray())
-                        }
-                        quickObfuscateInProgress = false
-                        quickMaskOp = null
-                        quickObfuscatePassword = ""
-                        quickObfuscatePasswordConfirm = ""
-                        if (ok) {
-                            Toast.makeText(context, context.getString(R.string.browser_mask_done, model.name), Toast.LENGTH_SHORT).show()
-                            browserTab.refresh()
-                        } else {
-                            Toast.makeText(context, context.getString(R.string.browser_mask_failed, model.name), Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                },
-                onDismiss = {
-                    quickMaskOp = null
-                    quickObfuscatePassword = ""
-                    quickObfuscatePasswordConfirm = ""
-                }
-            )
-        }
-        batchMaskOp?.let { list ->
-            QuickObfuscatePasswordDialog(
-                isMasked = list.all { isQuickObfuscatedFileName(it.name) },
-                fileName = context.getString(R.string.browser_file_count, list.size),
-                password = batchObfuscatePassword,
-                confirmPassword = batchObfuscatePasswordConfirm,
-                inProgress = batchObfuscateInProgress,
-                onPasswordChange = { batchObfuscatePassword = it },
-                onConfirmPasswordChange = { batchObfuscatePasswordConfirm = it },
-                onConfirm = { pwd ->
-                    batchObfuscateInProgress = true
-                    scope.launch {
-                        runWithProgress(context.getString(R.string.pending_list_action_mask), list.size) { setProgress ->
-                            withContext(Dispatchers.IO) {
-                                list.forEachIndexed { index, model ->
-                                    quickToggleObfuscation(context, model.uri, pwd.toCharArray())
-                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                }
-                            }
-                        }
-                        batchObfuscateInProgress = false
-                        batchMaskOp = null
-                        batchObfuscatePassword = ""
-                        batchObfuscatePasswordConfirm = ""
-                        Toast.makeText(context, context.getString(R.string.browser_masked_count, list.size), Toast.LENGTH_SHORT).show()
-                        finishPendingListAndReturn()
-                        browserTab.refresh()
-                    }
-                },
-                onDismiss = {
-                    batchMaskOp = null
-                    batchObfuscatePassword = ""
-                    batchObfuscatePasswordConfirm = ""
-                }
-            )
-        }
+        QuickObfuscateDialogs(
+            workflow = quickObfuscate,
+            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            onQuickFinished = { browserTab.refresh() },
+            onBatchFinished = {
+                finishPendingListAndReturn()
+                browserTab.refresh()
+            }
+        )
         // Crypto 域对话框：.pass 保护/查看/编辑与 GPG 加解密向导（状态在 CryptoWorkflowState，执行编排经宿主注入）
         CryptoDialogs(
             workflow = crypto,
@@ -2426,405 +2337,6 @@ private sealed class GpgMethod {
 }
 
 internal data class CachedDir(val items: List<DocumentFileModel>)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun QuickObfuscatePasswordDialog(
-    isMasked: Boolean,
-    fileName: String,
-    password: String,
-    confirmPassword: String,
-    inProgress: Boolean = false,
-    onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val passwordLabelText = stringResource(R.string.browser_enter_password)
-    val passwordConfirmed = isRequiredPasswordConfirmed(password, confirmPassword)
-    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(
-                    context.getString(R.string.context_quick_mask),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    if (isMasked) {
-                        context.getString(R.string.browser_mask_remove_hint)
-                    } else {
-                        context.getString(R.string.browser_mask_add_hint)
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(Modifier.height(16.dp))
-                PasswordConfirmationFields(
-                    password = password,
-                    confirmPassword = confirmPassword,
-                    onPasswordChange = onPasswordChange,
-                    onConfirmPasswordChange = onConfirmPasswordChange,
-                    passwordLabel = passwordLabelText,
-                    confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                    enabled = !inProgress,
-                    allowBlank = false
-                )
-                if (inProgress) {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.browser_masking), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
-                    Button(onClick = { onConfirm(password) }, enabled = !inProgress && passwordConfirmed) { Text(stringResource(R.string.common_ok)) }
-                }
-            }
-        }
-    }
-}
-
-internal fun isRequiredPasswordConfirmed(password: String, confirmPassword: String): Boolean {
-    return password.isNotBlank() && password == confirmPassword
-}
-
-internal fun isOptionalPasswordConfirmed(password: String, confirmPassword: String): Boolean {
-    return password.isBlank() || password == confirmPassword
-}
-
-@Composable
-internal fun PasswordConfirmationFields(
-    password: String,
-    confirmPassword: String,
-    onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
-    passwordLabel: String,
-    confirmLabel: String,
-    enabled: Boolean,
-    allowBlank: Boolean
-) {
-    val showMismatch = password.isNotEmpty() && confirmPassword.isNotEmpty() && (
-        !password.startsWith(confirmPassword) ||
-            (confirmPassword.length >= password.length && password != confirmPassword)
-        )
-    val showConfirmField = password.isNotEmpty() || !allowBlank
-
-    ReliablePasswordInputField(
-        value = password,
-        onValueChange = onPasswordChange,
-        label = { Text(passwordLabel) },
-        modifier = Modifier.fillMaxWidth(),
-        enabled = enabled
-    )
-    if (showConfirmField) {
-        Spacer(Modifier.height(12.dp))
-        ReliablePasswordInputField(
-            value = confirmPassword,
-            onValueChange = onConfirmPasswordChange,
-            label = { Text(confirmLabel) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = enabled
-        )
-    }
-
-    if (showConfirmField) {
-        Spacer(Modifier.height(4.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(20.dp)
-        ) {
-            if (showMismatch) {
-                Text(
-                    stringResource(R.string.browser_password_mismatch),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-    }
-}
-
-private fun readClipboardPassword(context: Context): String? {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager ?: return null
-    val clip = clipboard.primaryClip ?: return null
-    if (clip.itemCount <= 0) return null
-    val text = clip.getItemAt(0).coerceToText(context)?.toString() ?: return null
-    return text.ifBlank { null }
-}
-
-private enum class PasswordKeyCategory { DIGIT, UPPER, LOWER, SYMBOL }
-
-private val digitKeys = "1234567890".toList()
-private val upperKeys = ('A'..'Z').toList()
-private val lowerKeys = ('a'..'z').toList()
-private val symbolKeys = listOf(
-    '~', '!', '@', '#', '$', '%', '^', '&', '*',
-    '(', ')', '_', '+', '-', '=', '[', ']', '{', '}',
-    '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?', '`', '\\'
-)
-
-private fun categoryPages(category: PasswordKeyCategory): List<List<Char>> {
-    val keys = when (category) {
-        PasswordKeyCategory.DIGIT -> digitKeys
-        PasswordKeyCategory.UPPER -> upperKeys
-        PasswordKeyCategory.LOWER -> lowerKeys
-        PasswordKeyCategory.SYMBOL -> symbolKeys
-    }
-    return keys.chunked(30)
-}
-
-@Composable
-private fun PasswordGridPage(
-    keys: List<Char>,
-    enabled: Boolean,
-    onPress: (Char) -> Unit
-) {
-    val rows = keys.chunked(5)
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-        rows.forEach { rowKeys ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                rowKeys.forEach { key ->
-                    OutlinedButton(
-                        onClick = { onPress(key) },
-                        enabled = enabled,
-                        modifier = Modifier
-                            .padding(horizontal = 2.dp, vertical = 1.dp)
-                            .width(50.dp)
-                            .height(32.dp),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Text(key.toString(), style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun ReliablePasswordInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: @Composable (() -> Unit),
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    supportingText: @Composable (() -> Unit)? = null
-) {
-    val context = LocalContext.current
-    var keyboardVisible by remember { mutableStateOf(false) }
-    var category by remember { mutableStateOf(PasswordKeyCategory.DIGIT) }
-    var pageIndex by remember { mutableIntStateOf(0) }
-    val pages = remember(category) { categoryPages(category) }
-    if (pageIndex > pages.lastIndex) pageIndex = 0
-    val pageKeys = pages.getOrElse(pageIndex) { emptyList() }
-    val maskedValue = when {
-        value.isEmpty() -> ""
-        value.length <= 36 -> "*".repeat(value.length)
-        else -> "${"*".repeat(36)}…(${value.length})"
-    }
-
-    Column(modifier = modifier) {
-        Box(modifier = Modifier.padding(bottom = 6.dp)) {
-            label()
-        }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = enabled) { keyboardVisible = true }
-                .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))
-                .padding(horizontal = 12.dp, vertical = 10.dp)
-        ) {
-            Text(
-                text = if (maskedValue.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedValue,
-                color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        supportingText?.invoke()
-    }
-
-    if (keyboardVisible) {
-        Dialog(
-            onDismissRequest = { keyboardVisible = false },
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.BottomCenter
-            ) {
-                Surface(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(430.dp),
-                    shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                    color = MaterialTheme.colorScheme.surface
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp, vertical = 12.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 6.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .width(56.dp)
-                                    .height(8.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .border(0.dp, Color.Transparent, RoundedCornerShape(999.dp))
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .width(56.dp)
-                                    .height(8.dp)
-                                    .clip(RoundedCornerShape(999.dp))
-                                    .background(MaterialTheme.colorScheme.outlineVariant)
-                            )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Box(
-                                modifier = Modifier.height(32.dp),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                Text(
-                                    text = if (maskedValue.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedValue,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                                TextButton(
-                                    onClick = {
-                                        val pasted = readClipboardPassword(context)
-                                        if (pasted == null) {
-                                            Toast.makeText(context, context.getString(R.string.pwd_kb_clipboard_empty), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            onValueChange(pasted)
-                                            Toast.makeText(context, context.getString(R.string.pwd_kb_pasted), Toast.LENGTH_SHORT).show()
-                                        }
-                                    },
-                                    enabled = enabled,
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                                ) {
-                                    Text(stringResource(R.string.pwd_kb_paste))
-                                }
-                                TextButton(onClick = { keyboardVisible = false }, enabled = enabled) {
-                                    Text(stringResource(R.string.pwd_kb_done))
-                                }
-                            }
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.DIGIT; pageIndex = 0 },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_digits), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_upper), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_lower), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_symbols), style = MaterialTheme.typography.labelSmall) }
-                        }
-
-                        if (pages.size > 1) {
-                            Spacer(Modifier.height(2.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                pages.indices.forEach { idx ->
-                                    OutlinedButton(
-                                        onClick = { pageIndex = idx },
-                                        enabled = enabled,
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = if (idx == pageIndex) stringResource(R.string.pwd_kb_subclass_active, idx + 1) else stringResource(R.string.pwd_kb_subclass, idx + 1),
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(Modifier.height(4.dp))
-                        PasswordGridPage(
-                            keys = pageKeys,
-                            enabled = enabled,
-                            onPress = { ch -> onValueChange(value + ch) }
-                        )
-
-                        Spacer(Modifier.height(4.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            OutlinedButton(
-                                onClick = { onValueChange(value + " ") },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_space), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
-                                enabled = enabled && value.isNotEmpty(),
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_backspace), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { onValueChange("") },
-                                enabled = enabled && value.isNotEmpty(),
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_clear), style = MaterialTheme.typography.labelSmall) }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 
 
