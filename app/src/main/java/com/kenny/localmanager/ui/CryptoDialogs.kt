@@ -33,6 +33,21 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 
 /**
  * Crypto 域对话框：.pass 保护确认、.pass 查看/编辑口令框、GPG 单文件与批量加解密向导。
@@ -573,5 +588,268 @@ internal suspend fun encryptGpgFileToDir(
         val pwd = symmetricPassword ?: return@withContext false
         val encrypted = GpgHelper.encryptSymmetric(plain, pwd, fileModel.name) { } ?: return@withContext false
         createFileWithBytes(context, Uri.parse(targetDirUri), treeUri, fileModel.name + ".gpg", "application/octet-stream", encrypted)
+    }
+}
+
+/** GPG 口令输入弹窗（加/解密单文件，多屏共用）。状态在调用方。 */
+@Composable
+internal fun GpgPasswordDialog(
+    isDecrypt: Boolean,
+    fileName: String,
+    password: String,
+    passwordLabel: String? = null,
+    inProgress: Boolean = false,
+    onPasswordChange: (String) -> Unit,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val resolvedPasswordLabel = passwordLabel ?: stringResource(R.string.browser_enter_password)
+    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    if (isDecrypt) stringResource(R.string.context_gpg_decrypt) else stringResource(R.string.context_gpg_encrypt),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                ReliablePasswordInputField(
+                    value = password,
+                    onValueChange = onPasswordChange,
+                    label = { Text(resolvedPasswordLabel) },
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !inProgress
+                )
+                if (inProgress) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (isDecrypt) stringResource(R.string.browser_decrypting) else stringResource(R.string.browser_encrypting),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
+                    Button(
+                        onClick = { onConfirm(password) },
+                        enabled = !inProgress
+                    ) { Text(stringResource(R.string.common_ok)) }
+                }
+            }
+        }
+    }
+}
+
+
+/** GPG 加密方式弹窗：对称口令或公钥；有私钥时解密可选私钥。 */
+@Composable
+internal fun GpgEncryptDialog(
+    fileName: String,
+    keys: List<Pair<Long, String>>,
+    selectedKeyId: Long?,
+    password: String,
+    confirmPassword: String,
+    inProgress: Boolean = false,
+    onSelectPassword: () -> Unit,
+    onSelectKey: (Long) -> Unit,
+    onPasswordChange: (String) -> Unit,
+    onConfirmPasswordChange: (String) -> Unit,
+    onConfirm: (String, Long?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val passwordLabelText = stringResource(R.string.browser_enter_password)
+    val useSymmetric = selectedKeyId == null
+    val symmetricPasswordReady = isRequiredPasswordConfirmed(password, confirmPassword)
+    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    context.getString(R.string.context_gpg_encrypt),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !inProgress) { onSelectPassword() },
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    androidx.compose.material3.RadioButton(
+                        selected = selectedKeyId == null,
+                        onClick = if (inProgress) null else onSelectPassword
+                    )
+                    Text(stringResource(R.string.browser_gpg_use_symmetric_encrypt), style = MaterialTheme.typography.bodyMedium)
+                }
+                if (useSymmetric) {
+                    Spacer(Modifier.height(12.dp))
+                    PasswordConfirmationFields(
+                        password = password,
+                        confirmPassword = confirmPassword,
+                        onPasswordChange = onPasswordChange,
+                        onConfirmPasswordChange = onConfirmPasswordChange,
+                        passwordLabel = passwordLabelText,
+                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
+                        enabled = !inProgress,
+                        allowBlank = false
+                    )
+                } else {
+                    ReliablePasswordInputField(
+                        value = password,
+                        onValueChange = onPasswordChange,
+                        label = { Text(stringResource(R.string.browser_enter_password)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !inProgress
+                    )
+                }
+                if (keys.isNotEmpty()) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(stringResource(R.string.browser_gpg_or_select_public_key), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.height(8.dp))
+                    keys.forEach { (keyId, desc) ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable(enabled = !inProgress) { onSelectKey(keyId) },
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = selectedKeyId == keyId,
+                                onClick = if (inProgress) null else { { onSelectKey(keyId) } }
+                            )
+                            Text(desc, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
+                }
+                if (inProgress) {
+                    Spacer(Modifier.height(16.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.browser_encrypting), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
+                    Button(
+                        onClick = { onConfirm(password, selectedKeyId) },
+                        enabled = !inProgress && (selectedKeyId != null || symmetricPasswordReady)
+                    ) { Text(stringResource(R.string.common_ok)) }
+                }
+            }
+        }
+    }
+}
+
+
+/** GPG 解密方式选择（口令/私钥）。 */
+@Composable
+internal fun GpgMethodDialog(
+    isDecrypt: Boolean,
+    fileName: String,
+    hasPublicKeys: Boolean,
+    hasSecretKeys: Boolean,
+    onSymmetric: () -> Unit,
+    onPublicKey: () -> Unit,
+    onSecretKey: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(
+                    if (isDecrypt) context.getString(R.string.context_gpg_decrypt) else context.getString(R.string.context_gpg_encrypt),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                if (isDecrypt) {
+                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_password_decrypt)) }
+                    if (hasSecretKeys) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onSecretKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_secret_key_decrypt)) }
+                    }
+                } else {
+                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_symmetric_encrypt)) }
+                    if (hasPublicKeys) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = onPublicKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_op_public_key_encrypt)) }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+            }
+        }
+    }
+}
+
+
+/** GPG 公钥选择弹窗。 */
+@Composable
+internal fun GpgPublicKeyPickerDialog(
+    keys: List<Pair<Long, String>>,
+    fileName: String,
+    onConfirm: (keyId: Long, keyDesc: String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var selectedKeyId by remember { mutableStateOf<Long?>(keys.firstOrNull()?.first) }
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = MaterialTheme.shapes.large,
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp
+        ) {
+            Column(Modifier.padding(24.dp)) {
+                Text(stringResource(R.string.browser_op_public_key_encrypt), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(16.dp))
+                keys.forEach { (keyId, desc) ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { selectedKeyId = keyId },
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.material3.RadioButton(
+                            selected = selectedKeyId == keyId,
+                            onClick = { selectedKeyId = keyId }
+                        )
+                        Text(desc, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
+                    }
+                }
+                Spacer(Modifier.height(24.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
+                    Button(onClick = {
+                        val kid = selectedKeyId
+                        val desc = keys.find { it.first == kid }?.second ?: ""
+                        if (kid != null) onConfirm(kid, desc)
+                    }) { Text(stringResource(R.string.quick_crypto_action_encrypt_short)) }
+                }
+            }
+        }
     }
 }

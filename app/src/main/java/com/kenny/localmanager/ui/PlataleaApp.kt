@@ -1,7 +1,5 @@
 package com.kenny.localmanager.ui
 
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -10,7 +8,6 @@ import android.graphics.drawable.Icon
 import android.icu.text.Transliterator
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Build
 import android.util.Base64
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
@@ -61,7 +58,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -79,7 +75,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
@@ -123,37 +121,9 @@ import com.kenny.localmanager.file.compressSingleFileToFormat
 import com.kenny.localmanager.file.compressTarArchive
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.file.UnzipResult
-import com.kenny.localmanager.file.CacheEntry
-import com.kenny.localmanager.file.getCacheEntries
-import com.kenny.localmanager.file.clearCacheEntry
-import com.kenny.localmanager.file.formatSize
-import com.kenny.localmanager.file.collectMusicFilesRecursively
-import com.kenny.localmanager.player.PlaybackService
-import com.kenny.localmanager.player.PlaybackState
 import com.kenny.localmanager.player.TrackMetadata
-import com.kenny.localmanager.player.ACTION_PLAY
-import com.kenny.localmanager.player.ACTION_REMOVE_PLAYLIST_TRACK
-import com.kenny.localmanager.player.ACTION_RELOAD_PLAYLIST
-import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
-import com.kenny.localmanager.player.EXTRA_START_INDEX
-import com.kenny.localmanager.player.EXTRA_START_POSITION_MS
 import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.findPublicKeyRing
-import com.kenny.localmanager.gpg.generateDefaultKey
-import com.kenny.localmanager.gpg.KeyInfo
-import com.kenny.localmanager.gpg.listGpgKeyFiles
-import com.kenny.localmanager.gpg.listPublicKeyInfos
-import com.kenny.localmanager.gpg.listSecretKeyInfos
-import com.kenny.localmanager.gpg.deleteAllPublicKeys
-import com.kenny.localmanager.gpg.deletePublicKeyById
-import com.kenny.localmanager.gpg.deleteSecretKeys
-import com.kenny.localmanager.gpg.getAllPublicKeyRingsBytes
-import com.kenny.localmanager.gpg.getSecretKeyRingBytes
-import com.kenny.localmanager.gpg.getSinglePublicKeyRingBytes
-import com.kenny.localmanager.gpg.mergePublicKeyRing
-import com.kenny.localmanager.gpg.parsePublicKeyRingFromStream
-import com.kenny.localmanager.gpg.parseSecretKeyRingFromStream
-import com.kenny.localmanager.gpg.saveSecretKeyRing
 import com.kenny.localmanager.gpg.getGpgKeyDir
 import com.kenny.localmanager.gpg.loadPublicKeyRings
 import com.kenny.localmanager.gpg.loadSecretKeyRings
@@ -177,7 +147,6 @@ import java.util.concurrent.TimeoutException
 import java.io.File
 import java.text.Normalizer
 import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
 
 internal const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
@@ -2693,53 +2662,7 @@ fun PlataleaApp(
 }
 
 /** 统一进度：label 文案，total 为 null 表示不定型进度，否则为 X/total 项 */
-private data class OperationProgress(val label: String, val current: Int = 0, val total: Int? = null)
 
-internal class OperationCancelFlag {
-    @Volatile
-    private var cancelled: Boolean = false
-
-    fun requestCancel() {
-        cancelled = true
-    }
-
-    fun isCancelled(): Boolean = cancelled
-}
-
-@Composable
-private fun OperationProgressDialog(progress: OperationProgress, onCancel: (() -> Unit)? = null) {
-    Dialog(onDismissRequest = { }) {
-        Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.surface, tonalElevation = 6.dp) {
-            Column(Modifier.padding(24.dp)) {
-                Text(stringResource(R.string.browser_progress_in_progress, progress.label), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(16.dp))
-                if (progress.total != null && progress.total > 0) {
-                    val frac = (progress.current.toFloat() / progress.total).coerceIn(0f, 1f)
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), progress = { frac })
-                    Spacer(Modifier.height(8.dp))
-                    val progressText = if (progress.total >= 1000) {
-                        String.format(Locale.getDefault(), "%.1f%%", frac * 100f)
-                    } else {
-                        stringResource(R.string.browser_progress_items, progress.current, progress.total ?: 0)
-                    }
-                    Text(progressText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.browser_processing), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (onCancel != null) {
-                    Spacer(Modifier.height(16.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onCancel) {
-                            Text(stringResource(R.string.common_cancel))
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 /** 密码保护解密后的内容，暂存于内存中供渲染。 */
 /** 判断文件名是否为压缩 Markdown/RST 文件（.md.zip 或 .rst.zip）。 */
@@ -2831,7 +2754,7 @@ fun QuickObfuscatePasswordDialog(
     }
 }
 
-private fun isRequiredPasswordConfirmed(password: String, confirmPassword: String): Boolean {
+internal fun isRequiredPasswordConfirmed(password: String, confirmPassword: String): Boolean {
     return password.isNotBlank() && password == confirmPassword
 }
 
@@ -2840,7 +2763,7 @@ internal fun isOptionalPasswordConfirmed(password: String, confirmPassword: Stri
 }
 
 @Composable
-private fun PasswordConfirmationFields(
+internal fun PasswordConfirmationFields(
     password: String,
     confirmPassword: String,
     onPasswordChange: (String) -> Unit,
@@ -3164,169 +3087,7 @@ internal fun ReliablePasswordInputField(
     }
 }
 
-@Composable
-fun GpgPasswordDialog(
-    isDecrypt: Boolean,
-    fileName: String,
-    password: String,
-    passwordLabel: String? = null,
-    inProgress: Boolean = false,
-    onPasswordChange: (String) -> Unit,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val resolvedPasswordLabel = passwordLabel ?: stringResource(R.string.browser_enter_password)
-    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(
-                    if (isDecrypt) stringResource(R.string.context_gpg_decrypt) else stringResource(R.string.context_gpg_encrypt),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(16.dp))
-                ReliablePasswordInputField(
-                    value = password,
-                    onValueChange = onPasswordChange,
-                    label = { Text(resolvedPasswordLabel) },
-                    modifier = Modifier.fillMaxWidth(),
-                    enabled = !inProgress
-                )
-                if (inProgress) {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        if (isDecrypt) stringResource(R.string.browser_decrypting) else stringResource(R.string.browser_encrypting),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
-                    Button(
-                        onClick = { onConfirm(password) },
-                        enabled = !inProgress
-                    ) { Text(stringResource(R.string.common_ok)) }
-                }
-            }
-        }
-    }
-}
 
-@Composable
-fun GpgEncryptDialog(
-    fileName: String,
-    keys: List<Pair<Long, String>>,
-    selectedKeyId: Long?,
-    password: String,
-    confirmPassword: String,
-    inProgress: Boolean = false,
-    onSelectPassword: () -> Unit,
-    onSelectKey: (Long) -> Unit,
-    onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
-    onConfirm: (String, Long?) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val passwordLabelText = stringResource(R.string.browser_enter_password)
-    val useSymmetric = selectedKeyId == null
-    val symmetricPasswordReady = isRequiredPasswordConfirmed(password, confirmPassword)
-    Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(
-                    context.getString(R.string.context_gpg_encrypt),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = !inProgress) { onSelectPassword() },
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    androidx.compose.material3.RadioButton(
-                        selected = selectedKeyId == null,
-                        onClick = if (inProgress) null else onSelectPassword
-                    )
-                    Text(stringResource(R.string.browser_gpg_use_symmetric_encrypt), style = MaterialTheme.typography.bodyMedium)
-                }
-                if (useSymmetric) {
-                    Spacer(Modifier.height(12.dp))
-                    PasswordConfirmationFields(
-                        password = password,
-                        confirmPassword = confirmPassword,
-                        onPasswordChange = onPasswordChange,
-                        onConfirmPasswordChange = onConfirmPasswordChange,
-                        passwordLabel = passwordLabelText,
-                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                        enabled = !inProgress,
-                        allowBlank = false
-                    )
-                } else {
-                    ReliablePasswordInputField(
-                        value = password,
-                        onValueChange = onPasswordChange,
-                        label = { Text(stringResource(R.string.browser_enter_password)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !inProgress
-                    )
-                }
-                if (keys.isNotEmpty()) {
-                    Spacer(Modifier.height(16.dp))
-                    Text(stringResource(R.string.browser_gpg_or_select_public_key), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface)
-                    Spacer(Modifier.height(8.dp))
-                    keys.forEach { (keyId, desc) ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable(enabled = !inProgress) { onSelectKey(keyId) },
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            androidx.compose.material3.RadioButton(
-                                selected = selectedKeyId == keyId,
-                                onClick = if (inProgress) null else { { onSelectKey(keyId) } }
-                            )
-                            Text(desc, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
-                        }
-                    }
-                }
-                if (inProgress) {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.browser_encrypting), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !inProgress) { Text(stringResource(R.string.common_cancel)) }
-                    Button(
-                        onClick = { onConfirm(password, selectedKeyId) },
-                        enabled = !inProgress && (selectedKeyId != null || symmetricPasswordReady)
-                    ) { Text(stringResource(R.string.common_ok)) }
-                }
-            }
-        }
-    }
-}
 
 /** 直接编辑 .pass 文件：解密后显示可编辑文本，存盘时若已修改则重新加密写回。 */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -3386,519 +3147,6 @@ fun PassEditScreen(
             minLines = 20,
             maxLines = Int.MAX_VALUE
         )
-    }
-}
-
-@Composable
-fun GpgMethodDialog(
-    isDecrypt: Boolean,
-    fileName: String,
-    hasPublicKeys: Boolean,
-    hasSecretKeys: Boolean,
-    onSymmetric: () -> Unit,
-    onPublicKey: () -> Unit,
-    onSecretKey: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(
-                    if (isDecrypt) context.getString(R.string.context_gpg_decrypt) else context.getString(R.string.context_gpg_encrypt),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(16.dp))
-                if (isDecrypt) {
-                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_password_decrypt)) }
-                    if (hasSecretKeys) {
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = onSecretKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_secret_key_decrypt)) }
-                    }
-                } else {
-                    Button(onClick = onSymmetric, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_gpg_symmetric_encrypt)) }
-                    if (hasPublicKeys) {
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = onPublicKey, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.browser_op_public_key_encrypt)) }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
-            }
-        }
-    }
-}
-
-@Composable
-fun GpgPublicKeyPickerDialog(
-    keys: List<Pair<Long, String>>,
-    fileName: String,
-    onConfirm: (keyId: Long, keyDesc: String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var selectedKeyId by remember { mutableStateOf<Long?>(keys.firstOrNull()?.first) }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(stringResource(R.string.browser_op_public_key_encrypt), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text(fileName, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(16.dp))
-                keys.forEach { (keyId, desc) ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { selectedKeyId = keyId },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        androidx.compose.material3.RadioButton(
-                            selected = selectedKeyId == keyId,
-                            onClick = { selectedKeyId = keyId }
-                        )
-                        Text(desc, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(start = 8.dp))
-                    }
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
-                    Button(onClick = {
-                        val kid = selectedKeyId
-                        val desc = keys.find { it.first == kid }?.second ?: ""
-                        if (kid != null) onConfirm(kid, desc)
-                    }) { Text(stringResource(R.string.quick_crypto_action_encrypt_short)) }
-                }
-            }
-        }
-    }
-}
-@Composable
-fun CacheManagementDialog(
-    context: Context,
-    onDismiss: () -> Unit
-) {
-    var entries by remember { mutableStateOf<List<CacheEntry>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    val scope = rememberCoroutineScope()
-    LaunchedEffect(Unit) {
-        entries = withContext(Dispatchers.IO) { getCacheEntries(context) }
-        loading = false
-    }
-    fun refresh() {
-        scope.launch {
-            entries = withContext(Dispatchers.IO) { getCacheEntries(context) }
-        }
-    }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(
-                Modifier
-                    .padding(24.dp)
-                    .widthIn(max = 400.dp)
-            ) {
-                Text(stringResource(R.string.cache_management_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(16.dp))
-                if (loading) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.padding(24.dp))
-                    }
-                } else {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        entries.forEach { entry ->
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(entry.displayName, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-                                    if (entry.description.isNotBlank()) {
-                                        Text(
-                                            entry.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Text(formatSize(entry.sizeBytes), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                TextButton(
-                                    onClick = {
-                                        scope.launch {
-                                            withContext(Dispatchers.IO) { clearCacheEntry(context, entry) }
-                                            refresh()
-                                            Toast.makeText(context, context.getString(R.string.cache_cleared_entry, entry.displayName), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                ) { Text(stringResource(R.string.cache_clear_entry)) }
-                            }
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                if (!loading && entries.isNotEmpty()) {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                withContext(Dispatchers.IO) {
-                                    entries.forEach { clearCacheEntry(context, it) }
-                                }
-                                refresh()
-                                Toast.makeText(context, context.getString(R.string.cache_clear_all_done), Toast.LENGTH_SHORT).show()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text(stringResource(R.string.cache_clear_all)) }
-                    Spacer(Modifier.height(8.dp))
-                }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-            }
-        }
-    }
-}
-
-private sealed class PendingDelete {
-    object Secret : PendingDelete()
-    object AllPublic : PendingDelete()
-    data class SinglePublic(val keyId: Long) : PendingDelete()
-}
-
-@Composable
-fun KeyManagementDialog(
-    context: Context,
-    onDismiss: () -> Unit,
-    onKeysChanged: () -> Unit = {},
-    onOpenPubkeyShare: (() -> Unit)? = null
-) {
-    var publicKeys by remember { mutableStateOf<List<KeyInfo>>(emptyList()) }
-    var secretKeys by remember { mutableStateOf<List<KeyInfo>>(emptyList()) }
-    var keyFiles by remember { mutableStateOf(emptyList<Pair<String, Long>>()) }
-    var loading by remember { mutableStateOf(true) }
-    var refreshTrigger by remember { mutableStateOf(0) }
-    var importAsPrivate by remember { mutableStateOf(true) }
-    var pendingDelete by remember { mutableStateOf<PendingDelete?>(null) }
-    var deleteConfirmInput by remember { mutableStateOf("") }
-    var pendingExportFilename by remember { mutableStateOf("") }
-    var pendingExportSecret by remember { mutableStateOf(false) }
-    var pendingExportKeyId by remember { mutableStateOf<Long?>(null) }
-    var showGenerateKeyDialog by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val keyImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) {
-            val asPriv = importAsPrivate
-            scope.launch {
-                val (ok, err) = withContext(Dispatchers.IO) {
-                    context.contentResolver.openInputStream(uri)?.use { input ->
-                        val bytes = input.readBytes()
-                        if (asPriv) {
-                            parseSecretKeyRingFromStream(bytes.inputStream())?.let { saveSecretKeyRing(context, it) }
-                                ?: Pair(false, context.getString(R.string.gpg_parse_secret_failed))
-                        } else {
-                            parsePublicKeyRingFromStream(bytes.inputStream())?.let { mergePublicKeyRing(context, it) }
-                                ?: Pair(false, context.getString(R.string.gpg_parse_public_failed))
-                        }
-                    } ?: Pair(false, context.getString(R.string.gpg_read_file_failed))
-                }
-                if (ok) {
-                    Toast.makeText(context, context.getString(R.string.gpg_import_success), Toast.LENGTH_SHORT).show()
-                    refreshTrigger++
-                    onKeysChanged()
-                } else {
-                    Toast.makeText(context, context.getString(R.string.gpg_import_failed, err), Toast.LENGTH_LONG).show()
-                }
-            }
-        }
-    }
-    val keyExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pgp-keys")) { uri ->
-        if (uri != null && pendingExportFilename.isNotEmpty()) {
-            scope.launch {
-                val bytes = withContext(Dispatchers.IO) {
-                    when {
-                        pendingExportSecret -> getSecretKeyRingBytes(context)
-                        pendingExportKeyId != null -> getSinglePublicKeyRingBytes(context, pendingExportKeyId!!)
-                        else -> getAllPublicKeyRingsBytes(context)
-                    }
-                }
-                if (bytes != null) {
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
-                    }
-                    Toast.makeText(context, context.getString(R.string.gpg_export_success), Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(context, context.getString(R.string.gpg_export_failed), Toast.LENGTH_SHORT).show()
-                }
-                pendingExportFilename = ""
-                pendingExportKeyId = null
-                pendingExportSecret = false
-            }
-        }
-    }
-    LaunchedEffect(refreshTrigger) {
-        loading = true
-        withContext(Dispatchers.IO) {
-            val pubRings = loadPublicKeyRings(context)
-            val secRings = loadSecretKeyRings(context)
-            publicKeys = listPublicKeyInfos(pubRings)
-            secretKeys = listSecretKeyInfos(secRings)
-            keyFiles = listGpgKeyFiles(context)
-        }
-        loading = false
-    }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(stringResource(R.string.gpg_keys_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Text(stringResource(R.string.gpg_keys_subtitle), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(12.dp))
-                Button(onClick = { showGenerateKeyDialog = true }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.gpg_generate_keypair)) }
-                if (onOpenPubkeyShare != null) {
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedButton(onClick = { onDismiss(); onOpenPubkeyShare() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.gpg_pubkey_share_git)) }
-                }
-                Spacer(Modifier.height(16.dp))
-                if (loading) {
-                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(Modifier.size(32.dp))
-                    }
-                } else {
-                    Column(Modifier.verticalScroll(rememberScrollState())) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.gpg_public_keys_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                            Row {
-                                TextButton(onClick = { importAsPrivate = false; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text(stringResource(R.string.gpg_import_public_key)) }
-                                if (publicKeys.isNotEmpty()) {
-                                    TextButton(onClick = { pendingDelete = PendingDelete.AllPublic; deleteConfirmInput = "" }) { Text(stringResource(R.string.gpg_delete_all_public_keys)) }
-                                    TextButton(onClick = {
-                                        pendingExportFilename = "pubring.asc"
-                                        pendingExportSecret = false
-                                        pendingExportKeyId = null
-                                        keyExportLauncher.launch("pubring.asc")
-                                    }) { Text(stringResource(R.string.gpg_export_all_public_keys)) }
-                                }
-                            }
-                        }
-                        if (publicKeys.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        else publicKeys.forEachIndexed { _, k ->
-                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                                Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-                                val keyId = k.keyId
-                                TextButton(onClick = {
-                                        pendingExportFilename = "pubkey_${k.keyIdHex.replace("0x", "")}.asc"
-                                        pendingExportSecret = false
-                                        pendingExportKeyId = keyId
-                                        keyExportLauncher.launch(pendingExportFilename)
-                                }) { Text(stringResource(R.string.gpg_export_key), style = MaterialTheme.typography.labelSmall) }
-                                if (publicKeys.size > 1) {
-                                    TextButton(onClick = { pendingDelete = PendingDelete.SinglePublic(keyId); deleteConfirmInput = "" }) { Text(stringResource(R.string.gpg_delete_key_short), style = MaterialTheme.typography.labelSmall) }
-                                }
-                            }
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                            Text(stringResource(R.string.gpg_secret_keys_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                            Row {
-                                TextButton(onClick = { importAsPrivate = true; keyImportLauncher.launch(arrayOf("application/pgp-keys", "application/octet-stream", "*/*")) }) { Text(stringResource(R.string.gpg_import_secret_key)) }
-                                if (secretKeys.isNotEmpty()) {
-                                    TextButton(onClick = {
-                                        pendingExportFilename = "secring.asc"
-                                        pendingExportSecret = true
-                                        pendingExportKeyId = null
-                                        keyExportLauncher.launch("secring.asc")
-                                    }) { Text(stringResource(R.string.gpg_export_secret_key)) }
-                                    TextButton(onClick = { pendingDelete = PendingDelete.Secret; deleteConfirmInput = "" }) { Text(stringResource(R.string.common_delete)) }
-                                }
-                            }
-                        }
-                        if (secretKeys.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        else secretKeys.forEach { k ->
-                            Text("${k.keyIdHex} ${k.primaryUserId}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                        Spacer(Modifier.height(12.dp))
-                        Text(stringResource(R.string.gpg_key_files_section), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                        if (keyFiles.isEmpty()) Text(stringResource(R.string.gpg_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        else for (pair in keyFiles) {
-                            Text("${pair.first} (${pair.second} B)", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
-                        }
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-            }
-        }
-    }
-    pendingDelete?.let { pending ->
-        val (title, message) = when (pending) {
-            is PendingDelete.Secret -> context.getString(R.string.gpg_confirm_delete_secret_title) to context.getString(R.string.gpg_confirm_delete_secret_message)
-            is PendingDelete.AllPublic -> context.getString(R.string.gpg_confirm_delete_all_public_title) to context.getString(R.string.gpg_confirm_delete_all_public_message)
-            is PendingDelete.SinglePublic -> context.getString(R.string.gpg_confirm_delete_public_title) to context.getString(R.string.gpg_confirm_delete_public_message)
-        }
-        AlertDialog(
-            onDismissRequest = { pendingDelete = null; deleteConfirmInput = "" },
-            title = { Text(title) },
-            text = {
-                Column {
-                    Text(message)
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = deleteConfirmInput,
-                        onValueChange = { deleteConfirmInput = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.gpg_confirm_delete_input_label)) },
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (deleteConfirmInput.trim().lowercase() != "yes") return@Button
-                        scope.launch {
-                            val ok = withContext(Dispatchers.IO) {
-                                when (pending) {
-                                    is PendingDelete.Secret -> deleteSecretKeys(context)
-                                    is PendingDelete.AllPublic -> deleteAllPublicKeys(context)
-                                    is PendingDelete.SinglePublic -> deletePublicKeyById(context, pending.keyId).first
-                                }
-                            }
-                            if (ok) {
-                                Toast.makeText(context, context.getString(R.string.browser_deleted), Toast.LENGTH_SHORT).show()
-                                refreshTrigger++
-                                onKeysChanged()
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.common_delete_failed), Toast.LENGTH_SHORT).show()
-                            }
-                            pendingDelete = null
-                            deleteConfirmInput = ""
-                        }
-                    },
-                    enabled = deleteConfirmInput.trim().lowercase() == "yes"
-                ) { Text(stringResource(R.string.gpg_confirm_delete_action)) }
-            },
-            dismissButton = { TextButton(onClick = { pendingDelete = null; deleteConfirmInput = "" }) { Text(stringResource(R.string.common_cancel)) } }
-        )
-    }
-    if (showGenerateKeyDialog) {
-        GenerateKeyDialog(
-            context = context,
-            hasExistingKeys = secretKeys.isNotEmpty() || publicKeys.isNotEmpty(),
-            onDismiss = { showGenerateKeyDialog = false },
-            onSuccess = { refreshTrigger++; onKeysChanged() }
-        )
-    }
-}
-
-@Composable
-fun GenerateKeyDialog(
-    context: Context,
-    hasExistingKeys: Boolean,
-    onDismiss: () -> Unit,
-    onSuccess: () -> Unit = {}
-) {
-    var identity by remember { mutableStateOf("") }
-    var passphrase by remember { mutableStateOf("") }
-    var confirmPassphrase by remember { mutableStateOf("") }
-    var confirmKeyRisk by remember { mutableStateOf(false) }
-    var generatingInProgress by remember { mutableStateOf(false) }
-    val passphraseConfirmed = isOptionalPasswordConfirmed(passphrase, confirmPassphrase)
-    val scope = rememberCoroutineScope()
-    Dialog(onDismissRequest = { if (!generatingInProgress) onDismiss() }) {
-        Surface(
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surface,
-            tonalElevation = 6.dp
-        ) {
-            Column(Modifier.padding(24.dp)) {
-                Text(stringResource(R.string.gpg_generate_title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
-                Spacer(Modifier.height(16.dp))
-                OutlinedTextField(
-                    value = identity,
-                    onValueChange = { if (!generatingInProgress) identity = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.gpg_user_id_label)) },
-                    singleLine = true,
-                    enabled = !generatingInProgress
-                )
-                Spacer(Modifier.height(8.dp))
-                PasswordConfirmationFields(
-                    password = passphrase,
-                    confirmPassword = confirmPassphrase,
-                    onPasswordChange = { if (!generatingInProgress) passphrase = it },
-                    onConfirmPasswordChange = { if (!generatingInProgress) confirmPassphrase = it },
-                    passwordLabel = context.getString(R.string.gpg_key_protect_password_label),
-                    confirmLabel = context.getString(R.string.gpg_key_protect_password_confirm),
-                    enabled = !generatingInProgress,
-                    allowBlank = true
-                )
-                if (hasExistingKeys) {
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        stringResource(R.string.gpg_generate_overwrite_warning),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
-                            checked = confirmKeyRisk,
-                            onCheckedChange = { if (!generatingInProgress) confirmKeyRisk = it },
-                            enabled = !generatingInProgress
-                        )
-                        Text(
-                            stringResource(R.string.gpg_generate_risk_ack),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                }
-                if (generatingInProgress) {
-                    Spacer(Modifier.height(16.dp))
-                    LinearProgressIndicator(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.gpg_generating), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Spacer(Modifier.height(24.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss, enabled = !generatingInProgress) { Text(stringResource(R.string.common_cancel)) }
-                    Button(
-                        onClick = {
-                            if (identity.isNotBlank() && !generatingInProgress) {
-                                generatingInProgress = true
-                                scope.launch {
-                                    val (ok, errMsg) = withContext(Dispatchers.IO) {
-                                        generateDefaultKey(context, identity.trim(), passphrase.toCharArray())
-                                    }
-                                    generatingInProgress = false
-                                    if (ok) {
-                                        Toast.makeText(context, context.getString(R.string.gpg_key_generated), Toast.LENGTH_SHORT).show()
-                                        onSuccess()
-                                        onDismiss()
-                                    } else {
-                                        Toast.makeText(context, context.getString(R.string.gpg_generate_failed, errMsg ?: context.getString(R.string.common_unknown_error)), Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            }
-                        },
-                        enabled = !generatingInProgress && passphraseConfirmed && (!hasExistingKeys || confirmKeyRisk)
-                    ) { Text(stringResource(R.string.gpg_generate_action)) }
-                }
-            }
-        }
     }
 }
 
