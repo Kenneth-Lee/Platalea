@@ -1905,6 +1905,15 @@ fun PlataleaApp(
                     RecentTabRouteState(
                         items = recentOpenItems.take(30),
                         onOpenRecentItem = { item ->
+                        openRecentItemWithStaleGuard(
+                            scope = scope,
+                            context = context,
+                            item = item,
+                            isPlaylistPresent = { id -> config.player.playlists.first().any { it.id == id } },
+                            onRemoveStaleItem = { stale ->
+                                scope.launch { config.shell.removeRecentOpenItem(stale.type, stale.key) }
+                            },
+                            open = {
                         openRecentItemByType(
                             context = context,
                             item = item,
@@ -1933,6 +1942,8 @@ fun PlataleaApp(
                             onEpubTarget = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
                             onPdfTarget = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) }
                         )
+                            }
+                    )
                     },
                         onDeleteRecentItem = { item ->
                         scope.launch {

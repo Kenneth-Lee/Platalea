@@ -1,6 +1,9 @@
 package com.kenny.localmanager.ui
 
 import android.content.Context
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.content.Intent
 import android.os.Build
 import android.widget.Toast
@@ -215,6 +218,45 @@ internal const val RECENT_TYPE_PLAYLIST = "playlist"
 
 internal const val RECENT_TYPE_EXTERNAL_OPEN = "external_open"
 
+
+/**
+ * 打开最近项的残留守卫：目标不存在（播放列表已删、文件已删或记录残缺）时
+ * 移除该最近记录并提示，不再分发打开；URL 类条目（http/https）不检查存在性。
+ */
+internal fun openRecentItemWithStaleGuard(
+    scope: kotlinx.coroutines.CoroutineScope,
+    context: Context,
+    item: RecentOpenItem,
+    isPlaylistPresent: suspend (String) -> Boolean,
+    onRemoveStaleItem: (RecentOpenItem) -> Unit,
+    open: () -> Unit,
+) {
+    scope.launch {
+        val present = when (item.type) {
+            RECENT_TYPE_PLAYLIST -> {
+                val id = item.playlistId
+                !id.isNullOrBlank() && isPlaylistPresent(id)
+            }
+            RECENT_TYPE_HTML_VIEWER -> item.uri?.let { uri ->
+                uri.startsWith("http://", ignoreCase = true) || uri.startsWith("https://", ignoreCase = true) ||
+                    withContext(Dispatchers.IO) { recentDocumentExists(context, uri) }
+            } ?: false
+            RECENT_TYPE_EXTERNAL_OPEN, RECENT_TYPE_ZIP_VIEWER, RECENT_TYPE_EPUB_RENDERER, RECENT_TYPE_PDF_VIEWER ->
+                item.uri?.let { uri -> withContext(Dispatchers.IO) { recentDocumentExists(context, uri) } } ?: false
+            else -> true
+        }
+        if (!present) {
+            onRemoveStaleItem(item)
+            Toast.makeText(context, context.getString(R.string.recent_stale_removed, item.title), Toast.LENGTH_SHORT).show()
+        } else {
+            open()
+        }
+    }
+}
+
+private fun recentDocumentExists(context: Context, uriString: String): Boolean = runCatching {
+    androidx.documentfile.provider.DocumentFile.fromSingleUri(context, Uri.parse(uriString))?.exists() == true
+}.getOrDefault(false)
 
 private fun buildRecentModel(uri: String, name: String): DocumentFileModel {
     return DocumentFileModel(

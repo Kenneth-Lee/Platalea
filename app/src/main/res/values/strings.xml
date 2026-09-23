@@ -46,6 +46,7 @@
     <string name="recent_external_open_failed">外部打开失败：没有可打开的应用</string>
     <string name="recent_unsupported_zip_type">暂不支持从最近条目打开此 ZIP 类型</string>
     <string name="recent_unknown_type">未知条目类型：%1$s</string>
+    <string name="recent_stale_removed">「%1$s」已不存在，已从最近列表移除</string>
     <string name="directory_root_name">根目录</string>
     <string name="directory_filter_placeholder">正则过滤文件名，留空显示全部</string>
     <string name="directory_filter_clear">清除过滤</string>

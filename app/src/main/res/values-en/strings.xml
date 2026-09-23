@@ -42,6 +42,7 @@
     <string name="recent_external_open_failed">Failed to open externally: no compatible app was found.</string>
     <string name="recent_unsupported_zip_type">This ZIP type cannot be reopened from Recent yet.</string>
     <string name="recent_unknown_type">Unknown recent item type: %1$s</string>
+    <string name="recent_stale_removed">"%1$s" no longer exists; removed from recent items</string>
     <string name="directory_root_name">Root Directory</string>
     <string name="directory_filter_placeholder">Filter file names with regex. Leave empty to show all.</string>
     <string name="directory_filter_clear">Clear filter</string>

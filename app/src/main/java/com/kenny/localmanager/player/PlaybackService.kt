@@ -271,6 +271,14 @@ class PlaybackService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // startForegroundService() 契约：进入 onStartCommand 即先进入前台，
+        // 无论后续走哪条分支（含"列表已删/为空→立即退出"），否则系统超时后
+        // 以 RemoteServiceException 杀进程（RECENT 残留播放列表条目即触发过崩溃）。
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+        } else {
+            startForeground(NOTIFICATION_ID, buildNotification())
+        }
         when (intent?.action) {
             ACTION_PLAY -> {
                 val plId = intent.getStringExtra(EXTRA_PLAYLIST_ID)
@@ -638,7 +646,9 @@ class PlaybackService : Service() {
                 }
                 setOnCompletionListener {
                     progressUpdateRunnable?.let(handler::removeCallbacks)
-                    playNext()
+                    // 自然完成不把末尾位置存为恢复点；前进后 playTrackAtIndex
+                    // 的 persistPlaybackState 会把恢复点落在下一首开头。
+                    playNext(skipSave = true)
                 }
                 setOnErrorListener { _, what, extra ->
                     recordPlayerError("MediaPlayer what=$what extra=$extra")
@@ -1167,7 +1177,15 @@ class PlaybackService : Service() {
         if (!skipSave) savePosition()
         val next = currentIndex.get() + 1
         if (next >= playlistUris.size) {
+            val finishedPlaylistId = playlistId
             stopPlayback()
+            // 列表自然播完：恢复点回到列表头。
+            // 否则末尾位置被存为恢复点，下次打开该列表会"恢复到末尾即完成"，看似无响应。
+            if (finishedPlaylistId != null) {
+                scope.launch(Dispatchers.IO) {
+                    prefs.setPlayerLastStateForPlaylist(finishedPlaylistId, 0, 0L)
+                }
+            }
             return
         }
         playTrackAtIndex(next)
