@@ -1417,6 +1417,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_pending_list_title">待处理列表 (%1$d)</string>
     <string name="browser_pending_compress_confirm">将处理 %1$d 项。为避免误操作，请确认以下待处理列表：</string>
     <string name="browser_pending_more_items">... 另有 %1$d 项</string>
+    <string name="browser_progress_bytes">%1$s / %2$s（%3$d%%）</string>
     <string name="browser_progress_items">%1$d / %2$d 项</string>
     <string name="browser_progress_in_progress">%1$s 中…</string>
     <string name="browser_file_exists_overwrite">%1$s 已存在于当前目录，是否覆盖？</string>
@@ -2239,7 +2240,7 @@ OPF目录文件: %2$s</string>
     <!-- ZIP 编辑 -->
     <string name="zip_edit_menu_set_target">设为操作目标文件</string>
     <string name="zip_edit_menu_add_to_target">加入操作目标 zip</string>
-    <string name="zip_edit_pending_action">加入操作目标 zip</string>
+    <string name="zip_edit_pending_action">加入zip</string>
     <string name="zip_edit_bar_label">操作目标：%1$s</string>
     <string name="zip_edit_bar_manage">管理</string>
     <string name="zip_edit_bar_clear">清除</string>

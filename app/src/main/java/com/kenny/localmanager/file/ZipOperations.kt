@@ -26,9 +26,12 @@ import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.ZipParameters
 import net.lingala.zip4j.model.enums.AesKeyStrength
 import net.lingala.zip4j.model.enums.CompressionLevel
+import net.lingala.zip4j.model.enums.CompressionMethod
 import net.lingala.zip4j.model.enums.EncryptionMethod
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterInputStream
 import java.io.FilterOutputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
@@ -47,6 +50,78 @@ internal class ArchiveOperationCancelledException(message: String) : Interrupted
 private fun throwIfCancelled(shouldCancel: () -> Boolean) {
     if (shouldCancel()) {
         throw ArchiveOperationCancelledException("archive operation cancelled")
+    }
+}
+
+/**
+ * 字节级进度上报器：带节流（避免 64KB chunk 粒度回调过频导致 UI 重组风暴），
+ * done 超出 total 时顶格（产物字节数与源不一定相等，进度语义是“接近完成”而非精确计量）。
+ */
+private class BytesProgressReporter(
+    private val onBytes: ((Long, Long) -> Unit)?,
+    totalBytes: Long
+) {
+    var total: Long = totalBytes.coerceAtLeast(0L)
+        private set
+    private var done = 0L
+    private var lastReported = 0L
+    private var step: Long = 256L * 1024
+
+    init {
+        if (total > 0) step = (total / 400).coerceAtLeast(256L * 1024)
+        report()
+    }
+
+    fun setTotal(value: Long) {
+        total = value.coerceAtLeast(0L)
+        if (total > 0) step = (total / 400).coerceAtLeast(256L * 1024)
+    }
+
+    fun add(n: Int) {
+        if (n > 0 && onBytes != null) {
+            done += n
+            maybeReport()
+        }
+    }
+
+    fun add(n: Long) {
+        if (n > 0 && onBytes != null) {
+            done += n
+            maybeReport()
+        }
+    }
+
+    private fun maybeReport() {
+        if (done - lastReported >= step || done >= total) report()
+    }
+
+    private fun report() {
+        if (onBytes != null && total > 0) onBytes.invoke(done.coerceAtMost(total), total)
+        lastReported = done
+    }
+}
+
+/** SAF 文档树总大小预扫（目录递归，与拷贝阶段遍历成本同量级）。 */
+private fun docTreeSize(context: Context, docUri: Uri, treeUri: Uri?): Long {
+    val resolved = resolveDocUriWithTree(docUri, treeUri)
+    val doc = DocumentFile.fromSingleUri(context, resolved) ?: return 0L
+    if (!doc.isDirectory) return doc.length()
+    val dirDoc = getDirectoryViaTree(context, docUri, treeUri) ?: return 0L
+    return dirDoc.listFiles().orEmpty().sumOf { docTreeSize(context, it.uri, treeUri) }
+}
+
+/** 读入计数流（计压缩器实际读入的字节）。 */
+private class CountingInputStream(input: java.io.InputStream, private val onRead: (Int) -> Unit) : FilterInputStream(input) {
+    override fun read(b: ByteArray, off: Int, len: Int): Int {
+        val n = `in`.read(b, off, len)
+        if (n > 0) onRead(n)
+        return n
+    }
+
+    override fun read(): Int {
+        val n = `in`.read()
+        if (n >= 0) onRead(1)
+        return n
     }
 }
 
@@ -1028,7 +1103,9 @@ private fun addDocumentEntryToTar(
     treeUri: Uri?,
     entryRelativePath: String,
     nameHint: String?,
-    shouldCancel: () -> Boolean
+    shouldCancel: () -> Boolean,
+    reporter: BytesProgressReporter,
+    countBytes: Boolean
 ) {
     throwIfCancelled(shouldCancel)
     val doc = DocumentFile.fromSingleUri(context, resolveDocUriWithTree(docUri, treeUri)) ?: return
@@ -1042,7 +1119,7 @@ private fun addDocumentEntryToTar(
             throwIfCancelled(shouldCancel)
             val childUri = resolveDocUriWithTree(child.uri, treeUri)
             val childPath = if (entryRelativePath.isBlank()) child.name ?: "" else "$entryRelativePath/${child.name ?: ""}"
-            addDocumentEntryToTar(tarOut, context, childUri, treeUri, childPath, child.name, shouldCancel)
+            addDocumentEntryToTar(tarOut, context, childUri, treeUri, childPath, child.name, shouldCancel, reporter, countBytes)
         }
     } else {
         val normalizedPath = entryRelativePath.ifBlank { targetName }.replace('\\', '/').trimStart('/')
@@ -1050,7 +1127,8 @@ private fun addDocumentEntryToTar(
         fileEntry.size = doc.length()
         tarOut.putArchiveEntry(fileEntry)
         context.contentResolver.openInputStream(resolveDocUriWithTree(docUri, treeUri))?.use { input ->
-            copyStreamCancellable(input, tarOut, shouldCancel)
+            val onChunk: (Int) -> Unit = if (countBytes) reporter::add else { _ -> }
+            copyStreamCancellable(input, tarOut, shouldCancel, onChunkCopied = onChunk)
         }
         tarOut.closeArchiveEntry()
     }
@@ -1064,7 +1142,8 @@ fun compressSingleFileToFormat(
     outputFileName: String,
     format: ArchiveCompressionFormat,
     setProgress: (Int, Int) -> Unit,
-    shouldCancel: () -> Boolean = { false }
+    shouldCancel: () -> Boolean = { false },
+    onBytesProgress: ((Long, Long) -> Unit)? = null
 ): Boolean {
     val resolvedUri = resolveDocUriWithTree(sourceUri, treeUri)
     val doc = DocumentFile.fromSingleUri(context, resolvedUri) ?: return false
@@ -1075,25 +1154,26 @@ fun compressSingleFileToFormat(
     var outUri: Uri? = null
     try {
         throwIfCancelled(shouldCancel)
+        val reporter = BytesProgressReporter(onBytesProgress, docTreeSize(context, sourceUri, treeUri))
         val compressed = when (format) {
             ArchiveCompressionFormat.GZ -> tempFile.apply {
                 outputStream().use { out ->
                     GzipCompressorOutputStream(out).use { gz ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, gz, shouldCancel) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, gz, shouldCancel, onChunkCopied = reporter::add) }
                     }
                 }
             }
             ArchiveCompressionFormat.BZ2 -> tempFile.apply {
                 outputStream().use { out ->
                     BZip2CompressorOutputStream(out).use { bz2 ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, bz2, shouldCancel) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, bz2, shouldCancel, onChunkCopied = reporter::add) }
                     }
                 }
             }
             ArchiveCompressionFormat.XZ -> tempFile.apply {
                 outputStream().use { out ->
                     XZCompressorOutputStream(out).use { xz ->
-                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, xz, shouldCancel) }
+                        context.contentResolver.openInputStream(resolvedUri)?.use { input -> copyStreamCancellable(input, xz, shouldCancel, onChunkCopied = reporter::add) }
                     }
                 }
             }
@@ -1132,7 +1212,8 @@ fun compressTarArchive(
     compressionFormat: ArchiveCompressionFormat,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit,
-    shouldCancel: () -> Boolean = { false }
+    shouldCancel: () -> Boolean = { false },
+    onBytesProgress: ((Long, Long) -> Unit)? = null
 ): Boolean {
     if (password != null && password.isNotEmpty()) {
         Log.w(TAG, "compressTarArchive: password ignored for ${compressionFormat.extension}; tar-based formats do not support encryption in this app")
@@ -1162,6 +1243,9 @@ fun compressTarArchive(
     var outUri: Uri? = null
     try {
         throwIfCancelled(shouldCancel)
+        val reporter = BytesProgressReporter(onBytesProgress, sourceUris.sumOf { docTreeSize(context, it, treeUri) })
+        // 纯 tar：tar 写入即最终产物，计入 tar 阶段；带二次压缩：tar 阶段不计（每个字节在二次压缩读入时恰好计一次）
+        val countTarBytes = compressionFormat == ArchiveCompressionFormat.TAR
         val tarOut = TarArchiveOutputStream(tarPath.outputStream())
         tarOut.use { out ->
             sourceUris.forEachIndexed { index, uri ->
@@ -1173,7 +1257,7 @@ fun compressTarArchive(
                     sourceUris.size == 1 -> doc.name ?: "archive"
                     else -> doc.name ?: "${index}"
                 }
-                addDocumentEntryToTar(out, context, resolvedUri, treeUri, entryName, doc.name, shouldCancel)
+                addDocumentEntryToTar(out, context, resolvedUri, treeUri, entryName, doc.name, shouldCancel, reporter, countTarBytes)
             }
         }
 
@@ -1183,17 +1267,17 @@ fun compressTarArchive(
             }
             ArchiveCompressionFormat.TAR_GZ -> {
                 GzipCompressorOutputStream(outputFile.outputStream()).use { gzip ->
-                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, gzip, shouldCancel) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, gzip, shouldCancel, onChunkCopied = reporter::add) }
                 }
             }
             ArchiveCompressionFormat.TAR_BZ2 -> {
                 BZip2CompressorOutputStream(outputFile.outputStream()).use { bz2 ->
-                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, bz2, shouldCancel) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, bz2, shouldCancel, onChunkCopied = reporter::add) }
                 }
             }
             ArchiveCompressionFormat.TAR_XZ -> {
                 XZCompressorOutputStream(outputFile.outputStream()).use { xz ->
-                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, xz, shouldCancel) }
+                    tarPath.inputStream().use { tarIn -> copyStreamCancellable(tarIn, xz, shouldCancel, onChunkCopied = reporter::add) }
                 }
             }
             else -> return false
@@ -1231,6 +1315,7 @@ fun compressTarArchive(
  * @param zipFileName 生成的 zip 文件名（含 .zip）
  * @param password 加密密码，无密码传 null
  * @param setProgress (current, total) 当前项/总项数
+ * @param onBytesProgress 可选字节级进度（done, total），全程覆盖拷贝与压缩阶段
  * @return 成功 true
  */
 fun compressToZip(
@@ -1241,7 +1326,8 @@ fun compressToZip(
     zipFileName: String,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit,
-    shouldCancel: () -> Boolean = { false }
+    shouldCancel: () -> Boolean = { false },
+    onBytesProgress: ((Long, Long) -> Unit)? = null
 ): Boolean {
     val cr = context.contentResolver
     val cacheDir = File(context.cacheDir, "zip_compress_${System.currentTimeMillis()}").apply { mkdirs() }
@@ -1249,11 +1335,11 @@ fun compressToZip(
     var outUri: Uri? = null
     try {
         throwIfCancelled(shouldCancel)
+        val reporter = BytesProgressReporter(onBytesProgress, sourceUris.sumOf { docTreeSize(context, it, treeUri) })
         val total = sourceUris.size
         val zip = ZipFile(zipPath).apply {
             if (password != null && password.isNotEmpty()) setPassword(password)
         }
-        val params = buildZipParametersForCompression(password)
         sourceUris.forEachIndexed { index, uri ->
             throwIfCancelled(shouldCancel)
             setProgress(index, total)
@@ -1272,7 +1358,7 @@ fun compressToZip(
             if (doc.isDirectory) {
                 localEntry.mkdirs()
                 copyDocumentToLocal(context, resolvedUri, localEntry, treeUri, shouldCancel)
-                zip.addFolder(localEntry, params)
+                addLocalDirToZipStream(zip, localEntry, name, password, reporter, shouldCancel)
                 localEntry.deleteRecursively()
             } else {
                 cr.openInputStream(resolvedUri)?.use { input ->
@@ -1281,7 +1367,7 @@ fun compressToZip(
                     Log.e(TAG, "compressToZip: openInputStream failed for $resolvedUri")
                     return false
                 }
-                zip.addFile(localEntry, params)
+                addLocalFileToZipStream(zip, localEntry, name, password, reporter, shouldCancel)
                 localEntry.delete()
             }
         }
@@ -1320,6 +1406,51 @@ fun compressToZip(
     }
 }
 
+/** 本地文件流式写入 zip（字节计数穿透压缩阶段）。 */
+private fun addLocalFileToZipStream(
+    zip: ZipFile,
+    local: File,
+    entryName: String,
+    password: CharArray?,
+    reporter: BytesProgressReporter,
+    shouldCancel: () -> Boolean
+) {
+    throwIfCancelled(shouldCancel)
+    val params = buildZipParametersForCompression(password).apply {
+        fileNameInZip = entryName
+        entrySize = local.length()
+    }
+    local.inputStream().use { input ->
+        zip.addStream(CountingInputStream(input, reporter::add), params)
+    }
+}
+
+/** 本地目录流式写入 zip：目录条目 STORE 空流，子项递归（探针实证 addStream 支持）。 */
+private fun addLocalDirToZipStream(
+    zip: ZipFile,
+    dir: File,
+    entryPrefix: String,
+    password: CharArray?,
+    reporter: BytesProgressReporter,
+    shouldCancel: () -> Boolean
+) {
+    throwIfCancelled(shouldCancel)
+    val dirParams = buildZipParametersForCompression(null).apply {
+        fileNameInZip = "$entryPrefix/"
+        entrySize = 0L
+        compressionMethod = CompressionMethod.STORE
+    }
+    zip.addStream(ByteArrayInputStream(ByteArray(0)), dirParams)
+    dir.listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
+        val childName = "$entryPrefix/${child.name}"
+        if (child.isDirectory) {
+            addLocalDirToZipStream(zip, child, childName, password, reporter, shouldCancel)
+        } else {
+            addLocalFileToZipStream(zip, child, childName, password, reporter, shouldCancel)
+        }
+    }
+}
+
 /** 将若干文件/目录压缩为 7z，保存到指定目录。 */
 fun compressTo7z(
     context: Context,
@@ -1329,7 +1460,8 @@ fun compressTo7z(
     sevenZFileName: String,
     password: CharArray?,
     setProgress: (Int, Int) -> Unit,
-    shouldCancel: () -> Boolean = { false }
+    shouldCancel: () -> Boolean = { false },
+    onBytesProgress: ((Long, Long) -> Unit)? = null
 ): Boolean {
     val cr = context.contentResolver
     val cacheDir = File(context.cacheDir, "7z_compress_${System.currentTimeMillis()}").apply { mkdirs() }
@@ -1337,6 +1469,7 @@ fun compressTo7z(
     var outUri: Uri? = null
     try {
         throwIfCancelled(shouldCancel)
+        val reporter = BytesProgressReporter(onBytesProgress, sourceUris.sumOf { docTreeSize(context, it, treeUri) })
         val total = sourceUris.size.coerceAtLeast(1)
         val out = if (password != null && password.isNotEmpty()) {
             SevenZOutputFile(sevenZPath, password)
@@ -1354,13 +1487,13 @@ fun compressTo7z(
                 if (doc.isDirectory) {
                     localEntry.mkdirs()
                     copyDocumentToLocal(context, resolvedUri, localEntry, treeUri, shouldCancel)
-                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel)
+                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel, reporter)
                     localEntry.deleteRecursively()
                 } else {
                     cr.openInputStream(resolvedUri)?.use { input ->
                         localEntry.outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
                     } ?: return false
-                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel)
+                    addLocalTo7z(sevenZOut, localEntry, name, shouldCancel, reporter)
                     localEntry.delete()
                 }
             }
@@ -1394,7 +1527,7 @@ fun compressTo7z(
     }
 }
 
-private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, shouldCancel: () -> Boolean) {
+private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, shouldCancel: () -> Boolean, reporter: BytesProgressReporter) {
     throwIfCancelled(shouldCancel)
     val normalized = entryName.replace('\\', '/')
     if (local.isDirectory) {
@@ -1405,7 +1538,7 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, 
         local.listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
             throwIfCancelled(shouldCancel)
             val childName = "$normalized/${child.name}"
-            addLocalTo7z(out, child, childName, shouldCancel)
+            addLocalTo7z(out, child, childName, shouldCancel, reporter)
         }
     } else {
         val fileEntry: SevenZArchiveEntry = out.createArchiveEntry(local, normalized)
@@ -1418,6 +1551,7 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, 
                     val read = input.read(buffer)
                     if (read <= 0) break
                     out.write(buffer, 0, read)
+                    reporter.add(read)
                 }
             }
         } finally {
@@ -1428,7 +1562,7 @@ private fun addLocalTo7z(out: SevenZOutputFile, local: File, entryName: String, 
 
 /** 将 DocumentFile（目录）内容递归复制到已存在的本地目录 localDir。 */
 private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, treeUri: Uri?) {
-    copyDocumentToLocal(context, docUri, localDir, treeUri) { false }
+    copyDocumentToLocal(context, docUri, localDir, treeUri, shouldCancel = { false })
 }
 
 internal fun copyDocumentToLocal(
@@ -1436,7 +1570,8 @@ internal fun copyDocumentToLocal(
     docUri: Uri,
     localDir: File,
     treeUri: Uri?,
-    shouldCancel: () -> Boolean
+    shouldCancel: () -> Boolean,
+    onChunkCopied: (Int) -> Unit = {}
 ) {
     throwIfCancelled(shouldCancel)
     // 必须用树遍历得到的 DocumentFile，否则 SingleDocumentFile.listFiles() 会抛 UnsupportedOperationException
@@ -1447,10 +1582,10 @@ internal fun copyDocumentToLocal(
         val name = child.name ?: return@forEach
         val childUri = resolveDocUriWithTree(child.uri, treeUri)
         if (child.isDirectory) {
-            File(localDir, name).apply { mkdirs() }.let { copyDocumentToLocal(context, childUri, it, treeUri, shouldCancel) }
+            File(localDir, name).apply { mkdirs() }.let { copyDocumentToLocal(context, childUri, it, treeUri, shouldCancel, onChunkCopied) }
         } else {
             context.contentResolver.openInputStream(childUri)?.use { input ->
-                File(localDir, name).outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel) }
+                File(localDir, name).outputStream().use { output -> copyStreamCancellable(input, output, shouldCancel, onChunkCopied = onChunkCopied) }
             }
         }
     }

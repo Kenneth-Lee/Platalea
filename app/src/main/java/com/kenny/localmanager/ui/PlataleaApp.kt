@@ -1565,7 +1565,8 @@ fun PlataleaApp(
             format: ArchiveCompressionFormat,
             password: CharArray?,
             setProgress: (Int, Int) -> Unit,
-            shouldCancel: () -> Boolean = { false }
+            shouldCancel: () -> Boolean = { false },
+            onBytesProgress: ((Long, Long) -> Unit)? = null
         ): Boolean {
             if (sourceUris.isEmpty()) return false
             val outputName = buildArchiveOutputName(baseName, format)
@@ -1580,13 +1581,14 @@ fun PlataleaApp(
                         outputFileName = buildArchiveOutputName(docName, format),
                         format = format,
                         setProgress = setProgress,
-                        shouldCancel = shouldCancel
+                        shouldCancel = shouldCancel,
+                        onBytesProgress = onBytesProgress
                     )
                 }
             }
             return when (format) {
-                ArchiveCompressionFormat.ZIP -> compressToZip(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel)
-                ArchiveCompressionFormat.SEVEN_Z -> compressTo7z(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel)
+                ArchiveCompressionFormat.ZIP -> compressToZip(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel, onBytesProgress)
+                ArchiveCompressionFormat.SEVEN_Z -> compressTo7z(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel, onBytesProgress)
                 ArchiveCompressionFormat.TAR -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
                 ArchiveCompressionFormat.TAR_GZ -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
                 ArchiveCompressionFormat.TAR_BZ2 -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
@@ -1682,14 +1684,17 @@ fun PlataleaApp(
                         progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, 1)
                         delay(50)
                         val ok = withContext(Dispatchers.IO) {
+                        val onBytes: (Long, Long) -> Unit = { done, total ->
+                        scope.launch(Dispatchers.Main.immediate) { progressOp = progressOp?.let { it.copy(bytesDone = done, bytesTotal = total) } ?: OperationProgress(context.getString(R.string.browser_op_compress), bytesDone = done, bytesTotal = total) }
+                        }
                         if (format.compressesSingleFileOnly) {
                         compressSingleFileToFormat(context, target.uri, parentDirUri, treeUri, outputName, format, { cur, tot ->
                         scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
-                        }, shouldCancel = { cancelFlag.isCancelled() })
+                        }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
                         } else {
                         compressArchiveItems(itemUris, parentDirUri, treeUri, archiveBaseName, format, pwd, { cur, tot ->
                         scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
-                        }, shouldCancel = { cancelFlag.isCancelled() })
+                        }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
                         }
                         }
                         delay(120)
@@ -1723,17 +1728,20 @@ fun PlataleaApp(
                         progressOp = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
                         delay(50)
                         val ok = withContext(Dispatchers.IO) {
+                        val onBytes: (Long, Long) -> Unit = { done, total ->
+                        scope.launch(Dispatchers.Main.immediate) { progressOp = progressOp?.let { it.copy(bytesDone = done, bytesTotal = total) } ?: OperationProgress(context.getString(R.string.browser_op_compress), bytesDone = done, bytesTotal = total) }
+                        }
                         if (format.compressesSingleFileOnly) {
                         val allOk = items.all { item ->
                         compressSingleFileToFormat(context, item.uri, currentDirUri, rootTreeUri, buildArchiveOutputName(item.name, format), format, { cur, tot ->
                         scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
-                        }, shouldCancel = { cancelFlag.isCancelled() })
+                        }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
                         }
                         allOk
                         } else {
                         compressArchiveItems(items.map { it.uri }, currentDirUri, rootTreeUri, "archive", format, pwd, { cur, tot ->
                         scope.launch(Dispatchers.Main.immediate) { progressOp = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
-                        }, shouldCancel = { cancelFlag.isCancelled() })
+                        }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
                         }
                         }
                         delay(120)

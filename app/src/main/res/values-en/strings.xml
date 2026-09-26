@@ -1344,6 +1344,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_pending_list_title">Pending list (%1$d)</string>
     <string name="browser_pending_compress_confirm">Processing %1$d items. Confirm the pending list to avoid mistakes:</string>
     <string name="browser_pending_more_items">... and %1$d more items</string>
+    <string name="browser_progress_bytes">%1$s / %2$s (%3$d%%)</string>
     <string name="browser_progress_items">%1$d / %2$d items</string>
     <string name="browser_progress_in_progress">%1$s in progress…</string>
     <string name="browser_file_exists_overwrite">%1$s already exists in this directory. Overwrite?</string>
@@ -2162,7 +2163,7 @@ Use a dedicated PDF reader if you need to select text.</string>
     <!-- ZIP editing -->
     <string name="zip_edit_menu_set_target">Set as operation target file</string>
     <string name="zip_edit_menu_add_to_target">Add to target zip</string>
-    <string name="zip_edit_pending_action">Add to target zip</string>
+    <string name="zip_edit_pending_action">Add to zip</string>
     <string name="zip_edit_bar_label">Target: %1$s</string>
     <string name="zip_edit_bar_manage">Manage</string>
     <string name="zip_edit_bar_clear">Clear</string>

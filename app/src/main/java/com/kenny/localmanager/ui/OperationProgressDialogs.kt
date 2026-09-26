@@ -22,8 +22,15 @@ import java.util.Locale
 
 /**
  * 通用操作进度件：进度数据 + 取消标志 + 进度弹窗（各域长任务共用，AppShell 渲染）。
+ * bytesTotal > 0 时优先按字节显示（大文件/目录的字节级进度）。
  */
-internal data class OperationProgress(val label: String, val current: Int = 0, val total: Int? = null)
+internal data class OperationProgress(
+    val label: String,
+    val current: Int = 0,
+    val total: Int? = null,
+    val bytesDone: Long = 0L,
+    val bytesTotal: Long = 0L
+)
 
 internal class OperationCancelFlag {
     @Volatile
@@ -38,6 +45,16 @@ internal class OperationCancelFlag {
     }
 }
 
+internal fun formatBytes(bytes: Long): String {
+    val abs = if (bytes >= 0) bytes else 0L
+    if (abs < 1024) return "$abs B"
+    val kb = abs / 1024.0
+    if (kb < 1024.0) return String.format(Locale.getDefault(), "%.1f KB", kb)
+    val mb = kb / 1024.0
+    if (mb < 1024.0) return String.format(Locale.getDefault(), "%.1f MB", mb)
+    return String.format(Locale.getDefault(), "%.2f GB", mb / 1024.0)
+}
+
 @Composable
 internal fun OperationProgressDialog(progress: OperationProgress, onCancel: (() -> Unit)? = null) {
     Dialog(onDismissRequest = { }) {
@@ -45,7 +62,16 @@ internal fun OperationProgressDialog(progress: OperationProgress, onCancel: (() 
             Column(Modifier.padding(24.dp)) {
                 Text(stringResource(R.string.browser_progress_in_progress, progress.label), style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(16.dp))
-                if (progress.total != null && progress.total > 0) {
+                if (progress.bytesTotal > 0L) {
+                    val frac = (progress.bytesDone.toFloat() / progress.bytesTotal).coerceIn(0f, 1f)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), progress = { frac })
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.browser_progress_bytes, formatBytes(progress.bytesDone), formatBytes(progress.bytesTotal), (frac * 100).toInt()),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (progress.total != null && progress.total > 0) {
                     val frac = (progress.current.toFloat() / progress.total).coerceIn(0f, 1f)
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), progress = { frac })
                     Spacer(Modifier.height(8.dp))
