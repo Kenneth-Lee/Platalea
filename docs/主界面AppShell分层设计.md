@@ -295,3 +295,4 @@ interface MainTabFeature {
 - 2026-09-26：上下文菜单二轮修订——高度上限由固定 480.dp 改为屏高 90%；修复 JSON 等无专用查看器类型的菜单重复（默认打开项兜底文案即“用内置查看器打开”时，不再重复列出无条件内置查看器项）。
 - 2026-09-26：配置页“内部查看器预览长度”去重——行标题与输入框 label 此前使用同一字符串显示两次，删除输入框 label（窄输入框内长文案本就换行截断），保留行标题+范围提示。
 - 2026-09-26：ZIP 编辑进度字节化——addToZip/removeZipEntries 三阶段（拷目标快照+源拷贝 / 修改 / 写回）全部字节级进度（进度框优先显示 "xx MB / yy MB（z%）"）；addFilesToZipFile 由 zip4j addFile/addFolder 黑盒改为 addStream 流式（计数流插桩，顺带消灭同名改名的临时 rename），目录条目 STORE 空流+子项递归，加密条目按原算法保持；真机 300MB 明文 / 150MB AES 加入均平滑渐进，产物 md5/AES 解密验证。
+- 2026-09-26：修复打包阅读器缓存不随 zip 编辑失效——加入/删除成功后主动清该 zip 的全部解压缓存（md/html/pic/vid/epub 含 llm 目录，新旧 URI 都清）+ ViewerSessions 会话失效；不再依赖列表快照 lastModified 判定（编辑后列表未刷新时快照为旧值导致旧缓存复用）。真机 .pic.zip / .vid.zip 加入后查看均立即反映新内容。

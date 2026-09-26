@@ -50,6 +50,21 @@ data class ZipEditResult(
 /** 进度阶段 */
 enum class ZipEditStage { COPY_TARGET, MODIFY, WRITE_BACK }
 
+/**
+ * 使打包阅读器（md/html/pic/vid zip 及 epub/llm zip 共用的解压缓存）针对指定 zip URI 全部失效。
+ * zip 编辑写回后调用：写回走临时文档替换时 URI 可能变化，新旧 URI 都清；
+ * 失效后查看器重新解压，不依赖列表快照的 lastModified 判定（编辑后列表未刷新时快照是旧值）。
+ */
+fun invalidateArchiveViewerCaches(context: Context, vararg zipUris: Uri) {
+    for (uri in zipUris) {
+        getMdZipCacheDir(context, uri).deleteRecursively()
+        getHtmlZipCacheDir(context, uri).deleteRecursively()
+        getPicZipCacheDir(context, uri).deleteRecursively()
+        getVidZipCacheDir(context, uri).deleteRecursively()
+        getEpubCacheDir(context, uri).deleteRecursively()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 本地 File 纯函数层：全部 zip 语义在此，供单测覆盖
 // ---------------------------------------------------------------------------

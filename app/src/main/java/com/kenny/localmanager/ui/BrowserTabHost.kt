@@ -45,6 +45,7 @@ import android.widget.Toast
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.addToZip
+import com.kenny.localmanager.file.invalidateArchiveViewerCaches
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
@@ -793,6 +794,12 @@ internal fun BrowserTabHost(
                 }
                 result.ok -> {
                     val newUriString = result.newTargetUri?.toString()
+                    // 编辑写回后使该 zip 的打包阅读器解压缓存失效（新旧 URI 都清），防止查看旧内容
+                    withContext(Dispatchers.IO) {
+                        invalidateArchiveViewerCaches(context, Uri.parse(targetUri), result.newTargetUri ?: Uri.parse(targetUri))
+                    }
+                    markdownViewerSessionCache.invalidateByUri(targetUri)
+                    newUriString?.let { markdownViewerSessionCache.invalidateByUri(it) }
                     if (newUriString != null && newUriString != targetUri) {
                         if (writeBackToConfig) zipEditConfig.setOperationTarget(newUriString)
                         zipManagerSession = zipManagerSession?.let { it.copy(uri = newUriString) }
@@ -823,6 +830,12 @@ internal fun BrowserTabHost(
                     shouldCancel = { zipEditCancelFlag }
                 )
             }
+            // 删除同样使打包阅读器缓存失效（新旧 URI 都清）
+            withContext(Dispatchers.IO) {
+                invalidateArchiveViewerCaches(context, Uri.parse(session.uri), result.newTargetUri ?: Uri.parse(session.uri))
+            }
+            markdownViewerSessionCache.invalidateByUri(session.uri)
+            result.newTargetUri?.let { markdownViewerSessionCache.invalidateByUri(it.toString()) }
             if (result.ok && result.newTargetUri != null && result.newTargetUri.toString() != session.uri) {
                 if (session.fromConfig) zipEditConfig.setOperationTarget(result.newTargetUri.toString())
                 zipManagerSession = session.copy(uri = result.newTargetUri.toString())
