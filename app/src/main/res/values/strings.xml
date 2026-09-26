@@ -254,7 +254,7 @@
     <string name="config_startup_decrypt_desc">开启后启动需输入私钥密码解锁；解密成功则缓存在内存，后续使用密钥不再询问。不参与导出。</string>
     <string name="config_reader_hide_floating_next_button">隐藏阅读器悬浮翻页按钮</string>
     <string name="config_reader_hide_floating_next_button_hint">对 EPUB/PDF 阅读器生效。开启后不显示可拖动的“下一章/下页”按钮。</string>
-    <string name="config_viewer_preview_bytes">内部查看器预览长度（字节，非网络服务）</string>
+    <string name="config_viewer_preview_bytes">内部查看器预览长度（字节）</string>
     <string name="config_viewer_preview_range">范围：%1$d～%2$dM</string>
     <string name="config_ftp_password">接入密码（管理员）</string>
     <string name="config_ftp_password_hint">与 FTP 共用，对应 admin 身份：远程连入本机时可管理全部留言板与 FTP；留空则免密。用户身份（朋友、同事等）在家庭网络 Tab 中管理。</string>

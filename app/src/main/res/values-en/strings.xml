@@ -219,7 +219,7 @@
     <string name="config_hide_dot_files">Hide files starting with .</string>
     <string name="config_startup_decrypt_key">Decrypt key on startup</string>
     <string name="config_startup_decrypt_desc">When enabled, startup asks for the private-key password to unlock it. After a successful unlock, the key stays cached in memory and later key operations will not ask again. This is not exported.</string>
-    <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes, not network service)</string>
+    <string name="config_viewer_preview_bytes">Built-in viewer preview length (bytes)</string>
     <string name="config_viewer_preview_range">Range: %1$d to %2$dM</string>
     <string name="config_ftp_password">Access password (admin)</string>
     <string name="config_ftp_password_hint">Shared with FTP as the admin role. Manage all boards and FTP remotely. Leave empty for no password. User roles are managed in the Family Network tab.</string>
