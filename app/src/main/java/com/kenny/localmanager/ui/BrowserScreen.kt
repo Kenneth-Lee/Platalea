@@ -99,6 +99,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
@@ -1932,6 +1933,8 @@ internal fun BrowserScreen(
 
     if (showContextMenu && contextMenuTarget != null) {
         val menuTarget = contextMenuTarget!!
+        val openMenuLabel = defaultOpenMenuLabel(menuTarget)
+        val menuMaxHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
         Dialog(onDismissRequest = { showContextMenu = false; contextMenuTarget = null }) {
             Surface(
                 shape = MaterialTheme.shapes.large,
@@ -1941,6 +1944,8 @@ internal fun BrowserScreen(
                 Column(
                     Modifier
                         .fillMaxWidth()
+                        .heightIn(max = menuMaxHeight)
+                        .verticalScroll(rememberScrollState())
                         .padding(24.dp)
                 ) {
                     Text(
@@ -1959,7 +1964,7 @@ internal fun BrowserScreen(
                         }
                     ) {
                         Text(
-                            defaultOpenMenuLabel(menuTarget),
+                            openMenuLabel,
                             style = MaterialTheme.typography.bodyLarge.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -1972,14 +1977,17 @@ internal fun BrowserScreen(
                                     contextMenuTarget = null
                                 }
                             ) { Text(context.getString(R.string.context_open_with_other_app), color = MaterialTheme.colorScheme.onSurface) }
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onClearExternalOpenPreference(menuTarget.name)
-                                    onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
+                            // 默认打开项已是内置查看器时不再重复列出
+                            if (openMenuLabel != context.getString(R.string.context_open_with_internal_viewer)) {
+                                TextButton(
+                                    onClick = {
+                                        showContextMenu = false
+                                        onClearExternalOpenPreference(menuTarget.name)
+                                        onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
+                                        contextMenuTarget = null
+                                    }
+                                ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
+                            }
                         if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
                             TextButton(
                                 onClick = {

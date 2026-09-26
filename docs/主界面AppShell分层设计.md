@@ -291,3 +291,5 @@ interface MainTabFeature {
 - 2026-09-23（ZIP 编辑功能）：新增 file/ZipEditor.kt（纯函数层单测 8 项 + SAF 中转编排，临时文档替换写回）；ui/ZipEditWorkflow+ZipEditDialogs（加入向导三态）+ ZipManagerScreen（条目多选删除）；ConfigService 新增 ZipEditConfigView 投影；BrowserScreen 上下文菜单两项+目标指示条、PendingListScreen 批量动作；编排闭环在 BrowserTabHost 域内（deps 注入投影），PlataleaApp 仅一行接线。详见 docs/ZIP编辑功能设计.md。
 - 2026-09-25（ZIP 编辑二轮）：操作目标文件概念通用化（operation_target_uri 键 + OperationTargetConfigView 投影）；任意 zip"编辑 ZIP 内容"直接编辑（ZipManagerSession 会话，ZipManager 顶栏 SAF 添加文件）；上下文菜单去重 7 处重复项。详见 docs/ZIP编辑功能设计.md。
 - 2026-09-26：压缩进度字节化——OperationProgress 增 bytesDone/bytesTotal，进度框优先按字节显示（MB/GB + 百分比）；压缩各格式（zip/7z/tar 系/单文件 gzip 等）全程字节级进度，每个源字节恰计一次（仅计进入压缩器的阶段，拷贝暂存与写回不计）；zip 压缩改 zip4j addStream 流式写入（探针实证目录条目/嵌套/AES/ZipCrypto 支持），产物结构与原 addFile/addFolder 等价（真机 pyzipper 验证）。待处理列表加入动作更名"加入zip"。
+- 2026-09-26：文件上下文菜单（长按菜单）内容超高时可滚动——菜单容器加 heightIn(max=480.dp)+verticalScroll（与"用其他应用打开"对话框同模式），修复菜单项过多时"删除/取消"溢出屏幕不可见不可达。
+- 2026-09-26：上下文菜单二轮修订——高度上限由固定 480.dp 改为屏高 90%；修复 JSON 等无专用查看器类型的菜单重复（默认打开项兜底文案即“用内置查看器打开”时，不再重复列出无条件内置查看器项）。
