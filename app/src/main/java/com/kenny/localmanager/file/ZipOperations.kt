@@ -42,7 +42,7 @@ private const val MIME_7Z = "application/x-7z-compressed"
 private const val ARCHIVE_PROGRESS_UNITS = 10_000
 private val SEVEN_Z_SPLIT_PART_REGEX = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
 
-private class ArchiveOperationCancelledException(message: String) : InterruptedIOException(message)
+internal class ArchiveOperationCancelledException(message: String) : InterruptedIOException(message)
 
 private fun throwIfCancelled(shouldCancel: () -> Boolean) {
     if (shouldCancel()) {
@@ -381,7 +381,7 @@ fun isRarV5Archive(context: Context, archiveUri: Uri): Boolean {
 }
 
 /** 用 treeUri 解析文档 URI，使 openInputStream 等有权限。 */
-private fun resolveDocUriWithTree(uri: Uri, treeUri: Uri?): Uri = when {
+internal fun resolveDocUriWithTree(uri: Uri, treeUri: Uri?): Uri = when {
     treeUri != null -> try {
         DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getDocumentId(uri))
     } catch (_: Exception) { uri }
@@ -1431,7 +1431,7 @@ private fun copyDocumentToLocal(context: Context, docUri: Uri, localDir: File, t
     copyDocumentToLocal(context, docUri, localDir, treeUri) { false }
 }
 
-private fun copyDocumentToLocal(
+internal fun copyDocumentToLocal(
     context: Context,
     docUri: Uri,
     localDir: File,

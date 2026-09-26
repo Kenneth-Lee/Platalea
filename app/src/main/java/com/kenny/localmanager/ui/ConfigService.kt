@@ -58,6 +58,8 @@ internal class ConfigService(context: Context) {
 
     /** 主界面 AppShell 域的配置投影：Tab 记忆与最近打开记录（RECENT tab 数据源）。 */
     val shell: ShellConfigView = ShellConfigViewImpl(prefs)
+
+    val operationTarget: OperationTargetConfigView = OperationTargetConfigViewImpl(prefs)
 }
 
 @Composable
@@ -409,4 +411,17 @@ private class ShellConfigViewImpl(private val prefs: Preferences) : ShellConfigV
     ) = prefs.addRecentOpenItem(type = type, key = key, title = title, uri = uri, playlistId = playlistId)
     override suspend fun removeRecentOpenItem(type: String, key: String) = prefs.removeRecentOpenItem(type, key)
     override suspend fun clearRecentOpenItems() = prefs.clearRecentOpenItems()
+}
+
+
+/** 操作目标域的配置投影接口：目标文件的持久化指向（通用概念，zip 编辑是当前唯一使用者）。 */
+internal interface OperationTargetConfigView {
+    val operationTarget: Flow<String?>
+
+    suspend fun setOperationTarget(uri: String?)
+}
+
+private class OperationTargetConfigViewImpl(private val prefs: Preferences) : OperationTargetConfigView {
+    override val operationTarget get() = prefs.operationTargetUri
+    override suspend fun setOperationTarget(uri: String?) = prefs.setOperationTargetUri(uri)
 }

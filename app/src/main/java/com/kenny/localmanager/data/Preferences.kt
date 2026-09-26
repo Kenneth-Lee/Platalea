@@ -16,6 +16,7 @@ import java.util.UUID
 private val Context.dataStore: DataStore<androidx.datastore.preferences.core.Preferences> by preferencesDataStore(name = "settings")
 
 private val ROOT_URI = stringPreferencesKey("root_uri")
+private val OPERATION_TARGET_URI = stringPreferencesKey("operation_target_uri")
 private val HIDE_DOT_FILES = booleanPreferencesKey("hide_dot_files")
 private val VIEWER_PREVIEW_BYTES = intPreferencesKey("viewer_preview_bytes")
 private val FTP_PORT = intPreferencesKey("ftp_port")
@@ -153,6 +154,11 @@ data class DirectoryScrollMemory(
 class Preferences(private val context: Context) {
     val rootUri: Flow<String?> = context.dataStore.data.map { prefs ->
         prefs[ROOT_URI]
+    }
+
+    /** 操作目标文件（通用概念：当前作为某类操作对象的文件；目前 zip 编辑是唯一使用者） */
+    val operationTargetUri: Flow<String?> = context.dataStore.data.map { prefs ->
+        prefs[OPERATION_TARGET_URI]
     }
 
     val hideDotFiles: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -354,6 +360,13 @@ class Preferences(private val context: Context) {
         context.dataStore.edit { prefs ->
             if (uri == null) prefs.remove(ROOT_URI)
             else prefs[ROOT_URI] = uri
+        }
+    }
+
+    suspend fun setOperationTargetUri(uri: String?) {
+        context.dataStore.edit { prefs ->
+            if (uri == null) prefs.remove(OPERATION_TARGET_URI)
+            else prefs[OPERATION_TARGET_URI] = uri
         }
     }
 

@@ -2235,4 +2235,47 @@ OPF目录文件: %2$s</string>
     <string name="family_board_probe_recognized_none">无可识别的 IPv4 地址声明</string>
     <string name="family_board_probe_no_same_subnet">未发现与当前设备同网段的目标地址，已停止连接尝试（local=%1$s, attempted=%2$s, recognized=%3$s）。</string>
     <string name="family_board_probe_network_failure">网络连接失败：%1$s（local=%2$s, remote=%3$s, attempted=%4$s, recognized=%5$s）。%6$s</string>
+
+    <!-- ZIP 编辑 -->
+    <string name="zip_edit_menu_set_target">设为操作目标文件</string>
+    <string name="zip_edit_menu_add_to_target">加入操作目标 zip</string>
+    <string name="zip_edit_pending_action">加入操作目标 zip</string>
+    <string name="zip_edit_bar_label">操作目标：%1$s</string>
+    <string name="zip_edit_bar_manage">管理</string>
+    <string name="zip_edit_bar_clear">清除</string>
+    <string name="zip_edit_target_cleared">已清除 ZIP 编辑目标</string>
+    <string name="zip_edit_target_set">已设为操作目标：%1$s</string>
+    <string name="zip_edit_target_invalid">目标不可用，已清除；仅支持未加密未混淆的 zip</string>
+    <string name="zip_edit_no_target">尚未设置操作目标文件，请先长按某个文件设为目标</string>
+    <string name="zip_edit_add_title">加入 ZIP 编辑目标</string>
+    <string name="zip_edit_add_confirm">将把 %2$d 个文件/目录加入“%1$s”</string>
+    <string name="zip_edit_add_action">加入</string>
+    <string name="zip_edit_progress_title">正在编辑 ZIP</string>
+    <string name="zip_edit_stage_copy">正在读取目标与源文件…</string>
+    <string name="zip_edit_stage_modify">正在修改压缩包…</string>
+    <string name="zip_edit_stage_write_back">正在写回目标文件…</string>
+    <string name="zip_edit_result_ok_title">完成</string>
+    <string name="zip_edit_result_fail_title">失败</string>
+    <string name="zip_edit_result_ok">操作已完成</string>
+    <string name="zip_edit_result_renamed">以下条目因同名已自动改名：</string>
+    <string name="zip_edit_result_encrypted_kept">目标为加密压缩包，新条目已按原加密方式加密</string>
+    <string name="zip_edit_password_title">输入 ZIP 密码</string>
+    <string name="zip_edit_password_hint">“%1$s”为加密压缩包，需要密码才能加入：</string>
+    <string name="zip_edit_password_wrong">密码不正确，请重试</string>
+    <string name="zip_edit_password_wrong_result">密码不正确，未做任何修改</string>
+    <string name="zip_edit_encrypted_badge">加密</string>
+    <string name="zip_edit_menu_edit_contents">编辑 ZIP 内容</string>
+    <string name="zip_manager_add_files">添加文件</string>
+    <string name="zip_edit_copy_source_failed">无法读取所选文件</string>
+    <string name="zip_edit_self_add_blocked">目标 zip 不能加入它自身</string>
+    <string name="zip_manager_title">管理：%1$s</string>
+    <string name="zip_manager_loading">正在读取条目…</string>
+    <string name="zip_manager_load_failed">无法读取目标（可能已不存在、加密或混淆）</string>
+    <string name="zip_manager_empty">压缩包为空</string>
+    <string name="zip_manager_selected_count">已选 %1$d 项</string>
+    <string name="zip_manager_clear_selection">取消全选</string>
+    <string name="zip_manager_delete_action">删除所选</string>
+    <string name="zip_manager_delete_confirm_title">删除条目</string>
+    <string name="zip_manager_delete_confirm">将从压缩包中永久删除 %1$d 个条目，此操作不可撤销。</string>
+    <string name="zip_manager_entry_meta">大小 %1$d · 压缩后 %2$d</string>
 </resources>

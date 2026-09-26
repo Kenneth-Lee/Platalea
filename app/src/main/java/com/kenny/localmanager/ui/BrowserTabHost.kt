@@ -3,6 +3,7 @@ package com.kenny.localmanager.ui
 import android.content.Context
 import android.graphics.drawable.Icon
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import com.kenny.localmanager.data.AudioMetaAnnotation
 import kotlinx.coroutines.CoroutineScope
@@ -42,11 +44,13 @@ import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.addToZip
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.moveToTrash
+import com.kenny.localmanager.file.removeZipEntries
 import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.moveDocumentTo
@@ -668,6 +672,7 @@ internal class BrowserTabHostDependencies(
     val onBatchMask: (List<DocumentFileModel>) -> Unit,
     val onAddToPlayback: (List<DocumentFileModel>) -> Unit,
     val onAddDirectoryToPlayback: (String, String) -> Unit,
+    val operationTarget: OperationTargetConfigView,
 )
 
 @Composable
@@ -716,6 +721,139 @@ internal fun BrowserTabHost(
     var filterVisible by state::filterVisible
     var hideDotFiles by state::hideDotFiles
     var preferredExternalPackages by state::preferredExternalPackages
+
+    // ---------------------------------------------------------------------
+    // ZIP 编辑域：目标配置 + 加入/删除工作流 + 管理界面（域内闭环）
+    // 目标为通用"操作目标文件"（zip 编辑是当前唯一使用者）；ZipManager 亦可
+    // 从上下文菜单直接编辑任意 zip（会话式，不动目标配置）。
+    // ---------------------------------------------------------------------
+    val zipEditConfig = deps.operationTarget
+    val zipEditWorkflow = rememberZipEditWorkflow()
+    var zipEditCancelFlag by remember { mutableStateOf(false) }
+
+    /** ZipManager 会话：fromConfig = 编辑配置目标（写回回写配置），否则为临时编辑 */
+    data class ZipManagerSession(val uri: String, val name: String, val fromConfig: Boolean)
+    var zipManagerSession by remember { mutableStateOf<ZipManagerSession?>(null) }
+    var zipManagerRefresh by remember { mutableStateOf(0) }
+    val zipEditTargetUriValue by zipEditConfig.operationTarget.collectAsState(initial = null)
+    var zipEditTargetName by remember { mutableStateOf<String?>(null) }
+    // 加密目标的会话内密码（不持久化）：按目标 URI 单槽缓存，验证失败或换目标即失效
+    var zipEditPasswordFor by remember { mutableStateOf<Pair<String, String>?>(null) }
+    LaunchedEffect(zipEditTargetUriValue) {
+        val uri = zipEditTargetUriValue ?: run {
+            zipEditTargetName = null
+            zipEditPasswordFor = null
+            return@LaunchedEffect
+        }
+        if (zipEditPasswordFor?.first != uri) zipEditPasswordFor = null
+        val name = withContext(Dispatchers.IO) {
+            runCatching { DocumentFile.fromSingleUri(context, Uri.parse(uri))?.takeIf { it.exists() }?.name }.getOrNull()
+        }
+        if (name == null) {
+            // 目标失效：发现即清（与最近列表残留治理同语义）
+            zipEditConfig.setOperationTarget(null)
+            Toast.makeText(context, context.getString(R.string.zip_edit_target_invalid), Toast.LENGTH_LONG).show()
+        }
+        zipEditTargetName = name
+    }
+
+    fun beginZipEditExecution() {
+        zipEditCancelFlag = false
+        zipEditWorkflow.begin()
+    }
+
+    /**
+     * 执行加入：targetUri 为本次编辑对象（配置目标或临时编辑的 zip）；
+     * writeBackToConfig = 完成后把新 URI 回写目标配置（临时编辑不写）。
+     */
+    fun executeZipAdd(
+        request: ZipAddRequest,
+        targetUri: String,
+        writeBackToConfig: Boolean,
+        password: String? = zipEditPasswordFor?.takeIf { it.first == targetUri }?.second
+    ) {
+        beginZipEditExecution()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                addToZip(
+                    context = context,
+                    targetUri = Uri.parse(targetUri),
+                    treeUri = rootUri?.let { Uri.parse(it) },
+                    sourceUris = request.sources.map { it.uri },
+                    setProgress = { stage, done, total -> zipEditWorkflow.updateProgress(stage, done, total) },
+                    shouldCancel = { zipEditCancelFlag },
+                    password = password?.toCharArray()
+                )
+            }
+            when {
+                result.needsPassword -> zipEditWorkflow.requestPassword(request.targetName)
+                result.wrongPassword -> {
+                    zipEditPasswordFor = null
+                    zipEditWorkflow.requestPassword(request.targetName, wrongPrevious = true)
+                }
+                result.ok -> {
+                    val newUriString = result.newTargetUri?.toString()
+                    if (newUriString != null && newUriString != targetUri) {
+                        if (writeBackToConfig) zipEditConfig.setOperationTarget(newUriString)
+                        zipManagerSession = zipManagerSession?.let { it.copy(uri = newUriString) }
+                    }
+                    if (result.addedEncrypted && password != null) {
+                        // 密码缓存在写回后的新 URI 上（rename 后旧 URI 已失效）
+                        zipEditPasswordFor = (newUriString ?: targetUri) to password
+                    }
+                    Toast.makeText(context, context.getString(R.string.zip_edit_result_ok), Toast.LENGTH_SHORT).show()
+                    zipManagerRefresh++
+                    zipEditWorkflow.dismissResult()
+                }
+                else -> zipEditWorkflow.finish(result)
+            }
+        }
+    }
+
+    fun executeZipRemove(entryNames: List<String>, session: ZipManagerSession) {
+        beginZipEditExecution()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                removeZipEntries(
+                    context = context,
+                    targetUri = Uri.parse(session.uri),
+                    treeUri = rootUri?.let { Uri.parse(it) },
+                    entryNames = entryNames,
+                    setProgress = { stage, done, total -> zipEditWorkflow.updateProgress(stage, done, total) },
+                    shouldCancel = { zipEditCancelFlag }
+                )
+            }
+            if (result.ok && result.newTargetUri != null && result.newTargetUri.toString() != session.uri) {
+                if (session.fromConfig) zipEditConfig.setOperationTarget(result.newTargetUri.toString())
+                zipManagerSession = session.copy(uri = result.newTargetUri.toString())
+            }
+            if (result.ok) {
+                zipManagerRefresh++
+                Toast.makeText(context, context.getString(R.string.zip_edit_result_ok), Toast.LENGTH_SHORT).show()
+                zipEditWorkflow.dismissResult()
+            } else {
+                zipEditWorkflow.finish(result)
+            }
+        }
+    }
+
+    /** 待执行加入的目标 URI（向导确认后取用；密码重试环亦据此重试） */
+    var zipEditPendingTarget by remember { mutableStateOf<String?>(null) }
+
+    /** 发起加入向导（确认框）：targetUri 为本次编辑对象。 */
+    // SAF 同一文件可能以 document 形式或 tree 形式出现，字符串直等不可靠；用 documentId 归一化比较
+    fun Uri.docKey(): String? = try { DocumentsContract.getDocumentId(this) } catch (_: Exception) { toString() }
+
+    fun requestZipAdd(sources: List<DocumentFileModel>, targetUri: String, targetName: String) {
+        // 拦截把目标 zip 自身加入自身：产物是过时快照嵌套，体积膨胀且无意义
+        val targetKey = Uri.parse(targetUri).docKey()
+        if (sources.any { it.uri.docKey() == targetKey }) {
+            Toast.makeText(context, context.getString(R.string.zip_edit_self_add_blocked), Toast.LENGTH_LONG).show()
+            return
+        }
+        zipEditWorkflow.requestAdd(sources, targetName)
+        zipEditPendingTarget = targetUri
+    }
 
     val fileListLazyState = rememberLazyListState()
 
@@ -1047,7 +1185,43 @@ internal fun BrowserTabHost(
                                     }
                                 },
                                 playbackState = playbackState,
-                                onOpenPlaybackScreen = { requestOpenPlayerTab() }
+                                onOpenPlaybackScreen = { requestOpenPlayerTab() },
+                                zipEditTargetUri = zipEditTargetUriValue,
+                                zipEditTargetName = zipEditTargetName,
+                                zipEditTargetIsZip = zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true,
+                                onSetZipEditTarget = { model ->
+                                    scope.launch {
+                                        zipEditConfig.setOperationTarget(model.uri.toString())
+                                        Toast.makeText(context, context.getString(R.string.zip_edit_target_set, model.name), Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onAddToZipEditTarget = { model ->
+                                    val targetUri = zipEditTargetUriValue
+                                    val targetName = zipEditTargetName
+                                    if (targetUri == null || targetName == null) {
+                                        Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
+                                    } else {
+                                        requestZipAdd(listOf(model), targetUri, targetName)
+                                    }
+                                },
+                                onOpenZipManager = {
+                                    val targetUri = zipEditTargetUriValue
+                                    val targetName = zipEditTargetName
+                                    if (targetUri == null || targetName == null) {
+                                        Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
+                                    } else {
+                                        zipManagerSession = ZipManagerSession(targetUri, targetName, fromConfig = true)
+                                    }
+                                },
+                                onEditZipContents = { model ->
+                                    zipManagerSession = ZipManagerSession(model.uri.toString(), model.name, fromConfig = false)
+                                },
+                                onClearZipEditTarget = {
+                                    scope.launch {
+                                        zipEditConfig.setOperationTarget(null)
+                                        Toast.makeText(context, context.getString(R.string.zip_edit_target_cleared), Toast.LENGTH_SHORT).show()
+                                    }
+                                }
                             )
                         )
         if (showPendingList) {
@@ -1125,7 +1299,71 @@ internal fun BrowserTabHost(
                 },
                 onAddToPlayback = { audioList -> onAddToPlayback(audioList)
                 },
+                onAddToZipEditTarget = if (zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true) {
+                    { items ->
+                        val targetUri = zipEditTargetUriValue
+                        val targetName = zipEditTargetName
+                        if (targetUri == null || targetName == null) {
+                            Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
+                        } else {
+                            requestZipAdd(items, targetUri, targetName)
+                        }
+                    }
+                } else null,
                 onDismiss = { showPendingList = false }
+            )
+        }
+        ZipEditDialogs(
+            workflow = zipEditWorkflow,
+            onConfirmAdd = {
+                val request = zipEditWorkflow.addRequest ?: return@ZipEditDialogs
+                val targetUri = zipEditPendingTarget ?: zipEditTargetUriValue ?: return@ZipEditDialogs
+                val writeBack = targetUri == zipEditTargetUriValue
+                executeZipAdd(request, targetUri, writeBack)
+            },
+            onCancelProgress = { zipEditCancelFlag = true },
+            onSubmitPassword = { pw ->
+                val request = zipEditWorkflow.addRequest ?: return@ZipEditDialogs
+                val targetUri = zipEditPendingTarget ?: zipEditTargetUriValue ?: return@ZipEditDialogs
+                val writeBack = targetUri == zipEditTargetUriValue
+                executeZipAdd(request, targetUri, writeBack, pw)
+            }
+        )
+        zipManagerSession?.let { session ->
+            ZipManagerScreen(
+                state = ZipManagerRouteState(
+                    targetUri = session.uri,
+                    targetName = session.name,
+                    treeUri = rootUri,
+                    refreshTrigger = zipManagerRefresh,
+                    onRemoveEntries = { names -> executeZipRemove(names, session) },
+                    onAddFiles = { uris ->
+                        // SAF 选择器返回的文件解析为模型后走加入向导（IO 查询显示名）
+                        scope.launch {
+                            val models = withContext(Dispatchers.IO) {
+                                uris.mapNotNull { u ->
+                                    runCatching {
+                                        val doc = DocumentFile.fromSingleUri(context, u) ?: return@runCatching null
+                                        val name = doc.name ?: return@runCatching null
+                                        DocumentFileModel(
+                                            name = name,
+                                            isDirectory = false,
+                                            uri = u,
+                                            lastModified = 0L,
+                                            size = doc.length()
+                                        )
+                                    }.getOrNull()
+                                }
+                            }
+                            if (models.isEmpty()) {
+                                Toast.makeText(context, context.getString(R.string.zip_edit_copy_source_failed), Toast.LENGTH_SHORT).show()
+                            } else {
+                                requestZipAdd(models, session.uri, session.name)
+                            }
+                        }
+                    },
+                    onDismiss = { zipManagerSession = null }
+                )
             )
         }
         pendingBatchDetails?.let { files ->

@@ -103,6 +103,8 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
+import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Archive
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.documentfile.provider.DocumentFile
@@ -1135,6 +1137,14 @@ internal fun BrowserScreen(
     onRequestLlmView: (DocumentFileModel) -> Unit = {},
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
+    zipEditTargetUri: String? = null,
+    zipEditTargetName: String? = null,
+    zipEditTargetIsZip: Boolean = false,
+    onSetZipEditTarget: (DocumentFileModel) -> Unit = {},
+    onAddToZipEditTarget: (DocumentFileModel) -> Unit = {},
+    onEditZipContents: (DocumentFileModel) -> Unit = {},
+    onOpenZipManager: () -> Unit = {},
+    onClearZipEditTarget: () -> Unit = {},
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -1764,6 +1774,23 @@ internal fun BrowserScreen(
                 }
                 else -> {
                     Column(Modifier.fillMaxSize()) {
+                        if (zipEditTargetName != null) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                AssistChip(
+                                    onClick = onOpenZipManager,
+                                    label = { Text(stringResource(R.string.zip_edit_bar_label, zipEditTargetName), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) },
+                                    leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(18.dp)) }
+                                )
+                                TextButton(onClick = onClearZipEditTarget) {
+                                    Text(stringResource(R.string.zip_edit_bar_clear))
+                                }
+                            }
+                        }
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize(),
@@ -1937,78 +1964,22 @@ internal fun BrowserScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    if (!menuTarget.isDirectory) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                showExternalOpenDialog(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_open_with_other_app), color = MaterialTheme.colorScheme.onSurface) }
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onClearExternalOpenPreference(menuTarget.name)
-                                onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
-                        if (menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)) {
+                        if (!menuTarget.isDirectory) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
-                                    onOpenMarkdownView(menuTarget.uri.toString(), menuTarget.name, false)
+                                    showExternalOpenDialog(menuTarget)
                                     contextMenuTarget = null
                                 }
-                                ) { Text(context.getString(R.string.context_render_markdown), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (menuTarget.name.endsWith(".zip", ignoreCase = true)) {
-                            if (isCompressedMarkdown(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestMdZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_markdown), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isCompressedHtml(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestHtmlZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_html), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isCompressedLlmZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestLlmZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_zip_llm), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isPicZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestPicZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_compressed_images), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                            if (isVidZip(menuTarget.name)) {
-                                TextButton(
-                                    onClick = {
-                                        showContextMenu = false
-                                        onRequestVidZipView(menuTarget)
-                                        contextMenuTarget = null
-                                    }
-                                ) { Text(context.getString(R.string.context_view_videos), color = MaterialTheme.colorScheme.onSurface) }
-                            }
-                        }
+                            ) { Text(context.getString(R.string.context_open_with_other_app), color = MaterialTheme.colorScheme.onSurface) }
+                            TextButton(
+                                onClick = {
+                                    showContextMenu = false
+                                    onClearExternalOpenPreference(menuTarget.name)
+                                    onOpenFile(menuTarget.uri.toString(), menuTarget.name, false)
+                                    contextMenuTarget = null
+                                }
+                            ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
                         if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
                             TextButton(
                                 onClick = {
@@ -2030,13 +2001,6 @@ internal fun BrowserScreen(
                             ) { Text(context.getString(R.string.context_pass_protect), color = MaterialTheme.colorScheme.onSurface) }
                         }
                         if (menuTarget.name.endsWith(".pass", ignoreCase = true)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassView(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_view_password), color = MaterialTheme.colorScheme.onSurface) }
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -2129,6 +2093,36 @@ internal fun BrowserScreen(
                             if (pendingList.any { it.uri == menuTarget.uri }) context.getString(R.string.context_remove_from_pending) else context.getString(R.string.context_add_to_pending),
                             color = MaterialTheme.colorScheme.onSurface
                         )
+                    }
+                    if (!menuTarget.isDirectory) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onSetZipEditTarget(menuTarget)
+                                contextMenuTarget = null
+                            }
+                        ) { Text(context.getString(R.string.zip_edit_menu_set_target), color = MaterialTheme.colorScheme.onSurface) }
+                    }
+                    if (zipEditTargetIsZip && zipEditTargetUri != null && menuTarget.uri.toString() != zipEditTargetUri) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onAddToZipEditTarget(menuTarget)
+                                contextMenuTarget = null
+                            }
+                        ) { Text(context.getString(R.string.zip_edit_menu_add_to_target), color = MaterialTheme.colorScheme.onSurface) }
+                    }
+                    if (!menuTarget.isDirectory && menuTarget.name.endsWith(".zip", ignoreCase = true) &&
+                        !isCompressedMarkdown(menuTarget.name) && !isCompressedHtml(menuTarget.name) &&
+                        !isCompressedLlmZip(menuTarget.name) && !isPicZip(menuTarget.name) && !isVidZip(menuTarget.name)
+                    ) {
+                        TextButton(
+                            onClick = {
+                                showContextMenu = false
+                                onEditZipContents(menuTarget)
+                                contextMenuTarget = null
+                            }
+                        ) { Text(context.getString(R.string.zip_edit_menu_edit_contents), color = MaterialTheme.colorScheme.onSurface) }
                     }
                     TextButton(
                         onClick = {

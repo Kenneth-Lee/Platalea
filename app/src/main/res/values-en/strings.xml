@@ -2158,4 +2158,47 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="family_board_probe_recognized_none">No recognizable IPv4 declaration</string>
     <string name="family_board_probe_no_same_subnet">No same-subnet target address was found. Connection attempt has been skipped (local=%1$s, attempted=%2$s, recognized=%3$s).</string>
     <string name="family_board_probe_network_failure">Network connection failed: %1$s (local=%2$s, remote=%3$s, attempted=%4$s, recognized=%5$s). %6$s</string>
+
+    <!-- ZIP editing -->
+    <string name="zip_edit_menu_set_target">Set as operation target file</string>
+    <string name="zip_edit_menu_add_to_target">Add to target zip</string>
+    <string name="zip_edit_pending_action">Add to target zip</string>
+    <string name="zip_edit_bar_label">Target: %1$s</string>
+    <string name="zip_edit_bar_manage">Manage</string>
+    <string name="zip_edit_bar_clear">Clear</string>
+    <string name="zip_edit_target_cleared">ZIP edit target cleared</string>
+    <string name="zip_edit_target_set">Set as operation target: %1$s</string>
+    <string name="zip_edit_target_invalid">Target unavailable, cleared; only unencrypted, unobfuscated zip is supported</string>
+    <string name="zip_edit_no_target">No operation target set; long-press a file to set one</string>
+    <string name="zip_edit_add_title">Add to ZIP edit target</string>
+    <string name="zip_edit_add_confirm">%2$d file(s)/folder(s) will be added to "%1$s"</string>
+    <string name="zip_edit_add_action">Add</string>
+    <string name="zip_edit_progress_title">Editing ZIP</string>
+    <string name="zip_edit_stage_copy">Reading target and sources…</string>
+    <string name="zip_edit_stage_modify">Modifying archive…</string>
+    <string name="zip_edit_stage_write_back">Writing back to target…</string>
+    <string name="zip_edit_result_ok_title">Done</string>
+    <string name="zip_edit_result_fail_title">Failed</string>
+    <string name="zip_edit_result_ok">Operation completed</string>
+    <string name="zip_edit_result_renamed">Entries renamed due to name conflicts:</string>
+    <string name="zip_edit_result_encrypted_kept">Target is encrypted; new entries were encrypted the same way</string>
+    <string name="zip_edit_password_title">ZIP password</string>
+    <string name="zip_edit_password_hint">"%1$s" is an encrypted archive. Password required to add files:</string>
+    <string name="zip_edit_password_wrong">Wrong password, try again</string>
+    <string name="zip_edit_password_wrong_result">Wrong password; nothing was modified</string>
+    <string name="zip_edit_encrypted_badge">encrypted</string>
+    <string name="zip_edit_menu_edit_contents">Edit ZIP contents</string>
+    <string name="zip_manager_add_files">Add files</string>
+    <string name="zip_edit_copy_source_failed">Cannot read selected files</string>
+    <string name="zip_edit_self_add_blocked">Target zip cannot be added to itself</string>
+    <string name="zip_manager_title">Manage: %1$s</string>
+    <string name="zip_manager_loading">Reading entries…</string>
+    <string name="zip_manager_load_failed">Cannot read target (missing, encrypted, or obfuscated)</string>
+    <string name="zip_manager_empty">Archive is empty</string>
+    <string name="zip_manager_selected_count">%1$d selected</string>
+    <string name="zip_manager_clear_selection">Clear selection</string>
+    <string name="zip_manager_delete_action">Delete selected</string>
+    <string name="zip_manager_delete_confirm_title">Delete entries</string>
+    <string name="zip_manager_delete_confirm">%1$d entry(ies) will be permanently removed from the archive. This cannot be undone.</string>
+    <string name="zip_manager_entry_meta">Size %1$d · Compressed %2$d</string>
 </resources>

@@ -101,6 +101,7 @@ fun PendingListScreen(
     onRequestForwardToBulletin: () -> Unit = {},
     onClearFilteredList: (List<DocumentFileModel>) -> Unit = {},
     onAddToPlayback: (List<DocumentFileModel>) -> Unit = {},
+    onAddToZipEditTarget: ((List<DocumentFileModel>) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -197,6 +198,14 @@ fun PendingListScreen(
                     context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive,
                     context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
                 )
+                if (onAddToZipEditTarget != null) {
+                    // 仅在操作目标为 zip 时提供（目标概念是通用的，加入是 zip 专属动作）
+                    pendingActions.add(
+                        context.getString(R.string.zip_edit_pending_action) to {
+                            onAddToZipEditTarget(filteredPendingItems)
+                        }
+                    )
+                }
                 if (batchDetailKind != null) {
                     pendingActions.add(context.getString(R.string.context_details) to onShowBatchDetails)
                 }

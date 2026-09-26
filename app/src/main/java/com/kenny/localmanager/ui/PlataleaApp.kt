@@ -1894,6 +1894,7 @@ fun PlataleaApp(
             requestOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
             onSetProgressCancel = { action -> progressCancelAction = action },
+            operationTarget = config.operationTarget,
         )
         val directoryTab = browserTabFeature(state = browserTab, deps = browserTabHostDependencies)
                 MainTabContentHost(
