@@ -563,7 +563,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.29 支持7z多卷解压，文件格式匹配方法优化，pc_tools 留言板post支持多附件，支持文件共享，可以用pc_tools share命令put/get文件，支持webui，首先支持文件share。
 * V0.30 完善webui，支持读取手机配置，剪贴板等功能，图片增加多svg的支持，修正一组bug。
 * V0.31 架构大规模重构（可能造成不稳定），重点不让大部分逻辑挤到主程序文件中，也在重构过程中修复了一组bug，另外增加了zip文件的编辑功能（可以在zip文件中增加文件和删除文件）
-* V0.32 
+* V0.32 开发中
 
 ### 已知问题
 

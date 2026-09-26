@@ -102,7 +102,7 @@ private class BytesProgressReporter(
 }
 
 /** SAF 文档树总大小预扫（目录递归，与拷贝阶段遍历成本同量级）。 */
-private fun docTreeSize(context: Context, docUri: Uri, treeUri: Uri?): Long {
+internal fun docTreeSize(context: Context, docUri: Uri, treeUri: Uri?): Long {
     val resolved = resolveDocUriWithTree(docUri, treeUri)
     val doc = DocumentFile.fromSingleUri(context, resolved) ?: return 0L
     if (!doc.isDirectory) return doc.length()
@@ -111,7 +111,7 @@ private fun docTreeSize(context: Context, docUri: Uri, treeUri: Uri?): Long {
 }
 
 /** 读入计数流（计压缩器实际读入的字节）。 */
-private class CountingInputStream(input: java.io.InputStream, private val onRead: (Int) -> Unit) : FilterInputStream(input) {
+internal class CountingInputStream(input: java.io.InputStream, private val onRead: (Int) -> Unit) : FilterInputStream(input) {
     override fun read(b: ByteArray, off: Int, len: Int): Int {
         val n = `in`.read(b, off, len)
         if (n > 0) onRead(n)

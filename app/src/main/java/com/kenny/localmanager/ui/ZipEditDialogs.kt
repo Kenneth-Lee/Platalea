@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -136,6 +137,7 @@ private fun ZipEditProgressDialog(
         null -> ""
     }
     val (done, total) = workflow.progress
+    val (bytesDone, bytesTotal) = workflow.bytesProgress
     AlertDialog(
         onDismissRequest = { },
         title = { Text(stringResource(R.string.zip_edit_progress_title)) },
@@ -143,9 +145,26 @@ private fun ZipEditProgressDialog(
             Column {
                 Text(stageLabel, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(12.dp))
-                val fraction = if (total > 0) done.toFloat() / total else null
+                val fraction = when {
+                    bytesTotal > 0 -> (bytesDone.toFloat() / bytesTotal).coerceIn(0f, 1f)
+                    total > 0 -> done.toFloat() / total
+                    else -> null
+                }
                 if (fraction != null) {
                     LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    if (bytesTotal > 0) {
+                        Text(
+                            stringResource(
+                                R.string.browser_progress_bytes,
+                                formatBytes(bytesDone),
+                                formatBytes(bytesTotal),
+                                (fraction * 100).toInt()
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                    }
                 } else {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }

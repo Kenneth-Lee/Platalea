@@ -40,9 +40,11 @@ internal class ZipEditWorkflowState {
     var inProgress by mutableStateOf(false)
         private set
 
-    /** 进度阶段与 (done, total)。 */
+    /** 进度阶段、(done, total) 项数与 (bytesDone, bytesTotal) 字节数（bytesTotal>0 时 UI 按字节显示）。 */
     var stage by mutableStateOf<ZipEditStage?>(null)
     var progress by mutableStateOf(0 to 0)
+        private set
+    var bytesProgress by mutableStateOf(0L to 0L)
         private set
 
     /** 一次执行的结果；完成后呈现结果对话框（成功含改名明细 / 失败含原因）。 */
@@ -92,10 +94,11 @@ internal class ZipEditWorkflowState {
         passwordRequest = null
     }
 
-    /** 宿主上报进度。 */
-    fun updateProgress(stage: ZipEditStage, done: Int, total: Int) {
+    /** 宿主上报进度（bytesTotal>0 时 UI 优先按字节显示进度）。 */
+    fun updateProgress(stage: ZipEditStage, done: Int, total: Int, bytesDone: Long = 0L, bytesTotal: Long = 0L) {
         this.stage = stage
         this.progress = done to total
+        this.bytesProgress = bytesDone to bytesTotal
     }
 
     /** 宿主执行完毕：进入结果态。 */
@@ -119,6 +122,7 @@ internal class ZipEditWorkflowState {
         inProgress = true
         stage = null
         progress = 0 to 0
+        bytesProgress = 0L to 0L
         result = null
         passwordRequest = null
     }

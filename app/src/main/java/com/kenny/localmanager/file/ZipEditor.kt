@@ -7,8 +7,10 @@ import android.util.Log
 import androidx.documentfile.provider.DocumentFile
 import net.lingala.zip4j.ZipFile
 import net.lingala.zip4j.model.enums.AesKeyStrength
+import net.lingala.zip4j.model.enums.CompressionMethod
 import net.lingala.zip4j.model.enums.EncryptionMethod
 import net.lingala.zip4j.model.ZipParameters
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -114,7 +116,8 @@ internal fun addFilesToZipFile(
     zipFile: File,
     sources: List<File>,
     encryption: ZipEncryptionInfo? = null,
-    password: CharArray? = null
+    password: CharArray? = null,
+    onBytes: ((Long) -> Unit)? = null
 ): List<Pair<String, String>> {
     if (encryption != null) {
         require(password != null && password.isNotEmpty()) { "encrypted target requires password" }
@@ -125,41 +128,16 @@ internal fun addFilesToZipFile(
     ZipFile(zipFile, password).use { zip ->
         val existing = zip.fileHeaders.map { it.fileName }.toHashSet()
         val applied = mutableListOf<Pair<String, String>>()
+        val onChunk: (Int) -> Unit = { n -> if (n > 0) onBytes?.invoke(n.toLong()) }
         for (src in sources) {
             val entryName = uniqueEntryName(src.name, existing)
-            val params = if (encryption != null) {
-                ZipParameters().apply {
-                    isEncryptFiles = true
-                    encryptionMethod = encryption.method
-                    aesKeyStrength = encryption.aesKeyStrength ?: AesKeyStrength.KEY_STRENGTH_256
-                }
-            } else {
-                ZipParameters() // zip4j 不接受 null 参数
-            }
             if (src.isDirectory) {
-                // addFolder 以目录名作为前缀写入，需先将目录临时改名对齐 entryName
-                if (entryName != src.name) {
-                    val renamed = File(src.parentFile, entryName)
-                    if (!src.renameTo(renamed)) {
-                        throw IllegalStateException("rename source dir failed: ${src.name}")
-                    }
-                    zip.addFolder(renamed, params)
-                } else {
-                    zip.addFolder(src, params)
-                }
-                collectDirEntryNames(entryName).forEach { existing.add(it) }
+                addLocalDirEntryStream(zip, src, entryName, encryption, onChunk)
+                existing.add("$entryName/")
+                collectLocalEntryNames(src, entryName).forEach { existing.add(it) }
             } else {
-                if (entryName != src.name) {
-                    val renamed = File(src.parentFile, entryName)
-                    if (!src.renameTo(renamed)) {
-                        throw IllegalStateException("rename source file failed: ${src.name}")
-                    }
-                    zip.addFile(renamed, params)
-                    existing.add(entryName)
-                } else {
-                    zip.addFile(src, params)
-                    existing.add(src.name)
-                }
+                addLocalFileEntryStream(zip, src, entryName, encryption, onChunk)
+                existing.add(entryName)
             }
             applied.add(src.name to entryName)
         }
@@ -167,11 +145,54 @@ internal fun addFilesToZipFile(
     }
 }
 
-/** addFolder 后该目录前缀下可能的条目名集合（保守全集：目录前缀本身） */
-private fun collectDirEntryNames(dirEntryName: String): List<String> = listOf(
-    dirEntryName,
-    "$dirEntryName/"
-)
+/** 构造 addStream 条目参数：加密目标时新条目按原方式（算法+AES强度）加密；目录条目 STORE。 */
+private fun buildEntryParams(encryption: ZipEncryptionInfo?, fileNameInZip: String, size: Long, store: Boolean = false): ZipParameters {
+    return if (encryption != null) {
+        ZipParameters().apply {
+            isEncryptFiles = true
+            encryptionMethod = encryption.method
+            aesKeyStrength = encryption.aesKeyStrength ?: AesKeyStrength.KEY_STRENGTH_256
+            this.fileNameInZip = fileNameInZip
+            entrySize = size
+            if (store) compressionMethod = CompressionMethod.STORE
+        }
+    } else {
+        ZipParameters().apply {
+            this.fileNameInZip = fileNameInZip
+            entrySize = size
+            if (store) compressionMethod = CompressionMethod.STORE
+        }
+    }
+}
+
+/** 单文件源流式写入（探针实证 addStream 支持 AES/ZipCrypto 与计数流）。 */
+private fun addLocalFileEntryStream(zip: ZipFile, file: File, entryName: String, encryption: ZipEncryptionInfo?, onChunk: (Int) -> Unit) {
+    val params = buildEntryParams(encryption, entryName, file.length())
+    file.inputStream().use { input ->
+        zip.addStream(CountingInputStream(input, onChunk), params)
+    }
+}
+
+/** 目录源：目录条目 STORE 空流 + 子项按名排序递归（与压缩侧 addLocalDirToZipStream 同构）。 */
+private fun addLocalDirEntryStream(zip: ZipFile, dir: File, entryPrefix: String, encryption: ZipEncryptionInfo?, onChunk: (Int) -> Unit) {
+    zip.addStream(ByteArrayInputStream(ByteArray(0)), buildEntryParams(encryption, "$entryPrefix/", 0L, store = true))
+    dir.listFiles().orEmpty().sortedBy { it.name.lowercase() }.forEach { child ->
+        val childName = "$entryPrefix/${child.name}"
+        if (child.isDirectory) addLocalDirEntryStream(zip, child, childName, encryption, onChunk)
+        else addLocalFileEntryStream(zip, child, childName, encryption, onChunk)
+    }
+}
+
+/** 本地目录下将写出的全部条目名（含各级目录条目，精确集合，后续同名改名检测用） */
+private fun collectLocalEntryNames(dir: File, prefix: String): List<String> {
+    val names = mutableListOf<String>()
+    dir.walkTopDown().forEach { f ->
+        val rel = f.relativeTo(dir).invariantSeparatorsPath
+        if (rel.isEmpty()) return@forEach
+        names.add(if (f.isDirectory) "$prefix/$rel/" else "$prefix/$rel")
+    }
+    return names
+}
 
 /** 从本地 zip 删除指定条目（目录条目按名字精确删除） */
 internal fun removeEntriesFromZipFile(zipFile: File, entryNames: List<String>): Boolean {
@@ -194,12 +215,28 @@ internal fun removeEntriesFromZipFile(zipFile: File, entryNames: List<String>): 
 private fun buildEditCacheDir(context: Context): File =
     File(context.cacheDir, "zip_edit_${System.currentTimeMillis()}").apply { mkdirs() }
 
+/** 本地文件/目录树总字节数（MODIFY 阶段 total 用，目录源需递归）。 */
+private fun localTreeBytes(f: File): Long =
+    if (f.isDirectory) f.walkTopDown().filter { !it.isDirectory }.sumOf { it.length() } else f.length()
+
+/** 带 64KB 循环+取消检查的字节流拷贝，每个 chunk 回调累计字节数。 */
+private fun copyStreamCounting(input: java.io.InputStream, output: java.io.OutputStream, shouldCancel: () -> Boolean, onBytes: (Long) -> Unit) {
+    val buf = ByteArray(64 * 1024)
+    while (true) {
+        if (shouldCancel()) throw ArchiveOperationCancelledException("zip edit cancelled")
+        val n = input.read(buf)
+        if (n < 0) break
+        output.write(buf, 0, n)
+        if (n > 0) onBytes(n.toLong())
+    }
+}
+
 /**
  * 写回策略：同目录临时文档 -> 完整写入 -> 删原文档 -> 临时文档改回原名。
  * 无法在原目录创建临时文档（provider 限制）时退化为直接覆写原 URI。
  * 成功返回新的目标 URI（rename 路径下 URI 已变），失败返回 null。
  */
-private fun writeBackWithReplace(context: Context, targetUri: Uri, treeUri: Uri?, newZipFile: File): Uri? {
+private fun writeBackWithReplace(context: Context, targetUri: Uri, treeUri: Uri?, newZipFile: File, onBytes: (Long) -> Unit = {}): Uri? {
     val cr = context.contentResolver
     val doc = DocumentFile.fromSingleUri(context, targetUri)
     val docName = doc?.name ?: "target.zip"
@@ -216,12 +253,12 @@ private fun writeBackWithReplace(context: Context, targetUri: Uri, treeUri: Uri?
         }
         if (tempUri != null) {
             cr.openOutputStream(tempUri, "w")?.use { out ->
-                FileInputStream(newZipFile).use { inp -> inp.copyTo(out) }
+                FileInputStream(newZipFile).use { inp -> copyStreamCounting(inp, out, { false }, onBytes) }
             } ?: return null
             if (doc != null && !doc.delete()) {
                 Log.w(ZIP_EDITOR_TAG, "writeBack: delete original failed, fallback to overwrite")
                 runCatching { cr.deleteDocument(tempUri) }
-                return overwriteTarget(context, targetUri, newZipFile)
+                return overwriteTarget(context, targetUri, newZipFile, onBytes)
             }
             val renamedUri = try {
                 DocumentsContract.renameDocument(cr, tempUri, docName)
@@ -234,7 +271,7 @@ private fun writeBackWithReplace(context: Context, targetUri: Uri, treeUri: Uri?
             }
             // rename 失败：临时文档数据完整，回退覆写并清理
             Log.w(ZIP_EDITOR_TAG, "writeBack: rename returned null, fallback to overwrite")
-            val overwritten = overwriteTarget(context, targetUri, newZipFile)
+            val overwritten = overwriteTarget(context, targetUri, newZipFile, onBytes)
             runCatching { cr.deleteDocument(tempUri) }
             return overwritten
         } else {
@@ -260,13 +297,13 @@ private fun findParentDocument(context: Context, targetUri: Uri, treeUri: Uri?):
     }
 }
 
-private fun overwriteTarget(context: Context, targetUri: Uri, newZipFile: File): Uri? =
+private fun overwriteTarget(context: Context, targetUri: Uri, newZipFile: File, onBytes: (Long) -> Unit = {}): Uri? =
     context.contentResolver.openOutputStream(targetUri, "w")?.use { out ->
-        FileInputStream(newZipFile).use { inp -> inp.copyTo(out) }
+        FileInputStream(newZipFile).use { inp -> copyStreamCounting(inp, out, { false }, onBytes) }
         targetUri
     }
 
-private fun copyUriToLocal(context: Context, uri: Uri, localDir: File, treeUri: Uri?, shouldCancel: () -> Boolean): File? {
+private fun copyUriToLocal(context: Context, uri: Uri, localDir: File, treeUri: Uri?, shouldCancel: () -> Boolean, onBytes: (Long) -> Unit = {}): File? {
     val resolved = resolveDocUriWithTree(uri, treeUri)
     val doc = DocumentFile.fromSingleUri(context, resolved) ?: return null
     val name = doc.name ?: return null
@@ -285,6 +322,7 @@ private fun copyUriToLocal(context: Context, uri: Uri, localDir: File, treeUri: 
                         val n = input.read(buf)
                         if (n < 0) break
                         output.write(buf, 0, n)
+                        if (n > 0) onBytes(n.toLong())
                     }
                 }
             } ?: return null
@@ -322,17 +360,23 @@ fun addToZip(
     targetUri: Uri,
     treeUri: Uri?,
     sourceUris: List<Uri>,
-    setProgress: (ZipEditStage, Int, Int) -> Unit,
+    setProgress: (ZipEditStage, Int, Int, Long, Long) -> Unit,
     shouldCancel: () -> Boolean = { false },
     password: CharArray? = null
 ): ZipEditResult {
     val cacheDir = buildEditCacheDir(context)
     try {
-        setProgress(ZipEditStage.COPY_TARGET, 0, 1)
+        // 字节进度：COPY_TARGET 覆盖目标快照+源拷贝（连续计数），MODIFY 覆盖压入源字节，WRITE_BACK 覆盖新包写回
+        val targetBytes = docTreeSize(context, targetUri, treeUri)
+        val sourceBytes = sourceUris.sumOf { docTreeSize(context, it, treeUri) }
+        var copyDone = 0L
+        val reportCopy: (Long) -> Unit = { copyDone += it; setProgress(ZipEditStage.COPY_TARGET, 0, sourceUris.size + 1, copyDone, targetBytes + sourceBytes) }
+
+        setProgress(ZipEditStage.COPY_TARGET, 0, 1, 0, targetBytes + sourceBytes)
         val localZip = File(cacheDir, "target.zip")
         val resolvedTarget = resolveDocUriWithTree(targetUri, treeUri)
         context.contentResolver.openInputStream(resolvedTarget)?.use { input ->
-            localZip.outputStream().use { output -> input.copyTo(output) }
+            localZip.outputStream().use { output -> copyStreamCounting(input, output, shouldCancel, reportCopy) }
         } ?: return ZipEditResult(false, error = "open target failed")
 
         // 加密目标：先探测再校验，任一不满足直接返回（未做任何修改）
@@ -350,19 +394,24 @@ fun addToZip(
         val localSources = mutableListOf<File>()
         sourceUris.forEachIndexed { index, uri ->
             if (shouldCancel()) return ZipEditResult(false, error = "cancelled")
-            setProgress(ZipEditStage.COPY_TARGET, index + 1, sourceUris.size + 1)
-            val local = copyUriToLocal(context, uri, sourceDir, treeUri, shouldCancel)
+            val local = copyUriToLocal(context, uri, sourceDir, treeUri, shouldCancel, reportCopy)
                 ?: return ZipEditResult(false, error = "copy source failed: $uri")
             localSources.add(local)
+            setProgress(ZipEditStage.COPY_TARGET, index + 1, sourceUris.size + 1, copyDone, targetBytes + sourceBytes)
         }
 
-        setProgress(ZipEditStage.MODIFY, 0, localSources.size)
-        val applied = addFilesToZipFile(localZip, localSources, encryption, password)
-        setProgress(ZipEditStage.MODIFY, localSources.size, localSources.size)
+        val modifyTotal = localSources.sumOf { localTreeBytes(it) }
+        var modifyDone = 0L
+        val reportModify: (Long) -> Unit = { modifyDone += it; setProgress(ZipEditStage.MODIFY, 0, localSources.size, modifyDone, modifyTotal) }
+        setProgress(ZipEditStage.MODIFY, 0, localSources.size, 0, modifyTotal)
+        val applied = addFilesToZipFile(localZip, localSources, encryption, password, reportModify)
+        setProgress(ZipEditStage.MODIFY, localSources.size, localSources.size, modifyTotal, modifyTotal)
 
-        setProgress(ZipEditStage.WRITE_BACK, 0, 1)
-        val newUri = writeBackWithReplace(context, resolvedTarget, treeUri, localZip)
-        setProgress(ZipEditStage.WRITE_BACK, 1, 1)
+        setProgress(ZipEditStage.WRITE_BACK, 0, 1, 0, localZip.length())
+        val newUri = writeBackWithReplace(context, resolvedTarget, treeUri, localZip) { done ->
+            setProgress(ZipEditStage.WRITE_BACK, 0, 1, done, localZip.length())
+        }
+        setProgress(ZipEditStage.WRITE_BACK, 1, 1, localZip.length(), localZip.length())
         return if (newUri != null) {
             ZipEditResult(
                 ok = true,
@@ -389,28 +438,34 @@ fun removeZipEntries(
     targetUri: Uri,
     treeUri: Uri?,
     entryNames: List<String>,
-    setProgress: (ZipEditStage, Int, Int) -> Unit,
+    setProgress: (ZipEditStage, Int, Int, Long, Long) -> Unit,
     shouldCancel: () -> Boolean = { false }
 ): ZipEditResult {
     val cacheDir = buildEditCacheDir(context)
     try {
-        setProgress(ZipEditStage.COPY_TARGET, 0, 1)
+        val targetBytes = docTreeSize(context, targetUri, treeUri)
+        setProgress(ZipEditStage.COPY_TARGET, 0, 1, 0, targetBytes)
         val localZip = File(cacheDir, "target.zip")
         val resolvedTarget = resolveDocUriWithTree(targetUri, treeUri)
         context.contentResolver.openInputStream(resolvedTarget)?.use { input ->
-            localZip.outputStream().use { output -> input.copyTo(output) }
+            localZip.outputStream().use { output ->
+                var done = 0L
+                copyStreamCounting(input, output, shouldCancel) { done += it; setProgress(ZipEditStage.COPY_TARGET, 0, 1, done, targetBytes) }
+            }
         } ?: return ZipEditResult(false, error = "open target failed")
 
-        setProgress(ZipEditStage.MODIFY, 0, 1)
+        setProgress(ZipEditStage.MODIFY, 0, 1, 0, 0)
         val changed = removeEntriesFromZipFile(localZip, entryNames)
-        setProgress(ZipEditStage.MODIFY, 1, 1)
+        setProgress(ZipEditStage.MODIFY, 1, 1, 0, 0)
         if (!changed) {
             return ZipEditResult(true)
         }
 
-        setProgress(ZipEditStage.WRITE_BACK, 0, 1)
-        val newUri = writeBackWithReplace(context, resolvedTarget, treeUri, localZip)
-        setProgress(ZipEditStage.WRITE_BACK, 1, 1)
+        setProgress(ZipEditStage.WRITE_BACK, 0, 1, 0, localZip.length())
+        val newUri = writeBackWithReplace(context, resolvedTarget, treeUri, localZip) { done ->
+            setProgress(ZipEditStage.WRITE_BACK, 0, 1, done, localZip.length())
+        }
+        setProgress(ZipEditStage.WRITE_BACK, 1, 1, localZip.length(), localZip.length())
         return if (newUri != null) ZipEditResult(true, newTargetUri = newUri) else ZipEditResult(false, error = "write back failed")
     } catch (e: ArchiveOperationCancelledException) {
         return ZipEditResult(false, error = "cancelled")

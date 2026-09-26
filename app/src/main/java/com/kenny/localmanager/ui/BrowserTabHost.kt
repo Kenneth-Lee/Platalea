@@ -780,7 +780,7 @@ internal fun BrowserTabHost(
                     targetUri = Uri.parse(targetUri),
                     treeUri = rootUri?.let { Uri.parse(it) },
                     sourceUris = request.sources.map { it.uri },
-                    setProgress = { stage, done, total -> zipEditWorkflow.updateProgress(stage, done, total) },
+                    setProgress = { stage, done, total, bytesDone, bytesTotal -> zipEditWorkflow.updateProgress(stage, done, total, bytesDone, bytesTotal) },
                     shouldCancel = { zipEditCancelFlag },
                     password = password?.toCharArray()
                 )
@@ -819,7 +819,7 @@ internal fun BrowserTabHost(
                     targetUri = Uri.parse(session.uri),
                     treeUri = rootUri?.let { Uri.parse(it) },
                     entryNames = entryNames,
-                    setProgress = { stage, done, total -> zipEditWorkflow.updateProgress(stage, done, total) },
+                    setProgress = { stage, done, total, bytesDone, bytesTotal -> zipEditWorkflow.updateProgress(stage, done, total, bytesDone, bytesTotal) },
                     shouldCancel = { zipEditCancelFlag }
                 )
             }
