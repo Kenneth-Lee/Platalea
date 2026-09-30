@@ -56,6 +56,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
@@ -242,7 +243,9 @@ class PlaybackService : Service() {
         prefs = Preferences(applicationContext)
         audioManager = getSystemService(AUDIO_SERVICE) as? AudioManager
         playerAudioSettingsJob = scope.launch {
-            prefs.playerAudioSettings.collect { settings ->
+            // distinctUntilChanged：data flow 在任意 key 写入时都会发射，值未变不重应用音效
+            // （重应用 = release + 重建 Equalizer/BassBoost/Loudness，播放中会产生爆音）
+            prefs.playerAudioSettings.distinctUntilChanged().collect { settings ->
                 playerAudioSettings = settings
                 applyAudioEffectsToCurrentPlayer()
             }

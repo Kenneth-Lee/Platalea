@@ -1,6 +1,7 @@
 package com.kenny.localmanager.ui
 
 import androidx.activity.compose.BackHandler
+import com.kenny.localmanager.file.isHtmlFile
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 

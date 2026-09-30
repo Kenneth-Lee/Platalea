@@ -117,6 +117,8 @@ import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.DirectoryScrollMemory
 import com.kenny.localmanager.data.AudioMetaAnnotation
+import com.kenny.localmanager.file.isGalleryImageFile
+import com.kenny.localmanager.file.isHtmlFile
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.renameDocument
@@ -2780,11 +2782,20 @@ internal fun BrowserScreen(
                                                 imageExifLoading = true
                                                 imageExifSaveError = null
                                                 imageExifValidation = EditableImageExifValidation()
-                                                imageExifForm = withContext(Dispatchers.IO) {
+                                                val loaded = withContext(Dispatchers.IO) {
                                                     readEditableImageExif(context, detailTarget.uri)
                                                 }
                                                 imageExifLoading = false
-                                                showImageExifEditDialog = true
+                                                if (loaded == null) {
+                                                    Toast.makeText(
+                                                        context,
+                                                        context.getString(R.string.browser_meta_read_failed),
+                                                        Toast.LENGTH_SHORT
+                                                    ).show()
+                                                } else {
+                                                    imageExifForm = loaded
+                                                    showImageExifEditDialog = true
+                                                }
                                             }
                                         }
                                     ) {
@@ -3473,3 +3484,5 @@ private enum class FileSortOrder(@androidx.annotation.StringRes val labelRes: In
 
 
 private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
+
+internal data class CachedDir(val items: List<DocumentFileModel>)

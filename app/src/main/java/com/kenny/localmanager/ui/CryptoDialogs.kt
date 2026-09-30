@@ -1,5 +1,20 @@
 package com.kenny.localmanager.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.TopAppBar
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
@@ -851,5 +866,66 @@ internal fun GpgPublicKeyPickerDialog(
                 }
             }
         }
+    }
+}
+
+/** 直接编辑 .pass 文件：解密后显示可编辑文本，存盘时若已修改则重新加密写回。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun PassEditScreen(
+    fileName: String,
+    initialDecryptedBytes: ByteArray,
+    onSave: (ByteArray) -> Unit,
+    onBack: () -> Unit
+) {
+    val scrollState = rememberScrollState()
+    var textContent by remember(initialDecryptedBytes) {
+        mutableStateOf(initialDecryptedBytes.decodeToString())
+    }
+    var saveInProgress by remember { mutableStateOf(false) }
+
+    BackHandler { if (!saveInProgress) onBack() }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(fileName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
+                navigationIcon = {
+                    IconButton(onClick = { if (!saveInProgress) onBack() }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
+                    }
+                },
+                actions = {
+                    if (saveInProgress) {
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    TextButton(
+                        onClick = {
+                            if (saveInProgress) return@TextButton
+                            val newBytes = textContent.encodeToByteArray()
+                            if (newBytes.contentEquals(initialDecryptedBytes)) {
+                                onBack()
+                            } else {
+                                saveInProgress = true
+                                onSave(newBytes)
+                            }
+                        },
+                        enabled = !saveInProgress
+                    ) { Text(stringResource(R.string.common_save)) }
+                }
+            )
+        }
+    ) { padding ->
+        OutlinedTextField(
+            value = textContent,
+            onValueChange = { textContent = it },
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(scrollState),
+            minLines = 20,
+            maxLines = Int.MAX_VALUE
+        )
     }
 }

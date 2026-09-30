@@ -1,6 +1,20 @@
 package com.kenny.localmanager.ui
 
 import android.content.Context
+import android.net.Uri
+import androidx.compose.runtime.MutableState
+import androidx.documentfile.provider.DocumentFile
+import com.kenny.localmanager.file.UnzipResult
+import com.kenny.localmanager.file.unzipToParent
+import com.kenny.localmanager.file.compressToZip
+import com.kenny.localmanager.file.compressTo7z
+import com.kenny.localmanager.file.compressTarArchive
+import com.kenny.localmanager.file.compressSingleFileToFormat
+import com.kenny.localmanager.file.buildArchiveOutputName
+import kotlinx.coroutines.delay
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
@@ -138,4 +152,326 @@ internal class ArchiveOperationWorkflowState(
 @Composable
 internal fun rememberArchiveOperationWorkflow(context: Context, scope: CoroutineScope): ArchiveOperationWorkflowState {
     return remember(context, scope) { ArchiveOperationWorkflowState(context.applicationContext, scope) }
+}
+
+// ============================================================================
+// Archive 操作向导域 —— 确认后的文件操作执行编排
+//
+// 自 AppShell 下沉（Step 3 收尾）：进度 / 取消经宿主传入的两个 MutableState
+// 回写（progressOpState / progressCancelActionState），目录刷新与待处理列表
+// 清理经共享对象 browserTab 直呼。行为与宿主内联版逐 token 等价。
+// ============================================================================
+
+private fun compressArchiveItems(
+    context: Context,
+    sourceUris: List<Uri>,
+    parentDirUri: Uri,
+    treeUri: Uri?,
+    baseName: String,
+    format: ArchiveCompressionFormat,
+    password: CharArray?,
+    setProgress: (Int, Int) -> Unit,
+    shouldCancel: () -> Boolean = { false },
+    onBytesProgress: ((Long, Long) -> Unit)? = null
+): Boolean {
+    if (sourceUris.isEmpty()) return false
+    val outputName = buildArchiveOutputName(baseName, format)
+    if (format.compressesSingleFileOnly) {
+        return sourceUris.all { uri ->
+            val docName = DocumentFile.fromSingleUri(context, uri)?.name ?: "archive"
+            compressSingleFileToFormat(
+                context = context,
+                sourceUri = uri,
+                parentDirUri = parentDirUri,
+                treeUri = treeUri,
+                outputFileName = buildArchiveOutputName(docName, format),
+                format = format,
+                setProgress = setProgress,
+                shouldCancel = shouldCancel,
+                onBytesProgress = onBytesProgress
+            )
+        }
+    }
+    return when (format) {
+        ArchiveCompressionFormat.ZIP -> compressToZip(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel, onBytesProgress)
+        ArchiveCompressionFormat.SEVEN_Z -> compressTo7z(context, sourceUris, parentDirUri, treeUri, outputName, password, setProgress, shouldCancel, onBytesProgress)
+        ArchiveCompressionFormat.TAR -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
+        ArchiveCompressionFormat.TAR_GZ -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
+        ArchiveCompressionFormat.TAR_BZ2 -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
+        ArchiveCompressionFormat.TAR_XZ -> compressTarArchive(context, sourceUris, parentDirUri, treeUri, outputName, format, password, setProgress, shouldCancel)
+        ArchiveCompressionFormat.GZ -> false
+        ArchiveCompressionFormat.BZ2 -> false
+        ArchiveCompressionFormat.XZ -> false
+    }
+}
+
+internal fun executeArchiveOperation(
+    context: Context,
+    scope: CoroutineScope,
+    workflow: ArchiveOperationWorkflowState,
+    browserTab: BrowserTabState,
+    displayUri: String?,
+    progressOpState: MutableState<OperationProgress?>,
+    progressCancelActionState: MutableState<(() -> Unit)?>
+) {
+    when (val req = workflow.request) {
+        is ArchiveOperationRequest.Unzip -> {
+            val target = req.target
+            val parentDirUri = Uri.parse(displayUri)
+            val treeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            scope.launch {
+                val cancelFlag = OperationCancelFlag()
+                progressCancelActionState.value = { cancelFlag.requestCancel() }
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_extract), 0, null)
+                delay(50)
+                val pwd = if (workflow.encrypted == true) workflow.password.toCharArray() else null
+                val result = withContext(Dispatchers.IO) {
+                unzipToParent(
+                context,
+                target.uri,
+                parentDirUri,
+                treeUri,
+                target.name,
+                pwd,
+                setProgress = { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = OperationProgress(context.getString(R.string.browser_op_extract), cur, tot) }
+                },
+                shouldCancel = { cancelFlag.isCancelled() }
+                )
+                }
+                // 延迟再关闭进度条，避免 setProgress 的 Main.immediate 晚于本行执行导致进度条不消失
+                delay(120)
+                progressOpState.value = null
+                progressCancelActionState.value = null
+                when (result) {
+                is UnzipResult.Success -> {
+                workflow.close()
+                Toast.makeText(context, context.getString(R.string.browser_extract_complete), Toast.LENGTH_SHORT).show()
+                browserTab.refresh()
+                }
+                is UnzipResult.Cancelled -> {
+                Toast.makeText(context, context.getString(R.string.browser_operation_cancelled), Toast.LENGTH_SHORT).show()
+                }
+                is UnzipResult.PasswordRequired -> {
+                // 需要密码但未提供，显示密码输入框让用户重试
+                workflow.markUnzipPasswordRequired()
+                Toast.makeText(context, context.getString(R.string.browser_enter_password), Toast.LENGTH_SHORT).show()
+                }
+                is UnzipResult.WrongPassword -> {
+                // 密码错误，保留对话框让用户重试
+                workflow.markUnzipPasswordRequired()
+                Toast.makeText(context, context.getString(R.string.browser_wrong_password_retry), Toast.LENGTH_SHORT).show()
+                }
+                is UnzipResult.CorruptedFile -> {
+                workflow.close()
+                Toast.makeText(context, context.getString(R.string.browser_extract_failed_corrupt), Toast.LENGTH_SHORT).show()
+                }
+                is UnzipResult.UnsupportedFormat -> {
+                workflow.close()
+                Toast.makeText(context, context.getString(R.string.browser_extract_failed_format), Toast.LENGTH_SHORT).show()
+                }
+                is UnzipResult.IOError -> {
+                workflow.close()
+                val msg = result.message ?: context.getString(R.string.common_unknown_error)
+                Toast.makeText(context, context.getString(R.string.browser_extract_failed_detail, msg), Toast.LENGTH_SHORT).show()
+                }
+                }
+            }
+        }
+        is ArchiveOperationRequest.CompressFile -> {
+            val target = req.target
+            val format = workflow.format
+            val archiveBaseName = if (target.name.contains(".")) target.name.substringBeforeLast(".") else target.name
+            val outputName = buildArchiveOutputName(archiveBaseName, format)
+            val pwd = workflow.password.ifBlank { null }?.toCharArray()
+            val itemUris = listOf(target.uri)
+            val parentDirUri = Uri.parse(displayUri)
+            val treeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            scope.launch {
+                val cancelFlag = OperationCancelFlag()
+                progressCancelActionState.value = { cancelFlag.requestCancel() }
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), 0, 1)
+                delay(50)
+                val ok = withContext(Dispatchers.IO) {
+                val onBytes: (Long, Long) -> Unit = { done, total ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = progressOpState.value?.let { it.copy(bytesDone = done, bytesTotal = total) } ?: OperationProgress(context.getString(R.string.browser_op_compress), bytesDone = done, bytesTotal = total) }
+                }
+                if (format.compressesSingleFileOnly) {
+                compressSingleFileToFormat(context, target.uri, parentDirUri, treeUri, outputName, format, { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
+                } else {
+                compressArchiveItems(context, itemUris, parentDirUri, treeUri, archiveBaseName, format, pwd, { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
+                }
+                }
+                delay(120)
+                progressOpState.value = null
+                progressCancelActionState.value = null
+                workflow.close()
+                if (ok) {
+                Toast.makeText(context, context.getString(R.string.browser_compress_complete), Toast.LENGTH_SHORT).show()
+                browserTab.refresh()
+                } else {
+                Toast.makeText(
+                context,
+                if (cancelFlag.isCancelled()) context.getString(R.string.browser_operation_cancelled) else context.getString(R.string.browser_compress_failed),
+                Toast.LENGTH_SHORT
+                ).show()
+                }
+            }
+        }
+        is ArchiveOperationRequest.CompressPending -> {
+            val items = req.items
+            val currentDirUri = Uri.parse(displayUri)
+            val rootTreeUri = browserTab.rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+            when (req.fixedFormat) {
+                null -> {
+                    val format = workflow.format
+                    val pwd = workflow.password.ifBlank { null }?.toCharArray()
+                    val generatedPendingArchiveName = buildArchiveOutputName("archive", format)
+                    scope.launch {
+                val cancelFlag = OperationCancelFlag()
+                progressCancelActionState.value = { cancelFlag.requestCancel() }
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
+                delay(50)
+                val ok = withContext(Dispatchers.IO) {
+                val onBytes: (Long, Long) -> Unit = { done, total ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = progressOpState.value?.let { it.copy(bytesDone = done, bytesTotal = total) } ?: OperationProgress(context.getString(R.string.browser_op_compress), bytesDone = done, bytesTotal = total) }
+                }
+                if (format.compressesSingleFileOnly) {
+                val allOk = items.all { item ->
+                compressSingleFileToFormat(context, item.uri, currentDirUri, rootTreeUri, buildArchiveOutputName(item.name, format), format, { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
+                }
+                allOk
+                } else {
+                compressArchiveItems(context, items.map { it.uri }, currentDirUri, rootTreeUri, "archive", format, pwd, { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) { progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot) }
+                }, shouldCancel = { cancelFlag.isCancelled() }, onBytesProgress = onBytes)
+                }
+                }
+                delay(120)
+                progressOpState.value = null
+                progressCancelActionState.value = null
+                workflow.close()
+                if (ok) {
+                browserTab.finishPendingList()
+                Toast.makeText(context, context.getString(R.string.browser_compress_done, generatedPendingArchiveName), Toast.LENGTH_SHORT).show()
+                browserTab.refresh()
+                } else {
+                Toast.makeText(
+                context,
+                if (cancelFlag.isCancelled()) context.getString(R.string.browser_operation_cancelled) else context.getString(R.string.browser_compress_failed),
+                Toast.LENGTH_SHORT
+                ).show()
+                }
+                    }
+                }
+                ArchiveCompressionFormat.ZIP -> {
+                    val zipName = workflow.pendingName.trim().let {
+                        if (it.endsWith(".zip", ignoreCase = true)) it else "$it.zip"
+                    }
+                    val pwd = workflow.password.ifBlank { null }?.toCharArray()
+                    scope.launch {
+                val cancelFlag = OperationCancelFlag()
+                progressCancelActionState.value = { cancelFlag.requestCancel() }
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
+                delay(50)
+                val ok = withContext(Dispatchers.IO) {
+                compressToZip(
+                context,
+                items.map { it.uri },
+                currentDirUri,
+                rootTreeUri,
+                zipName,
+                pwd,
+                setProgress = { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) {
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot)
+                }
+                },
+                shouldCancel = { cancelFlag.isCancelled() }
+                )
+                }
+                delay(120)
+                progressOpState.value = null
+                progressCancelActionState.value = null
+                workflow.close()
+                if (ok) {
+                browserTab.finishPendingList()
+                Toast.makeText(context, context.getString(R.string.browser_compress_done, zipName), Toast.LENGTH_SHORT).show()
+                browserTab.refresh()
+                } else {
+                Toast.makeText(
+                context,
+                if (cancelFlag.isCancelled()) context.getString(R.string.browser_operation_cancelled) else context.getString(R.string.browser_compress_failed),
+                Toast.LENGTH_SHORT
+                ).show()
+                }
+                    }
+                }
+                ArchiveCompressionFormat.SEVEN_Z -> {
+                    val sevenZName = workflow.pendingName.trim().let {
+                        if (it.endsWith(".7z", ignoreCase = true)) it else "$it.7z"
+                    }
+                    val pwd = workflow.password.ifBlank { null }?.toCharArray()
+                    scope.launch {
+                val cancelFlag = OperationCancelFlag()
+                progressCancelActionState.value = { cancelFlag.requestCancel() }
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), 0, items.size)
+                delay(50)
+                var timeout = false
+                val ok = withContext(Dispatchers.IO) {
+                val executor = Executors.newSingleThreadExecutor()
+                try {
+                val future = executor.submit<Boolean> {
+                compressTo7z(
+                context,
+                items.map { it.uri },
+                currentDirUri,
+                rootTreeUri,
+                sevenZName,
+                pwd,
+                setProgress = { cur, tot ->
+                scope.launch(Dispatchers.Main.immediate) {
+                progressOpState.value = OperationProgress(context.getString(R.string.browser_op_compress), cur, tot)
+                }
+                },
+                shouldCancel = { cancelFlag.isCancelled() }
+                )
+                }
+                future.get(2, TimeUnit.MINUTES)
+                } catch (_: TimeoutException) {
+                timeout = true
+                false
+                } finally {
+                executor.shutdownNow()
+                }
+                }
+                delay(120)
+                progressOpState.value = null
+                progressCancelActionState.value = null
+                workflow.close()
+                if (ok) {
+                browserTab.finishPendingList()
+                Toast.makeText(context, context.getString(R.string.browser_compress_done, sevenZName), Toast.LENGTH_SHORT).show()
+                browserTab.refresh()
+                } else {
+                val message = when {
+                cancelFlag.isCancelled() -> context.getString(R.string.browser_operation_cancelled)
+                timeout -> context.getString(R.string.browser_compress_timeout)
+                else -> context.getString(R.string.browser_compress_failed)
+                }
+                Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+                }
+                    }
+                }
+                else -> { }
+            }
+        }
+        null -> { }
+    }
 }

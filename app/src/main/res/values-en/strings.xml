@@ -1469,6 +1469,7 @@ It will sync, copy, and push automatically.</string>
     <string name="browser_meta_taken_time_hint">Supports YYYY:MM:DD HH:MM:SS or YYYY-MM-DD HH:MM:SS</string>
     <string name="browser_meta_taken_time_invalid">Invalid taken time format. Use YYYY:MM:DD HH:MM:SS</string>
     <string name="browser_meta_field_too_long">%1$s must not exceed %2$d characters</string>
+    <string name="browser_meta_read_failed">Cannot read the file; it may have been moved or deleted</string>
     <string name="browser_meta_fix_form_errors">Please fix invalid fields before saving</string>
     <string name="browser_meta_camera_make_label">Camera make</string>
     <string name="browser_meta_camera_model_label">Camera model</string>

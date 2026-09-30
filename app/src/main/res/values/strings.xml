@@ -1547,6 +1547,7 @@ OPF目录文件: %2$s</string>
     <string name="browser_meta_taken_time_hint">支持 YYYY:MM:DD HH:MM:SS 或 YYYY-MM-DD HH:MM:SS</string>
     <string name="browser_meta_taken_time_invalid">拍摄时间格式无效，请使用 YYYY:MM:DD HH:MM:SS</string>
     <string name="browser_meta_field_too_long">%1$s不能超过 %2$d 个字符</string>
+    <string name="browser_meta_read_failed">无法读取文件，可能已被移动或删除</string>
     <string name="browser_meta_fix_form_errors">请先修正表单中的错误字段</string>
     <string name="browser_meta_camera_make_label">相机厂商</string>
     <string name="browser_meta_camera_model_label">相机型号</string>

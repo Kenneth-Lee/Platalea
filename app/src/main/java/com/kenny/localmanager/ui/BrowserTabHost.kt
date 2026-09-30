@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import android.widget.Toast
 import com.kenny.localmanager.R
+import com.kenny.localmanager.file.isGalleryImageFile
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.addToZip
 import com.kenny.localmanager.file.invalidateArchiveViewerCaches
@@ -324,6 +325,10 @@ private fun saveBatchEditableImageExif(
     val errors = mutableListOf<String>()
     for (file in files) {
         val current = readEditableImageExif(context, file.uri)
+        if (current == null) {
+            errors += "${file.name}: read source failed (file missing or unreadable)"
+            continue
+        }
         val merged = mergeEditableImageExifForBatch(current, patch)
         val error = saveEditableImageExif(context, file.uri, merged)
         if (error != null) {
@@ -381,7 +386,7 @@ private fun BatchPendingMetadataDialog(
     val validatingFail = remember(files) { mutableStateOf<String?>(null) }
     var batchSaving by remember(files) { mutableStateOf(false) }
     val initialImage = remember(files) {
-        if (batchKind == DetailMetadataKind.IMAGE) runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } else null
+        if (batchKind == DetailMetadataKind.IMAGE) runCatching { readEditableImageExif(context, files.first().uri) }.getOrNull() ?: EditableImageExif() else null
     }
     val initialAudio = remember(files) {
         if (batchKind == DetailMetadataKind.AUDIO) runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } else null
@@ -393,7 +398,7 @@ private fun BatchPendingMetadataDialog(
 
     LaunchedEffect(files, batchKind) {
         if (batchKind == DetailMetadataKind.IMAGE) {
-            imageForm = withContext(Dispatchers.IO) { runCatching { readEditableImageExif(context, files.first().uri) }.getOrElse { EditableImageExif() } }
+            imageForm = withContext(Dispatchers.IO) { runCatching { readEditableImageExif(context, files.first().uri) }.getOrNull() ?: EditableImageExif() }
             imageValidation = EditableImageExifValidation()
         } else if (batchKind == DetailMetadataKind.AUDIO) {
             audioForm = withContext(Dispatchers.IO) { runCatching { readEditableAudioAnnotation(context, files.first().uri) }.getOrElse { EditableAudioAnnotation() } }
