@@ -90,8 +90,6 @@ import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
 import com.kenny.localmanager.file.DocumentFileModel
-import com.kenny.localmanager.file.createFileWithBytes
-import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.compressToZip
 import com.kenny.localmanager.file.compressTo7z
@@ -515,43 +513,6 @@ fun PlataleaApp(
 
     // Archive 阅读器域：压缩包 / 文档阅读的临时 Route（请求 -> 密码 -> 解压 -> 查看器）
     val archiveReader = rememberArchiveReaderWorkflow(context, scope)
-
-    suspend fun savePicZipImageToRoot(sourceFile: File, fileName: String): Boolean {
-        val targetRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
-        if (targetRoot == null) {
-            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
-            return false
-        }
-        val bytes = withContext(Dispatchers.IO) {
-            runCatching { sourceFile.readBytes() }.getOrNull()
-        } ?: run {
-            Toast.makeText(context, context.getString(R.string.browser_save_image_read_failed), Toast.LENGTH_SHORT).show()
-            return false
-        }
-        val targetUri = Uri.parse(targetRoot)
-        val dotIndex = fileName.lastIndexOf('.')
-        val baseName = if (dotIndex > 0) fileName.substring(0, dotIndex) else fileName
-        val ext = if (dotIndex > 0) fileName.substring(dotIndex) else ""
-        var outName = fileName
-        var copyIndex = 1
-        while (findChildByName(context, targetUri, outName) != null) {
-            outName = "$baseName ($copyIndex)$ext"
-            copyIndex++
-        }
-        val mimeType = when (fileName.substringAfterLast('.', "").lowercase()) {
-            "jpg", "jpeg" -> "image/jpeg"
-            "png" -> "image/png"
-            "gif" -> "image/gif"
-            "webp" -> "image/webp"
-            "bmp" -> "image/bmp"
-            else -> "application/octet-stream"
-        }
-        val ok = withContext(Dispatchers.IO) {
-            createFileWithBytes(context, targetUri, targetUri, outName, mimeType, bytes)
-        }
-        Toast.makeText(context, if (ok) context.getString(R.string.browser_saved_to_root, outName) else context.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
-        return ok
-    }
 
 
     val quickNoteTab = quickNoteTabFeature(
@@ -1090,24 +1051,14 @@ fun PlataleaApp(
             )
         }
         archiveReader.viewer != null -> {
-            // Archive 阅读器域：解压完成后的全屏查看器（渲染与退出善后在 ArchiveViewerRouteHost）
-            ArchiveViewerRouteHost(
+            // Archive 阅读器域：解压完成后的全屏查看器（装配与善后在 ArchiveHostLayer）
+            ArchiveViewerHostLayer(
                 workflow = archiveReader,
+                browserTab = browserTab,
                 readerConfig = config.reader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 bookNote = bookNoteTab,
-                recordRecentOpen = { type, key, title, uri, playlistId ->
-                    recordRecentOpen(
-                        type = type,
-                        key = key,
-                        title = title,
-                        uri = uri,
-                        playlistId = playlistId
-                    )
-                },
-                onSavePicZipImage = { sourceFile, fileName ->
-                    savePicZipImageToRoot(sourceFile, fileName)
-                },
+                recordRecentOpen = ::recordRecentOpen,
                 onEncryptedExitRequest = { encryptedCacheExitDialog = it }
             )
         }
@@ -1142,30 +1093,7 @@ fun PlataleaApp(
         else -> MainTabsRootContent()
     }
     // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
-    encryptedCacheExitDialog?.let { dialog ->
-        AlertDialog(
-            onDismissRequest = { encryptedCacheExitDialog = null },
-            title = { Text(dialog.title) },
-            text = {
-                Text(
-                    stringResource(R.string.browser_delete_cache_exit_prompt),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            },
-            confirmButton = {
-                Button(onClick = {
-                    dialog.onDelete()
-                    encryptedCacheExitDialog = null
-                }) { Text(stringResource(R.string.browser_delete_cache_and_exit)) }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    dialog.onKeep()
-                    encryptedCacheExitDialog = null
-                }) { Text(stringResource(R.string.browser_keep_cache_and_exit)) }
-            }
-        )
-    }
+    EncryptedCacheExitConfirmLayer(encryptedCacheExitDialog) { encryptedCacheExitDialog = null }
     browserSave.overwriteConfirm?.let { (_, fileName) ->
         OverwriteSaveConfirmDialog(
             fileName = fileName,
