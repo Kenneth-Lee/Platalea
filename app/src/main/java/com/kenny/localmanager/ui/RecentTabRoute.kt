@@ -276,17 +276,7 @@ internal fun openRecentItemByType(
     currentPlaybackState: PlaybackState?,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     switchMainTab: (MainTab) -> Unit,
-    onMdZipTarget: (DocumentFileModel) -> Unit,
-    onHtmlZipTarget: (DocumentFileModel) -> Unit,
-    onHtmlTarget: (DocumentFileModel) -> Unit,
-    onHtmlUrlTarget: (String) -> Unit,
-    onPicZipTarget: (DocumentFileModel) -> Unit,
-    onVidZipTarget: (DocumentFileModel) -> Unit,
-    onLlmZipTarget: (DocumentFileModel) -> Unit,
-    onTxtTarget: (DocumentFileModel) -> Unit,
-    onLlmTarget: (DocumentFileModel) -> Unit,
-    onEpubTarget: (DocumentFileModel) -> Unit,
-    onPdfTarget: (DocumentFileModel) -> Unit
+    readingLauncher: ReadingLauncher
 ) {
     when (item.type) {
         RECENT_TYPE_PLAYLIST -> {
@@ -342,10 +332,10 @@ internal fun openRecentItemByType(
             }
             val model = buildRecentModel(uri, item.title)
             when {
-                item.title.endsWith(".md.zip", ignoreCase = true) || item.title.endsWith(".rst.zip", ignoreCase = true) -> onMdZipTarget(model)
-                item.title.endsWith(".html.zip", ignoreCase = true) -> onHtmlZipTarget(model)
-                item.title.endsWith(".pic.zip", ignoreCase = true) -> onPicZipTarget(model)
-                item.title.endsWith(".vid.zip", ignoreCase = true) -> onVidZipTarget(model)
+                isCompressedMarkdown(item.title) -> readingLauncher.mdZip(model)
+                isCompressedHtml(item.title) -> readingLauncher.htmlZip(model)
+                isPicZip(item.title) -> readingLauncher.picZip(model)
+                isVidZip(item.title) -> readingLauncher.vidZip(model)
                 else -> {
                     Toast.makeText(context, context.getString(R.string.recent_unsupported_zip_type), Toast.LENGTH_SHORT).show()
                     return
@@ -360,9 +350,9 @@ internal fun openRecentItemByType(
                 return
             }
             if (uri.startsWith("http://", ignoreCase = true) || uri.startsWith("https://", ignoreCase = true)) {
-                onHtmlUrlTarget(uri)
+                readingLauncher.htmlUrl(uri)
             } else {
-                onHtmlTarget(buildRecentModel(uri, item.title))
+                readingLauncher.html(buildRecentModel(uri, item.title))
             }
         }
 
@@ -374,10 +364,10 @@ internal fun openRecentItemByType(
             }
             val model = buildRecentModel(uri, item.title)
             when {
-                item.title.endsWith(".llm.zip", ignoreCase = true) -> onLlmZipTarget(model)
-                item.title.endsWith(".txt", ignoreCase = true) -> onTxtTarget(model)
-                item.title.endsWith(".llm", ignoreCase = true) -> onLlmTarget(model)
-                else -> onEpubTarget(model)
+                isCompressedLlmZip(item.title) -> readingLauncher.llmZip(model)
+                isTxtFile(item.title) -> readingLauncher.txt(model)
+                isLlmFile(item.title) -> readingLauncher.llm(model)
+                else -> readingLauncher.epub(model)
             }
         }
 
@@ -387,7 +377,7 @@ internal fun openRecentItemByType(
                 Toast.makeText(context, context.getString(R.string.recent_invalid_missing_uri), Toast.LENGTH_SHORT).show()
                 return
             }
-            onPdfTarget(buildRecentModel(uri, item.title))
+            readingLauncher.pdf(buildRecentModel(uri, item.title))
         }
 
         else -> {

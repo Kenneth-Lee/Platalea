@@ -776,65 +776,6 @@ private fun queryExternalOpenTargets(
 }
 
 
-private fun isCompressedMarkdown(name: String): Boolean =
-    name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
-
-
-/** 判断文件名是否为压缩 HTML 文件（.html.zip）。 */
-private fun isCompressedHtml(name: String): Boolean =
-    name.endsWith(".html.zip", ignoreCase = true)
-
-/** 判断文件名是否为压缩 LLM 包（.llm.zip）。 */
-private fun isCompressedLlmZip(name: String): Boolean =
-    name.endsWith(".llm.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .pic.zip 图片压缩包。 */
-private fun isPicZip(name: String): Boolean =
-    name.endsWith(".pic.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .vid.zip 视频压缩包。 */
-internal fun isVidZip(name: String): Boolean =
-    name.endsWith(".vid.zip", ignoreCase = true)
-
-/** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩格式）。 */
-internal fun isExtractableArchive(name: String): Boolean =
-    (name.endsWith(".zip", ignoreCase = true) && !isPicZip(name) && !isVidZip(name)) ||
-        name.endsWith(".rar", ignoreCase = true) ||
-        name.endsWith(".7z", ignoreCase = true) ||
-        sevenZSplitPartRegex.matches(name) ||
-        name.endsWith(".tar", ignoreCase = true) ||
-        name.endsWith(".tar.gz", ignoreCase = true) ||
-        name.endsWith(".tgz", ignoreCase = true) ||
-        name.endsWith(".tar.bz2", ignoreCase = true) ||
-        name.endsWith(".tbz2", ignoreCase = true) ||
-        name.endsWith(".tar.xz", ignoreCase = true) ||
-        name.endsWith(".txz", ignoreCase = true) ||
-        (name.endsWith(".gz", ignoreCase = true) &&
-            !name.endsWith(".tar.gz", ignoreCase = true) &&
-            !name.endsWith(".tgz", ignoreCase = true)) ||
-        (name.endsWith(".bz2", ignoreCase = true) &&
-            !name.endsWith(".tar.bz2", ignoreCase = true) &&
-            !name.endsWith(".tbz2", ignoreCase = true)) ||
-        (name.endsWith(".xz", ignoreCase = true) &&
-            !name.endsWith(".tar.xz", ignoreCase = true) &&
-            !name.endsWith(".txz", ignoreCase = true))
-
-/** 判断文件名是否为 EPUB 文件。 */
-private fun isEpubFile(name: String): Boolean =
-    name.endsWith(".epub", ignoreCase = true)
-
-/** 判断文件名是否为 TXT 文件。 */
-private fun isTxtFile(name: String): Boolean =
-    name.endsWith(".txt", ignoreCase = true)
-
-/** 判断文件名是否为 LLM 对话文件。 */
-private fun isLlmFile(name: String): Boolean =
-    name.endsWith(".llm", ignoreCase = true)
-
-/** 判断文件名是否为 PDF 文件。 */
-private fun isPdfFile(name: String): Boolean =
-    name.endsWith(".pdf", ignoreCase = true)
-
 private fun getCompressedPayloadExtension(name: String): String? {
     if (!name.endsWith(".zip", ignoreCase = true)) return null
     val withoutZip = name.dropLast(4)
@@ -1375,9 +1316,9 @@ internal fun BrowserScreen(
             isVidZip(target.name) -> context.getString(R.string.context_view_videos)
             isPdfFile(target.name) -> context.getString(R.string.context_default_open_pdf)
             isExtractableArchive(target.name) -> context.getString(R.string.browser_extract_action)
-            target.name.endsWith(".gpg", ignoreCase = true) -> context.getString(R.string.context_gpg_decrypt)
-            target.name.endsWith(".pass", ignoreCase = true) -> context.getString(R.string.context_view_password)
-            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) -> context.getString(R.string.context_render_markdown)
+            isGpgEncryptedFile(target.name) -> context.getString(R.string.context_gpg_decrypt)
+            isPassFile(target.name) -> context.getString(R.string.context_view_password)
+            isMarkdownFile(target.name) -> context.getString(R.string.context_render_markdown)
             else -> {
                 val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
                 if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
@@ -1416,18 +1357,18 @@ internal fun BrowserScreen(
                 onRequestPdfView(target)
             isExtractableArchive(target.name) ->
                 onUnzipRequest(target)
-            target.name.endsWith(".gpg", ignoreCase = true) ->
+            isGpgEncryptedFile(target.name) ->
                 onRequestGpgDecrypt(target, currentUri)
-            target.name.endsWith(".pass", ignoreCase = true) ->
+            isPassFile(target.name) ->
                 onRequestPassView(target)
-            target.name.endsWith(".md", ignoreCase = true) || target.name.endsWith(".rst", ignoreCase = true) ->
+            isMarkdownFile(target.name) ->
                 onOpenMarkdownView(target.uri.toString(), target.name, false)
             else -> {
                 val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
                 if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {
                     Unit
                 } else {
-                    val encrypted = target.name.endsWith(".gpg", ignoreCase = true)
+                    val encrypted = isGpgEncryptedFile(target.name)
                     onOpenFile(target.uri.toString(), target.name, encrypted)
                 }
             }
@@ -1994,7 +1935,7 @@ internal fun BrowserScreen(
                                     }
                                 ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
                             }
-                        if (!menuTarget.name.endsWith(".pass", ignoreCase = true)) {
+                        if (!isPassFile(menuTarget.name)) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -2003,8 +1944,7 @@ internal fun BrowserScreen(
                                 }
                             ) { Text(context.getString(R.string.context_gpg_encrypt), color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if ((menuTarget.name.endsWith(".md", ignoreCase = true) || menuTarget.name.endsWith(".rst", ignoreCase = true)
-                            || menuTarget.name.endsWith(".txt", ignoreCase = true))
+                        if ((isMarkdownFile(menuTarget.name) || isTxtFile(menuTarget.name))
                             && onRequestPassProtect != null) {
                             TextButton(
                                 onClick = {
@@ -2014,7 +1954,7 @@ internal fun BrowserScreen(
                                 }
                             ) { Text(context.getString(R.string.context_pass_protect), color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if (menuTarget.name.endsWith(".pass", ignoreCase = true)) {
+                        if (isPassFile(menuTarget.name)) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -2023,7 +1963,7 @@ internal fun BrowserScreen(
                                 }
                             ) { Text(context.getString(R.string.context_edit_directly), color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if (menuTarget.name.endsWith(".json", ignoreCase = true) && onRequestImportConfig != null) {
+                        if (isJsonFile(menuTarget.name) && onRequestImportConfig != null) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
@@ -3487,6 +3427,5 @@ private enum class FileSortOrder(@androidx.annotation.StringRes val labelRes: In
 }
 
 
-private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
 
 internal data class CachedDir(val items: List<DocumentFileModel>)

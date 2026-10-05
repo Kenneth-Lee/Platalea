@@ -693,6 +693,9 @@ internal fun BrowserTabHost(
     val scope = deps.scope
     val config = state.config
     val archiveReader = deps.archiveReader
+    val readingLauncher = remember(deps.archiveReader, deps.setTransientRoute) {
+        ReadingLauncher(deps.archiveReader, deps.setTransientRoute)
+    }
     val archiveOps = deps.archiveOps
     val crypto = deps.crypto
     val configImportExportWorkflow = deps.configImportExportWorkflow
@@ -1144,20 +1147,16 @@ internal fun BrowserTabHost(
                                     onForwardToBulletin(BulletinForwardPayload.Files(items))
                                 },
                                 onUnzipRequest = { archiveOps.open(ArchiveOperationRequest.Unzip(it)) },
-                                onRequestMdZipView = { archiveReader.open(ArchiveReaderKind.MD_ZIP, it) },
-                                onRequestHtmlView = {
-                                    setTransientRoute(htmlViewerRouteFromFile(it.uri.toString(), it.name))
-                                },
-                                onRequestHtmlZipView = { archiveReader.open(ArchiveReaderKind.HTML_ZIP, it) },
-                                onRequestOpenUrl = { url ->
-                                    setTransientRoute(htmlViewerRouteFromUrl(url))
-                                },
-                                onRequestLlmZipView = { archiveReader.open(ArchiveReaderKind.LLM_ZIP, it) },
-                                onRequestEpubView = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
-                                onRequestTxtView = { archiveReader.open(ArchiveReaderKind.TXT, it) },
-                                onRequestLlmView = { archiveReader.open(ArchiveReaderKind.LLM, it) },
-                                onRequestPicZipView = { archiveReader.open(ArchiveReaderKind.PIC_ZIP, it) },
-                                onRequestVidZipView = { archiveReader.open(ArchiveReaderKind.VID_ZIP, it) },
+                                onRequestMdZipView = readingLauncher::mdZip,
+                                onRequestHtmlView = readingLauncher::html,
+                                onRequestHtmlZipView = readingLauncher::htmlZip,
+                                onRequestOpenUrl = readingLauncher::htmlUrl,
+                                onRequestLlmZipView = readingLauncher::llmZip,
+                                onRequestEpubView = readingLauncher::epub,
+                                onRequestTxtView = readingLauncher::txt,
+                                onRequestLlmView = readingLauncher::llm,
+                                onRequestPicZipView = readingLauncher::picZip,
+                                onRequestVidZipView = readingLauncher::vidZip,
                                 onRequestDirectoryImageView = { item, dirUri, siblings ->
                                     scope.launch {
                                         runCatching {
@@ -1171,7 +1170,7 @@ internal fun BrowserTabHost(
                                         }
                                     }
                                 },
-                                onRequestPdfView = { setTransientRoute(TransientRoute.PdfViewer(it.uri.toString(), it.name)) },
+                                onRequestPdfView = readingLauncher::pdf,
                                 onCompressArchiveRequest = { archiveOps.open(ArchiveOperationRequest.CompressFile(it)) },
                                 onRequestPassProtect = { model -> crypto.open(CryptoRequest.PassProtect(model)) },
                                 onRequestPassView = { model -> crypto.open(CryptoRequest.PassView(model)) },

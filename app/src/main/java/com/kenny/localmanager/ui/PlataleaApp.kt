@@ -513,6 +513,8 @@ fun PlataleaApp(
 
     // Archive 阅读器域：压缩包 / 文档阅读的临时 Route（请求 -> 密码 -> 解压 -> 查看器）
     val archiveReader = rememberArchiveReaderWorkflow(context, scope)
+    // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
+    val readingLauncher = ReadingLauncher(archiveReader) { transientRoute = it }
 
 
     val quickNoteTab = quickNoteTabFeature(
@@ -757,19 +759,7 @@ fun PlataleaApp(
                                 )
                             },
                             switchMainTab = { requestOpenMainTab(it) },
-                            onMdZipTarget = { archiveReader.open(ArchiveReaderKind.MD_ZIP, it) },
-                            onHtmlZipTarget = { archiveReader.open(ArchiveReaderKind.HTML_ZIP, it) },
-                            onHtmlTarget = { transientRoute = htmlViewerRouteFromFile(it.uri.toString(), it.name) },
-                            onHtmlUrlTarget = { url ->
-                                transientRoute = htmlViewerRouteFromUrl(url)
-                            },
-                            onPicZipTarget = { archiveReader.open(ArchiveReaderKind.PIC_ZIP, it) },
-                            onVidZipTarget = { archiveReader.open(ArchiveReaderKind.VID_ZIP, it) },
-                            onLlmZipTarget = { archiveReader.open(ArchiveReaderKind.LLM_ZIP, it) },
-                            onTxtTarget = { archiveReader.open(ArchiveReaderKind.TXT, it) },
-                            onLlmTarget = { archiveReader.open(ArchiveReaderKind.LLM, it) },
-                            onEpubTarget = { archiveReader.open(ArchiveReaderKind.EPUB, it) },
-                            onPdfTarget = { transientRoute = TransientRoute.PdfViewer(it.uri.toString(), it.name) }
+                            readingLauncher = readingLauncher
                         )
                             }
                     )
