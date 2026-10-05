@@ -30,6 +30,7 @@ import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.deleteDocument
 import com.kenny.localmanager.file.findChildByName
 import com.kenny.localmanager.file.getTrashUriIfExists
+import com.kenny.localmanager.file.humanReadableRootUri
 import com.kenny.localmanager.file.listFilesSafe
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

@@ -1,18 +1,10 @@
 package com.kenny.localmanager.ui
 
 import android.content.Context
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.widget.Toast
-import com.kenny.localmanager.file.DocumentFileModel
-import com.kenny.localmanager.player.PlaybackState
-import com.kenny.localmanager.player.ACTION_PLAY
-import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
-import com.kenny.localmanager.player.PlaybackService
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -57,9 +49,18 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.RecentOpenItem
+import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.launchExternalOpen
+import com.kenny.localmanager.player.ACTION_PLAY
+import com.kenny.localmanager.player.EXTRA_PLAYLIST_ID
+import com.kenny.localmanager.player.PlaybackService
+import com.kenny.localmanager.player.PlaybackState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class RecentTabRouteState(
     val items: List<RecentOpenItem>,

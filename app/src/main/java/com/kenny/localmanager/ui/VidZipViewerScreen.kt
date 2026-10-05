@@ -37,10 +37,11 @@ import com.kenny.localmanager.R
 import com.kenny.localmanager.file.extractVidZipVideoRange
 import com.kenny.localmanager.file.formatSize
 import com.kenny.localmanager.file.getVidZipEntrySize
+import com.kenny.localmanager.file.launchExternalOpen
+import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 // ============================================================================
 // .vid.zip 查看器：解压完成后的视频列表（按需解压单个视频后调外部播放器打开）。
