@@ -22,10 +22,6 @@ import java.io.File
 internal enum class ArchiveReaderKind {
     MD_ZIP,    // .md.zip / .rst.zip
     HTML_ZIP,  // .html.zip
-    LLM_ZIP,   // .llm.zip（解压后走 EPUB 渲染器）
-    EPUB,      // .epub
-    TXT,       // .txt（转换为 EPUB 渲染）
-    LLM,       // .llm 对话导出文件（转换为 EPUB 渲染）
     PIC_ZIP,   // .pic.zip
     VID_ZIP    // .vid.zip
 }
@@ -34,8 +30,6 @@ internal enum class ArchiveReaderKind {
 internal val ArchiveReaderCancelableKinds: Set<ArchiveReaderKind> = setOf(
     ArchiveReaderKind.MD_ZIP,
     ArchiveReaderKind.HTML_ZIP,
-    ArchiveReaderKind.LLM_ZIP,
-    ArchiveReaderKind.EPUB,
     ArchiveReaderKind.PIC_ZIP
 )
 
@@ -69,7 +63,7 @@ internal data class HtmlZipViewState(
     val isEncrypted: Boolean
 ) : ArchiveViewerState
 
-/** EPUB（含 .llm.zip / .txt / .llm 转换）查看器状态。 */
+/** EPUB 渲染器查看器状态（来源 .epub / .llm.zip / .txt / .llm，状态机在 EpubReaderWorkflowState）。 */
 internal data class EpubViewState(
     val extractResult: EpubExtractResult,
     val zipFileName: String,

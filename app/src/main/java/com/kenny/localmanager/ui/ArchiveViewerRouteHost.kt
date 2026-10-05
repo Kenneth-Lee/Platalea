@@ -23,7 +23,7 @@ import java.io.File
 
 @Composable
 internal fun ArchiveViewerRouteHost(
-    workflow: ArchiveReaderWorkflowState,
+    workflow: ViewerHostWorkflow,
     readerConfig: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,
     bookNote: BookNoteTabFeature,

@@ -659,6 +659,7 @@ internal class BrowserTabState(
 internal class BrowserTabHostDependencies(
     val scope: CoroutineScope,
     val archiveReader: ArchiveReaderWorkflowState,
+    val epubReader: EpubReaderWorkflowState,
     val archiveOps: ArchiveOperationWorkflowState,
     val crypto: CryptoWorkflowState,
     val configImportExportWorkflow: ConfigImportExportWorkflowState,
@@ -693,8 +694,8 @@ internal fun BrowserTabHost(
     val scope = deps.scope
     val config = state.config
     val archiveReader = deps.archiveReader
-    val readingLauncher = remember(deps.archiveReader, deps.setTransientRoute) {
-        ReadingLauncher(deps.archiveReader, deps.setTransientRoute)
+    val readingLauncher = remember(deps.archiveReader, deps.epubReader, deps.setTransientRoute) {
+        ReadingLauncher(deps.archiveReader, deps.epubReader, deps.setTransientRoute)
     }
     val archiveOps = deps.archiveOps
     val crypto = deps.crypto

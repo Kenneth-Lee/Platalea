@@ -11,22 +11,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
-import com.kenny.localmanager.file.EpubExtractResult
-import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.HtmlZipExtractResult
 import com.kenny.localmanager.file.HtmlZipParseResult
 import com.kenny.localmanager.file.MdZipExtractResult
 import com.kenny.localmanager.file.PicZipExtractResult
-import com.kenny.localmanager.file.extractEpubToCache
 import com.kenny.localmanager.file.extractHtmlZipToCache
 import com.kenny.localmanager.file.extractHtmlZipToCacheWithProgress
-import com.kenny.localmanager.file.extractLlmZipToCache
 import com.kenny.localmanager.file.extractMdZipToCache
 import com.kenny.localmanager.file.extractPicZipToCache
 import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.findMdZipCacheTarget
-import com.kenny.localmanager.file.getEpubCacheDir
-import com.kenny.localmanager.file.getEpubCacheTimestamp
 import com.kenny.localmanager.file.getHtmlZipCacheDir
 import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
 import com.kenny.localmanager.file.getMdZipCacheDir
@@ -36,14 +30,10 @@ import com.kenny.localmanager.file.getPicZipCacheTimestamp
 import com.kenny.localmanager.file.getVidZipCacheDir
 import com.kenny.localmanager.file.getVidZipCacheTimestamp
 import com.kenny.localmanager.file.isArchiveEncrypted
-import com.kenny.localmanager.file.isEpubCacheEncrypted
 import com.kenny.localmanager.file.isHtmlZipCacheEncrypted
 import com.kenny.localmanager.file.isMdZipCacheEncrypted
 import com.kenny.localmanager.file.isPicZipCacheEncrypted
 import com.kenny.localmanager.file.isVidZipCacheEncrypted
-import com.kenny.localmanager.file.loadEpubFromCache
-import com.kenny.localmanager.file.prepareLlmAsEpub
-import com.kenny.localmanager.file.prepareTxtAsEpub
 import com.kenny.localmanager.file.readVidZipVideoPaths
 import com.kenny.localmanager.file.tryArchivePassword
 import com.kenny.localmanager.file.tryPicZipPassword
@@ -52,11 +42,32 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+/** 阅读工作流请求阶段的通用能力（密码 / 进度 / 日志 / 错误）：共享对话框组件面向此接口。 */
+internal interface ReaderRequestWorkflow {
+    val encrypted: Boolean?
+    val password: String
+    val inProgress: Boolean
+    val log: String
+    val loadError: String?
+    fun updatePassword(value: String)
+    fun submitPassword()
+    fun cancelRequest()
+    fun dismissRequestError()
+    fun dismissErrorOnly()
+}
+
+/** 阅读工作流查看器阶段的通用能力：查看器装配层（ArchiveViewerRouteHost）面向此接口。 */
+internal interface ViewerHostWorkflow {
+    val viewer: ArchiveViewerState?
+    fun closeViewer()
+}
+
 // ============================================================================
 // Archive 阅读器域 —— 状态机（请求阶段逻辑）
 //
 // 单槽工作流：open(kind, target) 后经历"检查缓存 / 加密 -> 密码输入 -> 解压"，
-// 产出 ArchiveViewerState 进入查看器阶段。宿主只与本类交互，不感知 8 组差异。
+// 产出 ArchiveViewerState 进入查看器阶段。宿主只与本类交互，不感知组内差异。
+// （EPUB 族 TXT/LLM/EPUB/LLM_ZIP 已分离至 EpubReaderWorkflowState，批次 C）
 // ============================================================================
 
 /**
@@ -69,19 +80,19 @@ import java.io.File
 internal class ArchiveReaderWorkflowState(
     private val context: Context,
     private val scope: CoroutineScope
-) {
+) : ReaderRequestWorkflow, ViewerHostWorkflow {
     var request by mutableStateOf<ArchiveReaderRequest?>(null)
         private set
-    var encrypted by mutableStateOf<Boolean?>(null)
+    override var encrypted by mutableStateOf<Boolean?>(null)
         private set
-    var password by mutableStateOf("")
-    var inProgress by mutableStateOf(false)
+    override var password by mutableStateOf("")
+    override var inProgress by mutableStateOf(false)
         private set
-    var log by mutableStateOf("")
+    override var log by mutableStateOf("")
         private set
-    var loadError by mutableStateOf<String?>(null)
+    override var loadError by mutableStateOf<String?>(null)
         private set
-    var viewer by mutableStateOf<ArchiveViewerState?>(null)
+    override var viewer by mutableStateOf<ArchiveViewerState?>(null)
         private set
 
     /** 最近一次请求的种类（request 清空后仍可用于错误对话框归属判断）。 */
@@ -100,10 +111,6 @@ internal class ArchiveReaderWorkflowState(
         when (kind) {
             ArchiveReaderKind.MD_ZIP -> openMdZip(target)
             ArchiveReaderKind.HTML_ZIP -> openHtmlZip(target)
-            ArchiveReaderKind.LLM_ZIP -> openLlmZip(target)
-            ArchiveReaderKind.EPUB -> openEpub(target)
-            ArchiveReaderKind.TXT -> openTxt(target)
-            ArchiveReaderKind.LLM -> openLlm(target)
             ArchiveReaderKind.PIC_ZIP -> openPicZip(target)
             ArchiveReaderKind.VID_ZIP -> openVidZip(target)
         }
@@ -114,12 +121,12 @@ internal class ArchiveReaderWorkflowState(
         viewer = route
     }
 
-    fun updatePassword(value: String) {
+    override fun updatePassword(value: String) {
         if (!inProgress) password = value
     }
 
     /** 密码对话框取消（进行中不允许）。 */
-    fun cancelRequest() {
+    override fun cancelRequest() {
         if (!inProgress) {
             request = null
             password = ""
@@ -127,35 +134,32 @@ internal class ArchiveReaderWorkflowState(
     }
 
     /** 加载 / 解析错误对话框关闭：同时清请求与日志。 */
-    fun dismissRequestError() {
+    override fun dismissRequestError() {
         request = null
         loadError = null
         log = ""
     }
 
     /** 独立错误对话框关闭（请求已清空，仅清错误与日志）。 */
-    fun dismissErrorOnly() {
+    override fun dismissErrorOnly() {
         loadError = null
         log = ""
     }
 
     /** 密码对话框确认：按种类分派解压逻辑。 */
-    fun submitPassword() {
+    override fun submitPassword() {
         val req = request ?: return
         if (inProgress || password.isBlank()) return
         when (req.kind) {
             ArchiveReaderKind.MD_ZIP -> submitMdZipPassword(req.target)
             ArchiveReaderKind.HTML_ZIP -> submitHtmlZipPassword(req.target)
-            ArchiveReaderKind.LLM_ZIP -> submitLlmZipPassword(req.target)
-            ArchiveReaderKind.EPUB -> submitEpubPassword(req.target)
             ArchiveReaderKind.PIC_ZIP -> submitPicZipPassword(req.target)
             ArchiveReaderKind.VID_ZIP -> submitVidZipPassword(req.target)
-            ArchiveReaderKind.TXT, ArchiveReaderKind.LLM -> Unit // 无密码流程
         }
     }
 
     /** 查看器关闭（含缓存清理在内的善后由调用侧 RouteHost 决定）。 */
-    fun closeViewer() {
+    override fun closeViewer() {
         viewer = null
     }
 
@@ -261,183 +265,9 @@ internal class ArchiveReaderWorkflowState(
         }
     }
 
-    private fun openLlmZip(target: DocumentFileModel) = scope.launch {
-        val cacheDir = getEpubCacheDir(context, target.uri)
-        val cacheTs = getEpubCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-            val cached = loadEpubFromCache(context, cacheDir)
-            if (cached != null) {
-                request = null
-                viewer = EpubViewState(
-                    extractResult = cached,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = false
-                )
-                return@launch
-            }
-            cacheDir.deleteRecursively()
-        }
-        encrypted = withContext(Dispatchers.IO) { isArchiveEncrypted(context, target.uri, target.name) }
-        if (encrypted == false) {
-            inProgress = true
-            val result = withContext(Dispatchers.IO) {
-                extractLlmZipToCache(context, target.uri, null, target.name)
-            }
-            inProgress = false
-            request = null
-            if (result != null) {
-                viewer = EpubViewState(
-                    extractResult = result,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = false
-                )
-            } else {
-                Toast.makeText(context, context.getString(R.string.browser_no_txt_llm_found), Toast.LENGTH_LONG).show()
-            }
-        }
-    }
 
-    private fun openEpub(target: DocumentFileModel) = scope.launch {
-        inProgress = true
-        log = context.getString(R.string.browser_html_zip_preparing, target.name)
-        try {
-            var cachedResult: EpubExtractResult? = null
-            var encryptedStatus: Boolean? = null
-            withContext(Dispatchers.IO) {
-                log += context.getString(R.string.browser_checking_cache)
-                val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
-                    cachedResult = loadEpubFromCache(context, cacheDir)
-                    if (cachedResult != null) {
-                        log += context.getString(R.string.browser_using_cache)
-                        return@withContext
-                    }
-                    cacheDir.deleteRecursively()
-                }
-                log += context.getString(R.string.browser_checking_encryption)
-                encryptedStatus = isArchiveEncrypted(context, target.uri, target.name)
-            }
-            val cached = cachedResult
-            if (cached != null) {
-                viewer = EpubViewState(
-                    extractResult = cached,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = false
-                )
-                request = null
-                inProgress = false
-                return@launch
-            }
-            encrypted = encryptedStatus
-            if (encryptedStatus == false) {
-                val result = withContext(Dispatchers.IO) {
-                    extractEpubToCache(context, target.uri, null, target.name) { entry ->
-                        log += "$entry\n"
-                    }
-                }
-                when (result) {
-                    is EpubParseResult.Success -> {
-                        viewer = EpubViewState(
-                            extractResult = result.result,
-                            zipFileName = target.name,
-                            epubUri = target.uri,
-                            isEncrypted = false
-                        )
-                        request = null
-                        inProgress = false
-                    }
-                    is EpubParseResult.Error -> {
-                        val detail = result.detail?.let { "\n$it" } ?: ""
-                        log += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
-                        loadError = "${result.message}$detail"
-                        inProgress = false
-                        // 保留 request 以便显示错误对话框
-                    }
-                }
-            } else {
-                log += context.getString(R.string.browser_file_encrypted_need_password)
-                inProgress = false
-            }
-        } catch (e: Exception) {
-            log += context.getString(R.string.browser_log_exception, e.javaClass.simpleName, e.message ?: "")
-            loadError = "${e.javaClass.simpleName}: ${e.message}"
-            inProgress = false
-        }
-    }
 
-    /** 处理 TXT 文件，转换为 EPUB 格式查看。 */
-    private fun openTxt(target: DocumentFileModel) = scope.launch {
-        inProgress = true
-        try {
-            val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
-            var result: EpubExtractResult? = null
-            // 检查是否有有效缓存
-            if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                result = loadEpubFromCache(context, cacheDir)
-                // 如果缓存加载失败，清除旧缓存
-                if (result == null) {
-                    cacheDir.deleteRecursively()
-                }
-            }
-            // 如果没有有效缓存，重新生成
-            if (result == null) {
-                result = prepareTxtAsEpub(context, target.uri, target.name)
-            }
-            if (result != null) {
-                viewer = EpubViewState(
-                    extractResult = result,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = false
-                )
-                request = null
-            } else {
-                loadError = context.getString(R.string.browser_txt_parse_failed)
-            }
-        } catch (e: Exception) {
-            loadError = "${e.javaClass.simpleName}: ${e.message}"
-        }
-        inProgress = false
-    }
 
-    /** 处理 LLM 对话文件，转换为 EPUB 格式查看。 */
-    private fun openLlm(target: DocumentFileModel) = scope.launch {
-        inProgress = true
-        try {
-            val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
-            var result: EpubExtractResult? = null
-            // 检查是否有有效缓存
-            if (cacheTs > 0 && cacheTs >= target.lastModified) {
-                result = loadEpubFromCache(context, cacheDir)
-                if (result == null) {
-                    cacheDir.deleteRecursively()
-                }
-            }
-            if (result == null) {
-                result = prepareLlmAsEpub(context, target.uri, target.name)
-            }
-            if (result != null) {
-                viewer = EpubViewState(
-                    extractResult = result,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = false
-                )
-                request = null
-            } else {
-                loadError = context.getString(R.string.browser_llm_parse_failed)
-            }
-        } catch (e: Exception) {
-            loadError = "${e.javaClass.simpleName}: ${e.message}"
-        }
-        inProgress = false
-    }
 
     private fun openPicZip(target: DocumentFileModel) = scope.launch {
         val cacheDir = getPicZipCacheDir(context, target.uri)
@@ -623,80 +453,7 @@ internal class ArchiveReaderWorkflowState(
         }
     }
 
-    private fun submitLlmZipPassword(target: DocumentFileModel) = scope.launch {
-        inProgress = true
-        val pwd = password.toCharArray()
-        val result = withContext(Dispatchers.IO) {
-            val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
-            if (
-                cacheTs > 0 &&
-                isEpubCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
-                tryArchivePassword(context, target.uri, pwd)
-            ) {
-                loadEpubFromCache(context, cacheDir)
-            } else {
-                extractLlmZipToCache(context, target.uri, pwd, target.name)
-            }
-        }
-        inProgress = false
-        if (result != null) {
-            request = null
-            password = ""
-            viewer = EpubViewState(
-                extractResult = result,
-                zipFileName = target.name,
-                epubUri = target.uri,
-                isEncrypted = true
-            )
-        } else {
-            Toast.makeText(context, context.getString(R.string.browser_extract_failed_password_content), Toast.LENGTH_SHORT).show()
-        }
-    }
 
-    private fun submitEpubPassword(target: DocumentFileModel) = scope.launch {
-        inProgress = true
-        log = context.getString(R.string.browser_epub_decrypt_start)
-        val pwd = password.toCharArray()
-        val result = withContext(Dispatchers.IO) {
-            val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
-            if (
-                cacheTs > 0 &&
-                isEpubCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
-                tryArchivePassword(context, target.uri, pwd)
-            ) {
-                loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
-                    ?: extractEpubToCache(context, target.uri, pwd, target.name) { entry ->
-                        log += "$entry\n"
-                    }
-            } else {
-                extractEpubToCache(context, target.uri, pwd, target.name) { entry ->
-                    log += "$entry\n"
-                }
-            }
-        }
-        inProgress = false
-        when (result) {
-            is EpubParseResult.Success -> {
-                request = null
-                password = ""
-                viewer = EpubViewState(
-                    extractResult = result.result,
-                    zipFileName = target.name,
-                    epubUri = target.uri,
-                    isEncrypted = true
-                )
-            }
-            is EpubParseResult.Error -> {
-                val detail = result.detail?.let { "\n$it" } ?: ""
-                log += context.getString(R.string.browser_log_error_detail, result.message ?: "", detail)
-                loadError = "${result.message}$detail"
-            }
-        }
-    }
 
     private fun submitPicZipPassword(target: DocumentFileModel) = scope.launch {
         inProgress = true

@@ -67,7 +67,7 @@ internal suspend fun savePicZipImageToRoot(
 
 @Composable
 internal fun ArchiveViewerHostLayer(
-    workflow: ArchiveReaderWorkflowState,
+    workflow: ViewerHostWorkflow,
     browserTab: BrowserTabState,
     readerConfig: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,

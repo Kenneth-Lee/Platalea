@@ -29,8 +29,9 @@ import com.kenny.localmanager.R
 // Archive 阅读器域 —— 请求阶段 UI（对话框）
 //
 // 按 workflow.request / encrypted / inProgress / loadError 渲染：
-// 密码输入（ArchivePasswordDialog）、检测/解压进度、加载日志（html.zip / epub）、
-// 解析错误（TXT / LLM / EPUB）。组件无状态，全部读写 ArchiveReaderWorkflowState。
+// 密码输入（ArchivePasswordDialog）、检测/解压进度、加载日志（html.zip）、解析错误。
+// 组件无状态，全部读写 ArchiveReaderWorkflowState。
+// （EPUB 族对话框已分离至 EpubReaderDialogs，批次 C；密码/日志/纯文本错误组件两族共享）
 // ============================================================================
 
 @Composable
@@ -40,30 +41,6 @@ internal fun ArchiveReaderDialogs(workflow: ArchiveReaderWorkflowState) {
         ArchiveReaderRequestDialogs(request, workflow)
     }
 
-    // EPUB 错误对话框（独立于请求：密码取消后残留的解析错误，此时 request 已清空）
-    if (request == null && workflow.lastKind == ArchiveReaderKind.EPUB && workflow.loadError != null) {
-        AlertDialog(
-            onDismissRequest = { workflow.dismissErrorOnly() },
-            title = { Text(stringResource(R.string.browser_epub_parse_failed_title)) },
-            text = {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp)
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    Text(
-                        workflow.log,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { workflow.dismissErrorOnly() }) { Text(stringResource(R.string.common_ok)) }
-            }
-        )
-    }
 }
 
 @Composable
@@ -104,36 +81,6 @@ private fun ArchiveReaderRequestDialogs(
                 )
             }
         }
-        ArchiveReaderKind.LLM_ZIP -> {
-            if (encrypted == true) {
-                ArchivePasswordDialog(
-                    title = stringResource(R.string.context_view_zip_llm),
-                    targetName = target.name,
-                    workflow = workflow
-                )
-            } else if (encrypted == null) {
-                ArchiveProcessingDialog(
-                    title = stringResource(R.string.context_view_zip_llm),
-                    targetName = target.name
-                )
-            }
-        }
-        ArchiveReaderKind.EPUB -> {
-            if (encrypted == true) {
-                ArchivePasswordDialog(
-                    title = stringResource(R.string.browser_view_epub_title),
-                    targetName = target.name,
-                    workflow = workflow
-                )
-            } else {
-                // encrypted == null 或 encrypted == false，都显示加载对话框
-                ArchiveLogDialog(
-                    title = stringResource(R.string.browser_open_epub_title),
-                    workflow = workflow
-                )
-            }
-        }
-        ArchiveReaderKind.TXT, ArchiveReaderKind.LLM -> Unit // 无中间对话框，仅错误对话框
         ArchiveReaderKind.PIC_ZIP -> {
             if (encrypted == true) {
                 ArchivePasswordDialog(
@@ -174,30 +121,14 @@ private fun ArchiveReaderRequestDialogs(
         }
     }
 
-    // TXT 解析失败对话框
-    if (request.kind == ArchiveReaderKind.TXT && workflow.loadError != null) {
-        ArchivePlainErrorDialog(
-            title = stringResource(R.string.browser_txt_parse_failed_title),
-            error = workflow.loadError ?: "",
-            onDismiss = { workflow.dismissRequestError() }
-        )
-    }
-    // LLM 解析失败对话框
-    if (request.kind == ArchiveReaderKind.LLM && workflow.loadError != null) {
-        ArchivePlainErrorDialog(
-            title = stringResource(R.string.browser_llm_parse_failed_title),
-            error = workflow.loadError ?: "",
-            onDismiss = { workflow.dismissRequestError() }
-        )
-    }
 }
 
 /** 加密压缩包密码输入对话框。 */
 @Composable
-private fun ArchivePasswordDialog(
+internal fun ArchivePasswordDialog(
     title: String,
     targetName: String,
-    workflow: ArchiveReaderWorkflowState
+    workflow: ReaderRequestWorkflow
 ) {
     AlertDialog(
         onDismissRequest = { workflow.cancelRequest() },
@@ -232,7 +163,7 @@ private fun ArchivePasswordDialog(
 
 /** 检测加密状态 / 处理文件进度对话框。 */
 @Composable
-private fun ArchiveProcessingDialog(title: String, targetName: String) {
+internal fun ArchiveProcessingDialog(title: String, targetName: String) {
     AlertDialog(
         onDismissRequest = {},
         title = { Text(title) },
@@ -249,7 +180,7 @@ private fun ArchiveProcessingDialog(title: String, targetName: String) {
 
 /** 解压中进度对话框（非加密，已确认 encrypted == false）。 */
 @Composable
-private fun ArchiveExtractingDialog(title: String, targetName: String) {
+internal fun ArchiveExtractingDialog(title: String, targetName: String) {
     AlertDialog(
         onDismissRequest = {},
         title = { Text(title) },
@@ -266,9 +197,9 @@ private fun ArchiveExtractingDialog(title: String, targetName: String) {
 
 /** 加载日志对话框（html.zip / epub）：滚动日志 + 出错时关闭按钮。 */
 @Composable
-private fun ArchiveLogDialog(
+internal fun ArchiveLogDialog(
     title: String,
-    workflow: ArchiveReaderWorkflowState
+    workflow: ReaderRequestWorkflow
 ) {
     AlertDialog(
         onDismissRequest = {},
@@ -307,7 +238,7 @@ private fun ArchiveLogDialog(
 
 /** 纯文本错误对话框（TXT / LLM 解析失败）。 */
 @Composable
-private fun ArchivePlainErrorDialog(
+internal fun ArchivePlainErrorDialog(
     title: String,
     error: String,
     onDismiss: () -> Unit

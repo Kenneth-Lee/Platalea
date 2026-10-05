@@ -513,8 +513,10 @@ fun PlataleaApp(
 
     // Archive 阅读器域：压缩包 / 文档阅读的临时 Route（请求 -> 密码 -> 解压 -> 查看器）
     val archiveReader = rememberArchiveReaderWorkflow(context, scope)
+    // EPUB 阅读器域：.epub / .llm.zip / .txt / .llm 统一经 epub_cache 渲染（批次 C）
+    val epubReader = rememberEpubReaderWorkflow(context, scope)
     // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
-    val readingLauncher = ReadingLauncher(archiveReader) { transientRoute = it }
+    val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
 
 
     val quickNoteTab = quickNoteTabFeature(
@@ -661,6 +663,7 @@ fun PlataleaApp(
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
                 archiveOps.request != null -> archiveOps.close()
                 archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
+                epubReader.request?.kind in EpubReaderCancelableKinds -> epubReader.cancelRequest()
                 transientRoute is TransientRoute.PdfViewer -> transientRoute = null
                 browserTab.canGoBack -> browserTab.goBack()
                 else -> {
@@ -702,6 +705,7 @@ fun PlataleaApp(
         val browserTabHostDependencies = BrowserTabHostDependencies(
             scope = scope,
             archiveReader = archiveReader,
+        epubReader = epubReader,
             archiveOps = archiveOps,
             crypto = crypto,
             configImportExportWorkflow = configTab.importExport,
@@ -885,6 +889,8 @@ fun PlataleaApp(
 
         // Archive 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 ArchiveReaderWorkflowState）
         ArchiveReaderDialogs(archiveReader)
+        // EPUB 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 EpubReaderWorkflowState）
+        EpubReaderDialogs(epubReader)
         // Archive 操作向导域：解压 / 压缩表单对话框（确认后由宿主执行文件操作）
         ArchiveOperationDialogs(
             workflow = archiveOps,
@@ -1044,6 +1050,18 @@ fun PlataleaApp(
             // Archive 阅读器域：解压完成后的全屏查看器（装配与善后在 ArchiveHostLayer）
             ArchiveViewerHostLayer(
                 workflow = archiveReader,
+                browserTab = browserTab,
+                readerConfig = config.reader,
+                markdownViewerSessionCache = markdownViewerSessionCache,
+                bookNote = bookNoteTab,
+                recordRecentOpen = ::recordRecentOpen,
+                onEncryptedExitRequest = { encryptedCacheExitDialog = it }
+            )
+        }
+        epubReader.viewer != null -> {
+            // EPUB 阅读器域：解压/转换完成后的全屏渲染器（装配与善后在 ArchiveHostLayer）
+            ArchiveViewerHostLayer(
+                workflow = epubReader,
                 browserTab = browserTab,
                 readerConfig = config.reader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
