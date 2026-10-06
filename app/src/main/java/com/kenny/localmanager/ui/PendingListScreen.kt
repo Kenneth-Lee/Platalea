@@ -96,6 +96,7 @@ fun PendingListScreen(
     onRequestBatchMask: () -> Unit = {},
     onRequestBatchGpgEncrypt: () -> Unit = {},
     onRequestBatchGpgDecrypt: () -> Unit = {},
+    onRequestBatchRename: () -> Unit = {},
     onRequestCompressArchive: () -> Unit = {},
     onRequestCompressToZip: () -> Unit = {},
     onRequestCompressTo7z: () -> Unit = {},
@@ -194,6 +195,7 @@ fun PendingListScreen(
                         }
                     },
                     context.getString(R.string.pending_list_action_mask) to onRequestBatchMask,
+                    context.getString(R.string.pending_list_action_rename) to onRequestBatchRename,
                     context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
                     context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
                     context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive,

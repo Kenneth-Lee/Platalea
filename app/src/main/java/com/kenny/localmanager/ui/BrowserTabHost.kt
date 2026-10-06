@@ -54,6 +54,7 @@ import com.kenny.localmanager.file.isGalleryImageFile
 import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.launchExternalOpen
 import com.kenny.localmanager.file.moveDocumentTo
+import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.pathFromRoot
@@ -641,6 +642,7 @@ internal class BrowserTabState(
     // ===== 面板开关 =====
     var showPendingList by mutableStateOf(false)
     var showPendingDeleteConfirm by mutableStateOf(false)
+    var showBatchRename by mutableStateOf(false)
 
 
     // ===== 过滤与外开偏好（prefs 镜像，Host 内 collect 接线）=====
@@ -730,6 +732,7 @@ internal fun BrowserTabHost(
     fun clearPendingList() = state.clearPendingList()
     var showPendingList by state::showPendingList
     var showPendingDeleteConfirm by state::showPendingDeleteConfirm
+    var showBatchRename by state::showBatchRename
     var pendingBatchDetails by state::pendingBatchDetails
     var filterVisible by state::filterVisible
     var hideDotFiles by state::hideDotFiles
@@ -1291,6 +1294,13 @@ internal fun BrowserTabHost(
                         }
                     }
                 },
+                onRequestBatchRename = {
+                    if (pendingList.isEmpty()) {
+                        Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
+                    } else {
+                        showBatchRename = true
+                    }
+                },
                 onRequestCompressArchive = {
                     if (pendingList.isEmpty()) {
                         Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
@@ -1396,6 +1406,38 @@ internal fun BrowserTabHost(
                 onSaved = { pendingBatchDetails = null }
             )
         }
+        if (showBatchRename && pendingList.isNotEmpty()) {
+            val renameTargets = pendingList.toList()
+            BatchRenameDialog(
+                items = renameTargets,
+                onDismiss = { showBatchRename = false },
+                onConfirm = { pairs ->
+                    showBatchRename = false
+                    scope.launch {
+                        var ok = 0
+                        var fail = 0
+                        runWithProgress(context.getString(R.string.batch_rename_progress), pairs.size) { setProgress ->
+                            withContext(Dispatchers.IO) {
+                                pairs.forEachIndexed { index, (model, newName) ->
+                                    try {
+                                        if (context.contentResolver.renameDocument(model.uri, newName) != null) ok++ else fail++
+                                    } catch (_: Exception) {
+                                        fail++
+                                    }
+                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                }
+                            }
+                        }
+                        refresh()
+                        finishPendingListAndReturn()
+                        val msg = if (fail == 0) context.getString(R.string.batch_rename_all_ok, ok)
+                        else context.getString(R.string.batch_rename_partial, ok, fail)
+                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+        }
+
         if (showPendingDeleteConfirm && pendingList.isNotEmpty()) {
             val toDelete = pendingList.toList()
             PendingDeleteConfirmDialog(
