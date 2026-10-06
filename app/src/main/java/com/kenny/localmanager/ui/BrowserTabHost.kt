@@ -54,7 +54,8 @@ import com.kenny.localmanager.file.isGalleryImageFile
 import com.kenny.localmanager.file.isInsideDirectory
 import com.kenny.localmanager.file.launchExternalOpen
 import com.kenny.localmanager.file.moveDocumentTo
-import com.kenny.localmanager.file.renameDocument
+import com.kenny.localmanager.file.renameDocumentResult
+import java.io.FileNotFoundException
 import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.pathFromRoot
@@ -643,6 +644,8 @@ internal class BrowserTabState(
     var showPendingList by mutableStateOf(false)
     var showPendingDeleteConfirm by mutableStateOf(false)
     var showBatchRename by mutableStateOf(false)
+    var batchRenameFailures by mutableStateOf<List<BatchRenameFailure>>(emptyList())
+    var batchRenameFailuresOkCount by mutableIntStateOf(0)
 
 
     // ===== 过滤与外开偏好（prefs 镜像，Host 内 collect 接线）=====
@@ -733,6 +736,8 @@ internal fun BrowserTabHost(
     var showPendingList by state::showPendingList
     var showPendingDeleteConfirm by state::showPendingDeleteConfirm
     var showBatchRename by state::showBatchRename
+    var batchRenameFailures by state::batchRenameFailures
+    var batchRenameFailuresOkCount by state::batchRenameFailuresOkCount
     var pendingBatchDetails by state::pendingBatchDetails
     var filterVisible by state::filterVisible
     var hideDotFiles by state::hideDotFiles
@@ -1415,14 +1420,23 @@ internal fun BrowserTabHost(
                     showBatchRename = false
                     scope.launch {
                         var ok = 0
-                        var fail = 0
+                        val failures = mutableListOf<BatchRenameFailure>()
                         runWithProgress(context.getString(R.string.batch_rename_progress), pairs.size) { setProgress ->
                             withContext(Dispatchers.IO) {
                                 pairs.forEachIndexed { index, (model, newName) ->
-                                    try {
-                                        if (context.contentResolver.renameDocument(model.uri, newName) != null) ok++ else fail++
-                                    } catch (_: Exception) {
-                                        fail++
+                                    val result = context.contentResolver.renameDocumentResult(model.uri, newName)
+                                    if (result.isSuccess) {
+                                        ok++
+                                    } else {
+                                        val reason = result.exceptionOrNull()?.let { e ->
+                                            when (e) {
+                                                is FileNotFoundException, is IllegalArgumentException ->
+                                                    context.getString(R.string.batch_rename_err_not_found)
+                                                else -> e.message?.takeIf { it.isNotBlank() }
+                                                    ?: context.getString(R.string.batch_rename_err_failed)
+                                            }
+                                        } ?: context.getString(R.string.batch_rename_err_failed)
+                                        failures += BatchRenameFailure(model.name, newName, reason)
                                     }
                                     withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
                                 }
@@ -1430,11 +1444,23 @@ internal fun BrowserTabHost(
                         }
                         refresh()
                         finishPendingListAndReturn()
-                        val msg = if (fail == 0) context.getString(R.string.batch_rename_all_ok, ok)
-                        else context.getString(R.string.batch_rename_partial, ok, fail)
-                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                        if (failures.isEmpty()) {
+                            Toast.makeText(context, context.getString(R.string.batch_rename_all_ok, ok), Toast.LENGTH_SHORT).show()
+                        } else {
+                            // 有失败项：弹明细报告（Toast 一闪而过容易被忽略）
+                            batchRenameFailures = failures
+                            batchRenameFailuresOkCount = ok
+                        }
                     }
                 }
+            )
+        }
+
+        if (batchRenameFailures.isNotEmpty()) {
+            BatchRenameFailureDialog(
+                failures = batchRenameFailures,
+                okCount = batchRenameFailuresOkCount,
+                onDismiss = { batchRenameFailures = emptyList() }
             )
         }
 

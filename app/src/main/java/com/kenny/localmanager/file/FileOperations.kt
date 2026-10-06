@@ -36,11 +36,19 @@ class DirectoryAccessException(message: String, cause: Throwable? = null) : Exce
 
 data class RecursiveFileSearchCriteria(
     val nameRegex: Regex? = null,
+    val contentRegex: Regex? = null,
     val minSizeBytes: Long? = null,
     val maxSizeBytes: Long? = null,
     val modifiedAfterMillis: Long? = null,
     val modifiedBeforeMillis: Long? = null
 )
+
+/** 内容匹配扫描的文件大小上限；超过则跳过（不视为匹配）。 */
+const val MAX_CONTENT_SEARCH_BYTES: Long = 4L * 1024 * 1024
+
+/** 纯逻辑：字节按 UTF-8 解码后做正则包含匹配（供测试与内容搜索复用）。 */
+internal fun fileContentMatches(bytes: ByteArray, regex: Regex): Boolean =
+    regex.containsMatchIn(bytes.decodeToString())
 
 data class RecursiveFileSearchHit(
     val model: DocumentFileModel,
@@ -131,7 +139,9 @@ fun listChildrenFast(context: Context, treeUriStr: String): List<DocumentFileMod
 fun searchFilesRecursively(
     context: Context,
     rootUriStr: String,
-    criteria: RecursiveFileSearchCriteria
+    criteria: RecursiveFileSearchCriteria,
+    isCancelled: () -> Boolean = { false },
+    onProgress: (visitedDirs: Int, hits: Int) -> Unit = { _, _ -> }
 ): List<RecursiveFileSearchHit> {
     val normalizedRoot = normalizeContentUriString(rootUriStr)
     fun matches(model: DocumentFileModel): Boolean {
@@ -151,15 +161,20 @@ fun searchFilesRecursively(
 
     val pendingDirs = ArrayDeque<Pair<String, String>>()
     val results = mutableListOf<RecursiveFileSearchHit>()
+    var visitedDirs = 0
     pendingDirs.addLast(normalizedRoot to "")
     while (pendingDirs.isNotEmpty()) {
+        if (isCancelled()) break
         val (dirUri, relativeDir) = pendingDirs.removeLast()
         val children = listChildrenFast(context, dirUri)
+        visitedDirs++
+        onProgress(visitedDirs, results.size)
         children.forEach { child ->
+            if (isCancelled()) return@forEach
             val childRelativePath = if (relativeDir.isBlank()) child.name else "$relativeDir/${child.name}"
             if (child.isDirectory) {
                 pendingDirs.addLast(child.uri.toString() to childRelativePath)
-            } else if (matches(child)) {
+            } else if (matches(child) && contentMatches(context, child, criteria.contentRegex)) {
                 results += RecursiveFileSearchHit(
                     model = child,
                     relativePath = childRelativePath
@@ -168,6 +183,27 @@ fun searchFilesRecursively(
         }
     }
     return results
+}
+
+/** 读入文件（不超过扫描上限）做内容正则匹配；regex 为 null 时恒通过，读取失败按不匹配处理。 */
+private fun contentMatches(context: Context, model: DocumentFileModel, regex: Regex?): Boolean {
+    if (regex == null) return true
+    if (model.size > MAX_CONTENT_SEARCH_BYTES) return false
+    val bytes = try {
+        context.contentResolver.openInputStream(model.uri)?.use { input ->
+            val buf = ByteArray(MAX_CONTENT_SEARCH_BYTES.toInt() + 1)
+            var off = 0
+            while (off < buf.size) {
+                val n = input.read(buf, off, buf.size - off)
+                if (n < 0) break
+                off += n
+            }
+            buf.copyOf(off)
+        } ?: return false
+    } catch (_: Exception) {
+        return false
+    }
+    return fileContentMatches(bytes, regex)
 }
 
 fun collectMusicFilesRecursively(context: Context, rootUriStr: String): List<RecursiveFileSearchHit> =
@@ -538,10 +574,14 @@ fun resolvePathUnderRoot(context: Context, rootUri: String, relativePath: String
     return current
 }
 
-fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
-    try {
+fun ContentResolver.renameDocumentResult(uri: Uri, newName: String): Result<Uri> =
+    runCatching {
         DocumentsContract.renameDocument(this, uri, newName)
-    } catch (_: Exception) { null }
+            ?: throw java.io.IOException("renameDocument returned null")
+    }
+
+fun ContentResolver.renameDocument(uri: Uri, newName: String): Uri? =
+    renameDocumentResult(uri, newName).getOrNull()
 
 /**
  * 从指定偏移读取最多 maxLen 字节。

@@ -78,6 +78,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -106,6 +107,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -134,10 +137,11 @@ import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.loadEpubFromCache
 import com.kenny.localmanager.file.renameDocument
 import com.kenny.localmanager.file.searchFilesRecursively
+import com.kenny.localmanager.file.parseSizeRange
+import com.kenny.localmanager.file.parseTimeRange
 import com.kenny.localmanager.file.toExternalLaunchUri
 import com.kenny.localmanager.player.PlaybackState
 import java.text.SimpleDateFormat
-import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
@@ -800,63 +804,21 @@ private fun fileListComparator(sortOrder: FileSortOrder, ascending: Boolean): Co
 }
 
 
-private fun parseFileSearchSize(context: Context, raw: String): Long? {
-    val normalized = raw.trim()
-    if (normalized.isEmpty()) return null
-    val match = Regex("""^([0-9]+(?:\.[0-9]+)?)\s*([kmgt]?b?)?$""", RegexOption.IGNORE_CASE).matchEntire(normalized)
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_format_invalid, raw))
-    val value = match.groupValues[1].toDoubleOrNull()
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_size_invalid, raw))
-    val unit = match.groupValues[2].lowercase(Locale.getDefault())
-    val multiplier = when (unit) {
-        "", "b" -> 1.0
-        "k", "kb" -> 1024.0
-        "m", "mb" -> 1024.0 * 1024
-        "g", "gb" -> 1024.0 * 1024 * 1024
-        "t", "tb" -> 1024.0 * 1024 * 1024 * 1024
-        else -> throw IllegalArgumentException(context.getString(R.string.browser_size_unit_unsupported, unit))
-    }
-    val bytes = value * multiplier
-    if (!bytes.isFinite() || bytes < 0.0) {
-        throw IllegalArgumentException(context.getString(R.string.browser_size_must_non_negative, raw))
-    }
-    return bytes.toLong()
-}
-
-
-private fun parseFileSearchDate(context: Context, raw: String, endOfDay: Boolean): Long? {
-    val normalized = raw.trim()
-    if (normalized.isEmpty()) return null
-    val parser = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).apply { isLenient = false }
-    val parsed = parser.parse(normalized)
-        ?: throw IllegalArgumentException(context.getString(R.string.browser_date_format_invalid, raw))
-    if (!endOfDay) return parsed.time
-    return Calendar.getInstance().apply {
-        time = parsed
-        set(Calendar.HOUR_OF_DAY, 23)
-        set(Calendar.MINUTE, 59)
-        set(Calendar.SECOND, 59)
-        set(Calendar.MILLISECOND, 999)
-    }.timeInMillis
-}
-
-
 @Composable
 private fun FileSearchDialog(
-    namePattern: String,
-    minSize: String,
-    maxSize: String,
-    modifiedAfter: String,
-    modifiedBefore: String,
+    namePattern: TextFieldValue,
+    contentPattern: String,
+    sizeRange: String,
+    modified: String,
     searching: Boolean,
+    searchProgress: Pair<Int, Int>?,
     error: String?,
-    onNamePatternChange: (String) -> Unit,
-    onMinSizeChange: (String) -> Unit,
-    onMaxSizeChange: (String) -> Unit,
-    onModifiedAfterChange: (String) -> Unit,
-    onModifiedBeforeChange: (String) -> Unit,
+    onNamePatternChange: (TextFieldValue) -> Unit,
+    onContentPatternChange: (String) -> Unit,
+    onSizeRangeChange: (String) -> Unit,
+    onModifiedChange: (String) -> Unit,
     onSearch: () -> Unit,
-    onClear: () -> Unit,
+    onSearchCancel: () -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -873,48 +835,62 @@ private fun FileSearchDialog(
             ) {
                 Text(stringResource(R.string.browser_file_search_title), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(12.dp))
+                val namePatternFocus = remember { FocusRequester() }
                 OutlinedTextField(
                     value = namePattern,
                     onValueChange = onNamePatternChange,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(namePatternFocus),
                     label = { Text(stringResource(R.string.browser_filename_regex_label)) },
                     placeholder = { Text(stringResource(R.string.browser_regex_example)) },
                     singleLine = true
                 )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    listOf("\\", "+").forEach { sym ->
+                        TextButton(
+                            onClick = {
+                                // 光标处插入（与批量改名一致）：取选区，插入后光标移到
+                                // 插入内容之后并回焦输入框
+                                val sel = namePattern.selection
+                                val start = sel.start.coerceIn(0, namePattern.text.length)
+                                val end = sel.end.coerceIn(0, namePattern.text.length)
+                                val newText = namePattern.text.substring(0, start) + sym +
+                                    namePattern.text.substring(end)
+                                onNamePatternChange(
+                                    TextFieldValue(newText, TextRange(start + sym.length))
+                                )
+                                namePatternFocus.requestFocus()
+                            },
+                            contentPadding = PaddingValues(horizontal = 12.dp)
+                        ) { Text(sym, style = MaterialTheme.typography.titleMedium) }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = minSize,
-                    onValueChange = onMinSizeChange,
+                    value = contentPattern,
+                    onValueChange = onContentPatternChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_min_size_label)) },
-                    placeholder = { Text(stringResource(R.string.browser_size_example_mb)) },
+                    label = { Text(stringResource(R.string.browser_content_regex_label)) },
+                    supportingText = { Text(stringResource(R.string.browser_content_regex_hint)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = maxSize,
-                    onValueChange = onMaxSizeChange,
+                    value = sizeRange,
+                    onValueChange = onSizeRangeChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_max_size_label)) },
-                    placeholder = { Text(stringResource(R.string.browser_size_example_large)) },
+                    label = { Text(stringResource(R.string.browser_size_range_label)) },
+                    supportingText = { Text(stringResource(R.string.browser_size_range_hint)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = modifiedAfter,
-                    onValueChange = onModifiedAfterChange,
+                    value = modified,
+                    onValueChange = onModifiedChange,
                     modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_min_mtime_label)) },
-                    placeholder = { Text("yyyy-MM-dd") },
-                    singleLine = true
-                )
-                Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
-                    value = modifiedBefore,
-                    onValueChange = onModifiedBeforeChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text(stringResource(R.string.browser_max_mtime_label)) },
-                    placeholder = { Text("yyyy-MM-dd") },
+                    label = { Text(stringResource(R.string.browser_time_range_label)) },
+                    supportingText = { Text(stringResource(R.string.browser_time_range_hint)) },
                     singleLine = true
                 )
                 Spacer(Modifier.height(8.dp))
@@ -923,6 +899,17 @@ private fun FileSearchDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (searching) {
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    searchProgress?.let { (dirs, hits) ->
+                        Text(
+                            stringResource(R.string.browser_search_progress, dirs, hits),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 error?.let {
                     Spacer(Modifier.height(8.dp))
                     SelectionContainer {
@@ -934,10 +921,13 @@ private fun FileSearchDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
-                    TextButton(onClick = onClear, enabled = !searching) { Text(stringResource(R.string.browser_clear_filter)) }
                     TextButton(onClick = onDismiss, enabled = !searching) { Text(stringResource(R.string.common_close)) }
-                    TextButton(onClick = onSearch, enabled = !searching) {
-                        Text(if (searching) stringResource(R.string.browser_search_in_progress) else stringResource(R.string.browser_start_search))
+                    if (searching) {
+                        TextButton(onClick = onSearchCancel) { Text(stringResource(R.string.browser_search_cancel)) }
+                    } else {
+                        TextButton(onClick = onSearch) {
+                            Text(stringResource(R.string.browser_start_search))
+                        }
                     }
                 }
             }
@@ -951,12 +941,12 @@ private fun FileSearchResultsDialog(
     results: List<RecursiveFileSearchHit>,
     pendingUris: Set<String>,
     onAddAll: () -> Unit,
-    onAddOne: (DocumentFileModel) -> Unit,
-    onDismiss: () -> Unit
+    onRefine: () -> Unit
 ) {
     val context = LocalContext.current
     val timeFormatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()) }
-    Dialog(onDismissRequest = onDismiss) {
+    // 任何方式关闭（按钮/返回键/点外部）都回到查找界面，便于调整条件重查
+    Dialog(onDismissRequest = onRefine) {
         Surface(
             shape = MaterialTheme.shapes.large,
             color = MaterialTheme.colorScheme.surface,
@@ -974,10 +964,10 @@ private fun FileSearchResultsDialog(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.End
                 ) {
+                    TextButton(onClick = onRefine) { Text(stringResource(R.string.browser_search_refine)) }
                     TextButton(onClick = onAddAll, enabled = results.any { it.model.uri.toString() !in pendingUris }) {
                         Text(stringResource(R.string.browser_add_all_to_pending))
                     }
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
                 }
                 Spacer(Modifier.height(8.dp))
                 if (results.isEmpty()) {
@@ -1006,15 +996,6 @@ private fun FileSearchResultsDialog(
                                         style = MaterialTheme.typography.bodySmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
-                                    Spacer(Modifier.height(4.dp))
-                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                                        TextButton(
-                                            onClick = { onAddOne(item.model) },
-                                            enabled = item.model.uri.toString() !in pendingUris
-                                        ) {
-                                            Text(if (item.model.uri.toString() in pendingUris) stringResource(R.string.browser_already_in_pending) else stringResource(R.string.browser_add_to_pending))
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1126,13 +1107,14 @@ internal fun BrowserScreen(
     var openUrlError by remember { mutableStateOf<String?>(null) }
     var showFileSearchDialog by remember { mutableStateOf(false) }
     var showFileSearchResultsDialog by remember { mutableStateOf(false) }
-    var fileSearchNamePattern by remember { mutableStateOf("") }
-    var fileSearchMinSize by remember { mutableStateOf("") }
-    var fileSearchMaxSize by remember { mutableStateOf("") }
-    var fileSearchModifiedAfter by remember { mutableStateOf("") }
-    var fileSearchModifiedBefore by remember { mutableStateOf("") }
+    var fileSearchNamePattern by remember { mutableStateOf(TextFieldValue("")) }
+    var fileSearchContentPattern by remember { mutableStateOf("") }
+    var fileSearchSizeRange by remember { mutableStateOf("") }
+    var fileSearchModified by remember { mutableStateOf("") }
     var fileSearchResults by remember { mutableStateOf<List<RecursiveFileSearchHit>>(emptyList()) }
     var fileSearchRunning by remember { mutableStateOf(false) }
+    var fileSearchCancelled by remember { mutableStateOf(false) }
+    var fileSearchProgress by remember { mutableStateOf<Pair<Int, Int>?>(null) }
     var fileSearchError by remember { mutableStateOf<String?>(null) }
 
     fun showExternalOpenDialog(target: DocumentFileModel) {
@@ -1161,11 +1143,10 @@ internal fun BrowserScreen(
     }
 
     fun clearFileSearchInputs() {
-        fileSearchNamePattern = ""
-        fileSearchMinSize = ""
-        fileSearchMaxSize = ""
-        fileSearchModifiedAfter = ""
-        fileSearchModifiedBefore = ""
+        fileSearchNamePattern = TextFieldValue("")
+        fileSearchContentPattern = ""
+        fileSearchSizeRange = ""
+        fileSearchModified = ""
         fileSearchError = null
     }
 
@@ -1178,67 +1159,64 @@ internal fun BrowserScreen(
 
     fun runFileSearch() {
         val nameRegex = try {
-            fileSearchNamePattern.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
+            fileSearchNamePattern.text.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
         } catch (error: Exception) {
             fileSearchError = context.getString(R.string.browser_filename_regex_invalid, error.message ?: error.javaClass.simpleName)
             return
         }
-        val minSizeBytes = try {
-            parseFileSearchSize(context, fileSearchMinSize)
+        val contentRegex = try {
+            fileSearchContentPattern.trim().takeIf { it.isNotEmpty() }?.let(::Regex)
         } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_min_size_invalid)
+            fileSearchError = context.getString(R.string.browser_content_regex_invalid, error.message ?: error.javaClass.simpleName)
             return
         }
-        val maxSizeBytes = try {
-            parseFileSearchSize(context, fileSearchMaxSize)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_max_size_invalid)
+        val sizeRange = parseSizeRange(fileSearchSizeRange)
+        if (sizeRange == null) {
+            fileSearchError = context.getString(R.string.browser_size_range_invalid, fileSearchSizeRange.trim())
             return
         }
-        val modifiedAfterMillis = try {
-            parseFileSearchDate(context, fileSearchModifiedAfter, endOfDay = false)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_min_invalid)
+        val timeRange = parseTimeRange(fileSearchModified, System.currentTimeMillis())
+        if (timeRange == null) {
+            fileSearchError = context.getString(R.string.browser_time_range_invalid, fileSearchModified.trim())
             return
         }
-        val modifiedBeforeMillis = try {
-            parseFileSearchDate(context, fileSearchModifiedBefore, endOfDay = true)
-        } catch (error: Exception) {
-            fileSearchError = error.message ?: context.getString(R.string.browser_mtime_max_invalid)
-            return
-        }
-        if (minSizeBytes != null && maxSizeBytes != null && minSizeBytes > maxSizeBytes) {
-            fileSearchError = context.getString(R.string.browser_size_range_invalid)
-            return
-        }
-        if (modifiedAfterMillis != null && modifiedBeforeMillis != null && modifiedAfterMillis > modifiedBeforeMillis) {
-            fileSearchError = context.getString(R.string.browser_mtime_range_invalid)
-            return
-        }
+        fileSearchCancelled = false
+        fileSearchProgress = null
         scope.launch {
             fileSearchRunning = true
             fileSearchError = null
             try {
                 val criteria = RecursiveFileSearchCriteria(
                     nameRegex = nameRegex,
-                    minSizeBytes = minSizeBytes,
-                    maxSizeBytes = maxSizeBytes,
-                    modifiedAfterMillis = modifiedAfterMillis,
-                    modifiedBeforeMillis = modifiedBeforeMillis
+                    contentRegex = contentRegex,
+                    minSizeBytes = sizeRange.minBytes,
+                    maxSizeBytes = sizeRange.maxBytes,
+                    modifiedAfterMillis = timeRange.afterMillis,
+                    modifiedBeforeMillis = timeRange.beforeMillis
                 )
                 val results = withContext(Dispatchers.IO) {
-                    searchFilesRecursively(context, currentUri, criteria)
+                    searchFilesRecursively(
+                        context, currentUri, criteria,
+                        isCancelled = { fileSearchCancelled },
+                        onProgress = { dirs, hits -> fileSearchProgress = dirs to hits }
+                    )
                 }
-                fileSearchResults = results
-                showFileSearchDialog = false
-                showFileSearchResultsDialog = true
-                if (results.isEmpty()) {
-                    Toast.makeText(context, context.getString(R.string.browser_no_matching_files), Toast.LENGTH_SHORT).show()
+                if (fileSearchCancelled) {
+                    // 用户取消：丢弃结果，留在查找界面便于调整条件
+                    Toast.makeText(context, context.getString(R.string.browser_search_cancelled), Toast.LENGTH_SHORT).show()
+                } else {
+                    fileSearchResults = results
+                    showFileSearchDialog = false
+                    showFileSearchResultsDialog = true
+                    if (results.isEmpty()) {
+                        Toast.makeText(context, context.getString(R.string.browser_no_matching_files), Toast.LENGTH_SHORT).show()
+                    }
                 }
             } catch (error: Exception) {
                 fileSearchError = context.getString(R.string.browser_search_failed, error.message ?: error.javaClass.simpleName)
             } finally {
                 fileSearchRunning = false
+                fileSearchProgress = null
             }
         }
     }
@@ -1561,7 +1539,7 @@ internal fun BrowserScreen(
                                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                                 onClick = {
                                     showOverflowMenu = false
-                                    fileSearchError = null
+                                    clearFileSearchInputs()
                                     showFileSearchDialog = true
                                 }
                             )
@@ -1834,34 +1812,30 @@ internal fun BrowserScreen(
     if (showFileSearchDialog) {
         FileSearchDialog(
             namePattern = fileSearchNamePattern,
-            minSize = fileSearchMinSize,
-            maxSize = fileSearchMaxSize,
-            modifiedAfter = fileSearchModifiedAfter,
-            modifiedBefore = fileSearchModifiedBefore,
+            contentPattern = fileSearchContentPattern,
+            sizeRange = fileSearchSizeRange,
+            modified = fileSearchModified,
             searching = fileSearchRunning,
             error = fileSearchError,
             onNamePatternChange = {
                 fileSearchNamePattern = it
                 if (fileSearchError != null) fileSearchError = null
             },
-            onMinSizeChange = {
-                fileSearchMinSize = it
+            onContentPatternChange = {
+                fileSearchContentPattern = it
                 if (fileSearchError != null) fileSearchError = null
             },
-            onMaxSizeChange = {
-                fileSearchMaxSize = it
+            onSizeRangeChange = {
+                fileSearchSizeRange = it
                 if (fileSearchError != null) fileSearchError = null
             },
-            onModifiedAfterChange = {
-                fileSearchModifiedAfter = it
+            onModifiedChange = {
+                fileSearchModified = it
                 if (fileSearchError != null) fileSearchError = null
             },
-            onModifiedBeforeChange = {
-                fileSearchModifiedBefore = it
-                if (fileSearchError != null) fileSearchError = null
-            },
+            searchProgress = fileSearchProgress,
             onSearch = { runFileSearch() },
-            onClear = { clearFileSearchInputs() },
+            onSearchCancel = { fileSearchCancelled = true },
             onDismiss = {
                 if (!fileSearchRunning) showFileSearchDialog = false
             }
@@ -1873,8 +1847,10 @@ internal fun BrowserScreen(
             results = fileSearchResults,
             pendingUris = pendingList.map { it.uri.toString() }.toSet(),
             onAddAll = { addSearchResultsToPending(fileSearchResults.map { it.model }) },
-            onAddOne = { addSearchResultsToPending(listOf(it)) },
-            onDismiss = { showFileSearchResultsDialog = false }
+            onRefine = {
+                showFileSearchResultsDialog = false
+                showFileSearchDialog = true
+            }
         )
     }
 

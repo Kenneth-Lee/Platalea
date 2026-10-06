@@ -136,6 +136,69 @@ class BatchRenameTest {
         assertEquals(listOf(IntRange(1, 1), IntRange(3, 3)), items[0].matchRanges)
     }
 
+    // ---------- 顺序号（连续 #） ----------
+
+    @Test
+    fun `连续井号按位数补零`() {
+        val plan = compileOk(".*\\.(jpg|png)", "file###.txt")
+        assertEquals("file001.txt", plan.applyTo("photo.jpg", 1))
+        assertEquals("file042.txt", plan.applyTo("photo.png", 42))
+        // 单个井号不补零
+        assertEquals("file7.txt", compileOk(".*", "file#.txt").applyTo("photo", 7))
+    }
+
+    @Test
+    fun `超出位数自然扩位`() {
+        assertEquals("file100.txt", compileOk(".*", "file##.txt").applyTo("photo", 100))
+    }
+
+    @Test
+    fun `同文件多处井号与多处匹配共用同一号`() {
+        val plan = compileOk("x", "#-#")
+        assertEquals("3-3a3-3", plan.applyTo("xax", 3)) // 中间的 a 保留，两处 x 各展开同一号
+    }
+
+    @Test
+    fun `预览按匹配项顺序分配号且不匹配不占号`() {
+        val items = preview(listOf("a1.txt", "b", "c9.log"), ".*\\.(txt|log)", "f###.\\1")
+        assertEquals("f001.txt", items[0].newName)
+        assertNull(items[1].newName) // 不匹配
+        assertEquals("f002.log", items[2].newName) // 不匹配不占号，这里拿 2 号
+    }
+
+    // ---------- 随机字符（连续 &） ----------
+
+    @Test
+    fun `连续与号生成等长随机字母数字`() {
+        val rnd = kotlin.random.Random(42)
+        val out = compileOk(".*", "x&&&.txt").applyTo("photo", 0, rnd)!!
+        // 长度 = 3；全部来自字母数字池
+        val tail = out.removePrefix("x").removeSuffix(".txt")
+        assertEquals(3, tail.length)
+        assertTrue(tail.all { it in BATCH_RENAME_RANDOM_CHARS })
+        // 同一 seed 可复现（预览与执行一致性由注入同一 Random 保证）
+        assertEquals(out, compileOk(".*", "x&&&.txt").applyTo("photo", 0, kotlin.random.Random(42)))
+    }
+
+    @Test
+    fun `各处与号独立随机`() {
+        val rnd = kotlin.random.Random(7)
+        // 两处单字符 &：几乎必然不同（seed 7 下验证实际输出）
+        val out = compileOk(".*", "&-&").applyTo("z", 0, rnd)!!
+        assertEquals(3, out.length)
+        assertTrue(out[0] in BATCH_RENAME_RANDOM_CHARS && out[2] in BATCH_RENAME_RANDOM_CHARS)
+    }
+
+    @Test
+    fun `井号与与号可混用`() {
+        val out = compileOk(".*", "f#&&.txt").applyTo("photo", 5, kotlin.random.Random(1))!!
+        assertTrue(out.startsWith("f5"))
+        assertTrue(out.endsWith(".txt"))
+        val randPart = out.substring(2, out.length - 4)
+        assertEquals(2, randPart.length)
+        assertTrue(randPart.all { it in BATCH_RENAME_RANDOM_CHARS })
+    }
+
     @Test
     fun `不匹配项 matched 为 false`() {
         val items = preview(listOf("z.txt"), "a", "c")

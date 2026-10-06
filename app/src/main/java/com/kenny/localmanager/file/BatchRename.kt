@@ -58,10 +58,13 @@ internal class BatchRenamePlan private constructor(
     private val regex: Regex,
     private val template: String
 ) {
-    /** 对单个文件名计算改名结果；不匹配返回 null（跳过）。 */
-    fun applyTo(name: String): String? {
+    /** 是否匹配（不展开模板）。 */
+    fun matches(name: String): Boolean = regex.containsMatchIn(name)
+
+    /** 对单个文件名计算改名结果（seq 为本文件的顺序号）；不匹配返回 null。 */
+    fun applyTo(name: String, seq: Int = 0, random: kotlin.random.Random = kotlin.random.Random.Default): String? {
         if (!regex.containsMatchIn(name)) return null
-        return regex.replace(name) { m -> expandRenameTemplate(m, template) }
+        return regex.replace(name) { m -> expandRenameTemplate(m, template, seq, random) }
     }
 
     /** 原名中被命中的区间（含头含尾），供预览高亮。 */
@@ -118,8 +121,22 @@ private fun scanTemplateGroupReferences(template: String): Int? {
     return if (max >= 0) max else null
 }
 
-/** 展开模板：\0 至 \9 引用组（越界防御性取空串），\\ 为字面反斜杠。 */
-internal fun expandRenameTemplate(match: MatchResult, template: String): String {
+/** 随机字符池：字母与数字（文件名安全字符）。 */
+internal const val BATCH_RENAME_RANDOM_CHARS =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+/**
+ * 展开模板：\0 至 \9 引用组（越界防御性取空串），\\ 为字面反斜杠，
+ * 连续 # 为顺序号（个数为位数，不足补零，超出自然扩位；同一文件名中
+ * 的各处匹配与各处 # 共用同一个号）；连续 & 为随机字符（个数为字符
+ * 数，取自字母与数字；各处独立随机）。
+ */
+internal fun expandRenameTemplate(
+    match: MatchResult,
+    template: String,
+    seq: Int,
+    random: kotlin.random.Random = kotlin.random.Random.Default
+): String {
     val sb = StringBuilder()
     var i = 0
     while (i < template.length) {
@@ -137,6 +154,20 @@ internal fun expandRenameTemplate(match: MatchResult, template: String): String 
                 continue
             }
         }
+        if (c == '#') {
+            var k = 0
+            while (i + k < template.length && template[i + k] == '#') k++
+            sb.append(seq.toString().padStart(k, '0'))
+            i += k
+            continue
+        }
+        if (c == '&') {
+            var k = 0
+            while (i + k < template.length && template[i + k] == '&') k++
+            repeat(k) { sb.append(BATCH_RENAME_RANDOM_CHARS[random.nextInt(BATCH_RENAME_RANDOM_CHARS.length)]) }
+            i += k
+            continue
+        }
         sb.append(c)
         i++
     }
@@ -148,9 +179,16 @@ internal fun expandRenameTemplate(match: MatchResult, template: String): String 
  * 未参与改名的原名相撞，都标 CONFLICT）。跳过项（不匹配 / 新旧同名）
  * 不参与冲突检测的目标集合——它们保持原名，只有被撞时才标。
  */
-internal fun buildBatchRenamePreview(names: List<String>, plan: BatchRenamePlan): List<BatchRenamePreviewItem> {
+internal fun buildBatchRenamePreview(
+    names: List<String>,
+    plan: BatchRenamePlan,
+    random: kotlin.random.Random = kotlin.random.Random.Default
+): List<BatchRenamePreviewItem> {
+    // 顺序号按预览顺序对匹配项从 1 递增（不匹配不占号）；同一文件的
+    // 全部匹配与 # 共用该号。
+    var seq = 0
     val items = names.map { original ->
-        val applied = plan.applyTo(original)
+        val applied = if (plan.matches(original)) plan.applyTo(original, ++seq, random) else null
         val matched = applied != null
         val newName = applied?.takeIf { it != original }
         val error = when {
