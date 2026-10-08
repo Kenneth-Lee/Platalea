@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -329,54 +328,6 @@ private fun BatchRenamePreviewRow(item: BatchRenamePreviewItem, planOk: Boolean)
             )
         }
     }
-}
-
-/** 提交阶段的失败明细（原名、目标名、原因），用于失败报告对话框。 */
-data class BatchRenameFailure(
-    val original: String,
-    val target: String,
-    val reason: String
-)
-
-@Composable
-fun BatchRenameFailureDialog(
-    failures: List<BatchRenameFailure>,
-    okCount: Int,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.batch_rename_failure_title, failures.size)) },
-        text = {
-            Column {
-                Text(
-                    stringResource(R.string.batch_rename_ok_count, okCount),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Spacer(Modifier.height(8.dp))
-                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
-                    items(failures) { f ->
-                        Column(Modifier.padding(vertical = 6.dp)) {
-                            Text(
-                                "${f.original} → ${f.target}",
-                                style = MaterialTheme.typography.bodyMedium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                f.reason,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_close)) }
-        }
-    )
 }
 
 @Composable

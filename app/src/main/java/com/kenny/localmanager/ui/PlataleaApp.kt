@@ -518,10 +518,39 @@ fun PlataleaApp(
     // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
     val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
 
+    // 批量操作执行页槽（E2 样板）：决策确认后由 startBatchOperation 置位，
+    // 全屏逐项执行展示；关闭（用户点关闭）置空退回前一页面
+    var operationRun by remember { mutableStateOf<OperationRunState?>(null) }
+
+    /**
+     * 批量操作执行页编排（E2）：创建执行状态并全屏接管，协程内逐项执行
+     * （状态翻转 / 取消检查由 OperationRunState.runEach 封装），结束后停留
+     * 结果页；收尾动作（清待处理列表 / 刷新等）在执行结束时立即执行，
+     * 用户随后点关闭退回主界面。
+     */
+    fun startBatchOperation(
+        label: String,
+        names: List<String>,
+        onFinished: (OperationRunState) -> Unit = {},
+        block: suspend (OperationRunState) -> Unit
+    ) {
+        val state = OperationRunState(label, names) { operationRun = null }
+        operationRun = state
+        scope.launch {
+            try {
+                block(state)
+            } finally {
+                state.finished = true
+                onFinished(state)
+            }
+        }
+    }
+
     // 独立全屏 Route 聚合槽（批次 D）：即时型槽 + 各工作流终态聚合为单一
     // activeRoute，顶层 when 与 Host 均不感知具体功能种类。优先级：即时型
     // 查看器最先（最新打开覆盖阅读器），工作流终态次之。
     val activeRoute: TransientRoute? = transientRoute
+        ?: operationRun?.let { TransientRoute.Operation(it) }
         ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
         ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
         ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
@@ -739,7 +768,7 @@ fun PlataleaApp(
             onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
             requestOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            onSetProgressCancel = { action -> progressCancelAction = action },
+            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
             operationTarget = config.operationTarget,
         )
         val directoryTab = browserTabFeature(state = browserTab, deps = browserTabHostDependencies)
@@ -881,7 +910,7 @@ fun PlataleaApp(
         GitShareDialogs(workflow = gitShare, rootUri = browserTab.rootUri)
         QuickObfuscateDialogs(
             workflow = quickObfuscate,
-            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
             onQuickFinished = { browserTab.refresh() },
             onBatchFinished = {
                 finishPendingListAndReturn()
@@ -895,6 +924,9 @@ fun PlataleaApp(
             rootUri = browserTab.rootUri,
             currentDirUri = displayUri,
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            runBatchOperation = { label, names, onFinished, block ->
+                startBatchOperation(label, names, onFinished, block)
+            },
             onRefresh = { browserTab.refresh() },
             onBatchFinished = { finishPendingListAndReturn() }
         )
@@ -910,7 +942,8 @@ fun PlataleaApp(
                     browserTab = browserTab,
                     displayUri = displayUri,
                     progressOpState = progressOpState,
-                    progressCancelActionState = progressCancelActionState
+                    progressCancelActionState = progressCancelActionState,
+                    runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
                 )
             }
         )

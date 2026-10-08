@@ -11,6 +11,9 @@
     <string name="common_copy_content">Copy Content</string>
     <string name="common_current">Current</string>
     <string name="common_ok">OK</string>
+    <string name="op_batch_progress">%1$d of %2$d done</string>
+    <string name="op_batch_done">Finished: %1$d succeeded, %2$d failed</string>
+    <string name="op_batch_cancelled">Cancelled: %1$d / %2$d done</string>
     <string name="common_unknown_error">Unknown error</string>
     <string name="common_select_root_first">Please select a root directory first.</string>
     <string name="crash_report_found_toast">New crash report found</string>
@@ -387,8 +390,6 @@
     <string name="batch_rename_apply">Rename (%1$d)</string>
     <string name="batch_rename_progress">Batch rename</string>
     <string name="batch_rename_all_ok">Renamed %1$d files</string>
-    <string name="batch_rename_failure_title">Batch rename: %1$d failed</string>
-    <string name="batch_rename_ok_count">%1$d succeeded</string>
     <string name="batch_rename_err_not_found">File does not exist or was deleted</string>
     <string name="batch_rename_err_failed">Operation failed</string>
     <string name="batch_rename_partial">%1$d succeeded, %2$d failed</string>

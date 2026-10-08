@@ -79,6 +79,8 @@ internal fun CryptoDialogs(
     /** 当前目录 uri（pass 保护写出到该目录）。 */
     currentDirUri: String,
     runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
+    /** 批量操作执行页编排（E2 样板）：全屏逐项执行展示。 */
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     onRefresh: () -> Unit,
     /** 待处理列表批量操作成功后的收尾（清列表并关闭面板）。 */
     onBatchFinished: () -> Unit
@@ -175,28 +177,31 @@ internal fun CryptoDialogs(
                         val autoKeyPass = SecretKeyPasswordCache.get() ?: return@LaunchedEffect
                         val ok = when (op) {
                             is GpgOpState.BatchDecrypt -> {
-                                var allOk = true
-                                runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
-                                    op.list.forEachIndexed { index, fileModel ->
-                                        if (!decryptGpgFileToDir(context, fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) {
-                                            allOk = false
-                                        }
-                                        setProgress(index + 1)
+                                // E2：批量执行切全屏执行页（逐项状态 / 取消 / 结果明细），
+                                // 决策对话框立即关闭，收尾（清列表 / 刷新）在执行结束时执行
+                                workflow.close()
+                                runBatchOperation(
+                                    context.getString(R.string.quick_crypto_action_decrypt_short),
+                                    op.list.map { it.name },
+                                    { state ->
+                                        if (state.failCount == 0) onBatchFinished()
+                                        onRefresh()
+                                    }
+                                ) { state ->
+                                    state.runEach(op.list) { fileModel ->
+                                        if (decryptGpgFileToDir(context, fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)) null else ""
                                     }
                                 }
-                                allOk
+                                null
                             }
                             is GpgOpState.Decrypt -> decryptGpgFileToDir(context, op.fileModel, dirUri, treeUri, symmetricPassword = null, keyPassphrase = autoKeyPass)
                             else -> false
                         }
                         workflow.inProgress = false
-                        if (ok) {
+                        if (ok == true) {
                             workflow.close()
                             onRefresh()
-                            if (op is GpgOpState.BatchDecrypt) {
-                                onBatchFinished()
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                            } else {
+                            if (op is GpgOpState.Decrypt) {
                                 Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
                             }
                         }
@@ -224,24 +229,33 @@ internal fun CryptoDialogs(
                                     val pwdChars = pwd.toCharArray()
                                     val ok = when (op) {
                                         is GpgOpState.BatchDecrypt -> {
-                                            runWithProgress(context.getString(R.string.quick_crypto_action_decrypt_short), op.list.size) { setProgress ->
-                                                op.list.forEachIndexed { index, fileModel ->
-                                                    decryptGpgFileToDir(
+                                            // E2：批量执行切全屏执行页（决策对话框立即关闭）
+                                            workflow.close()
+                                            val mode = decryptMode
+                                            runBatchOperation(
+                                                context.getString(R.string.quick_crypto_action_decrypt_short),
+                                                op.list.map { it.name },
+                                                { state ->
+                                                    if (state.failCount == 0) onBatchFinished()
+                                                    onRefresh()
+                                                }
+                                            ) { state ->
+                                                state.runEach(op.list) { fileModel ->
+                                                    if (decryptGpgFileToDir(
                                                         context,
                                                         fileModel,
                                                         dirUri,
                                                         treeUri,
-                                                        symmetricPassword = if (decryptMode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
-                                                        keyPassphrase = when (decryptMode) {
+                                                        symmetricPassword = if (mode == GpgDecryptUiMode.SECRET_KEY) null else pwdChars,
+                                                        keyPassphrase = when (mode) {
                                                             GpgDecryptUiMode.SYMMETRIC -> null
                                                             GpgDecryptUiMode.SECRET_KEY -> pwdChars
                                                             GpgDecryptUiMode.MIXED -> SecretKeyPasswordCache.get() ?: pwdChars
                                                         }
-                                                    )
-                                                    setProgress(index + 1)
+                                                    )) null else ""
                                                 }
                                             }
-                                            true
+                                            null
                                         }
                                         is GpgOpState.Decrypt -> decryptGpgFileToDir(
                                             context,
@@ -257,18 +271,14 @@ internal fun CryptoDialogs(
                                         )
                                         else -> false
                                     }
-                                    if (ok) {
-                                        if (op is GpgOpState.BatchDecrypt) {
-                                            onBatchFinished()
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
-                                        }
+                                    if (ok == true) {
+                                        Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_complete), Toast.LENGTH_SHORT).show()
                                         workflow.close()
                                         onRefresh()
-                                    } else {
+                                    } else if (ok == false) {
                                         Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_failed), Toast.LENGTH_LONG).show()
                                     }
+                                    // ok == null：批量已交全屏执行页收尾（结果页 / 清列表 / 刷新）
                                 } finally {
                                     workflow.inProgress = false
                                 }
@@ -321,20 +331,28 @@ internal fun CryptoDialogs(
                                 val pwdChars = password.toCharArray()
                                 val ok = when (op) {
                                     is GpgOpState.BatchEncrypt -> {
-                                        runWithProgress(if (keyId != null) context.getString(R.string.browser_op_public_key_encrypt) else context.getString(R.string.quick_crypto_action_encrypt_short), op.list.size) { setProgress ->
-                                            op.list.forEachIndexed { index, fileModel ->
-                                                encryptGpgFileToDir(
+                                        // E2：批量执行切全屏执行页（决策对话框立即关闭）
+                                        workflow.close()
+                                        runBatchOperation(
+                                            if (keyId != null) context.getString(R.string.browser_op_public_key_encrypt) else context.getString(R.string.quick_crypto_action_encrypt_short),
+                                            op.list.map { it.name },
+                                            { state ->
+                                                if (state.failCount == 0) onBatchFinished()
+                                                onRefresh()
+                                            }
+                                        ) { state ->
+                                            state.runEach(op.list) { fileModel ->
+                                                if (encryptGpgFileToDir(
                                                     context,
                                                     fileModel,
                                                     dirUri,
                                                     treeUri,
                                                     symmetricPassword = if (keyId == null) pwdChars else null,
                                                     publicKeyId = keyId
-                                                )
-                                                setProgress(index + 1)
+                                                )) null else ""
                                             }
                                         }
-                                        true
+                                        null
                                     }
                                     is GpgOpState.Encrypt -> encryptGpgFileToDir(
                                         context,
@@ -346,18 +364,14 @@ internal fun CryptoDialogs(
                                     )
                                     else -> false
                                 }
-                                if (ok) {
-                                    if (op is GpgOpState.BatchEncrypt) {
-                                        onBatchFinished()
-                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_public_key_encrypted_count, op.list.size) else ctx.getString(R.string.browser_encrypted_count, op.list.size), Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_op_public_key_encrypt) else ctx.getString(R.string.browser_encrypt_complete), Toast.LENGTH_SHORT).show()
-                                    }
+                                if (ok == true) {
+                                    Toast.makeText(ctx, if (keyId != null) ctx.getString(R.string.browser_op_public_key_encrypt) else ctx.getString(R.string.browser_encrypt_complete), Toast.LENGTH_SHORT).show()
                                     workflow.close()
                                     onRefresh()
-                                } else {
+                                } else if (ok == false) {
                                     Toast.makeText(ctx, ctx.getString(R.string.browser_encrypt_failed), Toast.LENGTH_LONG).show()
                                 }
+                                // ok == null：批量已交全屏执行页收尾（结果页 / 清列表 / 刷新）
                             } finally {
                                 workflow.inProgress = false
                                 workflow.pubEncryptInProgress = false

@@ -108,27 +108,25 @@ internal class QuickObfuscateWorkflowState(
         }
     }
 
-    /** 执行批量遮罩；[runWithProgress] 宿主进度注入，[onFinished] 待处理收尾。 */
+    /** 执行批量遮罩（E2：交全屏执行页，[runBatchOperation] 宿主编排注入，[onFinished] 待处理收尾）。 */
     fun confirmBatch(
         pwd: String,
-        runWithProgress: suspend (label: String, total: Int?, block: suspend ((Int) -> Unit) -> Unit) -> Unit,
-        onFinished: (count: Int) -> Unit,
+        runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
+        onFinished: () -> Unit,
     ) {
         val list = batchTarget ?: return
-        batchInProgress = true
-        scope.launch {
-            runWithProgress(context.getString(R.string.pending_list_action_mask), list.size) { setProgress ->
+        closeBatch()
+        runBatchOperation(
+            context.getString(R.string.pending_list_action_mask),
+            list.map { it.name },
+            { _ -> onFinished() }
+        ) { state ->
+            state.runEach(list) { model ->
                 withContext(Dispatchers.IO) {
-                    list.forEachIndexed { index, model ->
-                        quickToggleObfuscation(context, model.uri, pwd.toCharArray())
-                        withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                    }
+                    quickToggleObfuscation(context, model.uri, pwd.toCharArray())
+                    null
                 }
             }
-            batchInProgress = false
-            closeBatch()
-            Toast.makeText(context, context.getString(R.string.browser_masked_count, list.size), Toast.LENGTH_SHORT).show()
-            onFinished(list.size)
         }
     }
 }
@@ -143,7 +141,7 @@ internal fun rememberQuickObfuscateWorkflow(context: Context): QuickObfuscateWor
 @Composable
 internal fun QuickObfuscateDialogs(
     workflow: QuickObfuscateWorkflowState,
-    runWithProgress: suspend (label: String, total: Int?, block: suspend ((Int) -> Unit) -> Unit) -> Unit,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     onQuickFinished: () -> Unit,
     onBatchFinished: () -> Unit,
 ) {
@@ -170,7 +168,7 @@ internal fun QuickObfuscateDialogs(
             inProgress = workflow.batchInProgress,
             onPasswordChange = { workflow.batchPassword = it },
             onConfirmPasswordChange = { workflow.batchPasswordConfirm = it },
-            onConfirm = { pwd -> workflow.confirmBatch(pwd, runWithProgress) { onBatchFinished() } },
+            onConfirm = { pwd -> workflow.confirmBatch(pwd, runBatchOperation) { onBatchFinished() } },
             onDismiss = workflow::closeBatch
         )
     }

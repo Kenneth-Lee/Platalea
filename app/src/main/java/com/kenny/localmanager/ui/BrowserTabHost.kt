@@ -84,80 +84,60 @@ import kotlinx.coroutines.withContext
 // 批量操作执行 helper（原主程序顶层平移）
 private fun doCopyPendingToCurrentDir(
     context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
     displayUri: String,
     pendingList: List<DocumentFileModel>,
     rootUri: String?,
     copyMoveLog: ((String) -> Unit)?,
-    runWithProgress: RunProgressBlock,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     onSuccessAll: () -> Unit,
     onRefreshDone: () -> Unit
 ) {
     val targetDirUri = normalizeContentUriString(displayUri)
     copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_target, targetDirUri))
     val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        runWithProgress(context.getString(R.string.pending_list_action_copy), pendingList.size) { setProgress ->
-            val (ok, fail) = withContext(Dispatchers.IO) {
-                var o = 0
-                var f = 0
-                pendingList.forEachIndexed { index, model ->
-                    if (copyDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) o++
-                    else f++
-                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                }
-                Pair(o, f)
-            }
-            copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_result, ok, fail))
-            if (fail == 0 && ok > 0) {
-                onSuccessAll()
-                Toast.makeText(context, context.getString(R.string.browser_copy_all_ok, ok), Toast.LENGTH_SHORT).show()
-            } else if (ok > 0) {
-                Toast.makeText(context, context.getString(R.string.browser_copy_partial, ok, fail), Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, context.getString(R.string.browser_copy_failed), Toast.LENGTH_SHORT).show()
-            }
+    runBatchOperation(
+        context.getString(R.string.pending_list_action_copy),
+        pendingList.map { it.name },
+        { state ->
+            copyMoveLog?.invoke(context.getString(R.string.browser_log_copy_result, state.okCount, state.failCount))
+            if (state.failCount == 0 && state.okCount > 0) onSuccessAll()
             onRefreshDone()
+        }
+    ) { state ->
+        state.runEach(pendingList) { model ->
+            withContext(Dispatchers.IO) {
+                if (copyDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog) != null) null else ""
+            }
         }
     }
 }
 
 private fun doMovePendingToCurrentDir(
     context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
     displayUri: String,
     pendingList: List<DocumentFileModel>,
     rootUri: String?,
     copyMoveLog: ((String) -> Unit)?,
-    runWithProgress: RunProgressBlock,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     onSuccessAll: () -> Unit,
     onRefreshDone: () -> Unit
 ) {
     val targetDirUri = normalizeContentUriString(displayUri)
     copyMoveLog?.invoke(context.getString(R.string.browser_log_move_target, targetDirUri))
     val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        runWithProgress(context.getString(R.string.pending_list_action_move), pendingList.size) { setProgress ->
-            val (ok, fail) = withContext(Dispatchers.IO) {
-                var o = 0
-                var f = 0
-                pendingList.forEachIndexed { index, model ->
-                    if (moveDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) o++
-                    else f++
-                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                }
-                Pair(o, f)
-            }
-            copyMoveLog?.invoke(context.getString(R.string.browser_log_move_result, ok, fail))
-            if (fail == 0 && ok > 0) {
-                onSuccessAll()
-                Toast.makeText(context, context.getString(R.string.browser_move_all_ok, ok), Toast.LENGTH_SHORT).show()
-            } else if (ok > 0) {
-                Toast.makeText(context, context.getString(R.string.browser_move_partial, ok, fail), Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(context, context.getString(R.string.browser_move_failed), Toast.LENGTH_SHORT).show()
-            }
+    runBatchOperation(
+        context.getString(R.string.pending_list_action_move),
+        pendingList.map { it.name },
+        { state ->
+            copyMoveLog?.invoke(context.getString(R.string.browser_log_move_result, state.okCount, state.failCount))
+            if (state.failCount == 0 && state.okCount > 0) onSuccessAll()
             onRefreshDone()
+        }
+    ) { state ->
+        state.runEach(pendingList) { model ->
+            withContext(Dispatchers.IO) {
+                if (moveDocumentTo(context, model.uri, Uri.parse(targetDirUri), treeUri, copyMoveLog)) null else ""
+            }
         }
     }
 }
@@ -213,12 +193,10 @@ private fun buildPendingArchiveExtractTargets(pendingList: List<DocumentFileMode
 
 private fun doExtractPendingArchivesToCurrentDir(
     context: Context,
-    scope: kotlinx.coroutines.CoroutineScope,
     displayUri: String,
     pendingListSnapshot: List<DocumentFileModel>,
     rootUri: String?,
-    runWithProgress: RunProgressBlock,
-    setCancelAction: (((() -> Unit)?) -> Unit)? = null,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     onAllSuccess: () -> Unit,
     onRefreshDone: () -> Unit
 ) {
@@ -230,93 +208,37 @@ private fun doExtractPendingArchivesToCurrentDir(
 
     val targetDirUri = Uri.parse(normalizeContentUriString(displayUri))
     val treeUri = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-    scope.launch {
-        val cancelFlag = OperationCancelFlag()
-        setCancelAction?.invoke { cancelFlag.requestCancel() }
-        try {
-            runWithProgress(context.getString(R.string.browser_op_extract), extractTargets.size) { setProgress ->
-                var successCount = 0
-                var failedCount = 0
-                val failedDetails = mutableListOf<String>()
-                val passwordRequiredNames = mutableListOf<String>()
-
-                extractTargets.forEachIndexed { index, target ->
-                    val result = withContext(Dispatchers.IO) {
-                        unzipToParent(
-                            context = context,
-                            zipUri = target.model.uri,
-                            parentDirUri = targetDirUri,
-                            treeUri = treeUri,
-                            archiveName = target.model.name,
-                            password = null,
-                            setProgress = { _, _ -> },
-                            shouldCancel = { cancelFlag.isCancelled() }
-                        )
-                    }
-                    when (result) {
-                        is UnzipResult.Success -> successCount++
-                        is UnzipResult.Cancelled -> {
-                            Toast.makeText(context, context.getString(R.string.browser_operation_cancelled), Toast.LENGTH_SHORT).show()
-                            onRefreshDone()
-                            return@runWithProgress
-                        }
-                        is UnzipResult.PasswordRequired,
-                        is UnzipResult.WrongPassword -> {
-                            failedCount++
-                            passwordRequiredNames += target.model.name
-                        }
-                        is UnzipResult.CorruptedFile -> {
-                            failedCount++
-                            failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_corrupt)}"
-                        }
-                        is UnzipResult.UnsupportedFormat -> {
-                            failedCount++
-                            failedDetails += "${target.model.name}: ${context.getString(R.string.browser_extract_failed_format)}"
-                        }
-                        is UnzipResult.IOError -> {
-                            failedCount++
-                            val msg = result.message ?: context.getString(R.string.common_unknown_error)
-                            failedDetails += "${target.model.name}: $msg"
-                        }
-                    }
-                    setProgress(index + 1)
-                }
-
-                if (passwordRequiredNames.isNotEmpty()) {
-                    failedDetails += context.getString(
-                        R.string.browser_extract_batch_password_required,
-                        passwordRequiredNames.joinToString(",")
+    runBatchOperation(
+        context.getString(R.string.browser_op_extract),
+        extractTargets.map { it.model.name },
+        { state ->
+            if (state.failCount == 0 && state.okCount > 0) onAllSuccess()
+            onRefreshDone()
+        }
+    ) { state ->
+        state.runEach(extractTargets) { target ->
+            withContext(Dispatchers.IO) {
+                when (
+                    val result = unzipToParent(
+                        context = context,
+                        zipUri = target.model.uri,
+                        parentDirUri = targetDirUri,
+                        treeUri = treeUri,
+                        archiveName = target.model.name,
+                        password = null,
+                        setProgress = { _, _ -> },
+                        shouldCancel = { state.cancelRequested }
                     )
+                ) {
+                    is UnzipResult.Success -> null
+                    is UnzipResult.Cancelled -> context.getString(R.string.browser_operation_cancelled)
+                    is UnzipResult.PasswordRequired -> context.getString(R.string.browser_enter_password)
+                    is UnzipResult.WrongPassword -> context.getString(R.string.browser_wrong_password_retry)
+                    is UnzipResult.CorruptedFile -> context.getString(R.string.browser_extract_failed_corrupt)
+                    is UnzipResult.UnsupportedFormat -> context.getString(R.string.browser_extract_failed_format)
+                    is UnzipResult.IOError -> result.message ?: context.getString(R.string.common_unknown_error)
                 }
-
-                if (failedCount == 0 && successCount > 0) {
-                    onAllSuccess()
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_batch_done, successCount),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else if (successCount > 0) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_batch_partial, successCount, failedCount),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    Toast.makeText(context, context.getString(R.string.browser_extract_batch_failed), Toast.LENGTH_SHORT).show()
-                }
-
-                if (failedDetails.isNotEmpty()) {
-                    Toast.makeText(
-                        context,
-                        context.getString(R.string.browser_extract_failed_detail, failedDetails.joinToString("; ")),
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
-                onRefreshDone()
             }
-        } finally {
-            setCancelAction?.invoke(null)
         }
     }
 }
@@ -644,8 +566,6 @@ internal class BrowserTabState(
     var showPendingList by mutableStateOf(false)
     var showPendingDeleteConfirm by mutableStateOf(false)
     var showBatchRename by mutableStateOf(false)
-    var batchRenameFailures by mutableStateOf<List<BatchRenameFailure>>(emptyList())
-    var batchRenameFailuresOkCount by mutableIntStateOf(0)
 
 
     // ===== 过滤与外开偏好（prefs 镜像，Host 内 collect 接线）=====
@@ -683,7 +603,7 @@ internal class BrowserTabHostDependencies(
     val onOpenQuickNote: () -> Unit,
     val requestOpenPlayerTab: () -> Unit,
     val runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
-    val onSetProgressCancel: ((() -> Unit)?) -> Unit,
+    val runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
     val onBatchMask: (List<DocumentFileModel>) -> Unit,
     val onAddToPlayback: (List<DocumentFileModel>) -> Unit,
     val onAddDirectoryToPlayback: (String, String) -> Unit,
@@ -721,7 +641,7 @@ internal fun BrowserTabHost(
     val requestOpenPlayerTab = deps.requestOpenPlayerTab
     val onAddDirectoryToPlayback = deps.onAddDirectoryToPlayback
     val runWithProgress = deps.runWithProgress
-    val onSetProgressCancel = deps.onSetProgressCancel
+    val runBatchOperation = deps.runBatchOperation
     val onBatchMask = deps.onBatchMask
     val onAddToPlayback = deps.onAddToPlayback
     // 目录会话别名（组合期间读取即订阅快照）
@@ -736,8 +656,6 @@ internal fun BrowserTabHost(
     var showPendingList by state::showPendingList
     var showPendingDeleteConfirm by state::showPendingDeleteConfirm
     var showBatchRename by state::showBatchRename
-    var batchRenameFailures by state::batchRenameFailures
-    var batchRenameFailuresOkCount by state::batchRenameFailuresOkCount
     var pendingBatchDetails by state::pendingBatchDetails
     var filterVisible by state::filterVisible
     var hideDotFiles by state::hideDotFiles
@@ -960,12 +878,11 @@ internal fun BrowserTabHost(
         val doCopyHere: () -> Unit = {
             doCopyPendingToCurrentDir(
                 context = context,
-                scope = scope,
                 displayUri = displayUri,
                 pendingList = pendingList.toList(),
                 rootUri = rootUri,
                 copyMoveLog = copyMoveLog,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                runBatchOperation = runBatchOperation,
                 onSuccessAll = {
                     clearPendingList()
                     showPendingList = false
@@ -976,12 +893,11 @@ internal fun BrowserTabHost(
         val doMoveHere: () -> Unit = {
             doMovePendingToCurrentDir(
                 context = context,
-                scope = scope,
                 displayUri = displayUri,
                 pendingList = pendingList.toList(),
                 rootUri = rootUri,
                 copyMoveLog = copyMoveLog,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                runBatchOperation = runBatchOperation,
                 onSuccessAll = {
                     clearPendingList()
                     showPendingList = false
@@ -992,12 +908,10 @@ internal fun BrowserTabHost(
         val doExtractArchivesHere: () -> Unit = {
             doExtractPendingArchivesToCurrentDir(
                 context = context,
-                scope = scope,
                 displayUri = displayUri,
                 pendingListSnapshot = pendingList.toList(),
                 rootUri = rootUri,
-                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-                setCancelAction = { action -> onSetProgressCancel(action) },
+                runBatchOperation = runBatchOperation,
                 onAllSuccess = {
                     pendingList.removeAll { !it.isDirectory && isExtractableArchive(it.name) }
                     if (pendingList.isEmpty()) {
@@ -1418,49 +1332,32 @@ internal fun BrowserTabHost(
                 onDismiss = { showBatchRename = false },
                 onConfirm = { pairs ->
                     showBatchRename = false
-                    scope.launch {
-                        var ok = 0
-                        val failures = mutableListOf<BatchRenameFailure>()
-                        runWithProgress(context.getString(R.string.batch_rename_progress), pairs.size) { setProgress ->
-                            withContext(Dispatchers.IO) {
-                                pairs.forEachIndexed { index, (model, newName) ->
-                                    val result = context.contentResolver.renameDocumentResult(model.uri, newName)
-                                    if (result.isSuccess) {
-                                        ok++
-                                    } else {
-                                        val reason = result.exceptionOrNull()?.let { e ->
-                                            when (e) {
-                                                is FileNotFoundException, is IllegalArgumentException ->
-                                                    context.getString(R.string.batch_rename_err_not_found)
-                                                else -> e.message?.takeIf { it.isNotBlank() }
-                                                    ?: context.getString(R.string.batch_rename_err_failed)
-                                            }
-                                        } ?: context.getString(R.string.batch_rename_err_failed)
-                                        failures += BatchRenameFailure(model.name, newName, reason)
-                                    }
-                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
-                                }
-                            }
+                    // E2：执行段交全屏执行页，成功/失败与失败原因逐项展示
+                    runBatchOperation(
+                        context.getString(R.string.batch_rename_progress),
+                        pairs.map { it.first.name },
+                        { _ ->
+                            refresh()
+                            finishPendingListAndReturn()
                         }
-                        refresh()
-                        finishPendingListAndReturn()
-                        if (failures.isEmpty()) {
-                            Toast.makeText(context, context.getString(R.string.batch_rename_all_ok, ok), Toast.LENGTH_SHORT).show()
-                        } else {
-                            // 有失败项：弹明细报告（Toast 一闪而过容易被忽略）
-                            batchRenameFailures = failures
-                            batchRenameFailuresOkCount = ok
+                    ) { state ->
+                        state.runEach(pairs) { (model, newName) ->
+                            withContext(Dispatchers.IO) {
+                                context.contentResolver.renameDocumentResult(model.uri, newName).fold(
+                                    onSuccess = { null },
+                                    onFailure = { e ->
+                                        when (e) {
+                                            is FileNotFoundException, is IllegalArgumentException ->
+                                                context.getString(R.string.batch_rename_err_not_found)
+                                            else -> e.message?.takeIf { it.isNotBlank() }
+                                                ?: context.getString(R.string.batch_rename_err_failed)
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
-            )
-        }
-
-        if (batchRenameFailures.isNotEmpty()) {
-            BatchRenameFailureDialog(
-                failures = batchRenameFailures,
-                okCount = batchRenameFailuresOkCount,
-                onDismiss = { batchRenameFailures = emptyList() }
             )
         }
 
@@ -1471,25 +1368,27 @@ internal fun BrowserTabHost(
                 hasRoot = rootUri != null,
                 onDismiss = { showPendingDeleteConfirm = false },
                 onConfirm = { deletePermanently ->
-                    scope.launch {
-                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
-                        val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        runWithProgress(label, toDelete.size) { setProgress ->
+                    showPendingDeleteConfirm = false
+                    val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
+                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                    // E2：执行段交全屏执行页（并补强逐项失败检测；原实现不感知单项失败）
+                    runBatchOperation(
+                        label,
+                        toDelete.map { it.name },
+                        { _ ->
+                            refresh()
+                            finishPendingListAndReturn()
+                        }
+                    ) { state ->
+                        state.runEach(toDelete) { model ->
                             withContext(Dispatchers.IO) {
-                                toDelete.forEachIndexed { index, model ->
-                                    if (deletePermanently) {
-                                        context.contentResolver.deleteDocument(model.uri)
-                                    } else {
-                                        if (root != null) moveToTrash(context, model.uri, root, root)
-                                    }
-                                    withContext(Dispatchers.Main.immediate) { setProgress(index + 1) }
+                                if (deletePermanently) {
+                                    if (context.contentResolver.deleteDocument(model.uri)) null else ""
+                                } else {
+                                    if (root != null && moveToTrash(context, model.uri, root, root)) null else ""
                                 }
                             }
                         }
-                        refresh()
-                        showPendingDeleteConfirm = false
-                        finishPendingListAndReturn()
-                        Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted_count, toDelete.size) else context.getString(R.string.browser_moved_to_trash_count, toDelete.size), Toast.LENGTH_SHORT).show()
                     }
                 }
             )
