@@ -156,161 +156,6 @@ internal fun CryptoDialogs(
             )
         }
 
-        // ---- 密码保护：查看 .pass 文件 ----
-        (workflow.request as? CryptoRequest.PassView)?.let { req ->
-            val model = req.target
-            val secRings = loadSecretKeyRings(context)
-            if (secRings == null) {
-                AlertDialog(
-                    onDismissRequest = { workflow.close() },
-                    title = { Text(stringResource(R.string.context_view_password)) },
-                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
-                    confirmButton = {
-                        Button(onClick = { workflow.close() }) { Text(stringResource(R.string.common_ok)) }
-                    }
-                )
-            } else {
-                LaunchedEffect(model) {
-                    if (workflow.autoTried) return@LaunchedEffect
-                    val cached = SecretKeyPasswordCache.get() ?: run { workflow.autoTried = true; return@LaunchedEffect }
-                    workflow.autoTried = true
-                    workflow.inProgress = true
-                    val decrypted = withContext(Dispatchers.IO) {
-                        val rings = loadSecretKeyRings(context) ?: return@withContext null
-                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                        }
-                    }
-                    workflow.inProgress = false
-                    if (decrypted != null) {
-                        workflow.close()
-                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                        workflow.showPassContent(PassDecryptedContent(innerName, decrypted))
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                    }
-                }
-                if (SecretKeyPasswordCache.get() == null || workflow.autoTried) {
-                GpgPasswordDialog(
-                    isDecrypt = true,
-                    fileName = model.name,
-                    password = workflow.password,
-                    passwordLabel = context.getString(R.string.browser_key_password_label),
-                    inProgress = workflow.inProgress,
-                    onPasswordChange = { if (!workflow.inProgress) workflow.password = it },
-                    onConfirm = { pwd ->
-                        if (workflow.inProgress) return@GpgPasswordDialog
-                        workflow.inProgress = true
-                        val ctx = context
-                        scope.launch {
-                            val decrypted = withContext(Dispatchers.IO) {
-                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                    GpgHelper.decryptWithSecretKey(
-                                        input, rings, pwd.toCharArray()
-                                    ) { _ -> }
-                                }
-                            }
-                            workflow.inProgress = false
-                            if (decrypted != null) {
-                                workflow.close()
-                                workflow.password = ""
-                                // 根据内层扩展名确定渲染方式
-                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                workflow.showPassContent(PassDecryptedContent(innerName, decrypted))
-                            } else {
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onDismiss = {
-                        if (!workflow.inProgress) {
-                            workflow.close()
-                            workflow.password = ""
-                        }
-                    }
-                )
-                }
-            }
-        }
-
-        // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
-        (workflow.request as? CryptoRequest.PassEdit)?.let { req ->
-            val model = req.target
-            val dirUri = req.dirUri
-            val secRings = loadSecretKeyRings(context)
-            if (secRings == null) {
-                AlertDialog(
-                    onDismissRequest = { workflow.close() },
-                    title = { Text(stringResource(R.string.context_edit_directly)) },
-                    text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
-                    confirmButton = {
-                        Button(onClick = { workflow.close() }) { Text(stringResource(R.string.common_ok)) }
-                    }
-                )
-            } else {
-                LaunchedEffect(model) {
-                    if (workflow.autoTried) return@LaunchedEffect
-                    val cached = SecretKeyPasswordCache.get() ?: run { workflow.autoTried = true; return@LaunchedEffect }
-                    workflow.autoTried = true
-                    workflow.inProgress = true
-                    val decrypted = withContext(Dispatchers.IO) {
-                        val rings = loadSecretKeyRings(context) ?: return@withContext null
-                        context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                            GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
-                        }
-                    }
-                    workflow.inProgress = false
-                    if (decrypted != null) {
-                        workflow.close()
-                        val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                        val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                        workflow.startPassEdit(PassEditState(model, dirUri, tree, innerName, decrypted))
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                    }
-                }
-                if (SecretKeyPasswordCache.get() == null || workflow.autoTried) {
-                GpgPasswordDialog(
-                    isDecrypt = true,
-                    fileName = model.name,
-                    password = workflow.password,
-                    passwordLabel = context.getString(R.string.browser_key_password_label),
-                    inProgress = workflow.inProgress,
-                    onPasswordChange = { if (!workflow.inProgress) workflow.password = it },
-                    onConfirm = { pwd ->
-                        if (workflow.inProgress) return@GpgPasswordDialog
-                        workflow.inProgress = true
-                        val ctx = context
-                        scope.launch {
-                            val decrypted = withContext(Dispatchers.IO) {
-                                val rings = loadSecretKeyRings(ctx) ?: return@withContext null
-                                ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
-                                    GpgHelper.decryptWithSecretKey(
-                                        input, rings, pwd.toCharArray()
-                                    ) { _ -> }
-                                }
-                            }
-                            workflow.inProgress = false
-                            if (decrypted != null) {
-                                workflow.close()
-                                val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
-                                val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
-                                workflow.startPassEdit(PassEditState(model, dirUri, tree, innerName, decrypted))
-                            } else {
-                                Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    },
-                    onDismiss = {
-                        if (!workflow.inProgress) {
-                            workflow.close()
-                        }
-                    }
-                )
-                }
-            }
-        }
         (workflow.request as? CryptoRequest.Gpg)?.let { gpgReq ->
             val op = gpgReq.op
             val ctx = context
@@ -927,5 +772,179 @@ fun PassEditScreen(
             minLines = 20,
             maxLines = Int.MAX_VALUE
         )
+    }
+}
+
+// ============================================================================
+// Pass 打开型流程的 request 阶段 UI（查看 / 直接编辑 .pass 的密码框）
+//
+// 属于 PassViewer/PassEditor Route 的内部状态（E1 打开型全屏化）：由
+// TransientViewerRouteHost 在 Route 激活期间渲染，不经宿主 CryptoDialogs。
+// 依赖（scope/rootUri）由 Host 注入。
+// ============================================================================
+
+@Composable
+internal fun PassOpenPhaseDialogs(
+    workflow: CryptoWorkflowState,
+    scope: CoroutineScope,
+    /** 根目录 uri（pass 直接编辑写出用）。 */
+    rootUri: String?
+) {
+    val context = LocalContext.current
+
+    // ---- 密码保护：查看 .pass 文件 ----
+    (workflow.request as? CryptoRequest.PassView)?.let { req ->
+        val model = req.target
+        val secRings = loadSecretKeyRings(context)
+        if (secRings == null) {
+            AlertDialog(
+                onDismissRequest = { workflow.close() },
+                title = { Text(stringResource(R.string.context_view_password)) },
+                text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
+                confirmButton = {
+                    Button(onClick = { workflow.close() }) { Text(stringResource(R.string.common_ok)) }
+                }
+            )
+        } else {
+            LaunchedEffect(model) {
+                if (workflow.autoTried) return@LaunchedEffect
+                val cached = SecretKeyPasswordCache.get() ?: run { workflow.autoTried = true; return@LaunchedEffect }
+                workflow.autoTried = true
+                workflow.inProgress = true
+                val decrypted = withContext(Dispatchers.IO) {
+                    val rings = loadSecretKeyRings(context) ?: return@withContext null
+                    context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                        GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                    }
+                }
+                workflow.inProgress = false
+                if (decrypted != null) {
+                    workflow.close()
+                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                    workflow.showPassContent(PassDecryptedContent(innerName, decrypted))
+                } else {
+                    Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (SecretKeyPasswordCache.get() == null || workflow.autoTried) {
+            GpgPasswordDialog(
+                isDecrypt = true,
+                fileName = model.name,
+                password = workflow.password,
+                passwordLabel = context.getString(R.string.browser_key_password_label),
+                inProgress = workflow.inProgress,
+                onPasswordChange = { if (!workflow.inProgress) workflow.password = it },
+                onConfirm = { pwd ->
+                    if (workflow.inProgress) return@GpgPasswordDialog
+                    workflow.inProgress = true
+                    val ctx = context
+                    scope.launch {
+                        val decrypted = withContext(Dispatchers.IO) {
+                            val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                            ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                GpgHelper.decryptWithSecretKey(
+                                    input, rings, pwd.toCharArray()
+                                ) { _ -> }
+                            }
+                        }
+                        workflow.inProgress = false
+                        if (decrypted != null) {
+                            workflow.close()
+                            workflow.password = ""
+                            // 根据内层扩展名确定渲染方式
+                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                            workflow.showPassContent(PassDecryptedContent(innerName, decrypted))
+                        } else {
+                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                onDismiss = {
+                    if (!workflow.inProgress) {
+                        workflow.close()
+                        workflow.password = ""
+                    }
+                }
+            )
+            }
+        }
+    }
+
+    // ---- 密码保护：直接编辑 .pass 文件（解密后进入编辑界面） ----
+    (workflow.request as? CryptoRequest.PassEdit)?.let { req ->
+        val model = req.target
+        val dirUri = req.dirUri
+        val secRings = loadSecretKeyRings(context)
+        if (secRings == null) {
+            AlertDialog(
+                onDismissRequest = { workflow.close() },
+                title = { Text(stringResource(R.string.context_edit_directly)) },
+                text = { Text(stringResource(R.string.browser_no_default_secret_key)) },
+                confirmButton = {
+                    Button(onClick = { workflow.close() }) { Text(stringResource(R.string.common_ok)) }
+                }
+            )
+        } else {
+            LaunchedEffect(model) {
+                if (workflow.autoTried) return@LaunchedEffect
+                val cached = SecretKeyPasswordCache.get() ?: run { workflow.autoTried = true; return@LaunchedEffect }
+                workflow.autoTried = true
+                workflow.inProgress = true
+                val decrypted = withContext(Dispatchers.IO) {
+                    val rings = loadSecretKeyRings(context) ?: return@withContext null
+                    context.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                        GpgHelper.decryptWithSecretKey(input, rings, cached) { _ -> }
+                    }
+                }
+                workflow.inProgress = false
+                if (decrypted != null) {
+                    workflow.close()
+                    val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                    val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                    workflow.startPassEdit(PassEditState(model, dirUri, tree, innerName, decrypted))
+                } else {
+                    Toast.makeText(context, context.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
+                }
+            }
+            if (SecretKeyPasswordCache.get() == null || workflow.autoTried) {
+            GpgPasswordDialog(
+                isDecrypt = true,
+                fileName = model.name,
+                password = workflow.password,
+                passwordLabel = context.getString(R.string.browser_key_password_label),
+                inProgress = workflow.inProgress,
+                onPasswordChange = { if (!workflow.inProgress) workflow.password = it },
+                onConfirm = { pwd ->
+                    if (workflow.inProgress) return@GpgPasswordDialog
+                    workflow.inProgress = true
+                    val ctx = context
+                    scope.launch {
+                        val decrypted = withContext(Dispatchers.IO) {
+                            val rings = loadSecretKeyRings(ctx) ?: return@withContext null
+                            ctx.contentResolver.openInputStreamSafe(model.uri)?.use { input ->
+                                GpgHelper.decryptWithSecretKey(
+                                    input, rings, pwd.toCharArray()
+                                ) { _ -> }
+                            }
+                        }
+                        workflow.inProgress = false
+                        if (decrypted != null) {
+                            workflow.close()
+                            val innerName = model.name.removeSuffix(".pass").removeSuffix(".PASS")
+                            val tree = rootUri?.let { Uri.parse(normalizeContentUriString(it)) }
+                            workflow.startPassEdit(PassEditState(model, dirUri, tree, innerName, decrypted))
+                        } else {
+                            Toast.makeText(ctx, ctx.getString(R.string.browser_decrypt_check_password), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                },
+                onDismiss = {
+                    if (!workflow.inProgress) {
+                        workflow.close()
+                    }
+                }
+            )
+            }
+        }
     }
 }

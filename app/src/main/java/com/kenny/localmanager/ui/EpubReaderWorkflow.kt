@@ -142,6 +142,13 @@ internal class EpubReaderWorkflowState(
         viewer = null
     }
 
+    override val routeActive: Boolean
+        get() = request != null || viewer != null ||
+            (lastKind == EpubReaderKind.EPUB && loadError != null)
+
+    @Composable
+    override fun RequestPhaseDialogs() = EpubReaderDialogs(this)
+
     // ------------------------------------------------------------------
     // 请求阶段：检查缓存 / 加密状态，非加密直接解压或转换进入渲染器
     // ------------------------------------------------------------------

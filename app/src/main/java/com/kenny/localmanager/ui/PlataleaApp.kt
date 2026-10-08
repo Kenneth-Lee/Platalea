@@ -522,10 +522,12 @@ fun PlataleaApp(
     // activeRoute，顶层 when 与 Host 均不感知具体功能种类。优先级：即时型
     // 查看器最先（最新打开覆盖阅读器），工作流终态次之。
     val activeRoute: TransientRoute? = transientRoute
-        ?: archiveReader.viewer?.let { TransientRoute.WorkflowViewer(archiveReader) }
-        ?: epubReader.viewer?.let { TransientRoute.WorkflowViewer(epubReader) }
-        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
+        ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
+        ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
         ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
+        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
+        ?: (crypto.request as? CryptoRequest.PassEdit)?.let { TransientRoute.PassEditor(crypto) }
+        ?: (crypto.request as? CryptoRequest.PassView)?.let { TransientRoute.PassViewer(crypto) }
 
 
     val quickNoteTab = quickNoteTabFeature(
@@ -1059,12 +1061,6 @@ fun PlataleaApp(
         }
         else -> MainTabsRootContent()
     }
-    // Archive / EPUB 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在
-    // WorkflowState）。渲染在顶层 when 之外：request 阶段（主界面可见）与
-    // viewer 全屏阶段（Route 激活）都需要显示（批次 D 修复：原先挂在主界面
-    // 对话框层，全屏时不可见）
-    ArchiveReaderDialogs(archiveReader)
-    EpubReaderDialogs(epubReader)
     // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
     EncryptedCacheExitConfirmLayer(encryptedCacheExitDialog) { encryptedCacheExitDialog = null }
     browserSave.overwriteConfirm?.let { (_, fileName) ->

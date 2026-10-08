@@ -179,18 +179,25 @@ internal fun TransientViewerRouteHost(
             )
         }
         is TransientRoute.WorkflowViewer -> {
-            ArchiveViewerHostLayer(
-                workflow = route.workflow,
-                browserTab = browserTab,
-                readerConfig = config,
-                markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNote = bookNote,
-                recordRecentOpen = recordRecentOpen,
-                onEncryptedExitRequest = onEncryptedExitRequest
-            )
+            // E1 打开型全屏化：open 起即占据 Route。viewer 未就绪时
+            // 渲染 request 阶段（密码 / 处理中 / 错误残留对话框），由
+            // workflow 自描述，Host 不感知具体域差异
+            if (route.workflow.viewer != null) {
+                ArchiveViewerHostLayer(
+                    workflow = route.workflow,
+                    browserTab = browserTab,
+                    readerConfig = config,
+                    markdownViewerSessionCache = markdownViewerSessionCache,
+                    bookNote = bookNote,
+                    recordRecentOpen = recordRecentOpen,
+                    onEncryptedExitRequest = onEncryptedExitRequest
+                )
+            } else {
+                route.workflow.RequestPhaseDialogs()
+            }
         }
         is TransientRoute.PassViewer -> {
-            // Route 构造条件即 passContent 非空；此处判空防御重组间隙（关闭瞬间）
+            // E1：request 态（密码框）也在本 Route 内渲染；判空防御重组间隙
             val content = route.workflow.passContent
             if (content != null) {
                 BackHandler { route.workflow.closePassContent() }
@@ -199,6 +206,12 @@ internal fun TransientViewerRouteHost(
                     innerFileName = content.innerFileName,
                     decryptedBytes = content.decryptedBytes,
                     onBack = { route.workflow.closePassContent() }
+                )
+            } else {
+                PassOpenPhaseDialogs(
+                    workflow = route.workflow,
+                    scope = scope,
+                    rootUri = browserTab.rootUri
                 )
             }
         }
@@ -224,6 +237,12 @@ internal fun TransientViewerRouteHost(
                         }
                     },
                     onBack = { route.workflow.closePassEdit() }
+                )
+            } else {
+                PassOpenPhaseDialogs(
+                    workflow = route.workflow,
+                    scope = scope,
+                    rootUri = browserTab.rootUri
                 )
             }
         }

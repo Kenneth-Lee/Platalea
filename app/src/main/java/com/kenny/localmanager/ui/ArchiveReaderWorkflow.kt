@@ -60,6 +60,15 @@ internal interface ReaderRequestWorkflow {
 internal interface ViewerHostWorkflow {
     val viewer: ArchiveViewerState?
     fun closeViewer()
+
+    /**
+     * 本工作流是否占据独立全屏 Route（E1 打开型全屏化）：
+     * request（密码 / 处理中）、viewer、错误残留任一活跃即占据。
+     */
+    val routeActive: Boolean
+
+    /** request / 错误阶段对话框（Route 激活、viewer 未就绪时由 Host 渲染）。 */
+    @Composable fun RequestPhaseDialogs()
 }
 
 // ============================================================================
@@ -162,6 +171,12 @@ internal class ArchiveReaderWorkflowState(
     override fun closeViewer() {
         viewer = null
     }
+
+    override val routeActive: Boolean
+        get() = request != null || viewer != null
+
+    @Composable
+    override fun RequestPhaseDialogs() = ArchiveReaderDialogs(this)
 
     // ------------------------------------------------------------------
     // 请求阶段：检查缓存 / 加密状态，非加密直接解压进入查看器
