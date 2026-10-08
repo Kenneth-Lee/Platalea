@@ -518,6 +518,15 @@ fun PlataleaApp(
     // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
     val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
 
+    // 独立全屏 Route 聚合槽（批次 D）：即时型槽 + 各工作流终态聚合为单一
+    // activeRoute，顶层 when 与 Host 均不感知具体功能种类。优先级：即时型
+    // 查看器最先（最新打开覆盖阅读器），工作流终态次之。
+    val activeRoute: TransientRoute? = transientRoute
+        ?: archiveReader.viewer?.let { TransientRoute.WorkflowViewer(archiveReader) }
+        ?: epubReader.viewer?.let { TransientRoute.WorkflowViewer(epubReader) }
+        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
+        ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
+
 
     val quickNoteTab = quickNoteTabFeature(
         config = config.quickNote,
@@ -650,7 +659,9 @@ fun PlataleaApp(
                 }
                 quickObfuscate.batchTarget != null -> quickObfuscate.resetIfBatchActive()
                 quickObfuscate.quickTarget != null -> quickObfuscate.resetIfQuickActive()
-                crypto.passEdit != null -> crypto.closePassEdit()
+                // 注：viewer 阶段（passContent/passEdit/阅读器全屏）由
+                // TransientViewerRouteHost 内的 BackHandler 处理，主界面此时
+                // 不在组合中，此处只处理 request 阶段（主界面可见 + 对话框弹出）
                 crypto.request != null -> {
                     val guarded = crypto.request is CryptoRequest.PassView || crypto.request is CryptoRequest.PassEdit
                     if (!guarded || !crypto.inProgress) crypto.close()
@@ -664,7 +675,6 @@ fun PlataleaApp(
                 archiveOps.request != null -> archiveOps.close()
                 archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
                 epubReader.request?.kind in EpubReaderCancelableKinds -> epubReader.cancelRequest()
-                transientRoute is TransientRoute.PdfViewer -> transientRoute = null
                 browserTab.canGoBack -> browserTab.goBack()
                 else -> {
                     requestExitApp()
@@ -705,7 +715,7 @@ fun PlataleaApp(
         val browserTabHostDependencies = BrowserTabHostDependencies(
             scope = scope,
             archiveReader = archiveReader,
-        epubReader = epubReader,
+            epubReader = epubReader,
             archiveOps = archiveOps,
             crypto = crypto,
             configImportExportWorkflow = configTab.importExport,
@@ -887,10 +897,6 @@ fun PlataleaApp(
             onBatchFinished = { finishPendingListAndReturn() }
         )
 
-        // Archive 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 ArchiveReaderWorkflowState）
-        ArchiveReaderDialogs(archiveReader)
-        // EPUB 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在 EpubReaderWorkflowState）
-        EpubReaderDialogs(epubReader)
         // Archive 操作向导域：解压 / 压缩表单对话框（确认后由宿主执行文件操作）
         ArchiveOperationDialogs(
             workflow = archiveOps,
@@ -1028,9 +1034,11 @@ fun PlataleaApp(
                 }
             }
         }
-        transientRoute != null -> {
+        activeRoute != null -> {
+            // 独立全屏 Route 单槽（批次 D）：即时型 + 工作流型统一在此渲染，
+            // 宿主不再感知具体功能种类
             TransientViewerRouteHost(
-                route = transientRoute!!,
+                route = activeRoute!!,
                 config = config.reader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 bookNote = bookNoteTab,
@@ -1043,63 +1051,20 @@ fun PlataleaApp(
                         playlistId = playlistId
                     )
                 },
-                onRouteChange = { transientRoute = it }
-            )
-        }
-        archiveReader.viewer != null -> {
-            // Archive 阅读器域：解压完成后的全屏查看器（装配与善后在 ArchiveHostLayer）
-            ArchiveViewerHostLayer(
-                workflow = archiveReader,
+                onRouteChange = { transientRoute = it },
                 browserTab = browserTab,
-                readerConfig = config.reader,
-                markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNote = bookNoteTab,
-                recordRecentOpen = ::recordRecentOpen,
+                scope = scope,
                 onEncryptedExitRequest = { encryptedCacheExitDialog = it }
-            )
-        }
-        epubReader.viewer != null -> {
-            // EPUB 阅读器域：解压/转换完成后的全屏渲染器（装配与善后在 ArchiveHostLayer）
-            ArchiveViewerHostLayer(
-                workflow = epubReader,
-                browserTab = browserTab,
-                readerConfig = config.reader,
-                markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNote = bookNoteTab,
-                recordRecentOpen = ::recordRecentOpen,
-                onEncryptedExitRequest = { encryptedCacheExitDialog = it }
-            )
-        }
-        crypto.passContent != null -> {
-            val content = crypto.passContent!!
-            BackHandler { crypto.closePassContent() }
-            PassContentViewerScreen(
-                config = config.reader,
-                innerFileName = content.innerFileName,
-                decryptedBytes = content.decryptedBytes,
-                onBack = { crypto.closePassContent() }
-            )
-        }
-        crypto.passEdit != null -> {
-            val state = crypto.passEdit!!
-            BackHandler { crypto.closePassEdit() }
-            PassEditScreen(
-                fileName = state.innerName,
-                initialDecryptedBytes = state.decryptedBytes,
-                onSave = { newBytes ->
-                    val ctx = context
-                    scope.launch {
-                        val ok = savePassEditReencrypted(ctx, state, newBytes)
-                        crypto.closePassEdit()
-                        browserTab.refresh()
-                        Toast.makeText(ctx, if (ok) ctx.getString(R.string.browser_saved_and_reencrypted) else ctx.getString(R.string.viewer_save_failed), Toast.LENGTH_SHORT).show()
-                    }
-                },
-                onBack = { crypto.closePassEdit() }
             )
         }
         else -> MainTabsRootContent()
     }
+    // Archive / EPUB 阅读器域：密码 / 进度 / 解析错误对话框（状态与流程在
+    // WorkflowState）。渲染在顶层 when 之外：request 阶段（主界面可见）与
+    // viewer 全屏阶段（Route 激活）都需要显示（批次 D 修复：原先挂在主界面
+    // 对话框层，全屏时不可见）
+    ArchiveReaderDialogs(archiveReader)
+    EpubReaderDialogs(epubReader)
     // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
     EncryptedCacheExitConfirmLayer(encryptedCacheExitDialog) { encryptedCacheExitDialog = null }
     browserSave.overwriteConfirm?.let { (_, fileName) ->
