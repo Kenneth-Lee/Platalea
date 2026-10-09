@@ -370,11 +370,13 @@
     <string name="pending_forward_to_bulletin">Forward to bulletin board</string>
     <string name="pending_list_action_copy">Copy</string>
     <string name="pending_list_action_move">Move</string>
+    <string name="pending_list_action_extract">Extract to current directory</string>
     <string name="pending_list_action_delete">Delete</string>
-    <string name="pending_list_action_clear_filter">Clear filter</string>
-    <string name="pending_list_action_playback">Add to playback</string>
-    <string name="pending_list_action_mask">Mask</string>
-    <string name="pending_list_action_rename">Rename</string>
+    <string name="pending_list_action_clear_filter">Clear list</string>
+    <string name="pending_list_more_actions">More</string>
+    <string name="pending_list_action_playback">Add to playlist</string>
+    <string name="pending_list_action_mask">Batch mask file headers</string>
+    <string name="pending_list_action_rename">Batch rename</string>
     <string name="batch_rename_title">Batch rename (%1$d files)</string>
     <string name="batch_rename_pattern">Regex match</string>
     <string name="batch_rename_template">Replace with</string>
@@ -393,9 +395,9 @@
     <string name="batch_rename_err_not_found">File does not exist or was deleted</string>
     <string name="batch_rename_err_failed">Operation failed</string>
     <string name="batch_rename_partial">%1$d succeeded, %2$d failed</string>
-    <string name="pending_list_action_gpg_encrypt">GPG encrypt</string>
-    <string name="pending_list_action_gpg_decrypt">GPG decrypt</string>
-    <string name="pending_list_action_archive">Compress</string>
+    <string name="pending_list_action_gpg_encrypt">GPG batch encrypt</string>
+    <string name="pending_list_action_gpg_decrypt">GPG batch decrypt</string>
+    <string name="pending_list_action_archive">Compress to archive</string>
     <string name="pending_list_action_zip">Compress ZIP</string>
     <string name="pending_list_action_7z">Compress 7Z</string>
     <string name="bulletin_forward_pick_device">Select target device</string>
@@ -2179,7 +2181,7 @@ Use a dedicated PDF reader if you need to select text.</string>
     <!-- ZIP editing -->
     <string name="zip_edit_menu_set_target">Set as operation target file</string>
     <string name="zip_edit_menu_add_to_target">Add to target zip</string>
-    <string name="zip_edit_pending_action">Add to zip</string>
+    <string name="zip_edit_pending_action">Add to ZIP edit targets</string>
     <string name="zip_edit_bar_label">Target: %1$s</string>
     <string name="zip_edit_bar_manage">Manage</string>
     <string name="zip_edit_bar_clear">Clear</string>

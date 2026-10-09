@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -28,8 +30,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,6 +78,33 @@ internal fun pendingBatchMetadataKind(items: List<DocumentFileModel>): DetailMet
         kinds[0]
     } else {
         null
+    }
+}
+
+/** 待处理列表快捷操作按钮（描边方角、窄内边距，与其他快捷按钮同规格；宽度由调用方指定）。 */
+@Composable
+private fun PendingQuickActionButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    TextButton(
+        onClick = onClick,
+        shape = RectangleShape,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        colors = ButtonDefaults.textButtonColors(),
+        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
+        modifier = modifier
+            .defaultMinSize(minWidth = 0.dp, minHeight = 30.dp)
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        trailing?.invoke()
     }
 }
 
@@ -179,71 +211,82 @@ fun PendingListScreen(
                 if (!isPickMode) {
                 val audioFromFiltered = filteredPendingItems.filter { !it.isDirectory && isMusicFileName(it.name) }
                 val batchDetailKind = pendingBatchMetadataKind(filteredPendingItems)
-                val pendingActions = mutableListOf(
+                // 常用快捷操作直接平铺；其余收入"更多"菜单（菜单项名不受宽度限制，可用完整表述）
+                val quickActions = listOf(
                     context.getString(R.string.pending_list_action_copy) to onCopyHere,
                     context.getString(R.string.pending_list_action_move) to onMoveHere,
-                    context.getString(R.string.pending_list_action_extract) to onExtractArchivesHere,
                     context.getString(R.string.pending_list_action_delete) to onRequestDelete,
                     context.getString(R.string.pending_list_action_clear_filter) to {
                         onClearFilteredList(filteredPendingItems)
-                    },
-                    context.getString(R.string.pending_list_action_playback) to {
+                    }
+                )
+                val menuActions = buildList {
+                    add(context.getString(R.string.pending_list_action_extract) to onExtractArchivesHere)
+                    add(context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive)
+                    add(context.getString(R.string.pending_list_action_rename) to onRequestBatchRename)
+                    add(context.getString(R.string.pending_list_action_mask) to onRequestBatchMask)
+                    add(context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt)
+                    add(context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt)
+                    add(context.getString(R.string.pending_list_action_playback) to {
                         if (audioFromFiltered.isEmpty()) {
                             Toast.makeText(context, context.getString(R.string.browser_no_audio_in_list), Toast.LENGTH_SHORT).show()
                         } else {
                             onAddToPlayback(audioFromFiltered)
                         }
-                    },
-                    context.getString(R.string.pending_list_action_mask) to onRequestBatchMask,
-                    context.getString(R.string.pending_list_action_rename) to onRequestBatchRename,
-                    context.getString(R.string.pending_list_action_gpg_encrypt) to onRequestBatchGpgEncrypt,
-                    context.getString(R.string.pending_list_action_gpg_decrypt) to onRequestBatchGpgDecrypt,
-                    context.getString(R.string.pending_list_action_archive) to onRequestCompressArchive,
-                    context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin,
-                )
-                if (onAddToZipEditTarget != null) {
-                    // 仅在操作目标为 zip 时提供（目标概念是通用的，加入是 zip 专属动作）
-                    pendingActions.add(
-                        context.getString(R.string.zip_edit_pending_action) to {
+                    })
+                    add(context.getString(R.string.pending_forward_to_bulletin) to onRequestForwardToBulletin)
+                    if (onAddToZipEditTarget != null) {
+                        // 仅在操作目标为 zip 时提供（目标概念是通用的，加入是 zip 专属动作）
+                        add(context.getString(R.string.zip_edit_pending_action) to {
                             onAddToZipEditTarget(filteredPendingItems)
-                        }
-                    )
+                        })
+                    }
+                    if (batchDetailKind != null) {
+                        add(context.getString(R.string.context_details) to onShowBatchDetails)
+                    }
                 }
-                if (batchDetailKind != null) {
-                    pendingActions.add(context.getString(R.string.context_details) to onShowBatchDetails)
-                }
-                Column(
+                var moreMenuOpen by remember { mutableStateOf(false) }
+                Row(
                     Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 4.dp, vertical = 2.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    pendingActions.chunked(5).forEach { rowActions ->
-                        Row(
+                    quickActions.forEach { (label, action) ->
+                        PendingQuickActionButton(label = label, onClick = action, modifier = Modifier.weight(1f))
+                    }
+                    Box(Modifier.weight(1f)) {
+                        PendingQuickActionButton(
+                            label = stringResource(R.string.pending_list_more_actions),
+                            onClick = { moreMenuOpen = true },
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            trailing = {
+                                Icon(
+                                    Icons.Default.ArrowDropDown,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                        DropdownMenu(
+                            expanded = moreMenuOpen,
+                            onDismissRequest = { moreMenuOpen = false }
                         ) {
-                            rowActions.forEach { (label, action) ->
-                                TextButton(
-                                    onClick = action,
-                                    shape = RectangleShape,
-                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                                    colors = ButtonDefaults.textButtonColors(),
-                                    contentPadding = PaddingValues(horizontal = 2.dp, vertical = 0.dp),
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .defaultMinSize(minWidth = 0.dp, minHeight = 30.dp)
-                                ) {
-                                    Text(
-                                        label,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                            // DropdownMenu 内容测量约束无限高，verticalScroll 前必须 heightIn 限定，否则崩溃
+                            Column(
+                                Modifier
+                                    .heightIn(max = 420.dp)
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                menuActions.forEach { (label, action) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            moreMenuOpen = false
+                                            action()
+                                        }
                                     )
                                 }
-                            }
-                            repeat(5 - rowActions.size) {
-                                Spacer(Modifier.weight(1f))
                             }
                         }
                     }
