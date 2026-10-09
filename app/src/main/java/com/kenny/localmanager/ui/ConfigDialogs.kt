@@ -465,10 +465,8 @@ internal fun GenerateKeyDialog(
 ) {
     var identity by remember { mutableStateOf("") }
     var passphrase by remember { mutableStateOf("") }
-    var confirmPassphrase by remember { mutableStateOf("") }
     var confirmKeyRisk by remember { mutableStateOf(false) }
     var generatingInProgress by remember { mutableStateOf(false) }
-    val passphraseConfirmed = isOptionalPasswordConfirmed(passphrase, confirmPassphrase)
     val scope = rememberCoroutineScope()
     Dialog(onDismissRequest = { if (!generatingInProgress) onDismiss() }) {
         Surface(
@@ -490,13 +488,9 @@ internal fun GenerateKeyDialog(
                 Spacer(Modifier.height(8.dp))
                 PasswordConfirmationFields(
                     password = passphrase,
-                    confirmPassword = confirmPassphrase,
                     onPasswordChange = { if (!generatingInProgress) passphrase = it },
-                    onConfirmPasswordChange = { if (!generatingInProgress) confirmPassphrase = it },
                     passwordLabel = context.getString(R.string.gpg_key_protect_password_label),
-                    confirmLabel = context.getString(R.string.gpg_key_protect_password_confirm),
-                    enabled = !generatingInProgress,
-                    allowBlank = true
+                    enabled = !generatingInProgress
                 )
                 if (hasExistingKeys) {
                     Spacer(Modifier.height(12.dp))
@@ -547,7 +541,7 @@ internal fun GenerateKeyDialog(
                                 }
                             }
                         },
-                        enabled = !generatingInProgress && passphraseConfirmed && (!hasExistingKeys || confirmKeyRisk)
+                        enabled = !generatingInProgress && (!hasExistingKeys || confirmKeyRisk)
                     ) { Text(stringResource(R.string.gpg_generate_action)) }
                 }
             }

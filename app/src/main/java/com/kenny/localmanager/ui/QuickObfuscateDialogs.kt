@@ -48,37 +48,31 @@ internal class QuickObfuscateWorkflowState(
     // 单文件槽
     var quickTarget by mutableStateOf<DocumentFileModel?>(null)
     var quickPassword by mutableStateOf("")
-    var quickPasswordConfirm by mutableStateOf("")
     var quickInProgress by mutableStateOf(false)
 
     // 批量槽（待处理列表遮罩）
     var batchTarget by mutableStateOf<List<DocumentFileModel>?>(null)
     var batchPassword by mutableStateOf("")
-    var batchPasswordConfirm by mutableStateOf("")
     var batchInProgress by mutableStateOf(false)
 
     fun requestQuick(model: DocumentFileModel) {
         quickTarget = model
         quickPassword = ""
-        quickPasswordConfirm = ""
     }
 
     fun requestBatch(list: List<DocumentFileModel>) {
         batchTarget = list
         batchPassword = ""
-        batchPasswordConfirm = ""
     }
 
     fun closeQuick() {
         quickTarget = null
         quickPassword = ""
-        quickPasswordConfirm = ""
     }
 
     fun closeBatch() {
         batchTarget = null
         batchPassword = ""
-        batchPasswordConfirm = ""
     }
 
     fun resetIfQuickActive() {
@@ -151,10 +145,8 @@ internal fun QuickObfuscateDialogs(
             isMasked = isQuickObfuscatedFileName(model.name),
             fileName = model.name,
             password = workflow.quickPassword,
-            confirmPassword = workflow.quickPasswordConfirm,
             inProgress = workflow.quickInProgress,
             onPasswordChange = { workflow.quickPassword = it },
-            onConfirmPasswordChange = { workflow.quickPasswordConfirm = it },
             onConfirm = { pwd -> workflow.confirmQuick(pwd) { _, _ -> onQuickFinished() } },
             onDismiss = workflow::closeQuick
         )
@@ -164,10 +156,8 @@ internal fun QuickObfuscateDialogs(
             isMasked = list.all { isQuickObfuscatedFileName(it.name) },
             fileName = context.getString(R.string.browser_file_count, list.size),
             password = workflow.batchPassword,
-            confirmPassword = workflow.batchPasswordConfirm,
             inProgress = workflow.batchInProgress,
             onPasswordChange = { workflow.batchPassword = it },
-            onConfirmPasswordChange = { workflow.batchPasswordConfirm = it },
             onConfirm = { pwd -> workflow.confirmBatch(pwd, runBatchOperation) { onBatchFinished() } },
             onDismiss = workflow::closeBatch
         )
@@ -180,16 +170,14 @@ internal fun QuickObfuscatePasswordDialog(
     isMasked: Boolean,
     fileName: String,
     password: String,
-    confirmPassword: String,
     inProgress: Boolean = false,
     onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
     onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val passwordLabelText = stringResource(R.string.browser_enter_password)
-    val passwordConfirmed = isRequiredPasswordConfirmed(password, confirmPassword)
+    val passwordConfirmed = password.isNotBlank()
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -216,13 +204,9 @@ internal fun QuickObfuscatePasswordDialog(
                 Spacer(Modifier.height(16.dp))
                 PasswordConfirmationFields(
                     password = password,
-                    confirmPassword = confirmPassword,
                     onPasswordChange = onPasswordChange,
-                    onConfirmPasswordChange = onConfirmPasswordChange,
                     passwordLabel = passwordLabelText,
-                    confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                    enabled = !inProgress,
-                    allowBlank = false
+                    enabled = !inProgress
                 )
                 if (inProgress) {
                     Spacer(Modifier.height(16.dp))

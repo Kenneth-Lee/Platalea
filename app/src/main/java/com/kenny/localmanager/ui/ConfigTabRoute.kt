@@ -40,7 +40,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
 import com.kenny.localmanager.R
@@ -367,16 +366,14 @@ private fun ConfigPanel(
                         }
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
+                    ReliablePasswordInputField(
                         value = localFtpPassword,
                         onValueChange = { s ->
                             localFtpPassword = s
                             onFtpPasswordChange(s)
                         },
-                        modifier = Modifier.fillMaxWidth(),
                         label = { Text(context.getString(R.string.config_ftp_password)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
                         supportingText = {
                             Text(
                                 context.getString(R.string.config_ftp_password_hint),

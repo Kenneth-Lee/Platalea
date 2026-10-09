@@ -1721,6 +1721,8 @@ It will sync, copy, and push automatically.</string>
     <string name="pwd_kb_pasted">Password pasted from clipboard</string>
     <string name="pwd_kb_paste">Paste</string>
     <string name="pwd_kb_done">Done</string>
+    <string name="pwd_kb_confirm_stage">Enter again to confirm</string>
+    <string name="pwd_kb_confirm_mismatch">Entries do not match, try again</string>
     <string name="pwd_kb_digits">Digits</string>
     <string name="pwd_kb_upper">Uppercase</string>
     <string name="pwd_kb_lower">Lowercase</string>

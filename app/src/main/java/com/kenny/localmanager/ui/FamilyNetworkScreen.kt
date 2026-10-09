@@ -71,7 +71,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.CancellationException
@@ -429,16 +428,14 @@ internal fun FamilyNetworkScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
+                    ReliablePasswordInputField(
                         value = boardPasswordInput,
                         onValueChange = {
                             boardPasswordInput = it
                             boardPasswordError = null
                         },
-                        modifier = Modifier.fillMaxWidth(),
                         label = { Text(stringResource(R.string.family_board_password_label)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
                         enabled = !boardPasswordInProgress
                     )
                     boardPasswordError?.let { error ->
@@ -1911,14 +1908,12 @@ internal fun FamilyNetworkScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 singleLine = true
                             )
-                            OutlinedTextField(
+                            ReliablePasswordInputField(
                                 value = remoteConfigRolePassword,
                                 onValueChange = { remoteConfigRolePassword = it },
                                 label = { Text(stringResource(R.string.family_board_remote_config_role_password)) },
                                 enabled = !remoteConfigSaving,
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                                visualTransformation = PasswordVisualTransformation()
+                                modifier = Modifier.fillMaxWidth()
                             )
                             Button(
                                 enabled = !remoteConfigSaving,

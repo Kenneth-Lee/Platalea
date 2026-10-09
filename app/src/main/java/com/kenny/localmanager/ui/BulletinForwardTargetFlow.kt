@@ -39,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinBoardInfo
@@ -285,16 +284,14 @@ fun BulletinForwardTargetFlow(
                 title = { Text(stringResource(R.string.family_board_password_title)) },
                 text = {
                     Column {
-                        OutlinedTextField(
+                        ReliablePasswordInputField(
                             value = passwordInput,
                             onValueChange = {
                                 passwordInput = it
                                 passwordError = null
                             },
-                            modifier = Modifier.fillMaxWidth(),
                             label = { Text(stringResource(R.string.family_board_password_label)) },
-                            singleLine = true,
-                            visualTransformation = PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth(),
                             enabled = !passwordInProgress
                         )
                         passwordError?.let { error ->

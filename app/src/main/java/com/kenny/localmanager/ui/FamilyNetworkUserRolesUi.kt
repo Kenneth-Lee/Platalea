@@ -30,7 +30,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.FamilyNetworkManager
@@ -191,13 +190,11 @@ private fun FamilyUserRoleEditorDialog(
                     label = { Text(stringResource(R.string.family_user_roles_label_label)) },
                     singleLine = true
                 )
-                OutlinedTextField(
+                ReliablePasswordInputField(
                     value = password,
                     onValueChange = { password = it },
-                    modifier = Modifier.fillMaxWidth(),
                     label = { Text(stringResource(R.string.family_user_roles_password_label)) },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation()
+                    modifier = Modifier.fillMaxWidth()
                 )
                 error?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)

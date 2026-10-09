@@ -83,7 +83,6 @@ internal class ArchiveOperationWorkflowState(
     var password by mutableStateOf("")
 
     /** Compress：可选密码确认。 */
-    var passwordConfirm by mutableStateOf("")
 
     /** CompressFile / CompressPending(选择器)：用户选择的压缩格式。 */
     var format by mutableStateOf(ArchiveCompressionFormat.ZIP)
@@ -96,7 +95,6 @@ internal class ArchiveOperationWorkflowState(
         this.request = request
         encrypted = null
         password = ""
-        passwordConfirm = ""
         format = ArchiveCompressionFormat.ZIP
         pendingName = (request as? ArchiveOperationRequest.CompressPending)?.defaultName ?: ""
         if (request is ArchiveOperationRequest.Unzip) {
@@ -115,14 +113,8 @@ internal class ArchiveOperationWorkflowState(
         }
     }
 
-    /** 密码输入：清空时联动清空确认（与原向导一致）。 */
     fun updatePassword(value: String) {
         password = value
-        if (value.isEmpty()) passwordConfirm = ""
-    }
-
-    fun updatePasswordConfirm(value: String) {
-        passwordConfirm = value
     }
 
     fun updateFormat(value: ArchiveCompressionFormat) {
@@ -138,7 +130,6 @@ internal class ArchiveOperationWorkflowState(
         request = null
         encrypted = null
         password = ""
-        passwordConfirm = ""
         format = ArchiveCompressionFormat.ZIP
         pendingName = ""
     }

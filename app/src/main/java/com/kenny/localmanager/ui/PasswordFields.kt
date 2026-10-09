@@ -22,6 +22,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -56,70 +57,30 @@ import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 
 /**
- * 密码输入共享件：校验、确认双栏、可靠输入框（自定义键盘）。
+ * 密码输入共享件：校验、可靠输入框（自定义键盘，支持键盘内二次确认）。
  * GPG 弹窗族（CryptoDialogs）、快速混淆（QuickObfuscateDialogs）、
  * 解锁门（宿主）等多域共用，故独立成共享文件而非寄居主程序。
  */
 
-internal fun isRequiredPasswordConfirmed(password: String, confirmPassword: String): Boolean {
-    return password.isNotBlank() && password == confirmPassword
-}
-
-internal fun isOptionalPasswordConfirmed(password: String, confirmPassword: String): Boolean {
-    return password.isBlank() || password == confirmPassword
-}
-
+/**
+ * 密码 + 键盘内二次确认：输入一次进入确认轮，再次输入一致才回填，
+ * 全程不出安全键盘；不一致在键盘内提示并从头重输。
+ */
 @Composable
 internal fun PasswordConfirmationFields(
     password: String,
-    confirmPassword: String,
     onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
     passwordLabel: String,
-    confirmLabel: String,
-    enabled: Boolean,
-    allowBlank: Boolean
+    enabled: Boolean
 ) {
-    val showMismatch = password.isNotEmpty() && confirmPassword.isNotEmpty() && (
-        !password.startsWith(confirmPassword) ||
-            (confirmPassword.length >= password.length && password != confirmPassword)
-        )
-    val showConfirmField = password.isNotEmpty() || !allowBlank
-
     ReliablePasswordInputField(
         value = password,
         onValueChange = onPasswordChange,
         label = { Text(passwordLabel) },
         modifier = Modifier.fillMaxWidth(),
-        enabled = enabled
+        enabled = enabled,
+        requireConfirmation = true
     )
-    if (showConfirmField) {
-        Spacer(Modifier.height(12.dp))
-        ReliablePasswordInputField(
-            value = confirmPassword,
-            onValueChange = onConfirmPasswordChange,
-            label = { Text(confirmLabel) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = enabled
-        )
-    }
-
-    if (showConfirmField) {
-        Spacer(Modifier.height(4.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(20.dp)
-        ) {
-            if (showMismatch) {
-                Text(
-                    stringResource(R.string.browser_password_mismatch),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-    }
 }
 
 
@@ -191,20 +152,41 @@ internal fun ReliablePasswordInputField(
     label: @Composable (() -> Unit),
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    supportingText: @Composable (() -> Unit)? = null
+    supportingText: @Composable (() -> Unit)? = null,
+    /** 键盘内二次确认：两轮一致才回填；空值直接提交（视为清除密码）。 */
+    requireConfirmation: Boolean = false
 ) {
     val context = LocalContext.current
     var keyboardVisible by remember { mutableStateOf(false) }
     var category by remember { mutableStateOf(PasswordKeyCategory.DIGIT) }
     var pageIndex by remember { mutableIntStateOf(0) }
+    // 确认轮草稿：打开键盘时从 value 起步；第一轮暂存 firstEntry，第二轮比对
+    var buffer by remember { mutableStateOf(value) }
+    var confirmStage by remember { mutableIntStateOf(1) }
+    var firstEntry by remember { mutableStateOf<String?>(null) }
+    var mismatch by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboardVisible) {
+        if (keyboardVisible) {
+            buffer = value
+            confirmStage = 1
+            firstEntry = null
+            mismatch = false
+        }
+    }
     val pages = remember(category) { categoryPages(category) }
     if (pageIndex > pages.lastIndex) pageIndex = 0
     val pageKeys = pages.getOrElse(pageIndex) { emptyList() }
-    val maskedValue = when {
-        value.isEmpty() -> ""
-        value.length <= 36 -> "*".repeat(value.length)
-        else -> "${"*".repeat(36)}…(${value.length})"
+    val editingText = if (requireConfirmation) buffer else value
+    val edit: (String) -> Unit = { newText ->
+        if (requireConfirmation) buffer = newText else onValueChange(newText)
     }
+    fun maskOf(s: String) = when {
+        s.isEmpty() -> ""
+        s.length <= 36 -> "*".repeat(s.length)
+        else -> "${"*".repeat(36)}…(${s.length})"
+    }
+    val maskedValue = maskOf(value)
+    val maskedEditing = maskOf(editingText)
 
     Column(modifier = modifier) {
         Box(modifier = Modifier.padding(bottom = 6.dp)) {
@@ -280,9 +262,9 @@ internal fun ReliablePasswordInputField(
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 Text(
-                                    text = if (maskedValue.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedValue,
+                                    text = if (maskedEditing.isEmpty()) stringResource(R.string.browser_empty_placeholder) else maskedEditing,
                                     style = MaterialTheme.typography.bodyLarge,
-                                    color = if (maskedValue.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+                                    color = if (maskedEditing.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -292,7 +274,7 @@ internal fun ReliablePasswordInputField(
                                         if (pasted == null) {
                                             Toast.makeText(context, context.getString(R.string.pwd_kb_clipboard_empty), Toast.LENGTH_SHORT).show()
                                         } else {
-                                            onValueChange(pasted)
+                                            edit(pasted)
                                             Toast.makeText(context, context.getString(R.string.pwd_kb_pasted), Toast.LENGTH_SHORT).show()
                                         }
                                     },
@@ -301,8 +283,57 @@ internal fun ReliablePasswordInputField(
                                 ) {
                                     Text(stringResource(R.string.pwd_kb_paste))
                                 }
-                                TextButton(onClick = { keyboardVisible = false }, enabled = enabled) {
+                                TextButton(
+                                    onClick = {
+                                        if (!requireConfirmation) {
+                                            keyboardVisible = false
+                                        } else if (confirmStage == 1) {
+                                            // 空值直接提交（清除密码）；非空进入确认轮
+                                            if (buffer.isEmpty()) {
+                                                onValueChange("")
+                                                keyboardVisible = false
+                                            } else {
+                                                firstEntry = buffer
+                                                buffer = ""
+                                                confirmStage = 2
+                                                mismatch = false
+                                            }
+                                        } else if (buffer == firstEntry) {
+                                            onValueChange(buffer)
+                                            keyboardVisible = false
+                                            confirmStage = 1
+                                            firstEntry = null
+                                        } else {
+                                            mismatch = true
+                                            confirmStage = 1
+                                            buffer = ""
+                                            firstEntry = null
+                                        }
+                                    },
+                                    enabled = enabled
+                                ) {
                                     Text(stringResource(R.string.pwd_kb_done))
+                                }
+                            }
+                        }
+                        if (requireConfirmation) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(18.dp),
+                                contentAlignment = Alignment.CenterStart
+                            ) {
+                                val statusText = when {
+                                    mismatch -> stringResource(R.string.pwd_kb_confirm_mismatch)
+                                    confirmStage == 2 -> stringResource(R.string.pwd_kb_confirm_stage)
+                                    else -> ""
+                                }
+                                if (statusText.isNotEmpty()) {
+                                    Text(
+                                        text = statusText,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (mismatch) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                    )
                                 }
                             }
                         }
@@ -362,7 +393,7 @@ internal fun ReliablePasswordInputField(
                         PasswordGridPage(
                             keys = pageKeys,
                             enabled = enabled,
-                            onPress = { ch -> onValueChange(value + ch) }
+                            onPress = { ch -> edit(editingText + ch) }
                         )
 
                         Spacer(Modifier.height(4.dp))
@@ -371,20 +402,20 @@ internal fun ReliablePasswordInputField(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { onValueChange(value + " ") },
+                                onClick = { edit(editingText + " ") },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_space), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
-                                onClick = { if (value.isNotEmpty()) onValueChange(value.dropLast(1)) },
-                                enabled = enabled && value.isNotEmpty(),
+                                onClick = { if (editingText.isNotEmpty()) edit(editingText.dropLast(1)) },
+                                enabled = enabled && editingText.isNotEmpty(),
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_backspace), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
-                                onClick = { onValueChange("") },
-                                enabled = enabled && value.isNotEmpty(),
+                                onClick = { edit("") },
+                                enabled = enabled && editingText.isNotEmpty(),
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_clear), style = MaterialTheme.typography.labelSmall) }

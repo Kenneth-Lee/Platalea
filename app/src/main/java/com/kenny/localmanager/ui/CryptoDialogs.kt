@@ -295,30 +295,21 @@ internal fun CryptoDialogs(
                     keys = keys,
                     selectedKeyId = workflow.encryptSelectedKeyId,
                     password = workflow.password,
-                    confirmPassword = workflow.passwordConfirm,
                     inProgress = workflow.inProgress || workflow.pubEncryptInProgress,
                     onSelectPassword = {
                         if (!workflow.inProgress && !workflow.pubEncryptInProgress) {
                             workflow.encryptSelectedKeyId = null
-                            workflow.passwordConfirm = ""
                         }
                     },
                     onSelectKey = { keyId ->
                         if (!workflow.inProgress && !workflow.pubEncryptInProgress) {
                             workflow.encryptSelectedKeyId = keyId
-                            workflow.passwordConfirm = ""
                         }
                     },
                     onPasswordChange = {
                         if (!workflow.inProgress && !workflow.pubEncryptInProgress) {
                             workflow.password = it
-                            workflow.passwordConfirm = ""
                             if (it.isNotEmpty()) workflow.encryptSelectedKeyId = null
-                        }
-                    },
-                    onConfirmPasswordChange = {
-                        if (!workflow.inProgress && !workflow.pubEncryptInProgress) {
-                            workflow.passwordConfirm = it
                         }
                     },
                     onConfirm = { password, keyId ->
@@ -534,19 +525,17 @@ internal fun GpgEncryptDialog(
     keys: List<Pair<Long, String>>,
     selectedKeyId: Long?,
     password: String,
-    confirmPassword: String,
     inProgress: Boolean = false,
     onSelectPassword: () -> Unit,
     onSelectKey: (Long) -> Unit,
     onPasswordChange: (String) -> Unit,
-    onConfirmPasswordChange: (String) -> Unit,
     onConfirm: (String, Long?) -> Unit,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
     val passwordLabelText = stringResource(R.string.browser_enter_password)
     val useSymmetric = selectedKeyId == null
-    val symmetricPasswordReady = isRequiredPasswordConfirmed(password, confirmPassword)
+    val symmetricPasswordReady = password.isNotBlank()
     Dialog(onDismissRequest = { if (!inProgress) onDismiss() }) {
         Surface(
             shape = MaterialTheme.shapes.large,
@@ -577,13 +566,9 @@ internal fun GpgEncryptDialog(
                     Spacer(Modifier.height(12.dp))
                     PasswordConfirmationFields(
                         password = password,
-                        confirmPassword = confirmPassword,
                         onPasswordChange = onPasswordChange,
-                        onConfirmPasswordChange = onConfirmPasswordChange,
                         passwordLabel = passwordLabelText,
-                        confirmLabel = context.getString(R.string.browser_password_confirm_label),
-                        enabled = !inProgress,
-                        allowBlank = false
+                        enabled = !inProgress
                     )
                 } else {
                     ReliablePasswordInputField(

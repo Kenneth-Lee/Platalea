@@ -34,9 +34,6 @@ internal class CryptoWorkflowState {
     /** 密码输入（GPG 对称密码 / 私钥口令 / .pass 查看与编辑口令共用，互斥单槽）。 */
     var password by mutableStateOf("")
 
-    /** GPG 对称加密的确认密码。 */
-    var passwordConfirm by mutableStateOf("")
-
     /** GPG 解密方式（首次检测，null = 尚未检测完）。 */
     var decryptMode by mutableStateOf<GpgDecryptUiMode?>(null)
 
@@ -62,7 +59,6 @@ internal class CryptoWorkflowState {
     fun open(request: CryptoRequest) {
         this.request = request
         password = ""
-        passwordConfirm = ""
         decryptMode = null
         autoTried = false
         encryptSelectedKeyId = null
@@ -76,7 +72,6 @@ internal class CryptoWorkflowState {
     fun close() {
         request = null
         password = ""
-        passwordConfirm = ""
         decryptMode = null
         autoTried = false
         encryptSelectedKeyId = null

@@ -1798,6 +1798,8 @@ OPF目录文件: %2$s</string>
     <string name="pwd_kb_pasted">已从剪贴板粘贴密码</string>
     <string name="pwd_kb_paste">粘贴</string>
     <string name="pwd_kb_done">完成</string>
+    <string name="pwd_kb_confirm_stage">请再次输入以确认</string>
+    <string name="pwd_kb_confirm_mismatch">两次输入不一致，请重新输入</string>
     <string name="pwd_kb_digits">数字</string>
     <string name="pwd_kb_upper">大写</string>
     <string name="pwd_kb_lower">小写</string>

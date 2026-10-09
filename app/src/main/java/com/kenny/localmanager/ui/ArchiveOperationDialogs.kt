@@ -23,7 +23,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.ArchiveCompressionFormat
@@ -117,7 +116,6 @@ private fun CompressFileWizardDialog(
 ) {
     val baseName = if (request.target.name.contains(".")) request.target.name.substringBeforeLast(".") else request.target.name
     val generatedName = buildArchiveOutputName(baseName, workflow.format)
-    val passwordReady = isOptionalPasswordConfirmed(workflow.password, workflow.passwordConfirm)
     AlertDialog(
         onDismissRequest = { workflow.close() },
         title = { Text(stringResource(R.string.browser_compress_archive_title)) },
@@ -134,7 +132,7 @@ private fun CompressFileWizardDialog(
         },
         confirmButton = {
             Button(
-                enabled = generatedName.isNotBlank() && (!workflow.format.supportsPassword || passwordReady),
+                enabled = generatedName.isNotBlank(),
                 onClick = { onConfirm() }
             ) { Text(stringResource(R.string.browser_compress_action)) }
         },
@@ -153,7 +151,6 @@ private fun PendingCompressWizardDialog(
     if (fixed == null) {
         // 通用：格式下拉 + 自动名（archive 前缀）+ 可选密码
         val generatedName = buildArchiveOutputName("archive", workflow.format)
-        val passwordReady = isOptionalPasswordConfirmed(workflow.password, workflow.passwordConfirm)
         AlertDialog(
             onDismissRequest = { workflow.close() },
             title = { Text(stringResource(R.string.browser_compress_pending_archive_title)) },
@@ -170,7 +167,7 @@ private fun PendingCompressWizardDialog(
             },
             confirmButton = {
                 Button(
-                    enabled = generatedName.isNotBlank() && (!workflow.format.supportsPassword || passwordReady),
+                    enabled = generatedName.isNotBlank(),
                     onClick = { onConfirm() }
                 ) { Text(stringResource(R.string.browser_compress_action)) }
             },
@@ -179,7 +176,6 @@ private fun PendingCompressWizardDialog(
     } else {
         // 固定格式（ZIP / 7Z）：自定义输出名 + 可选密码
         val isZip = fixed == ArchiveCompressionFormat.ZIP
-        val passwordReady = isOptionalPasswordConfirmed(workflow.password, workflow.passwordConfirm)
         AlertDialog(
             onDismissRequest = { workflow.close() },
             title = {
@@ -207,39 +203,17 @@ private fun PendingCompressWizardDialog(
                         singleLine = true
                     )
                     Spacer(Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = workflow.password,
-                        onValueChange = { workflow.updatePassword(it) },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text(stringResource(R.string.browser_password_optional_label)) },
-                        singleLine = true,
-                        visualTransformation = PasswordVisualTransformation()
+                    PasswordConfirmationFields(
+                        password = workflow.password,
+                        onPasswordChange = { workflow.updatePassword(it) },
+                        passwordLabel = stringResource(R.string.browser_password_optional_label),
+                        enabled = true
                     )
-                    if (workflow.password.isNotEmpty()) {
-                        Spacer(Modifier.height(8.dp))
-                        OutlinedTextField(
-                            value = workflow.passwordConfirm,
-                            onValueChange = { workflow.updatePasswordConfirm(it) },
-                            modifier = Modifier.fillMaxWidth(),
-                            label = { Text(stringResource(R.string.browser_password_confirm_label)) },
-                            singleLine = true,
-                            isError = workflow.passwordConfirm.isNotEmpty() && workflow.password != workflow.passwordConfirm,
-                            visualTransformation = PasswordVisualTransformation()
-                        )
-                        if (workflow.passwordConfirm.isNotEmpty() && workflow.password != workflow.passwordConfirm) {
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                stringResource(R.string.browser_password_mismatch),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
                 }
             },
             confirmButton = {
                 Button(
-                    enabled = workflow.pendingName.isNotBlank() && passwordReady,
+                    enabled = workflow.pendingName.isNotBlank(),
                     onClick = { onConfirm() }
                 ) { Text(stringResource(R.string.browser_compress_action)) }
             },
@@ -317,24 +291,10 @@ private fun FormatNotices(format: ArchiveCompressionFormat) {
 private fun OptionalPasswordFields(workflow: ArchiveOperationWorkflowState) {
     if (!workflow.format.supportsPassword) return
     Spacer(Modifier.height(12.dp))
-    OutlinedTextField(
-        value = workflow.password,
-        onValueChange = { workflow.updatePassword(it) },
-        modifier = Modifier.fillMaxWidth(),
-        label = { Text(stringResource(R.string.browser_password_optional_label)) },
-        singleLine = true,
-        visualTransformation = PasswordVisualTransformation()
+    PasswordConfirmationFields(
+        password = workflow.password,
+        onPasswordChange = { workflow.updatePassword(it) },
+        passwordLabel = stringResource(R.string.browser_password_optional_label),
+        enabled = true
     )
-    if (workflow.password.isNotEmpty()) {
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = workflow.passwordConfirm,
-            onValueChange = { workflow.updatePasswordConfirm(it) },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text(stringResource(R.string.browser_password_confirm_label)) },
-            singleLine = true,
-            isError = workflow.passwordConfirm.isNotEmpty() && workflow.password != workflow.passwordConfirm,
-            visualTransformation = PasswordVisualTransformation()
-        )
-    }
 }
