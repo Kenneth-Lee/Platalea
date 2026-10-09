@@ -21,7 +21,7 @@ import java.io.File
 // Archive 解包域宿主接线层（批次 A）：执行逻辑与渲染装配自 PlataeaApp 主函数下沉。
 // - savePicZipImageToRoot：pic.zip 查看器"保存到根目录"执行逻辑（rootUri 参数化）
 // - ArchiveViewerHostLayer：解压完成后全屏查看器的装配
-// - EncryptedCacheExitConfirmLayer：加密缓存退出确认对话框（状态由宿主持有，善后动作在 dialog 携带）
+// - EncryptedCacheExitConfirmLayer：加密缓存退出确认对话框（状态与善后归 workflow，域内渲染）
 
 internal suspend fun savePicZipImageToRoot(
     context: Context,
@@ -72,8 +72,7 @@ internal fun ArchiveViewerHostLayer(
     readerConfig: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,
     bookNote: BookNoteTabFeature,
-    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
-    onEncryptedExitRequest: (EncryptedCacheExitDialogState) -> Unit
+    recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit
 ) {
     val context = LocalContext.current
     ArchiveViewerRouteHost(
@@ -86,8 +85,7 @@ internal fun ArchiveViewerHostLayer(
         },
         onSavePicZipImage = { sourceFile, fileName ->
             savePicZipImageToRoot(context, browserTab.rootUri, sourceFile, fileName)
-        },
-        onEncryptedExitRequest = onEncryptedExitRequest
+        }
     )
 }
 

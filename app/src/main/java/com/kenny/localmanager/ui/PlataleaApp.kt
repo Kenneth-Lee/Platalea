@@ -400,7 +400,6 @@ fun PlataleaApp(
     val markdownViewerSessionCache = rememberViewerSessions(browserTab.rootUri)
     // Crypto 域（GPG 加解密 / .pass 保护查看编辑）单槽工作流状态
     val crypto = rememberCryptoWorkflow()
-    var encryptedCacheExitDialog by remember { mutableStateOf<EncryptedCacheExitDialogState?>(null) }
 
     // AppShell navigation + shared UI surfaces
     var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
@@ -1089,13 +1088,11 @@ fun PlataleaApp(
                 onRouteChange = { transientRoute = it },
                 browserTab = browserTab,
                 scope = scope,
-                onEncryptedExitRequest = { encryptedCacheExitDialog = it }
             )
         }
         else -> MainTabsRootContent()
     }
     // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
-    EncryptedCacheExitConfirmLayer(encryptedCacheExitDialog) { encryptedCacheExitDialog = null }
     browserSave.overwriteConfirm?.let { (_, fileName) ->
         OverwriteSaveConfirmDialog(
             fileName = fileName,

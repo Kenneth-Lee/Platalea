@@ -69,6 +69,15 @@ internal interface ViewerHostWorkflow {
 
     /** request / 错误阶段对话框（Route 激活、viewer 未就绪时由 Host 渲染）。 */
     @Composable fun RequestPhaseDialogs()
+
+    /** 加密缓存退出确认对话框（查看器阶段，域内自持状态）。 */
+    val encryptedExitDialog: EncryptedCacheExitDialogState?
+
+    /** 请求退出确认：删除缓存退出 / 保留缓存退出（动作与关闭查看器由域内统一封装）。 */
+    fun requestEncryptedExit(title: String, onCleanup: () -> Unit)
+
+    /** 关闭退出确认对话框（不退出查看器）。 */
+    fun dismissEncryptedExit()
 }
 
 // ============================================================================
@@ -102,6 +111,8 @@ internal class ArchiveReaderWorkflowState(
     override var loadError by mutableStateOf<String?>(null)
         private set
     override var viewer by mutableStateOf<ArchiveViewerState?>(null)
+        private set
+    override var encryptedExitDialog by mutableStateOf<EncryptedCacheExitDialogState?>(null)
         private set
 
     /** 最近一次请求的种类（request 清空后仍可用于错误对话框归属判断）。 */
@@ -170,6 +181,25 @@ internal class ArchiveReaderWorkflowState(
     /** 查看器关闭（含缓存清理在内的善后由调用侧 RouteHost 决定）。 */
     override fun closeViewer() {
         viewer = null
+    }
+
+    override fun requestEncryptedExit(title: String, onCleanup: () -> Unit) {
+        encryptedExitDialog = EncryptedCacheExitDialogState(
+            title = title,
+            onDelete = {
+                onCleanup()
+                closeViewer()
+                encryptedExitDialog = null
+            },
+            onKeep = {
+                closeViewer()
+                encryptedExitDialog = null
+            }
+        )
+    }
+
+    override fun dismissEncryptedExit() {
+        encryptedExitDialog = null
     }
 
     override val routeActive: Boolean

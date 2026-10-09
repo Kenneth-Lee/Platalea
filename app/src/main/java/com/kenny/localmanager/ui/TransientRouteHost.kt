@@ -120,7 +120,6 @@ internal fun TransientViewerRouteHost(
     onRouteChange: (TransientRoute?) -> Unit,
     browserTab: BrowserTabState,
     scope: CoroutineScope,
-    onEncryptedExitRequest: (EncryptedCacheExitDialogState) -> Unit
 ) {
     when (route) {
         is TransientRoute.MarkdownViewer -> {
@@ -196,7 +195,6 @@ internal fun TransientViewerRouteHost(
                     markdownViewerSessionCache = markdownViewerSessionCache,
                     bookNote = bookNote,
                     recordRecentOpen = recordRecentOpen,
-                    onEncryptedExitRequest = onEncryptedExitRequest
                 )
             } else {
                 route.workflow.RequestPhaseDialogs()

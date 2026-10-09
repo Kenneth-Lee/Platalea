@@ -18,7 +18,7 @@ import java.io.File
 // 解压完成后的全屏渲染分派：按 ArchiveViewerRoute 子类调用各查看器 Screen
 // （MdZip / HtmlZip / Epub 在 MarkdownViewerScreen.kt，PicZip 在 PicZipViewerScreen.kt，
 //  VidZip 在 VidZipViewerScreen.kt）。统一处理"最近打开"记录与加密退出善后
-// （保留 / 删除缓存确认经 onEncryptedExitRequest 上抛宿主渲染）。
+// （保留 / 删除缓存确认对话框：状态由 workflow 域内持有，本层渲染）。
 // ============================================================================
 
 @Composable
@@ -28,25 +28,13 @@ internal fun ArchiveViewerRouteHost(
     markdownViewerSessionCache: ViewerSessions,
     bookNote: BookNoteTabFeature,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
-    onSavePicZipImage: suspend (File, String) -> Boolean,    onEncryptedExitRequest: (EncryptedCacheExitDialogState) -> Unit
+    onSavePicZipImage: suspend (File, String) -> Boolean
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    fun requestEncryptedExit(title: String, onCleanup: () -> Unit) {
-        onEncryptedExitRequest(
-            EncryptedCacheExitDialogState(
-                title = title,
-                onDelete = {
-                    onCleanup()
-                    workflow.closeViewer()
-                },
-                onKeep = {
-                    workflow.closeViewer()
-                }
-            )
-        )
-    }
+    fun requestEncryptedExit(title: String, onCleanup: () -> Unit) =
+        workflow.requestEncryptedExit(title, onCleanup)
 
     when (val state = workflow.viewer) {
         is MdZipViewState -> {
@@ -215,5 +203,10 @@ internal fun ArchiveViewerRouteHost(
             )
         }
         null -> Unit
+    }
+
+    // 加密缓存退出确认：状态与动作归本域（workflow），渲染在此完成，宿主不感知。
+    workflow.encryptedExitDialog?.let { dialog ->
+        EncryptedCacheExitConfirmLayer(dialog) { workflow.dismissEncryptedExit() }
     }
 }

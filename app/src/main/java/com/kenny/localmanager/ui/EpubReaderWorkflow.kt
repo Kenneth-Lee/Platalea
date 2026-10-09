@@ -142,6 +142,28 @@ internal class EpubReaderWorkflowState(
         viewer = null
     }
 
+    override var encryptedExitDialog by mutableStateOf<EncryptedCacheExitDialogState?>(null)
+        private set
+
+    override fun requestEncryptedExit(title: String, onCleanup: () -> Unit) {
+        encryptedExitDialog = EncryptedCacheExitDialogState(
+            title = title,
+            onDelete = {
+                onCleanup()
+                closeViewer()
+                encryptedExitDialog = null
+            },
+            onKeep = {
+                closeViewer()
+                encryptedExitDialog = null
+            }
+        )
+    }
+
+    override fun dismissEncryptedExit() {
+        encryptedExitDialog = null
+    }
+
     override val routeActive: Boolean
         get() = request != null || viewer != null ||
             (lastKind == EpubReaderKind.EPUB && loadError != null)
