@@ -118,6 +118,26 @@ internal fun launchExternalOpen(
 
 internal fun pathFromRoot(context: Context, rootUri: String?, currentUri: String): String {
     if (rootUri == null) return currentUri
+    // 首选 documentId 前缀法：ExternalStorageProvider 的 id 形如 "volume:rel/path"，
+    // 与根 id（"volume:rel"）做前缀匹配即可得到从应用根算起的相对路径。
+    // 单文档 URI（如 zip 编辑目标）的 parentFile 为 null，上溯法对其无效。
+    val rootId = runCatching {
+        DocumentsContract.getTreeDocumentId(Uri.parse(normalizeContentUriString(rootUri)))
+    }.getOrNull()
+    val currentId = runCatching {
+        val uri = Uri.parse(normalizeContentUriString(currentUri))
+        if (uri.pathSegments.firstOrNull() == "tree") DocumentsContract.getDocumentId(uri)
+        else uri.lastPathSegment
+    }.getOrNull()
+    if (rootId != null && currentId != null && rootId.isNotEmpty()) {
+        // 根 id 两种形态：带目录（"primary:Documents"）后跟"/"；卷根（"home:"）后直接跟路径
+        if (currentId == rootId) return "/"
+        if (currentId.startsWith(rootId)) {
+            val rel = currentId.removePrefix(rootId).removePrefix("/")
+            if (rel.isNotEmpty()) return rel
+        }
+    }
+    // 兜底：parentFile 上溯（其他 provider 的 id 不带路径语义时仍可用）
     val rootDoc = DocumentFile.fromTreeUri(context, Uri.parse(normalizeContentUriString(rootUri))) ?: return currentUri
     val currentDoc = if (currentUri.contains("/tree/")) DocumentFile.fromTreeUri(context, Uri.parse(currentUri))
         else DocumentFile.fromSingleUri(context, Uri.parse(currentUri))
@@ -129,7 +149,23 @@ internal fun pathFromRoot(context: Context, rootUri: String?, currentUri: String
         parts.add(0, cursor.name ?: "?")
         cursor = cursor.parentFile
     }
-    return "/" + parts.joinToString("/")
+    return parts.joinToString("/").ifEmpty { "/" }
+}
+
+/**
+ * 把（[pathFromRoot] 得到的、从应用根算起的）目标路径换算成相对当前目录的显示形式：
+ * 同目录给纯文件名；跨目录用标准 ".." 段回退。目标为当前目录自身时给 "."。
+ */
+internal fun relativePathFromCurrentDir(targetPathFromRoot: String, currentDirPathFromRoot: String): String {
+    val target = targetPathFromRoot.trim('/').split('/').filter { it.isNotEmpty() }
+    val base = currentDirPathFromRoot.trim('/').split('/').filter { it.isNotEmpty() }
+    if (target == base) return "."
+    var common = 0
+    // 目标最后一段是文件名，不参与目录段匹配，避免与同名目录误消
+    while (common < base.size && common < target.size - 1 && base[common] == target[common]) common++
+    val ups = List(base.size - common) { ".." }
+    val rest = target.drop(common)
+    return (ups + rest).joinToString("/").ifEmpty { "." }
 }
 
 internal fun humanReadableRootUri(uriString: String): String {

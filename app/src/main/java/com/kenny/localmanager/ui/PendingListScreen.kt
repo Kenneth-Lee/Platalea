@@ -114,6 +114,8 @@ fun PendingListScreen(
     pendingList: List<DocumentFileModel>,
     currentDirPath: String = "",
     rootUri: String? = null,
+    /** zip 编辑操作目标名；非空时在顶部显示，并把"加入 ZIP 编辑目标"项收进更多菜单。 */
+    zipEditTargetName: String? = null,
     mode: PendingListMode = PendingListMode.NORMAL,
     title: String? = null,
     confirmLabel: String? = null,
@@ -187,6 +189,16 @@ fun PendingListScreen(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                 )
+                if (zipEditTargetName != null) {
+                    Text(
+                        stringResource(R.string.zip_edit_bar_label, zipEditTargetName),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
                 }
                 Row(
                     Modifier

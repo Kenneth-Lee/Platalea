@@ -59,6 +59,7 @@ import java.io.FileNotFoundException
 import com.kenny.localmanager.file.moveToTrash
 import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.pathFromRoot
+import com.kenny.localmanager.file.relativePathFromCurrentDir
 import com.kenny.localmanager.file.removeZipEntries
 import com.kenny.localmanager.file.restoreFromTrash
 import com.kenny.localmanager.file.unzipToParent
@@ -676,11 +677,14 @@ internal fun BrowserTabHost(
     var zipManagerRefresh by remember { mutableStateOf(0) }
     val zipEditTargetUriValue by zipEditConfig.operationTarget.collectAsState(initial = null)
     var zipEditTargetName by remember { mutableStateOf<String?>(null) }
+    // 显示用：从应用根目录算起的目标路径（显示时再相对当前目录换算）；操作传参仍用 zipEditTargetName（文件名）
+    var zipEditTargetRootPath by remember { mutableStateOf<String?>(null) }
     // 加密目标的会话内密码（不持久化）：按目标 URI 单槽缓存，验证失败或换目标即失效
     var zipEditPasswordFor by remember { mutableStateOf<Pair<String, String>?>(null) }
     LaunchedEffect(zipEditTargetUriValue) {
         val uri = zipEditTargetUriValue ?: run {
             zipEditTargetName = null
+            zipEditTargetRootPath = null
             zipEditPasswordFor = null
             return@LaunchedEffect
         }
@@ -694,6 +698,11 @@ internal fun BrowserTabHost(
             Toast.makeText(context, context.getString(R.string.zip_edit_target_invalid), Toast.LENGTH_LONG).show()
         }
         zipEditTargetName = name
+        // 路径换算失败（rootUri 为空、非本根 provider 等）时退回文件名
+        zipEditTargetRootPath = if (name == null) null
+        else withContext(Dispatchers.IO) {
+            runCatching { pathFromRoot(context, rootUri, uri) }.getOrNull()?.takeIf { it.isNotEmpty() && !it.startsWith("content://") } ?: name
+        }
     }
 
     fun beginZipEditExecution() {
@@ -1130,7 +1139,7 @@ internal fun BrowserTabHost(
                                 playbackState = playbackState,
                                 onOpenPlaybackScreen = { requestOpenPlayerTab() },
                                 zipEditTargetUri = zipEditTargetUriValue,
-                                zipEditTargetName = zipEditTargetName,
+                                zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
                                 zipEditTargetIsZip = zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true,
                                 onSetZipEditTarget = { model ->
                                     scope.launch {
@@ -1172,6 +1181,7 @@ internal fun BrowserTabHost(
                 pendingList = pendingList,
                 currentDirPath = currentDirPath,
                 rootUri = rootUri,
+                zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
                 onShowFileDetails = { file -> onShowFileDetail(file) },
                 onShowBatchDetails = { pendingBatchDetails = pendingList.toList().takeIf { pendingBatchMetadataKind(it) != null } },
                 onRemove = { pendingList.remove(it) },
