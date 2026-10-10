@@ -22,6 +22,7 @@ import com.kenny.localmanager.file.extractPicZipToCache
 import com.kenny.localmanager.file.findHtmlZipIndexFile
 import com.kenny.localmanager.file.findMdZipCacheTarget
 import com.kenny.localmanager.file.getHtmlZipCacheDir
+import com.kenny.localmanager.file.isArchiveCacheStampValid
 import com.kenny.localmanager.file.getHtmlZipCacheTimestamp
 import com.kenny.localmanager.file.getMdZipCacheDir
 import com.kenny.localmanager.file.getMdZipCacheTimestamp
@@ -215,8 +216,7 @@ internal class ArchiveReaderWorkflowState(
     private fun openMdZip(target: DocumentFileModel) = scope.launch {
         // 先检查是否有有效缓存（非加密时）
         val cacheDir = getMdZipCacheDir(context, target.uri)
-        val cacheTs = getMdZipCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isMdZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+        if (!isMdZipCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
             val contentDir = File(cacheDir, "content")
             val hasContent = contentDir.exists() &&
                 (contentDir.listFiles()?.isNotEmpty() == true)
@@ -260,8 +260,7 @@ internal class ArchiveReaderWorkflowState(
     private fun openHtmlZip(target: DocumentFileModel) = scope.launch {
         log = context.getString(R.string.browser_html_zip_preparing, target.name)
         val cacheDir = getHtmlZipCacheDir(context, target.uri)
-        val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isHtmlZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+        if (!isHtmlZipCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
             val contentDir = File(cacheDir, "content")
             if (contentDir.exists() && contentDir.listFiles()?.isNotEmpty() == true) {
                 val cachedIndex = findHtmlZipIndexFile(contentDir)
@@ -316,8 +315,7 @@ internal class ArchiveReaderWorkflowState(
 
     private fun openPicZip(target: DocumentFileModel) = scope.launch {
         val cacheDir = getPicZipCacheDir(context, target.uri)
-        val cacheTs = getPicZipCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isPicZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+        if (!isPicZipCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
             val contentDir = File(cacheDir, "content")
             val listFile = File(cacheDir, ".image_list")
             if (contentDir.exists() && listFile.exists()) {
@@ -363,8 +361,7 @@ internal class ArchiveReaderWorkflowState(
 
     private fun openVidZip(target: DocumentFileModel) = scope.launch {
         val cacheDir = getVidZipCacheDir(context, target.uri)
-        val cacheTs = getVidZipCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isVidZipCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+        if (!isVidZipCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
             val contentDir = File(cacheDir, "content")
             val listFile = File(cacheDir, ".video_list")
             if (contentDir.exists() && listFile.exists()) {
@@ -420,13 +417,11 @@ internal class ArchiveReaderWorkflowState(
         val pwd = password.toCharArray()
         val result = withContext(Dispatchers.IO) {
             val cacheDir = getMdZipCacheDir(context, target.uri)
-            val cacheTs = getMdZipCacheTimestamp(cacheDir)
             val contentDir = File(cacheDir, "content")
             val isRstZip = target.name.endsWith(".rst.zip", ignoreCase = true)
             if (
-                cacheTs > 0 &&
                 isMdZipCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
+                isArchiveCacheStampValid(context, cacheDir, target) &&
                 contentDir.exists() &&
                 contentDir.listFiles()?.isNotEmpty() == true &&
                 tryArchivePassword(context, target.uri, pwd)
@@ -462,12 +457,10 @@ internal class ArchiveReaderWorkflowState(
         val pwd = password.toCharArray()
         val result = withContext(Dispatchers.IO) {
             val cacheDir = getHtmlZipCacheDir(context, target.uri)
-            val cacheTs = getHtmlZipCacheTimestamp(cacheDir)
             val contentDir = File(cacheDir, "content")
             if (
-                cacheTs > 0 &&
                 isHtmlZipCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
+                isArchiveCacheStampValid(context, cacheDir, target) &&
                 contentDir.exists() &&
                 contentDir.listFiles()?.isNotEmpty() == true &&
                 tryArchivePassword(context, target.uri, pwd)

@@ -164,4 +164,33 @@ class ZipCentralDirectoryTest {
         assertEquals(19L, entries[19].uncompressedSize)
         assertFalse(entries[0].isDirectory)
     }
+
+    @Test
+    fun EOCD指纹_内容变化指纹必变() {
+        val f1 = tmp.newFile("fp1.zip")
+        writeSimpleZip(f1)
+        val f2 = tmp.newFile("fp2.zip")
+        ZipOutputStream(f2.outputStream().buffered()).use { zos ->
+            zos.putNextEntry(ZipEntry("dir/")); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("dir/a.txt")); zos.write("hello world longer".toByteArray()); zos.closeEntry()
+            zos.putNextEntry(ZipEntry("dir/b.txt")); zos.write(byteArrayOf(1)); zos.closeEntry()
+        }
+
+        val fp1 = java.io.RandomAccessFile(f1, "r").use { parseZipEocd(it.channel, 0L, f1.length()) }
+        val fp2 = java.io.RandomAccessFile(f2, "r").use { parseZipEocd(it.channel, 0L, f2.length()) }
+
+        assertEquals(3L, fp1?.totalEntries)
+        assertEquals(3L, fp2?.totalEntries)
+        // 大小不同 → cdOffset/cdSize 必不同（指纹区分内容变化）
+        org.junit.Assert.assertNotEquals(fp1, fp2)
+    }
+
+    @Test
+    fun EOCD指纹_同一文件稳定不变() {
+        val f = tmp.newFile("fp-stable.zip")
+        writeSimpleZip(f)
+        val a = java.io.RandomAccessFile(f, "r").use { parseZipEocd(it.channel, 0L, f.length()) }
+        val b = java.io.RandomAccessFile(f, "r").use { parseZipEocd(it.channel, 0L, f.length()) }
+        org.junit.Assert.assertEquals(a, b)
+    }
 }

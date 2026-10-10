@@ -52,15 +52,36 @@ fun readZipCentralDirectoryFromUri(context: Context, uri: Uri): List<ZipCdEntry>
     }
 }
 
+/** EOCD 摘要：目录定位信息，用作 zip 内容指纹（任何实质内容变化必变）。 */
+data class ZipEocdFingerprint(
+    val cdSize: Long,
+    val cdOffset: Long,
+    val totalEntries: Long
+)
+
 /**
- * 解析内核：[channel] 为底层 fd 的通道，[baseOffset] 为逻辑 0 字节在 fd 中的绝对位置，
- * [logicalSize] 为逻辑文件长度。结构非法返回 null。
+ * 仅读尾部 EOCD（最坏 64KB）拿目录指纹，不解析条目。
+ * 供缓存失效判定使用：零复制、与大包大小无关。返回 null 表示非 zip / 不可 seek。
  */
-internal fun parseZipCentralDirectory(
+fun readZipEocdFingerprintFromUri(context: Context, uri: Uri): ZipEocdFingerprint? {
+    return try {
+        context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { afd ->
+            val channel = FileInputStream(afd.fileDescriptor).channel
+            val base = afd.startOffset
+            val logicalSize = if (afd.declaredLength >= 0) afd.declaredLength else channel.size() - base
+            if (logicalSize <= 0) null else parseZipEocd(channel, base, logicalSize)
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+/** 解析 EOCD（含 zip64 定位），供指纹与完整目录解析共用。 */
+internal fun parseZipEocd(
     channel: FileChannel,
     baseOffset: Long,
     logicalSize: Long
-): List<ZipCdEntry>? {
+): ZipEocdFingerprint? {
     // ---- 1) 尾部搜索 EOCD（允许最长 64KB 注释）----
     val tailLen = minOf(logicalSize, (22L + MAX_ZIP_COMMENT))
     val tailStart = logicalSize - tailLen
@@ -99,6 +120,22 @@ internal fun parseZipCentralDirectory(
         cdOffset = zbuf.long
     }
     if (cdOffset < 0 || cdSize < 0 || cdOffset + cdSize > logicalSize || totalEntries < 0) return null
+    return ZipEocdFingerprint(cdSize = cdSize, cdOffset = cdOffset, totalEntries = totalEntries)
+}
+
+/**
+ * 解析内核：[channel] 为底层 fd 的通道，[baseOffset] 为逻辑 0 字节在 fd 中的绝对位置，
+ * [logicalSize] 为逻辑文件长度。结构非法返回 null。
+ */
+internal fun parseZipCentralDirectory(
+    channel: FileChannel,
+    baseOffset: Long,
+    logicalSize: Long
+): List<ZipCdEntry>? {
+    val eocd = parseZipEocd(channel, baseOffset, logicalSize) ?: return null
+    val totalEntries = eocd.totalEntries
+    val cdSize = eocd.cdSize
+    val cdOffset = eocd.cdOffset
 
     // ---- 3) 顺序解析 central directory 条目 ----
     val cdBytes = readBytes(channel, baseOffset + cdOffset, cdSize.toInt()) ?: return null

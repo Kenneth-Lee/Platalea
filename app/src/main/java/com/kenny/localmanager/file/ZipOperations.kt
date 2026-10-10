@@ -2200,6 +2200,7 @@ fun extractMdZipToCache(
             Log.w(TAG, "extractMdZipToCache: no files found in $zipUri")
         }
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, zipUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
         return MdZipExtractResult(cacheDir, contentDir, target, encrypted)
     } catch (e: Exception) {
@@ -2399,6 +2400,7 @@ fun extractHtmlZipToCacheWithProgress(
         onLog(context.getString(R.string.zip_log_entry_file, indexFile.name))
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, zipUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
 
         onLog(context.getString(R.string.zip_log_done))
@@ -2491,6 +2493,7 @@ fun extractPicZipToCache(
         }
         File(cacheDir, ".image_list").writeText(imagePaths.joinToString("\n"))
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, zipUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
         return PicZipExtractResult(cacheDir, contentDir, imagePaths, encrypted)
     } catch (e: Exception) {
@@ -2709,6 +2712,7 @@ fun readVidZipVideoPaths(
                 File(cacheDir, "content").mkdirs()
                 File(cacheDir, ".video_list").writeText(paths.joinToString("\n"))
                 File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+                writeArchiveStamp(context, zipUri, cacheDir)
                 File(cacheDir, ".encrypted").delete()
                 startArchiveCacheCopyAsync(context, zipUri, cacheDir)
             }
@@ -2751,6 +2755,7 @@ fun readVidZipVideoPaths(
             }
             listFile.writeText(paths.joinToString("\n"))
             File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+            writeArchiveStamp(context, zipUri, cacheDir)
             if (encrypted) File(cacheDir, ".encrypted").createNewFile() else File(cacheDir, ".encrypted").delete()
         }
         paths
@@ -2837,6 +2842,7 @@ fun extractVidZipToCache(
         }
         File(cacheDir, ".video_list").writeText(videoPaths.joinToString("\n"))
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, zipUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
         return VidZipExtractResult(cacheDir, contentDir, videoPaths, encrypted)
     } catch (e: Exception) {
@@ -3307,6 +3313,7 @@ fun extractEpubToCache(
         }
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, epubUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
 
         onLog(context.getString(R.string.zip_log_load_complete))
@@ -3660,6 +3667,7 @@ private fun prepareTextBookAsEpub(
         File(oebpsDir, "content.opf").writeText(opfContent)
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, sourceUri, cacheDir)
         if (isLlm) File(cacheDir, ".llm_source").writeText(sourceFileName)
         else File(cacheDir, ".txt_source").writeText(sourceFileName)
 
@@ -3795,6 +3803,7 @@ fun extractLlmZipToCache(
         File(oebpsDir, "content.opf").writeText(opfContent)
 
         File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+        writeArchiveStamp(context, zipUri, cacheDir)
         if (encrypted) File(cacheDir, ".encrypted").createNewFile()
         saveChapterTitles(cacheDir, chapters)
 

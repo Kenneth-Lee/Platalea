@@ -10,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.DocumentFileModel
+import com.kenny.localmanager.file.isArchiveCacheStampValid
 import com.kenny.localmanager.file.EpubExtractResult
 import com.kenny.localmanager.file.EpubParseResult
 import com.kenny.localmanager.file.extractEpubToCache
@@ -177,8 +178,7 @@ internal class EpubReaderWorkflowState(
 
         private fun openLlmZip(target: DocumentFileModel) = scope.launch {
         val cacheDir = getEpubCacheDir(context, target.uri)
-        val cacheTs = getEpubCacheTimestamp(cacheDir)
-        if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+        if (!isEpubCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
             val cached = loadEpubFromCache(context, cacheDir)
             if (cached != null) {
                 request = null
@@ -222,8 +222,7 @@ internal class EpubReaderWorkflowState(
             withContext(Dispatchers.IO) {
                 log += context.getString(R.string.browser_checking_cache)
                 val cacheDir = getEpubCacheDir(context, target.uri)
-                val cacheTs = getEpubCacheTimestamp(cacheDir)
-                if (cacheTs > 0 && !isEpubCacheEncrypted(cacheDir) && cacheTs >= target.lastModified) {
+                if (!isEpubCacheEncrypted(cacheDir) && isArchiveCacheStampValid(context, cacheDir, target)) {
                     cachedResult = loadEpubFromCache(context, cacheDir)
                     if (cachedResult != null) {
                         log += context.getString(R.string.browser_using_cache)
@@ -287,10 +286,9 @@ internal class EpubReaderWorkflowState(
         inProgress = true
         try {
             val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
             var result: EpubExtractResult? = null
             // 检查是否有有效缓存
-            if (cacheTs > 0 && cacheTs >= target.lastModified) {
+            if (isArchiveCacheStampValid(context, cacheDir, target)) {
                 result = loadEpubFromCache(context, cacheDir)
                 // 如果缓存加载失败，清除旧缓存
                 if (result == null) {
@@ -322,10 +320,9 @@ internal class EpubReaderWorkflowState(
         inProgress = true
         try {
             val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
             var result: EpubExtractResult? = null
             // 检查是否有有效缓存
-            if (cacheTs > 0 && cacheTs >= target.lastModified) {
+            if (isArchiveCacheStampValid(context, cacheDir, target)) {
                 result = loadEpubFromCache(context, cacheDir)
                 if (result == null) {
                     cacheDir.deleteRecursively()
@@ -356,11 +353,9 @@ internal class EpubReaderWorkflowState(
         val pwd = password.toCharArray()
         val result = withContext(Dispatchers.IO) {
             val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
             if (
-                cacheTs > 0 &&
                 isEpubCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
+                isArchiveCacheStampValid(context, cacheDir, target) &&
                 tryArchivePassword(context, target.uri, pwd)
             ) {
                 loadEpubFromCache(context, cacheDir)
@@ -389,11 +384,9 @@ internal class EpubReaderWorkflowState(
         val pwd = password.toCharArray()
         val result = withContext(Dispatchers.IO) {
             val cacheDir = getEpubCacheDir(context, target.uri)
-            val cacheTs = getEpubCacheTimestamp(cacheDir)
             if (
-                cacheTs > 0 &&
                 isEpubCacheEncrypted(cacheDir) &&
-                cacheTs >= target.lastModified &&
+                isArchiveCacheStampValid(context, cacheDir, target) &&
                 tryArchivePassword(context, target.uri, pwd)
             ) {
                 loadEpubFromCache(context, cacheDir)?.let { EpubParseResult.Success(it) }
