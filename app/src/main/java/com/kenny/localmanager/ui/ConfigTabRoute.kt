@@ -374,6 +374,7 @@ private fun ConfigPanel(
                         },
                         label = { Text(context.getString(R.string.config_ftp_password)) },
                         modifier = Modifier.fillMaxWidth(),
+                        requireConfirmation = true,
                         supportingText = {
                             Text(
                                 context.getString(R.string.config_ftp_password_hint),

@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -31,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +42,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextRange
@@ -50,7 +56,10 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import android.view.WindowManager
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.BatchRenameCompileResult
 import com.kenny.localmanager.file.BatchRenameItemError
@@ -124,11 +133,27 @@ internal fun BatchRenameDialog(
     }
     val hasFatalError = preview.any { it.error != null }
     val validCount = preview.count { it.newName != null && it.error == null }
+    val applyEnabled = !hasFatalError && validCount > 0
+    val applyRename: () -> Unit = {
+        val pairs = preview.mapIndexedNotNull { index, item ->
+            val name = item.newName
+            if (name != null && item.error == null) items[index] to name else null
+        }
+        if (pairs.isNotEmpty()) onConfirm(pairs)
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
+        // IME 避让前置条件：Dialog 窗口默认不透传 IME insets，
+        // 需关闭 decor 自动消费 + ADJUST_RESIZE，bottomBar 的 imePadding 才能感知键盘/联想条
+        val view = LocalView.current
+        SideEffect {
+            val window = (view.parent as? DialogWindowProvider)?.window ?: return@SideEffect
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Scaffold(
                 topBar = {
@@ -145,11 +170,33 @@ internal fun BatchRenameDialog(
                             IconButton(onClick = onDismiss) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back))
                             }
+                        },
+                        actions = {
+                            // 本机 IME 下拉收起后常驻联想条（窗口未关），底部提交键被盖住点不到；
+                            // 顶部动作位永远不被 IME 遮挡，作为可靠提交入口
+                            val keyboard = LocalSoftwareKeyboardController.current
+                            val focusManager = LocalFocusManager.current
+                            TextButton(
+                                onClick = {
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                    applyRename()
+                                },
+                                enabled = applyEnabled
+                            ) { Text(stringResource(R.string.batch_rename_apply, validCount)) }
                         }
                     )
                 },
                 bottomBar = {
-                    Surface(tonalElevation = 2.dp) {
+                    // imePadding：下拉收起键盘后 IME 常驻联想条（窗口未真正关闭），
+                    // 按钮栏需避让否则被 IME 窗口盖住无法点击；decorFitsSystemWindows=false 后导航栏需自行补偿
+                    Surface(
+                        Modifier
+                            .fillMaxWidth()
+                            .navigationBarsPadding()
+                            .imePadding(),
+                        tonalElevation = 2.dp
+                    ) {
                         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
                             if (hasFatalError) {
                                 Text(
@@ -165,16 +212,9 @@ internal fun BatchRenameDialog(
                             ) {
                                 Spacer(Modifier.weight(1f))
                                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.common_cancel)) }
-                                Button(
-                                    onClick = {
-                                        val pairs = preview.mapIndexedNotNull { index, item ->
-                                            val name = item.newName
-                                            if (name != null && item.error == null) items[index] to name else null
-                                        }
-                                        if (pairs.isNotEmpty()) onConfirm(pairs)
-                                    },
-                                    enabled = !hasFatalError && validCount > 0
-                                ) { Text(stringResource(R.string.batch_rename_apply, validCount)) }
+                                Button(onClick = applyRename, enabled = applyEnabled) {
+                                    Text(stringResource(R.string.batch_rename_apply, validCount))
+                                }
                             }
                         }
                     }
