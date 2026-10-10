@@ -269,7 +269,8 @@ private fun ConfigPanel(
             onDismissRequest = { showFtpConfigDialog = false },
             title = { Text(context.getString(R.string.config_ftp_section)) },
             text = {
-                Column {
+                // 内容超高（密码框键盘内确认后新增提示等）：可滚动，末尾输入框不被截断
+                Column(Modifier.verticalScroll(rememberScrollState())) {
                     Row(
                         Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
