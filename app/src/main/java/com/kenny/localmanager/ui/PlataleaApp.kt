@@ -125,6 +125,7 @@ internal const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
 internal enum class ConfigExportResult {
     SUCCESS,
     FILE_EXISTS,
+    ENCRYPT_FAILED,
     FAILED
 }
 

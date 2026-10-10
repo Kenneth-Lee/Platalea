@@ -1108,16 +1108,7 @@ internal fun BrowserTabHost(
                                 onRequestPassView = { model -> crypto.open(CryptoRequest.PassView(model)) },
                                 onRequestPassEdit = { model, dirUri -> crypto.open(CryptoRequest.PassEdit(model, dirUri)) },
                                 onRequestImportConfig = { model ->
-                                    scope.launch {
-                                        val jsonString = withContext(Dispatchers.IO) {
-                                            try {
-                                                context.contentResolver.openInputStream(model.uri)?.use { it.bufferedReader().readText() } ?: ""
-                                            } catch (_: Exception) {
-                                                ""
-                                            }
-                                        }
-                                        configImportExportWorkflow.startImportFromJson(jsonString)
-                                    }
+                                    configImportExportWorkflow.startImportFromUri(model.uri)
                                 },
                                 onRequestImportStarDict = { model ->
                                     scope.launch {

@@ -58,6 +58,10 @@ internal fun isMarkdownFile(name: String): Boolean =
 internal fun isJsonFile(name: String): Boolean =
     name.endsWith(".json", ignoreCase = true)
 
+/** 判断文件名是否可作为配置导入文件（明文 .json 或 GPG 加密的 .json.gpg）。 */
+internal fun isConfigImportFile(name: String): Boolean =
+    isJsonFile(name) || name.endsWith(".json.gpg", ignoreCase = true)
+
 private val sevenZSplitPartRegex = Regex("(?i)^(.*\\.7z)\\.(\\d{3})$")
 
 /** 判断文件名是否为可解压压缩包（zip / rar / 7z / tar 及常见压缩格式）。 */

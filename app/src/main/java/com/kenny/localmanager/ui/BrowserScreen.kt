@@ -1939,7 +1939,7 @@ internal fun BrowserScreen(
                                 }
                             ) { Text(context.getString(R.string.context_edit_directly), color = MaterialTheme.colorScheme.onSurface) }
                         }
-                        if (isJsonFile(menuTarget.name) && onRequestImportConfig != null) {
+                        if (isConfigImportFile(menuTarget.name) && onRequestImportConfig != null) {
                             TextButton(
                                 onClick = {
                                     showContextMenu = false

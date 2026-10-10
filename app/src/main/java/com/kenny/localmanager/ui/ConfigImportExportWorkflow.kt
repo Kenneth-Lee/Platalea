@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
@@ -25,6 +27,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.data.ConfigExportCategory
@@ -34,6 +37,9 @@ import com.kenny.localmanager.data.configJsonContainsKeys
 import com.kenny.localmanager.data.configJsonPlaylistCount
 import com.kenny.localmanager.file.createFileWithBytes
 import com.kenny.localmanager.file.findChildByName
+import com.kenny.localmanager.gpg.GpgHelper
+import com.kenny.localmanager.gpg.GpgHelper.GpgEncryptedKind
+import java.io.ByteArrayInputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -76,10 +82,24 @@ class ConfigImportExportWorkflowState internal constructor(
     var pendingImportPlaylistMode by mutableStateOf(ConfigPlaylistImportMode.OVERWRITE)
         internal set
 
+    // ---- 导入解密状态（.json.gpg 文件）----
+    /** 待解密的密文（对称加密导出文件），解密成功后清空。 */
+    var pendingEncryptedBytes by mutableStateOf<ByteArray?>(null)
+        private set
+    var showImportPasswordDialog by mutableStateOf(false)
+        internal set
+    var importPassword by mutableStateOf("")
+        internal set
+
     // ---- 导出流程状态 ----
     var showExportConfigDialog by mutableStateOf(false)
         internal set
     var exportConfigFileName by mutableStateOf(CONFIG_EXPORT_FILE_NAME)
+        internal set
+    /** 导出时默认启用 GPG 对称加密，生成 .json.gpg 文件。 */
+    var exportEncrypt by mutableStateOf(true)
+        internal set
+    var exportPassword by mutableStateOf("")
         internal set
     var exportGitCategory by mutableStateOf(true)
         internal set
@@ -109,6 +129,9 @@ class ConfigImportExportWorkflowState internal constructor(
         showImportCategoryDialog = false
         showImportKeyConfirmDialog = false
         showImportPlaylistConfirmDialog = false
+        pendingEncryptedBytes = null
+        importPassword = ""
+        showImportPasswordDialog = false
     }
 
     fun startImportFromJson(jsonString: String) {
@@ -129,8 +152,66 @@ class ConfigImportExportWorkflowState internal constructor(
         showImportCategoryDialog = true
     }
 
+    /**
+     * 从文件 uri 启动导入：自动识别 GPG 加密（.json.gpg）与明文 .json。
+     * 对称加密的文件先弹密码框解密，再进入分类选择流程。
+     */
+    fun startImportFromUri(uri: android.net.Uri) {
+        scope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                } catch (_: Exception) {
+                    null
+                }
+            }
+            if (bytes == null || bytes.isEmpty()) {
+                Toast.makeText(context, context.getString(R.string.browser_config_import_read_failed), Toast.LENGTH_SHORT).show()
+                return@launch
+            }
+            when (withContext(Dispatchers.IO) { GpgHelper.detectEncryptedKind(ByteArrayInputStream(bytes)) }) {
+                GpgEncryptedKind.SYMMETRIC -> {
+                    pendingEncryptedBytes = bytes
+                    importPassword = ""
+                    showImportPasswordDialog = true
+                }
+                GpgEncryptedKind.PUBLIC_KEY -> {
+                    val plain = withContext(Dispatchers.IO) {
+                        GpgHelper.decryptStream(ByteArrayInputStream(bytes))
+                    }
+                    if (plain == null) {
+                        Toast.makeText(context, context.getString(R.string.config_import_pubkey_failed), Toast.LENGTH_LONG).show()
+                    } else {
+                        startImportFromJson(String(plain, Charsets.UTF_8))
+                    }
+                }
+                else -> startImportFromJson(String(bytes, Charsets.UTF_8))
+            }
+        }
+    }
+
+    /** 用密码解密待导入密文：成功进入分类选择，失败提示并保留密码框供重试。 */
+    internal fun tryDecryptPendingImport(password: String) {
+        val bytes = pendingEncryptedBytes ?: return
+        if (password.isBlank()) return
+        scope.launch {
+            val plain = withContext(Dispatchers.IO) {
+                GpgHelper.decryptSymmetric(ByteArrayInputStream(bytes), password.toCharArray())
+            }
+            if (plain == null) {
+                Toast.makeText(context, context.getString(R.string.config_import_decrypt_failed), Toast.LENGTH_LONG).show()
+            } else {
+                pendingEncryptedBytes = null
+                showImportPasswordDialog = false
+                startImportFromJson(String(plain, Charsets.UTF_8))
+            }
+        }
+    }
+
     fun openExportDialog() {
         exportConfigFileName = CONFIG_EXPORT_FILE_NAME
+        exportEncrypt = true
+        exportPassword = ""
         exportGitCategory = true
         exportMusicCategory = true
         exportRecentCategory = true
@@ -199,15 +280,18 @@ class ConfigImportExportWorkflowState internal constructor(
         }
     }
 
-    internal fun launchExport(fileName: String, categories: Set<ConfigExportCategory>) {
+    internal fun launchExport(fileName: String, categories: Set<ConfigExportCategory>, password: String?) {
         scope.launch {
-            when (exportToRoot(fileName, categories)) {
+            when (exportToRoot(fileName, categories, password)) {
                 ConfigExportResult.SUCCESS -> {
                     Toast.makeText(context, context.getString(R.string.config_export_success), Toast.LENGTH_SHORT).show()
                     onConfigFileWritten()
                 }
                 ConfigExportResult.FILE_EXISTS -> {
                     Toast.makeText(context, context.getString(R.string.config_export_file_exists, fileName), Toast.LENGTH_LONG).show()
+                }
+                ConfigExportResult.ENCRYPT_FAILED -> {
+                    Toast.makeText(context, context.getString(R.string.config_export_encrypt_failed), Toast.LENGTH_SHORT).show()
                 }
                 ConfigExportResult.FAILED -> {
                     Toast.makeText(context, context.getString(R.string.config_export_failed), Toast.LENGTH_SHORT).show()
@@ -216,17 +300,19 @@ class ConfigImportExportWorkflowState internal constructor(
         }
     }
 
-    internal fun normalizeExportFileName(input: String): String? {
-        val trimmed = input.trim()
-        if (trimmed.isBlank() || trimmed.contains('/') || trimmed.contains('\\')) return null
-        return if (trimmed.endsWith(".json", ignoreCase = true)) trimmed else "$trimmed.json"
-    }
-
-    internal suspend fun exportToRoot(fileName: String, categories: Set<ConfigExportCategory>): ConfigExportResult {
+    internal suspend fun exportToRoot(fileName: String, categories: Set<ConfigExportCategory>, password: String?): ConfigExportResult {
         if (categories.isEmpty()) return ConfigExportResult.FAILED
         val targetRoot = rootUriProvider()?.let { normalizeContentUriString(it) } ?: return ConfigExportResult.FAILED
         val targetUri = android.net.Uri.parse(targetRoot)
         val jsonBytes = config.exportConfigJson(categories).toByteArray(Charsets.UTF_8)
+        val (writeBytes, mime) = if (password != null) {
+            val encrypted = withContext(Dispatchers.IO) {
+                GpgHelper.encryptSymmetric(jsonBytes, password.toCharArray(), fileName)
+            } ?: return ConfigExportResult.ENCRYPT_FAILED
+            encrypted to "application/octet-stream"
+        } else {
+            jsonBytes to "application/json"
+        }
         val existing = findChildByName(context, targetUri, fileName)
         if (existing != null) return ConfigExportResult.FILE_EXISTS
         return if (createFileWithBytes(
@@ -234,9 +320,31 @@ class ConfigImportExportWorkflowState internal constructor(
                 targetUri,
                 targetUri,
                 fileName,
-                "application/json",
-                jsonBytes
+                mime,
+                writeBytes
             )) ConfigExportResult.SUCCESS else ConfigExportResult.FAILED
+    }
+}
+
+/**
+ * 规范化导出文件名：加密导出补齐 .json.gpg 后缀，明文导出补齐 .json。
+ */
+internal fun normalizeConfigExportFileName(input: String, encrypt: Boolean): String? {
+    val trimmed = input.trim()
+    if (trimmed.isBlank() || trimmed.contains('/') || trimmed.contains('\\')) return null
+    val hasJson = trimmed.endsWith(".json", ignoreCase = true)
+    val hasJsonGpg = trimmed.endsWith(".json.gpg", ignoreCase = true)
+    return when {
+        encrypt -> when {
+            hasJsonGpg -> trimmed
+            hasJson -> "$trimmed.gpg"
+            else -> "$trimmed.json.gpg"
+        }
+        else -> when {
+            hasJsonGpg -> trimmed.dropLast(".gpg".length)
+            hasJson -> trimmed
+            else -> "$trimmed.json"
+        }
     }
 }
 
@@ -411,12 +519,47 @@ fun ConfigImportExportDialogs(state: ConfigImportExportWorkflowState) {
             }
         )
     }
+    if (state.showImportPasswordDialog && state.pendingEncryptedBytes != null) {
+        AlertDialog(
+            onDismissRequest = { state.clearImportState() },
+            title = { Text(stringResource(R.string.config_import_password_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = stringResource(R.string.config_import_password_hint),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    ReliablePasswordInputField(
+                        value = state.importPassword,
+                        onValueChange = { state.importPassword = it },
+                        label = { Text(stringResource(R.string.config_import_password_field)) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    if (state.importPassword.isBlank()) {
+                        Toast.makeText(context, context.getString(R.string.config_import_password_required), Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    state.tryDecryptPendingImport(state.importPassword)
+                }) { Text(stringResource(R.string.common_continue)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { state.clearImportState() }) { Text(stringResource(R.string.common_cancel)) }
+            }
+        )
+    }
     if (state.showExportConfigDialog) {
         AlertDialog(
             onDismissRequest = { state.showExportConfigDialog = false },
             title = { Text(context.getString(R.string.config_export_dialog_title)) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
                     OutlinedTextField(
                         value = state.exportConfigFileName,
                         onValueChange = { state.exportConfigFileName = it },
@@ -454,11 +597,42 @@ fun ConfigImportExportDialogs(state: ConfigImportExportWorkflowState) {
                         Checkbox(checked = state.exportOtherCategory, onCheckedChange = { state.exportOtherCategory = it })
                         Text(context.getString(R.string.config_export_category_other))
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = state.exportEncrypt,
+                            onCheckedChange = {
+                                state.exportEncrypt = it
+                                if (!it) state.exportPassword = ""
+                            }
+                        )
+                        Text(context.getString(R.string.config_export_encrypt_toggle))
+                    }
+                    if (state.exportEncrypt) {
+                        ReliablePasswordInputField(
+                            value = state.exportPassword,
+                            onValueChange = { state.exportPassword = it },
+                            label = { Text(context.getString(R.string.config_export_password)) },
+                            modifier = Modifier.fillMaxWidth(),
+                            requireConfirmation = true,
+                            supportingText = {
+                                Text(
+                                    context.getString(R.string.config_export_password_hint),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontStyle = FontStyle.Italic
+                                )
+                            }
+                        )
+                    }
                 }
             },
             confirmButton = {
                 Button(onClick = {
-                    val normalizedFileName = state.normalizeExportFileName(state.exportConfigFileName)
+                    if (state.exportEncrypt && state.exportPassword.isBlank()) {
+                        Toast.makeText(context, context.getString(R.string.config_export_password_required), Toast.LENGTH_SHORT).show()
+                        return@Button
+                    }
+                    val normalizedFileName = normalizeConfigExportFileName(state.exportConfigFileName, state.exportEncrypt)
                     if (normalizedFileName == null) {
                         Toast.makeText(context, context.getString(R.string.config_export_invalid_file_name), Toast.LENGTH_SHORT).show()
                         return@Button
@@ -476,7 +650,11 @@ fun ConfigImportExportDialogs(state: ConfigImportExportWorkflowState) {
                         return@Button
                     }
                     state.showExportConfigDialog = false
-                    state.launchExport(normalizedFileName, categories)
+                    state.launchExport(
+                        normalizedFileName,
+                        categories,
+                        if (state.exportEncrypt) state.exportPassword else null
+                    )
                 }) {
                     Text(context.getString(R.string.config_export))
                 }

@@ -508,6 +508,17 @@
     <string name="family_network_target_peer">Current Peer</string>
     <string name="config_export_success">Configuration exported to the root directory.</string>
     <string name="config_export_failed">Export failed.</string>
+    <string name="config_export_encrypt_toggle">GPG symmetric encryption (produces .json.gpg, recommended)</string>
+    <string name="config_export_password">Encryption password</string>
+    <string name="config_export_password_hint">Exports as a .json.gpg file; this password is required when importing</string>
+    <string name="config_export_password_required">Enter an encryption password or uncheck encryption</string>
+    <string name="config_export_encrypt_failed">GPG encryption failed.</string>
+    <string name="config_import_password_title">Enter decryption password</string>
+    <string name="config_import_password_hint">This exported configuration is encrypted. Enter the password set during export.</string>
+    <string name="config_import_password_field">Password</string>
+    <string name="config_import_password_required">Enter the password.</string>
+    <string name="config_import_decrypt_failed">Decryption failed: wrong password or corrupt file.</string>
+    <string name="config_import_pubkey_failed">This export was encrypted with a public key; it could not be decrypted with the local secret key.</string>
     <string name="config_player_shortcut_requested">Requested creation of the player shortcut.</string>
     <string name="config_player_shortcut_failed">Failed to create the player shortcut: %1$s</string>
     <string name="config_quick_note_shortcut_requested">Requested creation of the notes shortcut.</string>

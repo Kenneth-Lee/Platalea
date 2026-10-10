@@ -353,6 +353,17 @@
     <string name="config_epub_tts_unset">未设置，将自动选择</string>
     <string name="config_export_success">配置已导出到根目录</string>
     <string name="config_export_failed">导出失败</string>
+    <string name="config_export_encrypt_toggle">GPG 对称加密（生成 .json.gpg，推荐）</string>
+    <string name="config_export_password">加密密码</string>
+    <string name="config_export_password_hint">导出为 .json.gpg 文件，导入时需输入此密码</string>
+    <string name="config_export_password_required">请输入加密密码，或取消勾选加密</string>
+    <string name="config_export_encrypt_failed">GPG 加密失败</string>
+    <string name="config_import_password_title">输入解密密码</string>
+    <string name="config_import_password_hint">该配置导出文件已加密，请输入导出时设置的密码</string>
+    <string name="config_import_password_field">密码</string>
+    <string name="config_import_password_required">请输入密码</string>
+    <string name="config_import_decrypt_failed">解密失败：密码错误或文件损坏</string>
+    <string name="config_import_pubkey_failed">公钥加密的配置文件需用对应私钥解密，本机未能解密</string>
     <string name="config_player_shortcut_requested">已请求创建播放器快捷方式</string>
     <string name="config_player_shortcut_failed">播放器快捷方式创建失败：%1$s</string>
     <string name="config_quick_note_shortcut_requested">已请求创建速记快捷方式</string>
