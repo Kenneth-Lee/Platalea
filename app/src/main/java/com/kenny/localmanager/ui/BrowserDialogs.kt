@@ -340,7 +340,7 @@ internal fun OverwriteSaveConfirmDialog(
         title = { Text(stringResource(R.string.browser_file_exists_title)) },
         text = { Text(stringResource(R.string.browser_file_exists_overwrite, fileName)) },
         confirmButton = {
-            Button(onClick = onOverwrite) { Text(stringResource(R.string.file_share_overwrite_action)) }
+            Button(onClick = onOverwrite) { Text(stringResource(R.string.browser_overwrite)) }
         },
         dismissButton = {
             TextButton(onClick = onSkip) { Text(stringResource(R.string.browser_do_not_overwrite)) }

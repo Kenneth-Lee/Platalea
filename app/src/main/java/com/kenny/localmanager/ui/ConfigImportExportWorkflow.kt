@@ -482,7 +482,7 @@ fun ConfigImportExportDialogs(state: ConfigImportExportWorkflowState) {
                         state.showImportPlaylistConfirmDialog = false
                         state.pendingImportPlaylistMode = ConfigPlaylistImportMode.OVERWRITE
                         state.continueImportAfterPlaylistChoice()
-                    }) { Text(stringResource(R.string.file_share_overwrite_action)) }
+                    }) { Text(stringResource(R.string.browser_overwrite)) }
                     TextButton(onClick = { state.clearImportState() }) { Text(stringResource(R.string.common_cancel)) }
                 }
             }

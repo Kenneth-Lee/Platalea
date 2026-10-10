@@ -599,7 +599,6 @@ internal class BrowserTabHostDependencies(
     val onChangeRoot: () -> Unit,
     val onShowFileDetail: (DocumentFileModel) -> Unit,
     val onQuickMask: (DocumentFileModel) -> Unit,
-    val onShareToGit: (DocumentFileModel) -> Unit,
     val onForwardToBulletin: (BulletinForwardPayload) -> Unit,
     val onOpenQuickNote: () -> Unit,
     val requestOpenPlayerTab: () -> Unit,
@@ -636,7 +635,6 @@ internal fun BrowserTabHost(
     val onChangeRoot = deps.onChangeRoot
     val onShowFileDetail = deps.onShowFileDetail
     val onQuickMask = deps.onQuickMask
-    val onShareToGit = deps.onShareToGit
     val onForwardToBulletin = deps.onForwardToBulletin
     val onOpenQuickNote = deps.onOpenQuickNote
     val requestOpenPlayerTab = deps.requestOpenPlayerTab
@@ -1070,9 +1068,6 @@ internal fun BrowserTabHost(
                                             refresh()
                                         }
                                     }
-                                },
-                                onShareFileToGit = { model ->
-                                    onShareToGit(model)
                                 },
                                 onForwardToBulletin = { items ->
                                     if (items.isEmpty()) return@BrowserTabRouteState

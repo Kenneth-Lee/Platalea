@@ -1040,7 +1040,6 @@ internal fun BrowserScreen(
     onChangeRoot: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
-    onShareFileToGit: ((DocumentFileModel) -> Unit)? = null,
     onForwardToBulletin: ((List<DocumentFileModel>) -> Unit)? = null,
     onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
     onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
@@ -1993,15 +1992,6 @@ internal fun BrowserScreen(
                             contextMenuTarget = null
                         }
                     ) { Text(context.getString(R.string.context_compress_archive), color = MaterialTheme.colorScheme.onSurface) }
-                    if (!menuTarget.isDirectory && onShareFileToGit != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onShareFileToGit.invoke(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_share_to_git), color = MaterialTheme.colorScheme.onSurface) }
-                    }
                     if (onForwardToBulletin != null) {
                         TextButton(
                             onClick = {

@@ -21,10 +21,6 @@ enum class DirectoryPickPurpose(
         titleRes = R.string.directory_pick_purpose_generic,
         confirmLabelRes = R.string.directory_pick_confirm_generic
     ),
-    GIT_SHARE(
-        titleRes = R.string.directory_pick_purpose_git_share,
-        confirmLabelRes = R.string.directory_pick_confirm_generic
-    ),
     GENERIC(
         titleRes = R.string.directory_pick_purpose_generic,
         confirmLabelRes = R.string.directory_pick_confirm_generic
@@ -58,11 +54,6 @@ fun DirectoryPickPurpose.defaultPolicy(): DirectoryPickPolicy = when (this) {
         multiSelect = false,
         maxItems = 1,
         allowedExtensions = setOf("boardpack")
-    )
-    DirectoryPickPurpose.GIT_SHARE -> DirectoryPickPolicy(
-        allowFiles = true,
-        allowDirectories = false,
-        multiSelect = true
     )
     DirectoryPickPurpose.GENERIC -> DirectoryPickPolicy()
 }

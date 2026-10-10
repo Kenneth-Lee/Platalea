@@ -155,7 +155,6 @@ internal enum class MainTab(
     LOCAL_SHARE("local_share", R.string.main_tab_local_share, TabExitRestorePolicy.TRANSIENT),
     FAMILY_NETWORK("family_network", R.string.main_tab_family_network, TabExitRestorePolicy.TRANSIENT),
     CONFIG("config", R.string.main_tab_config),
-    GIT_SHARE("git_share", R.string.main_tab_git_share),
     GIT_PROJECTS("git_projects", R.string.main_tab_git_projects),
     BOOK_NOTE("book_note", R.string.main_tab_book_note),
     QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
@@ -184,7 +183,6 @@ private fun mainTabIcon(tab: MainTab): ImageVector {
         MainTab.LOCAL_SHARE -> Icons.Default.Devices
         MainTab.FAMILY_NETWORK -> Icons.Default.Home
         MainTab.CONFIG -> Icons.Default.Settings
-        MainTab.GIT_SHARE -> Icons.Default.Share
         MainTab.GIT_PROJECTS -> Icons.Default.FolderOpen
         MainTab.BOOK_NOTE -> Icons.AutoMirrored.Filled.Article
         MainTab.QUICK_NOTE -> Icons.Default.Edit
@@ -231,7 +229,6 @@ private fun ScrollableMainTabBar(
         MainTab.FTP,
         MainTab.LOCAL_SHARE,
         MainTab.FAMILY_NETWORK,
-        MainTab.GIT_SHARE,
         MainTab.ABOUT
     )
     var candidateUsageOrder by remember { mutableStateOf(candidateTabs) }
@@ -392,8 +389,6 @@ fun PlataleaApp(
     // Browser 域工作流：根目录切换（最近根/换根确认）与外源保存（覆盖确认）
     val rootSwitch = rememberRootSwitchWorkflow(context, browserTab)
     val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
-    // Git 域分享工作流（分享到 Git 仓库：确认→同步→复制→推送）
-    val gitShare = rememberGitShareWorkflow(context, config.git)
     // Crypto 域快速遮罩工作流（单文件/批量）
     val quickObfuscate = rememberQuickObfuscateWorkflow(context)
     // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
@@ -760,7 +755,6 @@ fun PlataleaApp(
             onChangeRoot = rootSwitch::open,
             onShowFileDetail = { showFileDetail = it },
             onQuickMask = quickObfuscate::requestQuick,
-            onShareToGit = gitShare::request,
             onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
             onBatchMask = quickObfuscate::requestBatch,
             onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
@@ -826,18 +820,6 @@ fun PlataleaApp(
             networkServices.webUi,
             networkServices.family,
             configTab,
-            mainTabFeature(
-                MainTab.GIT_SHARE,
-                {
-                        GitShareTabRoute(
-                            GitShareTabRouteState(
-                                config = config.git,
-                                rootUri = browserTab.rootUri,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        )
-                    }
-            ),
             mainTabFeature(
                 MainTab.GIT_PROJECTS,
                 {
@@ -906,8 +888,6 @@ fun PlataleaApp(
                 onLaunchPicker = { treeLauncher.launch(null) }
             )
         }
-        // 共享文件到 Git
-        GitShareDialogs(workflow = gitShare, rootUri = browserTab.rootUri)
         QuickObfuscateDialogs(
             workflow = quickObfuscate,
             runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
