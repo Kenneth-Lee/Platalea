@@ -267,7 +267,7 @@ private fun writeBackWithReplace(context: Context, targetUri: Uri, treeUri: Uri?
             }
         }
         if (tempUri != null) {
-            cr.openOutputStream(tempUri, "w")?.use { out ->
+            cr.openOutputStream(tempUri, "rwt")?.use { out ->
                 FileInputStream(newZipFile).use { inp -> copyStreamCounting(inp, out, { false }, onBytes) }
             } ?: return null
             if (doc != null && !doc.delete()) {
@@ -313,7 +313,9 @@ private fun findParentDocument(context: Context, targetUri: Uri, treeUri: Uri?):
 }
 
 private fun overwriteTarget(context: Context, targetUri: Uri, newZipFile: File, onBytes: (Long) -> Unit = {}): Uri? =
-    context.contentResolver.openOutputStream(targetUri, "w")?.use { out ->
+    // rwt：强制截断。部分 ROM 的 DocumentsProvider 对 "w" 不截断，
+    // 新内容短于旧文件时会残留旧尾部，留下损坏的 zip。
+    context.contentResolver.openOutputStream(targetUri, "rwt")?.use { out ->
         FileInputStream(newZipFile).use { inp -> copyStreamCounting(inp, out, { false }, onBytes) }
         targetUri
     }
@@ -353,10 +355,23 @@ private fun copyUriToLocal(context: Context, uri: Uri, localDir: File, treeUri: 
 
 /** 列出目标 zip 全部条目；目标不可读/非 zip 返回 null */
 fun listZipEntries(context: Context, zipUri: Uri, treeUri: Uri?): List<ZipEntryInfo>? {
+    // 快路径：fd 读尾部目录，零复制、与大包大小无关；失败回退全量复制 + zip4j
+    val resolved = resolveDocUriWithTree(zipUri, treeUri)
+    readZipCentralDirectoryFromUri(context, resolved)?.let { cd ->
+        return cd.map {
+            ZipEntryInfo(
+                name = it.name,
+                size = it.uncompressedSize,
+                compressedSize = it.compressedSize,
+                lastModifiedTime = it.lastModifiedTime,
+                isDirectory = it.isDirectory,
+                isEncrypted = it.isEncrypted
+            )
+        }
+    }
     val cacheDir = buildEditCacheDir(context)
     return try {
         val localZip = File(cacheDir, "target.zip")
-        val resolved = resolveDocUriWithTree(zipUri, treeUri)
         context.contentResolver.openInputStream(resolved)?.use { input ->
             localZip.outputStream().use { output -> input.copyTo(output) }
         } ?: return null

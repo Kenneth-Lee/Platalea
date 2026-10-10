@@ -1598,6 +1598,11 @@ fun isZipEncrypted(context: Context, zipUri: Uri): Boolean {
 
 /** 检测归档（zip/rar）是否加密。 */
 fun isArchiveEncrypted(context: Context, archiveUri: Uri, archiveName: String? = null): Boolean {
+    // 快路径：fd 可 seek 时仅读尾部 central directory 判断加密（零复制、与大包大小无关）。
+    // 解析失败（非 zip / 不可 seek / 损坏）回退旧的全量复制路径。
+    readZipCentralDirectoryFromUri(context, archiveUri)?.let { cd ->
+        return cd.any { it.isEncrypted }
+    }
     val cache = File(context.cacheDir, "zip_check_${System.currentTimeMillis()}.zip")
     return try {
         context.contentResolver.openInputStream(archiveUri)?.use { input ->
@@ -1670,6 +1675,38 @@ fun getZipFirstLevelEntries(context: Context, zipUri: Uri, password: CharArray?)
     return getArchiveFirstLevelEntries(context, zipUri, null, password)
 }
 
+/** 由条目名列表聚合第一层清单（含单根目录展开语义）。 */
+internal fun buildZipFirstLevel(names: List<String>): ZipFirstLevelResult {
+    val firstLevel = mutableSetOf<String>()
+    val firstLevelDirs = mutableSetOf<String>()
+    for (path in names) {
+        val top = path.substringBefore("/").ifEmpty { path }
+        if (top.isNotEmpty()) {
+            firstLevel.add(top)
+            if (path.startsWith("$top/")) firstLevelDirs.add(top)
+        }
+    }
+    if (firstLevel.size == 1) {
+        val rootName = firstLevel.single()
+        val prefix = "$rootName/"
+        val hasChildrenUnderRoot = names.any { it.startsWith(prefix) }
+        if (hasChildrenUnderRoot) {
+            val childToDir = mutableMapOf<String, Boolean>()
+            for (path in names) {
+                if (!path.startsWith(prefix)) continue
+                val rest = path.removePrefix(prefix)
+                val childName = rest.substringBefore("/")
+                if (childName.isEmpty()) continue
+                val isDir = rest == "$childName/" || rest.startsWith("$childName/")
+                childToDir[childName] = childToDir[childName] == true || isDir
+            }
+            val children = childToDir.entries.sortedBy { it.key }.map { (name, isDir) -> if (isDir) "$name/" else name }
+            return ZipFirstLevelResult.OkSingleDir(rootName, children)
+        }
+    }
+    return ZipFirstLevelResult.Ok(firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it })
+}
+
 /** 读取归档第一层内容（zip/rar/7z）。 */
 fun getArchiveFirstLevelEntries(
     context: Context,
@@ -1677,6 +1714,12 @@ fun getArchiveFirstLevelEntries(
     archiveName: String?,
     password: CharArray?
 ): ZipFirstLevelResult {
+    // 快路径：fd 读尾部目录解析 zip 第一层（零复制、与大包大小无关）。
+    // zip 的条目名在 central directory 中为明文，无需密码即可列出（与 ZIP 编辑页一致）；
+    // rar/7z（含头加密）解析不到 EOCD 会返回 null，自然落入下方旧路径。
+    readZipCentralDirectoryFromUri(context, archiveUri)?.let { cd ->
+        return buildZipFirstLevel(cd.map { it.name })
+    }
     val cache = File(context.cacheDir, "zip_list_${System.currentTimeMillis()}.zip")
     return try {
         context.contentResolver.openInputStream(archiveUri)?.use { input ->
@@ -1692,40 +1735,11 @@ fun getArchiveFirstLevelEntries(
             return getTarFirstLevelEntries(cache, archiveName)
         }
         val zip = ZipFile(cache)
-        if (zip.isEncrypted) {
-            if (password == null || password.isEmpty()) return ZipFirstLevelResult.Encrypted
+        if (zip.isEncrypted && password != null && password.isNotEmpty()) {
             zip.setPassword(password)
         }
-        val firstLevel = mutableSetOf<String>()
-        val firstLevelDirs = mutableSetOf<String>()
-        for (header in zip.fileHeaders) {
-            val path = header.fileName
-            val top = path.substringBefore("/").ifEmpty { path }
-            if (top.isNotEmpty()) {
-                firstLevel.add(top)
-                if (path.startsWith("$top/")) firstLevelDirs.add(top)
-            }
-        }
-        val sortedFirst = firstLevel.sorted().map { if (it in firstLevelDirs) "$it/" else it }
-        if (firstLevel.size == 1) {
-            val rootName = firstLevel.single()
-            val prefix = "$rootName/"
-            val hasChildrenUnderRoot = zip.fileHeaders.any { it.fileName.startsWith(prefix) }
-            if (hasChildrenUnderRoot) {
-                val childToDir = mutableMapOf<String, Boolean>()
-                for (header in zip.fileHeaders) {
-                    if (!header.fileName.startsWith(prefix)) continue
-                    val rest = header.fileName.removePrefix(prefix)
-                    val childName = rest.substringBefore("/")
-                    if (childName.isEmpty()) continue
-                    val isDir = rest == "$childName/" || rest.startsWith("$childName/")
-                    childToDir[childName] = childToDir[childName] == true || isDir
-                }
-                val children = childToDir.entries.sortedBy { it.key }.map { (name, isDir) -> if (isDir) "$name/" else name }
-                return ZipFirstLevelResult.OkSingleDir(rootName, children)
-            }
-        }
-        ZipFirstLevelResult.Ok(sortedFirst)
+        // 回退路径也不拦截加密：fileHeaders 读的是明文目录，免密可列
+        return buildZipFirstLevel(zip.fileHeaders.map { it.fileName })
     } catch (_: Exception) {
         ZipFirstLevelResult.Error
     } finally {
@@ -2648,12 +2662,59 @@ fun getVidZipCacheDir(context: Context, zipUri: Uri): File {
     return File(context.cacheDir, "vid_zip_cache/$key")
 }
 
+/** 后台复制整包缓存（.vid.zip / .pic.zip 的 __archive.zip），避免阻塞目录列表展示。 */
+private val archiveCacheCopyExecutor = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+    Thread(r, "archive-cache-copy").apply { isDaemon = true }
+}
+
+/**
+ * 后台把整包复制到缓存目录的 __archive.zip（供后续 zip4j 按需解压）。
+ * 先写 .part 再 rename，半成品不会被读到；失败静默（播放时会有同步回退）。
+ */
+private fun startArchiveCacheCopyAsync(context: Context, zipUri: Uri, cacheDir: File) {
+    archiveCacheCopyExecutor.execute {
+        try {
+            val target = File(cacheDir, "__archive.zip")
+            if (target.exists()) return@execute
+            val part = File(cacheDir, "__archive.zip.part")
+            context.contentResolver.openInputStream(zipUri)?.use { input ->
+                part.outputStream().use { input.copyTo(it) }
+            } ?: return@execute
+            if (!part.renameTo(target)) part.delete()
+        } catch (_: Exception) {
+            // 半成品/失败：保留旧状态，播放路径会同步回退复制
+        }
+    }
+}
+
 fun readVidZipVideoPaths(
     context: Context,
     zipUri: Uri,
     password: CharArray?,
     zipFileName: String
 ): List<String>? {
+    // 快路径（非加密）：fd 读尾部目录瞬时出列表，整包缓存转后台复制。
+    if (password == null || password.isEmpty()) {
+        val cd = readZipCentralDirectoryFromUri(context, zipUri)
+        if (cd != null && cd.none { it.isEncrypted }) {
+            val paths = cd.asSequence()
+                .filter { !it.isDirectory }
+                .map { it.name }
+                .filter(::isVideoArchiveEntry)
+                .sorted()
+                .toList()
+            if (paths.isNotEmpty()) {
+                val cacheDir = getVidZipCacheDir(context, zipUri)
+                cacheDir.mkdirs()
+                File(cacheDir, "content").mkdirs()
+                File(cacheDir, ".video_list").writeText(paths.joinToString("\n"))
+                File(cacheDir, ".cache_ts").writeText(System.currentTimeMillis().toString())
+                File(cacheDir, ".encrypted").delete()
+                startArchiveCacheCopyAsync(context, zipUri, cacheDir)
+            }
+            return paths
+        }
+    }
     val cacheDir = getVidZipCacheDir(context, zipUri)
     cacheDir.mkdirs()
     val archiveFile = File(cacheDir, "__archive.zip")
@@ -2709,13 +2770,17 @@ fun getVidZipEntrySize(context: Context, zipUri: Uri, entryPath: String, passwor
     val cacheDir = getVidZipCacheDir(context, zipUri)
     val archiveFile = File(cacheDir, "__archive.zip")
     val zipFile = if (archiveFile.exists()) archiveFile else {
-        val tmp = File(context.cacheDir, "vid_zip_size_${System.currentTimeMillis()}.zip")
+        // 同步回退（后台缓存复制未完成时触发）：复制后落盘缓存，下次直接复用
+        val part = File(cacheDir, "__archive.zip.part")
         try {
+            cacheDir.mkdirs()
             context.contentResolver.openInputStream(zipUri)?.use { input ->
-                tmp.outputStream().use { output -> input.copyTo(output) }
+                part.outputStream().use { output -> input.copyTo(output) }
             }
-            if (tmp.exists()) tmp else null
+            if (part.exists() && !part.renameTo(archiveFile)) part.delete()
+            if (archiveFile.exists()) archiveFile else null
         } catch (_: Exception) {
+            part.delete()
             null
         }
     }
@@ -2730,10 +2795,6 @@ fun getVidZipEntrySize(context: Context, zipUri: Uri, entryPath: String, passwor
         header.uncompressedSize
     } catch (_: Exception) {
         0L
-    } finally {
-        if (zipFile.parentFile == context.cacheDir && zipFile.name.startsWith("vid_zip_size_")) {
-            zipFile.delete()
-        }
     }
 }
 

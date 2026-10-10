@@ -2042,10 +2042,7 @@ internal fun BrowserScreen(
                             }
                         ) { Text(context.getString(R.string.zip_edit_menu_add_to_target), color = MaterialTheme.colorScheme.onSurface) }
                     }
-                    if (!menuTarget.isDirectory && menuTarget.name.endsWith(".zip", ignoreCase = true) &&
-                        !isCompressedMarkdown(menuTarget.name) && !isCompressedHtml(menuTarget.name) &&
-                        !isCompressedLlmZip(menuTarget.name) && !isPicZip(menuTarget.name) && !isVidZip(menuTarget.name)
-                    ) {
+                    if (!menuTarget.isDirectory && menuTarget.name.endsWith(".zip", ignoreCase = true)) {
                         TextButton(
                             onClick = {
                                 showContextMenu = false
@@ -2449,7 +2446,8 @@ internal fun BrowserScreen(
         var detailRenameValue by remember(detailTarget.uri) { mutableStateOf(detailTarget.name) }
         var detailMeta by remember(detailTarget.uri) { mutableStateOf<Map<String, String>>(emptyMap()) }
         val detailRenameFocus = remember { FocusRequester() }
-        val isArchiveFile = isExtractableArchive(detailTarget.name)
+        // 详情面板的“压缩包内容”区覆盖所有 zip（含 pic/vid 阅读器形态）；其余压缩格式同解压判定
+        val isArchiveFile = isExtractableArchive(detailTarget.name) || isPicZip(detailTarget.name) || isVidZip(detailTarget.name)
         var zipDetailResult by remember(detailTarget.uri) { mutableStateOf<ZipFirstLevelResult?>(null) }
         var zipDetailPassword by remember(detailTarget.uri) { mutableStateOf("") }
         var zipDetailShowPasswordInput by remember(detailTarget.uri) { mutableStateOf(false) }
