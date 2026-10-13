@@ -61,11 +61,6 @@ internal sealed interface TransientRoute {
     /** 工作流型：Crypto 域 .pass 保护内容编辑全屏。 */
     data class PassEditor(val workflow: CryptoWorkflowState) : TransientRoute
 
-    /**
-     * 操作型：批量操作执行页（E2 样板）——决策对话框确认后全屏接管，
-     * 逐项执行展示，结束停留结果页。宿主槽 operationRun 持有状态。
-     */
-    data class Operation(val run: OperationRunState) : TransientRoute
 }
 
 /** HTML 查看器路由参数。 */
@@ -199,9 +194,6 @@ internal fun TransientViewerRouteHost(
             } else {
                 route.workflow.RequestPhaseDialogs()
             }
-        }
-        is TransientRoute.Operation -> {
-            OperationScreen(state = route.run)
         }
         is TransientRoute.PassViewer -> {
             // E1：request 态（密码框）也在本 Route 内渲染；判空防御重组间隙

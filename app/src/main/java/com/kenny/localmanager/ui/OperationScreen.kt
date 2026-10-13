@@ -32,20 +32,22 @@ import com.kenny.localmanager.R
 //
 // 用户模型的"执行段"：决策对话框确认后，本页全屏接管，逐项展示执行状态；
 // 结束（完成 / 取消 / 全部失败）停留展示结果，关闭后退回前一页面。
-// 状态由宿主持有（operationRun 槽），经 TransientRoute.Operation 渲染。
+// 状态由宿主创建，以功能页形态入导航栈（NavigationState.push）。
 // ============================================================================
 
 /** 单项执行状态。 */
 internal enum class OperationItemStatus { PENDING, RUNNING, OK, FAILED }
 
-/** 执行页状态：宿主创建，协程编排与 UI 共享读写。 */
+/**
+ * 执行页状态：宿主创建，协程编排与 UI 共享读写。
+ *
+ * [onClose] 由宿主在入栈时接线（pop 导航栈），页面关闭按钮与返回键触发。
+ */
 internal class OperationRunState(
     /** 操作标题（如"加密"、"解密"）。 */
     val label: String,
     /** 逐项展示名（与执行列表一一对应）。 */
-    names: List<String>,
-    /** 关闭本页（置空宿主槽）。 */
-    val onClose: () -> Unit
+    names: List<String>
 ) {
     internal class Item(val name: String) {
         var status by mutableStateOf(OperationItemStatus.PENDING)
@@ -62,6 +64,9 @@ internal class OperationRunState(
 
     /** 执行协程结束（正常完成或取消后收尾完毕）。 */
     var finished by mutableStateOf(false)
+
+    /** 关闭本页：宿主入栈时接线（pop 导航栈）。 */
+    var onClose: () -> Unit = {}
 
     val total: Int get() = items.size
     val doneCount: Int get() = items.count { it.status == OperationItemStatus.OK || it.status == OperationItemStatus.FAILED }

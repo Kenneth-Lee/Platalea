@@ -398,7 +398,6 @@ fun PlataleaApp(
     val crypto = rememberCryptoWorkflow()
 
     // AppShell navigation + shared UI surfaces
-    var currentMainTab by remember { mutableStateOf<MainTab?>(null) }
     var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
@@ -454,11 +453,12 @@ fun PlataleaApp(
         }
     }
 
+    // 导航服务（《主界面判断归位设计》P1）：主界面全部的显示状态——
+    // tab 层（currentTab）+ 功能页栈；tab 持久化决策经回调交宿主
+    val nav = rememberNavigationState(onTabSwitched = ::persistTabChoice)
+
     fun switchMainTab(tab: MainTab) {
-        if (currentMainTab == tab) return
-        val previousTab = currentMainTab
-        currentMainTab = tab
-        persistTabChoice(tab, previousTab)
+        nav.switchTab(tab)
     }
 
     fun requestOpenMainTab(tab: MainTab) {
@@ -485,7 +485,7 @@ fun PlataleaApp(
         } else {
             savedTab
         }
-        currentMainTab = restoreTab
+        nav.restore(restoreTab)
     }
 
     fun recordRecentOpen(
@@ -513,15 +513,13 @@ fun PlataleaApp(
     // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
     val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
 
-    // 批量操作执行页槽（E2 样板）：决策确认后由 startBatchOperation 置位，
-    // 全屏逐项执行展示；关闭（用户点关闭）置空退回前一页面
-    var operationRun by remember { mutableStateOf<OperationRunState?>(null) }
-
+    // 批量操作执行页（E2 样板）已入导航栈：以功能页 push/pop，
+    // 栈顶即当前执行页，关闭经 OperationRunState.onClose pop。
     /**
-     * 批量操作执行页编排（E2）：创建执行状态并全屏接管，协程内逐项执行
-     * （状态翻转 / 取消检查由 OperationRunState.runEach 封装），结束后停留
-     * 结果页；收尾动作（清待处理列表 / 刷新等）在执行结束时立即执行，
-     * 用户随后点关闭退回主界面。
+     * 批量操作执行页编排（E2）：创建执行状态并以功能页入导航栈，协程内逐项
+     * 执行（状态翻转 / 取消检查由 OperationRunState.runEach 封装），结束后
+     * 停留结果页；收尾动作（清待处理列表 / 刷新等）在执行结束时立即执行，
+     * 用户随后点关闭退回主界面（pop 导航栈）。
      */
     fun startBatchOperation(
         label: String,
@@ -529,8 +527,11 @@ fun PlataleaApp(
         onFinished: (OperationRunState) -> Unit = {},
         block: suspend (OperationRunState) -> Unit
     ) {
-        val state = OperationRunState(label, names) { operationRun = null }
-        operationRun = state
+        val state = OperationRunState(label, names)
+        lateinit var page: AppPage
+        state.onClose = { nav.pop(page) }
+        page = appPage { OperationScreen(state = state) }
+        nav.push(page)
         scope.launch {
             try {
                 block(state)
@@ -543,9 +544,9 @@ fun PlataleaApp(
 
     // 独立全屏 Route 聚合槽（批次 D）：即时型槽 + 各工作流终态聚合为单一
     // activeRoute，顶层 when 与 Host 均不感知具体功能种类。优先级：即时型
-    // 查看器最先（最新打开覆盖阅读器），工作流终态次之。
+    // 查看器最先（最新打开覆盖阅读器），工作流终态次之。执行页在导航栈中，
+    // 全屏接管期间不可能同时打开查看器，两层互斥。
     val activeRoute: TransientRoute? = transientRoute
-        ?: operationRun?.let { TransientRoute.Operation(it) }
         ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
         ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
         ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
@@ -557,12 +558,12 @@ fun PlataleaApp(
     val quickNoteTab = quickNoteTabFeature(
         config = config.quickNote,
         rootUri = browserTab.rootUri,
-        isActive = currentMainTab == MainTab.QUICK_NOTE,
+        isActive = nav.currentTab == MainTab.QUICK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
     val bookNoteTab = bookNoteTabFeature(
         rootUri = browserTab.rootUri,
-        isActive = currentMainTab == MainTab.BOOK_NOTE,
+        isActive = nav.currentTab == MainTab.BOOK_NOTE,
         markdownViewerSessionCache = markdownViewerSessionCache
     )
 
@@ -593,7 +594,7 @@ fun PlataleaApp(
     @Composable
     fun MainTabsRootContent() {
         val displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!
-        val activeMainTab = currentMainTab ?: MainTab.DIRECTORY
+        val activeMainTab = nav.currentTab ?: MainTab.DIRECTORY
 
         fun requestOpenQuickNoteTabFromDirectory() {
             requestOpenMainTab(MainTab.QUICK_NOTE)
@@ -643,7 +644,7 @@ fun PlataleaApp(
             context = context,
             config = config.network,
             readerConfig = config.reader,
-            activeMainTab = currentMainTab ?: MainTab.DIRECTORY,
+            activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
             rootUri = browserTab.rootUri,
             displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!,
             familyRootUri = browserTab.rootUri ?: initialDirUri,
@@ -1048,6 +1049,11 @@ fun PlataleaApp(
                     }
                 }
             }
+        }
+        // 功能页（导航栈栈顶，如批量执行页）：整页自绘，返回键页内自理。
+        // 全屏接管期间不可能同时打开查看器，与 activeRoute 两层互斥
+        nav.top != null -> {
+            nav.top?.let { it.content() }
         }
         activeRoute != null -> {
             // 独立全屏 Route 单槽（批次 D）：即时型 + 工作流型统一在此渲染，
