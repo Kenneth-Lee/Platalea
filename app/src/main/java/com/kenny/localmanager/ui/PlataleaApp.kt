@@ -10,6 +10,7 @@ import android.util.Base64
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -68,6 +69,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
@@ -110,6 +112,7 @@ import org.jaudiotagger.tag.FieldKey
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.collect
@@ -567,6 +570,57 @@ fun PlataleaApp(
         markdownViewerSessionCache = markdownViewerSessionCache
     )
 
+    // Archive 操作向导域（P2 上移主函数：向导功能页需要在此组装）
+    val archiveOps = rememberArchiveOperationWorkflow(context, scope)
+
+    // ---- 退出协商（原 MainTabsRootContent 局部函数上移，tab 层与功能页共用）----
+    var lastBackPressTime by remember { mutableStateOf(0L) }
+    fun finishCurrentActivity() {
+        (context as? Activity)?.finish()
+    }
+
+    fun requestExitApp() {
+        if ((nav.currentTab ?: MainTab.DIRECTORY) == MainTab.QUICK_NOTE) {
+            quickNoteTab.requestExitApp(context) { finishCurrentActivity() }
+            return
+        }
+        if (bypassExitDoubleConfirm) {
+            finishCurrentActivity()
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBackPressTime < 2000) finishCurrentActivity()
+            else {
+                lastBackPressTime = now
+                Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // ---- 宿主操作进度（P2 上移主函数：进度对话框在全局层挂载，任何显示阶段可见）----
+    val progressOpState = remember { mutableStateOf<OperationProgress?>(null) }
+    var progressOp by progressOpState
+    val progressCancelActionState = remember { mutableStateOf<(() -> Unit)?>(null) }
+    var progressCancelAction by progressCancelActionState
+
+    suspend fun runWithProgress(
+        label: String,
+        total: Int? = null,
+        block: suspend ((Int) -> Unit) -> Unit
+    ) {
+        progressCancelAction = null
+        try {
+            runWithUiProgress(
+                setProgressState = { progressOp = it },
+                label = label,
+                total = total,
+                block = block
+            )
+        } finally {
+            progressCancelAction = null
+        }
+    }
+
+
     // Config 域：配置导入 / 导出工作流（独立状态持有者，写盘后通过回调刷新目录）
 
     val treeLauncher = rememberLauncherForActivityResult(
@@ -591,6 +645,108 @@ fun PlataleaApp(
         }
     }
 
+    // 网络服务域（FTP / WebUI / 家庭网络）（P2 上移主函数：公告转发页需要组装；
+    // 服务生命周期 effect 常驻执行，不再随 MainTabsRootContent 阶段性重组）
+    val networkServices = networkServicesTabs(
+        context = context,
+        config = config.network,
+        readerConfig = config.reader,
+        activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
+        rootUri = browserTab.rootUri,
+        displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri ?: "",
+        familyRootUri = browserTab.rootUri ?: initialDirUri,
+        hideDotFiles = browserTab.hideDotFiles,
+        onRequestExitApp = { requestExitApp() }
+    )
+
+    // 公告转发中转状态（P2 上移主函数：原 MainTabsRootContent 局部状态，
+    // 置位经 browser 菜单 onForwardToBulletin，由 bulletinPage 绑定显示）
+    var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
+
+    // ---- P2 跨域向导功能页：DialogPageBinder 把域状态绑定到页面栈 ----
+    // （置位入栈 / 清空出栈；向导对话框在页面内组合，组件本体留在域文件）
+    val quickMaskPage = remember {
+        quickObfuscateDialogPage(
+            workflow = quickObfuscate,
+            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
+            onQuickFinished = { browserTab.refresh() },
+            onBatchFinished = {
+                browserTab.finishPendingList()
+                browserTab.refresh()
+            }
+        )
+    }
+    val cryptoPage = remember {
+        cryptoDialogPage(
+            workflow = crypto,
+            scope = scope,
+            rootUriProvider = { browserTab.rootUri },
+            currentDirUriProvider = { browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!! },
+            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
+            onRefresh = { browserTab.refresh() },
+            onBatchFinished = { browserTab.finishPendingList() }
+        )
+    }
+    val archiveOpsPage = remember {
+        archiveOpsDialogPage(
+            context = context,
+            scope = scope,
+            workflow = archiveOps,
+            browserTab = browserTab,
+            displayUriProvider = { browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!! },
+            progressOpState = progressOpState,
+            progressCancelActionState = progressCancelActionState,
+            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
+        )
+    }
+    val rootSwitchPage = remember {
+        rootSwitchDialogPage(
+            workflow = rootSwitch,
+            browserTab = browserTab,
+            recentRootUrisProvider = { recentRootUris },
+            initialDirUriSink = { initialDirUri = it },
+            treeLauncher = treeLauncher,
+            scope = scope,
+            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+            context = context
+        )
+    }
+    val bulletinPage = remember {
+        bulletinForwardDialogPage(
+            payloadProvider = { bulletinForwardPayload },
+            networkServices = networkServices,
+            onDismiss = { bulletinForwardPayload = null },
+            onComplete = {
+                browserTab.finishPendingList()
+                bulletinForwardPayload = null
+            },
+            onBack = { requestExitApp() }
+        )
+    }
+    val overwritePage = remember {
+        overwriteConfirmDialogPage(
+            browserSave = browserSave,
+            onOverwriteSaved = { dir ->
+                initialDirUri = dir
+                browserTab.navigateTo(dir)
+                saveCompletedToken++
+            },
+            onSkipped = { dir -> initialDirUri = dir },
+            onBack = { requestExitApp() }
+        )
+    }
+    // PassView / PassEdit 走全屏查看器（activeRoute 聚合），不经对话框页
+    DialogPageBinder(nav, quickMaskPage) { quickObfuscate.batchTarget != null || quickObfuscate.quickTarget != null }
+    DialogPageBinder(nav, cryptoPage) {
+        val r = crypto.request
+        r != null && r !is CryptoRequest.PassView && r !is CryptoRequest.PassEdit
+    }
+    DialogPageBinder(nav, archiveOpsPage) { archiveOps.request != null }
+    DialogPageBinder(nav, rootSwitchPage) { rootSwitch.showRootSwitchDialog || rootSwitch.showChangeRootConfirm }
+    DialogPageBinder(nav, bulletinPage) { bulletinForwardPayload != null }
+    DialogPageBinder(nav, overwritePage) { browserSave.overwriteConfirm != null }
+
     @Composable
     fun MainTabsRootContent() {
         val displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!
@@ -601,56 +757,16 @@ fun PlataleaApp(
             quickNoteTab.requestOpenWithCachedPassword()
         }
 
-        var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
 
         // App-level transient dialogs / playback-target workflow
         LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) browserTab.refresh() }
-        var lastBackPressTime by remember { mutableStateOf(0L) }
-        fun finishCurrentActivity() {
-            (context as? Activity)?.finish()
-        }
 
-        fun requestExitApp() {
-            if (activeMainTab == MainTab.QUICK_NOTE) {
-                quickNoteTab.requestExitApp(context) { finishCurrentActivity() }
-                return
-            }
-            if (bypassExitDoubleConfirm) {
-                finishCurrentActivity()
-            } else {
-                val now = System.currentTimeMillis()
-                if (now - lastBackPressTime < 2000) finishCurrentActivity()
-                else {
-                    lastBackPressTime = now
-                    Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-
-        // Long-running operation status
-        val progressOpState = remember { mutableStateOf<OperationProgress?>(null) }
-        var progressOp by progressOpState
-        val progressCancelActionState = remember { mutableStateOf<(() -> Unit)?>(null) }
-        var progressCancelAction by progressCancelActionState
 
         // DirectoryRoot derived UI state
         LaunchedEffect(browserTab.rootUri) {
             rootSwitch.refreshTrashUri(browserTab.rootUri)
         }
 
-        // 网络服务域（FTP / WebUI / 家庭网络）：三服务对象 + 共享配置 + 生命周期接线全部内聚于工厂
-        val networkServices = networkServicesTabs(
-            context = context,
-            config = config.network,
-            readerConfig = config.reader,
-            activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
-            rootUri = browserTab.rootUri,
-            displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!,
-            familyRootUri = browserTab.rootUri ?: initialDirUri,
-            hideDotFiles = browserTab.hideDotFiles,
-            onRequestExitApp = { requestExitApp() }
-        )
         // Config 域：设置 tab 功能对象（设置项镜像、对话框群、导入导出 workflow 内聚于工厂）
         val configTab = configTabFeature(
             context = context,
@@ -665,7 +781,6 @@ fun PlataleaApp(
         // Git 分享临时流程（目录文件共享到 Git 仓库）
 
         // Archive 操作向导域：解压 / 压缩向导（表单状态在 ArchiveOperationWorkflowState，执行编排留宿主）
-        val archiveOps = rememberArchiveOperationWorkflow(context, scope)
 
         // PlayerTab 域：播放器 tab 功能对象（接口面：MainTabFeature + PlayerTabApi，实现不可见）
         val playerTab = playerTabFeature(
@@ -679,51 +794,26 @@ fun PlataleaApp(
             onOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
         )
 
+        // tab 层返回键（P2 后）：向导类分支已随功能页迁移（页内 BackHandler），
+        // 此处只保留 tab 页内对话框、阅读器请求、目录返回与退出协商。
+        // 注：viewer 阶段（passContent/passEdit/阅读器全屏）由
+        // TransientViewerRouteHost 内的 BackHandler 处理，主界面此时不在组合中。
         BackHandler {
             when {
                 progressOp != null -> {
                     progressCancelAction?.invoke()
                 }
-                quickObfuscate.batchTarget != null -> quickObfuscate.resetIfBatchActive()
-                quickObfuscate.quickTarget != null -> quickObfuscate.resetIfQuickActive()
-                // 注：viewer 阶段（passContent/passEdit/阅读器全屏）由
-                // TransientViewerRouteHost 内的 BackHandler 处理，主界面此时
-                // 不在组合中，此处只处理 request 阶段（主界面可见 + 对话框弹出）
-                crypto.request != null -> {
-                    val guarded = crypto.request is CryptoRequest.PassView || crypto.request is CryptoRequest.PassEdit
-                    if (!guarded || !crypto.inProgress) crypto.close()
-                }
-                rootSwitch.showChangeRootConfirm -> rootSwitch.dismissChangeRootConfirm()
                 configTab.hasOpenConfigDialog -> configTab.closeTopConfigDialog()
                 browserTab.showPendingDeleteConfirm -> browserTab.showPendingDeleteConfirm = false
                 browserTab.showPendingList -> browserTab.showPendingList = false
                 networkServices.family.isBulletinBoardOpen -> networkServices.family.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
-                archiveOps.request != null -> archiveOps.close()
                 archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
                 epubReader.request?.kind in EpubReaderCancelableKinds -> epubReader.cancelRequest()
                 browserTab.canGoBack -> browserTab.goBack()
                 else -> {
                     requestExitApp()
                 }
-            }
-        }
-        val copyMoveLog: ((String) -> Unit)? = null
-        suspend fun runWithProgress(
-            label: String,
-            total: Int? = null,
-            block: suspend ((Int) -> Unit) -> Unit
-        ) {
-            progressCancelAction = null
-            try {
-                runWithUiProgress(
-                    setProgressState = { progressOp = it },
-                    label = label,
-                    total = total,
-                    block = block
-                )
-            } finally {
-                progressCancelAction = null
             }
         }
 
@@ -737,7 +827,6 @@ fun PlataleaApp(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(stringResource(R.string.viewer_saving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
             }
-            progressOp?.let { OperationProgressDialog(it, progressCancelAction) }
             Box(Modifier.weight(1f)) {
         val browserTabHostDependencies = BrowserTabHostDependencies(
             scope = scope,
@@ -867,90 +956,8 @@ fun PlataleaApp(
                 onSwitchMainTab = { requestOpenMainTab(it) }
             )
         }
-        bulletinForwardPayload?.let { payload ->
-            BulletinForwardTargetFlow(
-                manager = networkServices.familyNetworkManager,
-                payload = payload,
-                localServiceEnabled = networkServices.config.localNetworkServiceEnabled,
-                keepEphemeralSession = !networkServices.familyNetworkForeground,
-                onDismiss = { bulletinForwardPayload = null },
-                onComplete = {
-                    finishPendingListAndReturn()
-                    bulletinForwardPayload = null
-                }
-            )
-        }
-        // Config 域：配置导入 / 导出工作流对话框（状态与逻辑在 ConfigImportExportWorkflowState 中）
-        if (rootSwitch.showRootSwitchDialog) {
-            RootSwitchDialog(
-                recentRootUris = recentRootUris,
-                workflow = rootSwitch,
-                onPickRoot = { rootUri -> rootSwitch.pickRecentRoot(rootUri) { initialDirUri = it } },
-                onLaunchPicker = { treeLauncher.launch(null) }
-            )
-        }
-        QuickObfuscateDialogs(
-            workflow = quickObfuscate,
-            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
-            onQuickFinished = { browserTab.refresh() },
-            onBatchFinished = {
-                finishPendingListAndReturn()
-                browserTab.refresh()
-            }
-        )
-        // Crypto 域对话框：.pass 保护/查看/编辑与 GPG 加解密向导（状态在 CryptoWorkflowState，执行编排经宿主注入）
-        CryptoDialogs(
-            workflow = crypto,
-            scope = scope,
-            rootUri = browserTab.rootUri,
-            currentDirUri = displayUri,
-            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            runBatchOperation = { label, names, onFinished, block ->
-                startBatchOperation(label, names, onFinished, block)
-            },
-            onRefresh = { browserTab.refresh() },
-            onBatchFinished = { finishPendingListAndReturn() }
-        )
 
-        // Archive 操作向导域：解压 / 压缩表单对话框（确认后由宿主执行文件操作）
-        ArchiveOperationDialogs(
-            workflow = archiveOps,
-            onConfirm = {
-                executeArchiveOperation(
-                    context = context,
-                    scope = scope,
-                    workflow = archiveOps,
-                    browserTab = browserTab,
-                    displayUri = displayUri,
-                    progressOpState = progressOpState,
-                    progressCancelActionState = progressCancelActionState,
-                    runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
-                )
-            }
-        )
 
-        if (rootSwitch.showChangeRootConfirm && browserTab.rootUri != null) {
-            val r = browserTab.rootUri!!
-            val root = Uri.parse(normalizeContentUriString(r))
-            ChangeRootConfirmDialog(
-                onEmptyAndChange = {
-                    scope.launch {
-                        rootSwitch.dismissChangeRootConfirm()
-                        runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
-                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                            if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
-                            treeLauncher.launch(null)
-                            browserTab.refresh()
-                        }
-                    }
-                },
-                onChangeDirectly = {
-                    rootSwitch.dismissChangeRootConfirm()
-                    treeLauncher.launch(null)
-                },
-                onCancel = rootSwitch::dismissChangeRootConfirm
-            )
-        }
     }
     // （修复）MainTabsRootContent 局部函数定义至此闭合。
     // 5b3f9ec 平移时丢失了此闭合括号，导致下方顶层 when 被吞进定义体，
@@ -1079,22 +1086,224 @@ fun PlataleaApp(
         }
         else -> MainTabsRootContent()
     }
-    // Archive 阅读器域：加密缓存退出确认（渲染在顶层，确保全屏查看器激活时也能弹出）
-    browserSave.overwriteConfirm?.let { (_, fileName) ->
-        OverwriteSaveConfirmDialog(
-            fileName = fileName,
-            onOverwrite = {
-                browserSave.confirmOverwrite { dir ->
-                    initialDirUri = dir
-                    browserTab.navigateTo(dir)
-                    saveCompletedToken++
-                }
-            },
-            onSkip = {
-                browserSave.skipOverwrite { dir -> initialDirUri = dir }
+    // 宿主操作进度对话框（P2 上移全局层）：runWithProgress 可运行于任何显示阶段
+    // （tab 层 / 向导功能页 / 阅读器），进度指示不应依赖某一层组合存活
+    progressOp?.let { OperationProgressDialog(it, progressCancelAction) }
+}
+
+// ============================================================================
+// P2 跨域向导功能页组装：Dialog UI 组件留在域文件，此处只做组合接线与
+// 返回键。页面生存期由 DialogPageBinder 绑定域状态（置位入栈 / 清空出栈）。
+// ============================================================================
+
+/**
+ * 向导页返回键：对齐原主界面 BackHandler 的分支次序——进度取消优先于
+ * 向导关闭（runWithProgress 运行中 back = 取消进度而非关向导）。
+ */
+@Composable
+private fun DialogPageBackHandler(
+    progressOp: OperationProgress?,
+    progressCancelAction: (() -> Unit)?,
+    onDialogBack: () -> Unit
+) {
+    // 低优先：向导自身的关闭（先注册）
+    BackHandler { onDialogBack() }
+    // 高优先：进度取消（后注册，enabled 时抢先）
+    BackHandler(enabled = progressOp != null) { progressCancelAction?.invoke() }
+}
+
+/**
+ * 快速遮罩向导页（单文件 / 批量）。执行走自有 quickInProgress 或执行页，
+ * 不经宿主 runWithProgress，页内 back 无进度取消分支。
+ */
+private fun quickObfuscateDialogPage(
+    workflow: QuickObfuscateWorkflowState,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
+    onQuickFinished: () -> Unit,
+    onBatchFinished: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
+            if (workflow.batchTarget != null) workflow.resetIfBatchActive()
+            else workflow.resetIfQuickActive()
+        }
+        QuickObfuscateDialogs(
+            workflow = workflow,
+            runBatchOperation = runBatchOperation,
+            onQuickFinished = onQuickFinished,
+            onBatchFinished = onBatchFinished
+        )
+    }
+    return page
+}
+
+/** GPG 加解密 / .pass 保护向导页（PassView / PassEdit 走全屏查看器，不经此页）。 */
+private fun cryptoDialogPage(
+    workflow: CryptoWorkflowState,
+    scope: CoroutineScope,
+    rootUriProvider: () -> String?,
+    currentDirUriProvider: () -> String,
+    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
+    onRefresh: () -> Unit,
+    onBatchFinished: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
+            if (!workflow.inProgress) workflow.close()
+        }
+        CryptoDialogs(
+            workflow = workflow,
+            scope = scope,
+            rootUri = rootUriProvider(),
+            currentDirUri = currentDirUriProvider(),
+            runWithProgress = runWithProgress,
+            runBatchOperation = runBatchOperation,
+            onRefresh = onRefresh,
+            onBatchFinished = onBatchFinished
+        )
+    }
+    return page
+}
+
+/** 压缩 / 解压向导页（确认后由 executeArchiveOperation 执行文件操作）。 */
+private fun archiveOpsDialogPage(
+    context: Context,
+    scope: CoroutineScope,
+    workflow: ArchiveOperationWorkflowState,
+    browserTab: BrowserTabState,
+    displayUriProvider: () -> String,
+    progressOpState: MutableState<OperationProgress?>,
+    progressCancelActionState: MutableState<(() -> Unit)?>,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOpState.value, progressCancelActionState.value) {
+            workflow.close()
+        }
+        ArchiveOperationDialogs(
+            workflow = workflow,
+            onConfirm = {
+                executeArchiveOperation(
+                    context = context,
+                    scope = scope,
+                    workflow = workflow,
+                    browserTab = browserTab,
+                    displayUri = displayUriProvider(),
+                    progressOpState = progressOpState,
+                    progressCancelActionState = progressCancelActionState,
+                    runBatchOperation = runBatchOperation
+                )
             }
         )
     }
+    return page
+}
+
+/** 换根页：根选择对话框与清空回收站确认同域同页（先后最多一个显示）。 */
+private fun rootSwitchDialogPage(
+    workflow: BrowserRootSwitchWorkflow,
+    browserTab: BrowserTabState,
+    recentRootUrisProvider: () -> List<String>,
+    initialDirUriSink: (String) -> Unit,
+    treeLauncher: ManagedActivityResultLauncher<Uri?, Uri?>,
+    scope: CoroutineScope,
+    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
+    context: Context
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
+            when {
+                workflow.showChangeRootConfirm -> workflow.dismissChangeRootConfirm()
+                else -> workflow.dismissRootSwitch()
+            }
+        }
+        if (workflow.showRootSwitchDialog) {
+            RootSwitchDialog(
+                recentRootUris = recentRootUrisProvider(),
+                workflow = workflow,
+                onPickRoot = { rootUri -> workflow.pickRecentRoot(rootUri, initialDirUriSink) },
+                onLaunchPicker = { treeLauncher.launch(null) }
+            )
+        }
+        if (workflow.showChangeRootConfirm && browserTab.rootUri != null) {
+            val r = browserTab.rootUri!!
+            val root = Uri.parse(normalizeContentUriString(r))
+            ChangeRootConfirmDialog(
+                onEmptyAndChange = {
+                    scope.launch {
+                        workflow.dismissChangeRootConfirm()
+                        runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
+                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                            if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
+                            treeLauncher.launch(null)
+                            browserTab.refresh()
+                        }
+                    }
+                },
+                onChangeDirectly = {
+                    workflow.dismissChangeRootConfirm()
+                    treeLauncher.launch(null)
+                },
+                onCancel = workflow::dismissChangeRootConfirm
+            )
+        }
+    }
+    return page
+}
+
+/** 公告转发页：转发目标选择流程（完成 / 取消退回）。 */
+private fun bulletinForwardDialogPage(
+    payloadProvider: () -> BulletinForwardPayload?,
+    networkServices: NetworkServicesTabs,
+    onDismiss: () -> Unit,
+    onComplete: () -> Unit,
+    onBack: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        // 对齐原主界面 BackHandler 行为：转发流程无对话框级 back 分支，
+        // 落到退出协商
+        BackHandler { onBack() }
+        payloadProvider()?.let { payload ->
+            BulletinForwardTargetFlow(
+                manager = networkServices.familyNetworkManager,
+                payload = payload,
+                localServiceEnabled = networkServices.config.localNetworkServiceEnabled,
+                keepEphemeralSession = !networkServices.familyNetworkForeground,
+                onDismiss = onDismiss,
+                onComplete = onComplete
+            )
+        }
+    }
+    return page
+}
+
+/** 外源保存覆盖确认页：目标目录就绪且重名时由 BrowserSaveWorkflow 置位。 */
+private fun overwriteConfirmDialogPage(
+    browserSave: BrowserSaveWorkflow,
+    onOverwriteSaved: (String) -> Unit,
+    onSkipped: (String) -> Unit,
+    onBack: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        // 对齐原主界面 BackHandler 行为：覆盖确认无对话框级 back 分支，
+        // 落到退出协商
+        BackHandler { onBack() }
+        browserSave.overwriteConfirm?.let { (_, fileName) ->
+            OverwriteSaveConfirmDialog(
+                fileName = fileName,
+                onOverwrite = { browserSave.confirmOverwrite(onOverwriteSaved) },
+                onSkip = { browserSave.skipOverwrite(onSkipped) }
+            )
+        }
+    }
+    return page
 }
 
 internal fun normalizeContentUriString(s: String): String =

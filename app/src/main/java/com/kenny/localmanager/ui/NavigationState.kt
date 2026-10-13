@@ -1,11 +1,13 @@
 package com.kenny.localmanager.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 
 /**
  * 页面（AppPage）：一个功能的一次完整显示（《主界面判断归位设计》§2.2）。
@@ -66,11 +68,14 @@ internal class NavigationState internal constructor(
         featurePages.add(page)
     }
 
-    /** 退出自己 push 的功能页：仅当栈顶仍是该页时弹出。 */
+    /**
+     * 退出自己 push 的功能页：从栈中移除自己，不动其他页面。
+     *
+     * 不限栈顶：向导确认时"清向导状态 + push 执行页"同帧发生，向导页
+     * 自退时执行页可能已在其上，限定栈顶会把自己卡在栈中。
+     */
     fun pop(page: AppPage) {
-        if (featurePages.lastOrNull() === page) {
-            featurePages.remove(page)
-        }
+        featurePages.remove(page)
     }
 }
 
@@ -79,3 +84,28 @@ internal class NavigationState internal constructor(
 internal fun rememberNavigationState(
     onTabSwitched: (tab: MainTab, previous: MainTab?) -> Unit
 ): NavigationState = remember { NavigationState(onTabSwitched) }
+
+/**
+ * 对话框页绑定器（P2）：把"域状态非空"绑定为页面在栈。
+ *
+ * 适配向导域的置位即弹窗模型：域 open() 置状态 → push 页面；任意路径清
+ * 状态（close / 完成 / 取消）→ pop。页面生存期是域状态的投影，宿主与域
+ * 都不需要维护"状态与栈同步"。同一时刻只有一个向导可活跃（对话框模态），
+ * 因此至多一个对话框页在栈且必为栈顶。
+ */
+@Composable
+internal fun DialogPageBinder(
+    nav: NavigationState,
+    page: AppPage,
+    active: () -> Boolean
+) {
+    LaunchedEffect(page) {
+        snapshotFlow { active() }.collect { on ->
+            if (on) {
+                if (nav.top !== page) nav.push(page)
+            } else {
+                nav.pop(page)
+            }
+        }
+    }
+}
