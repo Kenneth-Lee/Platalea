@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,28 +29,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Devices
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.automirrored.filled.Article
-import androidx.compose.material.icons.automirrored.filled.MenuBook
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Wifi
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
@@ -61,9 +44,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -76,11 +56,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
@@ -177,24 +155,6 @@ internal enum class MainTab(
     }
 }
 
-private fun mainTabIcon(tab: MainTab): ImageVector {
-    return when (tab) {
-        MainTab.DIRECTORY -> Icons.Default.Folder
-        MainTab.RECENT -> Icons.AutoMirrored.Filled.List
-        MainTab.PLAYER -> Icons.AutoMirrored.Filled.QueueMusic
-        MainTab.FTP -> Icons.Default.Wifi
-        MainTab.LOCAL_SHARE -> Icons.Default.Devices
-        MainTab.FAMILY_NETWORK -> Icons.Default.Home
-        MainTab.CONFIG -> Icons.Default.Settings
-        MainTab.GIT_PROJECTS -> Icons.Default.FolderOpen
-        MainTab.BOOK_NOTE -> Icons.AutoMirrored.Filled.Article
-        MainTab.QUICK_NOTE -> Icons.Default.Edit
-        MainTab.QUICK_CRYPTO -> Icons.Default.Lock
-        MainTab.DICTIONARY -> Icons.AutoMirrored.Filled.MenuBook
-        MainTab.ABOUT -> Icons.Default.Info
-    }
-}
-
 private suspend fun runWithUiProgress(
     setProgressState: (OperationProgress?) -> Unit,
     label: String,
@@ -210,167 +170,6 @@ private suspend fun runWithUiProgress(
         setProgressState(null)
     }
 }
-
-@Composable
-private fun ScrollableMainTabBar(
-    activeMainTab: MainTab,
-    onSwitchMainTab: (MainTab) -> Unit
-) {
-    val context = LocalContext.current
-    fun trySwitchTab(tab: MainTab) {
-        onSwitchMainTab(tab)
-    }
-    val fixedTabs = listOf(MainTab.DIRECTORY, MainTab.RECENT)
-    val candidateTabs = listOf(
-        MainTab.CONFIG,
-        MainTab.GIT_PROJECTS,
-        MainTab.BOOK_NOTE,
-        MainTab.QUICK_NOTE,
-        MainTab.QUICK_CRYPTO,
-        MainTab.PLAYER,
-        MainTab.DICTIONARY,
-        MainTab.FTP,
-        MainTab.LOCAL_SHARE,
-        MainTab.FAMILY_NETWORK,
-        MainTab.ABOUT
-    )
-    var candidateUsageOrder by remember { mutableStateOf(candidateTabs) }
-    var overflowExpanded by remember { mutableStateOf(false) }
-    var pendingOverflowPromotion by remember { mutableStateOf<MainTab?>(null) }
-    var previousActiveTab by remember { mutableStateOf<MainTab?>(null) }
-
-    fun moveCandidateToFront(tab: MainTab) {
-        if (tab !in candidateTabs) return
-        candidateUsageOrder = listOf(tab) + candidateUsageOrder.filter { it != tab }
-    }
-
-    LaunchedEffect(activeMainTab) {
-        if (previousActiveTab == activeMainTab) return@LaunchedEffect
-        val pending = pendingOverflowPromotion
-        if (pending != null && activeMainTab != pending) {
-            moveCandidateToFront(pending)
-            pendingOverflowPromotion = null
-        }
-        if (activeMainTab in candidateTabs) {
-            moveCandidateToFront(activeMainTab)
-        }
-        previousActiveTab = activeMainTab
-    }
-
-    val dynamicTabs = candidateUsageOrder.take(2)
-    val overflowTabs = candidateTabs.filter { it !in dynamicTabs }
-
-    Surface(tonalElevation = 2.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 8.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            fixedTabs.forEach { tab ->
-                val selected = activeMainTab == tab
-                val label = context.getString(tab.labelRes)
-                OutlinedButton(
-                    onClick = { trySwitchTab(tab) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(mainTabIcon(tab), contentDescription = label, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-
-            dynamicTabs.forEach { tab ->
-                val selected = activeMainTab == tab
-                val label = context.getString(tab.labelRes)
-                OutlinedButton(
-                    onClick = { trySwitchTab(tab) },
-                    modifier = Modifier.weight(1f),
-                    shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(mainTabIcon(tab), contentDescription = label, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            label,
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-
-            Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.Center) {
-                val overflowSelected = activeMainTab in overflowTabs
-                OutlinedButton(
-                    onClick = { overflowExpanded = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(4.dp),
-                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = if (overflowSelected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
-                        contentColor = if (overflowSelected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurface
-                    )
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(Icons.Default.MoreVert, contentDescription = context.getString(R.string.main_tab_more), modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            context.getString(R.string.main_tab_more),
-                            style = MaterialTheme.typography.labelSmall,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-                DropdownMenu(
-                    expanded = overflowExpanded,
-                    onDismissRequest = { overflowExpanded = false }
-                ) {
-                    overflowTabs.forEach { tab ->
-                        val label = context.getString(tab.labelRes)
-                        DropdownMenuItem(
-                            text = { Text(label) },
-                            leadingIcon = {
-                                Icon(
-                                    mainTabIcon(tab),
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            },
-                            onClick = {
-                                overflowExpanded = false
-                                pendingOverflowPromotion = tab
-                                trySwitchTab(tab)
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -822,12 +621,16 @@ fun PlataleaApp(
         }
 
 
-        Column(Modifier.fillMaxSize()) {
-            if (crypto.pubEncryptInProgress || browserSave.inProgress) {
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(stringResource(R.string.viewer_saving), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(4.dp))
+        // P3：tab 层页面模板（tab 栏渲染与项分类归页面框架，主界面不渲染 tab 栏）
+        MainTabsScaffold(
+            nav = nav,
+            header = {
+                SavingProgressHeader(
+                    pubEncryptInProgress = crypto.pubEncryptInProgress,
+                    saveInProgress = browserSave.inProgress
+                )
             }
-            Box(Modifier.weight(1f)) {
+        ) {
         val browserTabHostDependencies = BrowserTabHostDependencies(
             scope = scope,
             archiveReader = archiveReader,
@@ -949,12 +752,6 @@ fun PlataleaApp(
             playerTab
                     )
                 )
-            } // （修复）Box(weight 1f) 闭合：原版此处闭合后 TabBar 才能位于 Box 之下、Column 之内
-
-            ScrollableMainTabBar(
-                activeMainTab = activeMainTab,
-                onSwitchMainTab = { requestOpenMainTab(it) }
-            )
         }
 
 
