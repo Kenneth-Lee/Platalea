@@ -39,7 +39,7 @@ internal fun appPage(content: @Composable () -> Unit): AppPage =
  */
 internal class NavigationState internal constructor(
     private val onTabSwitched: (tab: MainTab, previous: MainTab?) -> Unit
-) {
+) : Navigator {
     /** tab 层当前显示的 tab；null = 启动恢复未完成（宿主读取时回落 DIRECTORY）。 */
     var currentTab by mutableStateOf<MainTab?>(null)
         private set
@@ -51,7 +51,7 @@ internal class NavigationState internal constructor(
     val top: AppPage? get() = featurePages.lastOrNull()
 
     /** tab 层内切换（等值忽略）；持久化决策经构造回调交宿主。 */
-    fun switchTab(tab: MainTab) {
+    override fun switchTab(tab: MainTab) {
         val previous = currentTab
         if (previous == tab) return
         currentTab = tab
@@ -64,7 +64,7 @@ internal class NavigationState internal constructor(
     }
 
     /** 进入功能页（成为栈顶，整页渲染）。 */
-    fun push(page: AppPage) {
+    override fun push(page: AppPage) {
         featurePages.add(page)
     }
 
@@ -74,7 +74,7 @@ internal class NavigationState internal constructor(
      * 不限栈顶：向导确认时"清向导状态 + push 执行页"同帧发生，向导页
      * 自退时执行页可能已在其上，限定栈顶会把自己卡在栈中。
      */
-    fun pop(page: AppPage) {
+    override fun pop(page: AppPage) {
         featurePages.remove(page)
     }
 }
@@ -84,6 +84,24 @@ internal class NavigationState internal constructor(
 internal fun rememberNavigationState(
     onTabSwitched: (tab: MainTab, previous: MainTab?) -> Unit
 ): NavigationState = remember { NavigationState(onTabSwitched) }
+
+/**
+ * 导航能力（《主界面判断归位设计》§4）：主界面暴露给各域的唯一一组显示接口。
+ *
+ * 实现：[NavigationState]（组合根创建，主界面全部的显示状态）。域经组合根
+ * 接线拿到 Navigator 引用，不感知实现；tab 层模板（MainTabsScaffold）用它
+ * 渲染 tab 栏与切换。
+ */
+internal interface Navigator {
+    /** 在 tab 层内切换（tab 层页面经模板调用）。 */
+    fun switchTab(tab: MainTab)
+
+    /** 进入功能页（成为栈顶）。 */
+    fun push(page: AppPage)
+
+    /** 退出自己 push 的功能页（从栈中移除自己）。 */
+    fun pop(page: AppPage)
+}
 
 /**
  * 对话框页绑定器（P2）：把"域状态非空"绑定为页面在栈。

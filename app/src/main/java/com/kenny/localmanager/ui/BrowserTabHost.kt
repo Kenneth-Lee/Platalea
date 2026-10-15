@@ -39,6 +39,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.documentfile.provider.DocumentFile
 import com.kenny.localmanager.R
+import com.kenny.localmanager.family.BulletinForwardPayload
 import com.kenny.localmanager.data.AudioMetaAnnotation
 import com.kenny.localmanager.dict.importStarDict
 import com.kenny.localmanager.file.ArchiveCompressionFormat
@@ -593,20 +594,19 @@ internal class BrowserTabHostDependencies(
     val playbackState: PlaybackState?,
     val initialDirUri: String?,
     val cachedTrashUri: Uri?,
-    val finishPendingListAndReturn: () -> Unit,
     val setTransientRoute: (TransientRoute?) -> Unit,
     val recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
-    val onChangeRoot: () -> Unit,
-    val onShowFileDetail: (DocumentFileModel) -> Unit,
-    val onQuickMask: (DocumentFileModel) -> Unit,
+    // ---- 跨域出口（P4：命令式直呼目标域对象，不再经宿主回调中转）----
+    val quickObfuscate: QuickObfuscateWorkflowState,
+    val playerTab: PlayerTabFeature,
+    val rootSwitch: BrowserRootSwitchWorkflow,
+    // ---- 导航出口（经宿主：切 tab 是导航服务的判断）----
     val onForwardToBulletin: (BulletinForwardPayload) -> Unit,
     val onOpenQuickNote: () -> Unit,
     val requestOpenPlayerTab: () -> Unit,
+    // ---- 宿主编排能力 ----
     val runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
     val runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
-    val onBatchMask: (List<DocumentFileModel>) -> Unit,
-    val onAddToPlayback: (List<DocumentFileModel>) -> Unit,
-    val onAddDirectoryToPlayback: (String, String) -> Unit,
     val operationTarget: OperationTargetConfigView,
 )
 
@@ -629,20 +629,16 @@ internal fun BrowserTabHost(
     val playbackState = deps.playbackState
     val initialDirUri = deps.initialDirUri
     val cachedTrashUri = deps.cachedTrashUri
-    val finishPendingListAndReturn = deps.finishPendingListAndReturn
     val setTransientRoute = deps.setTransientRoute
     val recordRecentOpen = deps.recordRecentOpen
-    val onChangeRoot = deps.onChangeRoot
-    val onShowFileDetail = deps.onShowFileDetail
-    val onQuickMask = deps.onQuickMask
+    val quickObfuscate = deps.quickObfuscate
+    val playerTab = deps.playerTab
+    val rootSwitch = deps.rootSwitch
     val onForwardToBulletin = deps.onForwardToBulletin
     val onOpenQuickNote = deps.onOpenQuickNote
     val requestOpenPlayerTab = deps.requestOpenPlayerTab
-    val onAddDirectoryToPlayback = deps.onAddDirectoryToPlayback
     val runWithProgress = deps.runWithProgress
     val runBatchOperation = deps.runBatchOperation
-    val onBatchMask = deps.onBatchMask
-    val onAddToPlayback = deps.onAddToPlayback
     // 目录会话别名（组合期间读取即订阅快照）
     val rootUri = state.rootUri
     val currentUri = state.currentUri
@@ -967,7 +963,7 @@ internal fun BrowserTabHost(
                                         }
                                     }
                                 },
-                                onChangeRoot = { onChangeRoot() },
+                                onChangeRoot = rootSwitch::open,
                                 onRestoreFromTrash = rootUri?.let { r ->
                                     { model ->
                                         scope.launch {
@@ -1036,18 +1032,14 @@ internal fun BrowserTabHost(
                                 onCreateQuickNote = {
                                     onOpenQuickNote()
                                 },
-                                onCreateMusicPlaylist = { uri, name ->
-                                    onAddDirectoryToPlayback(uri, name)
-                                },
+                                onCreateMusicPlaylist = playerTab::requestCreateDirectoryPlaylist,
                                 onRequestGpgDecrypt = { fileModel, dirUri ->
                                     crypto.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
                                 },
                                 onRequestGpgEncrypt = { fileModel, dirUri ->
                                     crypto.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
                                 },
-                                onRequestQuickMask = { model ->
-                                    onQuickMask(model)
-                                },
+                                onRequestQuickMask = quickObfuscate::requestQuick,
                                 onConfirmDelete = { model, deletePermanently ->
                                     scope.launch {
                                         val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
@@ -1168,7 +1160,6 @@ internal fun BrowserTabHost(
                 currentDirPath = currentDirPath,
                 rootUri = rootUri,
                 zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
-                onShowFileDetails = { file -> onShowFileDetail(file) },
                 onShowBatchDetails = { pendingBatchDetails = pendingList.toList().takeIf { pendingBatchMetadataKind(it) != null } },
                 onRemove = { pendingList.remove(it) },
                 onCopyHere = doCopyHere,
@@ -1185,7 +1176,7 @@ internal fun BrowserTabHost(
                 onRequestBatchMask = {
                     val list = pendingList.filter { !it.isDirectory }
                     if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_mask_candidates), Toast.LENGTH_SHORT).show()
-                    else onBatchMask(list)
+                    else quickObfuscate.requestBatch(list)
                 },
                 onRequestBatchGpgEncrypt = {
                     if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
@@ -1243,8 +1234,7 @@ internal fun BrowserTabHost(
                     val snapshot = toRemove.toList()
                     pendingList.removeAll(snapshot)
                 },
-                onAddToPlayback = { audioList -> onAddToPlayback(audioList)
-                },
+                onAddToPlayback = playerTab::requestAddToPlayback,
                 onAddToZipEditTarget = if (zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true) {
                     { items ->
                         val targetUri = zipEditTargetUriValue
@@ -1334,7 +1324,7 @@ internal fun BrowserTabHost(
                         pairs.map { it.first.name },
                         { _ ->
                             refresh()
-                            finishPendingListAndReturn()
+                            state.finishPendingList()
                         }
                     ) { state ->
                         state.runEach(pairs) { (model, newName) ->
@@ -1373,7 +1363,7 @@ internal fun BrowserTabHost(
                         toDelete.map { it.name },
                         { _ ->
                             refresh()
-                            finishPendingListAndReturn()
+                            state.finishPendingList()
                         }
                     ) { state ->
                         state.runEach(toDelete) { model ->

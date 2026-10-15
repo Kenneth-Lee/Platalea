@@ -120,7 +120,6 @@ fun PendingListScreen(
     title: String? = null,
     confirmLabel: String? = null,
     onConfirm: (() -> Unit)? = null,
-    onShowFileDetails: (DocumentFileModel) -> Unit = {},
     onShowBatchDetails: () -> Unit = {},
     onRemove: (DocumentFileModel) -> Unit,
     onCopyHere: () -> Unit = {},
@@ -338,13 +337,6 @@ fun PendingListScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        IconButton(onClick = { onShowFileDetails(item) }) {
-                            Icon(
-                                Icons.Default.Info,
-                                contentDescription = stringResource(R.string.context_details),
-                                tint = MaterialTheme.colorScheme.primary
                             )
                         }
                         IconButton(onClick = { onRemove(item) }) {

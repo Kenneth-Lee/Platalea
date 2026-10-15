@@ -111,6 +111,7 @@ import com.kenny.localmanager.family.BulletinAttachmentUploadProgress
 import com.kenny.localmanager.family.BulletinAttachmentRef
 import com.kenny.localmanager.family.BulletinBoardDefaults
 import com.kenny.localmanager.family.BulletinBoardInfo
+import com.kenny.localmanager.family.BulletinForwardPayload
 import com.kenny.localmanager.family.BulletinBoardMention
 import com.kenny.localmanager.family.BulletinMentionTextField
 import com.kenny.localmanager.family.BulletinBoardOpenSession

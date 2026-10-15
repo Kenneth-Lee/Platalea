@@ -42,6 +42,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
 import com.kenny.localmanager.family.BulletinBoardInfo
+import com.kenny.localmanager.family.BulletinForwardPayload
 import com.kenny.localmanager.family.BulletinBoardOpenSession
 import com.kenny.localmanager.family.BulletinForwardTarget
 import com.kenny.localmanager.family.BulletinMessage
@@ -49,18 +50,6 @@ import com.kenny.localmanager.family.FamilyDiscoveredService
 import com.kenny.localmanager.family.FamilyNetworkManager
 import com.kenny.localmanager.file.DocumentFileModel
 import kotlinx.coroutines.launch
-
-sealed class BulletinForwardPayload {
-    data class Files(
-        val items: List<DocumentFileModel>,
-        val textContent: String = ""
-    ) : BulletinForwardPayload()
-
-    data class Messages(
-        val sourceSession: BulletinBoardOpenSession,
-        val messages: List<BulletinMessage>
-    ) : BulletinForwardPayload()
-}
 
 @Composable
 fun BulletinForwardTargetFlow(

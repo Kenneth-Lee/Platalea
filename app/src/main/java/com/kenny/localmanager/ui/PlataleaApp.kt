@@ -69,6 +69,9 @@ import com.kenny.localmanager.R
 import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
+import androidx.compose.runtime.collectAsState
+import com.kenny.localmanager.family.BulletinForwardPayload
+import com.kenny.localmanager.family.FamilyNetworkManager
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.compressToZip
@@ -200,7 +203,6 @@ fun PlataleaApp(
     val crypto = rememberCryptoWorkflow()
 
     // AppShell navigation + shared UI surfaces
-    var showFileDetail by remember { mutableStateOf<DocumentFileModel?>(null) }
     var saveCompletedToken by remember { mutableStateOf(0) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
 
@@ -259,21 +261,13 @@ fun PlataleaApp(
     // tab 层（currentTab）+ 功能页栈；tab 持久化决策经回调交宿主
     val nav = rememberNavigationState(onTabSwitched = ::persistTabChoice)
 
-    fun switchMainTab(tab: MainTab) {
-        nav.switchTab(tab)
-    }
-
-    fun requestOpenMainTab(tab: MainTab) {
-        switchMainTab(tab)
-    }
-
     LaunchedEffect(config.shell, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
             Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
             withContext(Dispatchers.IO) {
                 CrashReportStore.exportLatestToRootAndClear(context)
             }
-            switchMainTab(MainTab.ABOUT)
+            nav.switchTab(MainTab.ABOUT)
             CrashReportStore.markLatestSeen(context)
             return@LaunchedEffect
         }
@@ -458,10 +452,6 @@ fun PlataleaApp(
         onRequestExitApp = { requestExitApp() }
     )
 
-    // 公告转发中转状态（P2 上移主函数：原 MainTabsRootContent 局部状态，
-    // 置位经 browser 菜单 onForwardToBulletin，由 bulletinPage 绑定显示）
-    var bulletinForwardPayload by remember { mutableStateOf<BulletinForwardPayload?>(null) }
-
     // ---- P2 跨域向导功能页：DialogPageBinder 把域状态绑定到页面栈 ----
     // （置位入栈 / 清空出栈；向导对话框在页面内组合，组件本体留在域文件）
     val quickMaskPage = remember {
@@ -511,14 +501,17 @@ fun PlataleaApp(
             context = context
         )
     }
+    // 公告转发页（P4：请求槽在家庭网络域 FamilyNetworkManager，宿主不中转）
     val bulletinPage = remember {
+        val manager = networkServices.familyNetworkManager
         bulletinForwardDialogPage(
-            payloadProvider = { bulletinForwardPayload },
-            networkServices = networkServices,
-            onDismiss = { bulletinForwardPayload = null },
+            manager = manager,
+            familyNetworkForegroundProvider = { networkServices.familyNetworkForeground },
+            localServiceEnabledProvider = { networkServices.config.localNetworkServiceEnabled },
+            onDismiss = manager::clearForwardRequest,
             onComplete = {
                 browserTab.finishPendingList()
-                bulletinForwardPayload = null
+                manager.clearForwardRequest()
             },
             onBack = { requestExitApp() }
         )
@@ -543,7 +536,8 @@ fun PlataleaApp(
     }
     DialogPageBinder(nav, archiveOpsPage) { archiveOps.request != null }
     DialogPageBinder(nav, rootSwitchPage) { rootSwitch.showRootSwitchDialog || rootSwitch.showChangeRootConfirm }
-    DialogPageBinder(nav, bulletinPage) { bulletinForwardPayload != null }
+    val bulletinForwardRequest by networkServices.familyNetworkManager.forwardRequest.collectAsState()
+    DialogPageBinder(nav, bulletinPage) { bulletinForwardRequest != null }
     DialogPageBinder(nav, overwritePage) { browserSave.overwriteConfirm != null }
 
     @Composable
@@ -552,7 +546,7 @@ fun PlataleaApp(
         val activeMainTab = nav.currentTab ?: MainTab.DIRECTORY
 
         fun requestOpenQuickNoteTabFromDirectory() {
-            requestOpenMainTab(MainTab.QUICK_NOTE)
+            nav.switchTab(MainTab.QUICK_NOTE)
             quickNoteTab.requestOpenWithCachedPassword()
         }
 
@@ -590,7 +584,7 @@ fun PlataleaApp(
             onRequestExitApp = { requestExitApp() },
             recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
             onBatchFinished = { browserTab.finishPendingList() },
-            onOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
+            onOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
         )
 
         // tab 层返回键（P2 后）：向导类分支已随功能页迁移（页内 BackHandler），
@@ -616,11 +610,6 @@ fun PlataleaApp(
             }
         }
 
-        val finishPendingListAndReturn: () -> Unit = {
-            browserTab.finishPendingList()
-        }
-
-
         // P3：tab 层页面模板（tab 栏渲染与项分类归页面框架，主界面不渲染 tab 栏）
         MainTabsScaffold(
             nav = nav,
@@ -642,18 +631,14 @@ fun PlataleaApp(
             playbackState = playerTab.playbackState,
             initialDirUri = initialDirUri,
             cachedTrashUri = rootSwitch.cachedTrashUri,
-            finishPendingListAndReturn = finishPendingListAndReturn,
             setTransientRoute = { transientRoute = it },
             recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
-            onChangeRoot = rootSwitch::open,
-            onShowFileDetail = { showFileDetail = it },
-            onQuickMask = quickObfuscate::requestQuick,
-            onForwardToBulletin = { payload -> bulletinForwardPayload = payload },
-            onBatchMask = quickObfuscate::requestBatch,
-            onAddToPlayback = { audioList -> playerTab.requestAddToPlayback(audioList) },
-            onAddDirectoryToPlayback = { uri, name -> playerTab.requestCreateDirectoryPlaylist(uri, name) },
+            quickObfuscate = quickObfuscate,
+            playerTab = playerTab,
+            rootSwitch = rootSwitch,
+            onForwardToBulletin = { payload -> networkServices.familyNetworkManager.requestForward(payload) },
             onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
-            requestOpenPlayerTab = { switchMainTab(MainTab.PLAYER) },
+            requestOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
             runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
             runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
             operationTarget = config.operationTarget,
@@ -690,7 +675,7 @@ fun PlataleaApp(
                                     playlistId = playlistId
                                 )
                             },
-                            switchMainTab = { requestOpenMainTab(it) },
+                            switchMainTab = { tab -> nav.switchTab(tab) },
                             readingLauncher = readingLauncher
                         )
                             }
@@ -1053,10 +1038,15 @@ private fun rootSwitchDialogPage(
     return page
 }
 
-/** 公告转发页：转发目标选择流程（完成 / 取消退回）。 */
+/**
+ * 公告转发页：转发目标选择流程（完成 / 取消退回）。
+ * P4：请求槽在 FamilyNetworkManager（域状态），页面投影 forwardRequest；
+ * familyNetworkForeground 需组合期读取，经 provider 注入。
+ */
 private fun bulletinForwardDialogPage(
-    payloadProvider: () -> BulletinForwardPayload?,
-    networkServices: NetworkServicesTabs,
+    manager: FamilyNetworkManager,
+    familyNetworkForegroundProvider: () -> Boolean,
+    localServiceEnabledProvider: () -> Boolean,
     onDismiss: () -> Unit,
     onComplete: () -> Unit,
     onBack: () -> Unit
@@ -1066,12 +1056,13 @@ private fun bulletinForwardDialogPage(
         // 对齐原主界面 BackHandler 行为：转发流程无对话框级 back 分支，
         // 落到退出协商
         BackHandler { onBack() }
-        payloadProvider()?.let { payload ->
+        val payload by manager.forwardRequest.collectAsState()
+        payload?.let {
             BulletinForwardTargetFlow(
-                manager = networkServices.familyNetworkManager,
-                payload = payload,
-                localServiceEnabled = networkServices.config.localNetworkServiceEnabled,
-                keepEphemeralSession = !networkServices.familyNetworkForeground,
+                manager = manager,
+                payload = it,
+                localServiceEnabled = localServiceEnabledProvider(),
+                keepEphemeralSession = !familyNetworkForegroundProvider(),
                 onDismiss = onDismiss,
                 onComplete = onComplete
             )

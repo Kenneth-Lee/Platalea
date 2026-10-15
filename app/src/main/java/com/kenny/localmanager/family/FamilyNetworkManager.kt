@@ -153,6 +153,19 @@ class FamilyNetworkManager(context: Context) {
     private val _state = MutableStateFlow(FamilyNetworkState())
     val state: StateFlow<FamilyNetworkState> = _state
 
+    // 公告转发请求槽："有没有待转发的公告"归本域（见 BulletinForwardPayload 文档）。
+    // 发起方 requestForward 直呼；转发页投影非空态，完成/取消 clearForwardRequest。
+    private val _forwardRequest = MutableStateFlow<BulletinForwardPayload?>(null)
+    val forwardRequest: StateFlow<BulletinForwardPayload?> = _forwardRequest
+
+    fun requestForward(payload: BulletinForwardPayload) {
+        _forwardRequest.value = payload
+    }
+
+    fun clearForwardRequest() {
+        _forwardRequest.value = null
+    }
+
     private var multicastLock: WifiManager.MulticastLock? = null
     private var httpsServer: EmbeddedHttpServer? = null
     private var registrationListener: NsdManager.RegistrationListener? = null

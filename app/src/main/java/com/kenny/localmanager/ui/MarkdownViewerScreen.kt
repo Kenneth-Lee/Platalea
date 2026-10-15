@@ -128,6 +128,7 @@ import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.epub.EpubBookmark
 import com.kenny.localmanager.epub.EpubBookmarkManager
 import com.kenny.localmanager.epub.EpubReadingProgress
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -4069,6 +4070,9 @@ internal fun MdZipViewerScreen(
                 loadingMessage = context.getString(R.string.md_viewer_init_page_scripts)
                 Log.d(MDZIP_DEBUG, "HTML渲染完成 长度=${htmlContent?.length}")
                 logDebug?.invoke("[MDZIP] HTML渲染完成 长度=${htmlContent?.length}")
+            } catch (e: CancellationException) {
+                // 离开查看器时效果取消不是加载失败（取消消息会被当错误文案显示）
+                throw e
             } catch (e: Exception) {
                 loadError = context.getString(R.string.md_viewer_load_failed_detail, e.message ?: "")
                 Log.e(MDZIP_DEBUG, "加载异常: ${e.javaClass.name}: ${e.message}", e)
@@ -10065,6 +10069,8 @@ internal fun PdfViewerScreen(
             } else {
                 errorMsg = context.getString(R.string.pdf_empty)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("PdfViewer", "加载 PDF 失败", e)
             errorMsg = context.getString(R.string.md_viewer_load_failed_detail, e.message ?: "")
@@ -10122,6 +10128,8 @@ internal fun PdfViewerScreen(
                     pageCache[cacheKey] = bitmap
                     currentPageBitmap = bitmap
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("PdfViewer", "渲染页面失败", e)
             }

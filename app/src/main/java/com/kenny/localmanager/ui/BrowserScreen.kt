@@ -144,6 +144,7 @@ import com.kenny.localmanager.player.PlaybackState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -1234,6 +1235,9 @@ internal fun BrowserScreen(
                     }
                     items = result
                     onCacheDir(normalizedUri, result)
+                } catch (e: CancellationException) {
+                    // 效果重启/离开组合的取消不是加载失败（写状态会与新效果竞态残留）
+                    throw e
                 } catch (e: Exception) {
                     error = e.message ?: context.getString(R.string.browser_loading_failed)
                     items = emptyList()
@@ -1249,6 +1253,8 @@ internal fun BrowserScreen(
             }
             items = result
             onCacheDir(normalizedUri, result)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             error = e.message ?: context.getString(R.string.browser_loading_failed)
             items = emptyList()
@@ -2533,6 +2539,8 @@ internal fun BrowserScreen(
                         isDirectory = detailTarget.isDirectory
                     )
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 typeSpecificMetaError = e.message ?: e.javaClass.simpleName
                 emptyList()
