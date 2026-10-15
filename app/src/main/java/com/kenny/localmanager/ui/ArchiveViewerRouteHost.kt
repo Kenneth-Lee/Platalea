@@ -26,7 +26,7 @@ internal fun ArchiveViewerRouteHost(
     workflow: ViewerHostWorkflow,
     readerConfig: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,
-    bookNote: BookNoteTabFeature,
+    bookNote: BookNoteService,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onSavePicZipImage: suspend (File, String) -> Boolean
 ) {
@@ -124,11 +124,11 @@ internal fun ArchiveViewerRouteHost(
                 extractResult = state.extractResult,
                 zipFileName = state.zipFileName,
                 epubUri = state.epubUri,
-                bookNoteLoadedData = bookNote.bookNoteData,
-                bookNoteEntries = bookNote.bookNoteEntries,
-                bookNoteInProgress = bookNote.bookNoteInProgress,
-                onRequestOpenBookNotes = bookNote::requestOpenBookNotes,
-                onBookNoteEntriesChanged = bookNote::updateBookNoteEntries,
+                bookNoteLoadedData = bookNote.data,
+                bookNoteEntries = bookNote.entriesSnapshot,
+                bookNoteInProgress = bookNote.inProgress,
+                onRequestOpenBookNotes = bookNote::requestOpenWithCachedPassword,
+                onBookNoteEntriesChanged = bookNote::updateEntries,
                 onBack = { close() },
                 logDebug = null
             )

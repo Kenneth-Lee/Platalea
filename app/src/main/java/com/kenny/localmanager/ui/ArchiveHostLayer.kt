@@ -71,7 +71,7 @@ internal fun ArchiveViewerHostLayer(
     browserTab: BrowserTabState,
     readerConfig: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,
-    bookNote: BookNoteTabFeature,
+    bookNote: BookNoteService,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit
 ) {
     val context = LocalContext.current

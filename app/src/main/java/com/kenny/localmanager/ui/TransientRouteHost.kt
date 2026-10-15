@@ -110,7 +110,7 @@ internal fun TransientViewerRouteHost(
     route: TransientRoute,
     config: ReaderConfigView,
     markdownViewerSessionCache: ViewerSessions,
-    bookNote: BookNoteTabFeature,
+    bookNote: BookNoteService,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onRouteChange: (TransientRoute?) -> Unit,
     browserTab: BrowserTabState,
@@ -170,11 +170,11 @@ internal fun TransientViewerRouteHost(
                 config = config,
                 uri = route.uri,
                 fileName = route.fileName,
-                bookNoteLoadedData = bookNote.bookNoteData,
-                bookNoteEntries = bookNote.bookNoteEntries,
-                bookNoteInProgress = bookNote.bookNoteInProgress,
-                onRequestOpenBookNotes = bookNote::requestOpenBookNotes,
-                onBookNoteEntriesChanged = bookNote::updateBookNoteEntries,
+                bookNoteLoadedData = bookNote.data,
+                bookNoteEntries = bookNote.entriesSnapshot,
+                bookNoteInProgress = bookNote.inProgress,
+                onRequestOpenBookNotes = bookNote::requestOpenWithCachedPassword,
+                onBookNoteEntriesChanged = bookNote::updateEntries,
                 onBack = { onRouteChange(null) }
             )
         }

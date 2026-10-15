@@ -1,218 +1,202 @@
 package com.kenny.localmanager.ui
 
-import android.content.Context
-import android.content.Intent
-import android.graphics.drawable.Icon
-import android.icu.text.Transliterator
-import android.media.MediaMetadataRetriever
-import android.net.Uri
-import android.util.Base64
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.lazy.items
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FolderOpen
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Archive
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.collect
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
-import androidx.documentfile.provider.DocumentFile
-import androidx.exifinterface.media.ExifInterface
-import org.json.JSONObject
-import android.widget.Toast
 import com.kenny.localmanager.R
-import com.kenny.localmanager.data.Playlist
 import com.kenny.localmanager.data.RecentOpenItem
 import com.kenny.localmanager.diagnostics.CrashReportStore
-import androidx.compose.runtime.collectAsState
-import com.kenny.localmanager.family.BulletinForwardPayload
-import com.kenny.localmanager.family.FamilyNetworkManager
-import com.kenny.localmanager.file.DocumentFileModel
-import com.kenny.localmanager.file.emptyTrash
-import com.kenny.localmanager.file.compressToZip
-import com.kenny.localmanager.file.compressTo7z
-import com.kenny.localmanager.file.ArchiveCompressionFormat
-import com.kenny.localmanager.file.buildArchiveOutputName
-import com.kenny.localmanager.file.compressSingleFileToFormat
-import com.kenny.localmanager.file.compressTarArchive
-import com.kenny.localmanager.file.unzipToParent
-import com.kenny.localmanager.file.UnzipResult
-import com.kenny.localmanager.player.TrackMetadata
-import com.kenny.localmanager.gpg.GpgHelper
 import com.kenny.localmanager.gpg.getGpgKeyDir
-import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import com.mpatric.mp3agic.ID3v24Tag
-import com.mpatric.mp3agic.Mp3File
-import org.jaudiotagger.audio.AudioFileIO
-import org.jaudiotagger.tag.FieldKey
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.collect
-import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.TimeoutException
 import java.io.File
-import java.text.Normalizer
-import java.text.SimpleDateFormat
-
-internal const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
-
-internal enum class ConfigExportResult {
-    SUCCESS,
-    FILE_EXISTS,
-    ENCRYPT_FAILED,
-    FAILED
-}
-
-internal typealias RunProgressBlock = suspend (
-    label: String,
-    total: Int?,
-    block: suspend ((Int) -> Unit) -> Unit
-) -> Unit
 
 /**
- * tab 的退出恢复策略（AppShell 编排约定）：
- * - PERSISTENT：常规 tab，退出时保存、下次启动恢复到它
- * - TRANSIENT：会话型 tab（网络服务等），退出不作为恢复目标，
- *   启动恢复时回落到最近的 PERSISTENT tab
+ * PlataleaApp——应用组合根（P5 定型）。
+ *
+ * 只做三件事：**创建**（域对象唯一创建点）、**接线**（跨域出口命令式直呼，
+ * 向导页经 DialogPageBinder 绑定域状态）、**组合栈顶**（顶层 when 分派：
+ * 解锁门 → 无根门 → 导航栈顶功能页 → 全屏 Route → tab 层页面）。
+ * 判断归位后主界面不持有任何功能域的显示判断（见 docs/主界面判断归位设计.md）。
  */
-internal enum class TabExitRestorePolicy { PERSISTENT, TRANSIENT }
-
-internal enum class MainTab(
-    val key: String,
-    val labelRes: Int,
-    val exitRestorePolicy: TabExitRestorePolicy = TabExitRestorePolicy.PERSISTENT
-) {
-    DIRECTORY("directory", R.string.main_tab_directory),
-    RECENT("recent", R.string.main_tab_recent),
-    PLAYER("player", R.string.main_tab_player),
-    FTP("ftp", R.string.main_tab_ftp, TabExitRestorePolicy.TRANSIENT),
-    LOCAL_SHARE("local_share", R.string.main_tab_local_share, TabExitRestorePolicy.TRANSIENT),
-    FAMILY_NETWORK("family_network", R.string.main_tab_family_network, TabExitRestorePolicy.TRANSIENT),
-    CONFIG("config", R.string.main_tab_config),
-    GIT_PROJECTS("git_projects", R.string.main_tab_git_projects),
-    BOOK_NOTE("book_note", R.string.main_tab_book_note),
-    QUICK_NOTE("quick_note", R.string.main_tab_quick_note),
-    QUICK_CRYPTO("quick_crypto", R.string.main_tab_quick_crypto),
-    DICTIONARY("dictionary", R.string.main_tab_dictionary),
-    ABOUT("about", R.string.main_menu_about);
-
-    companion object {
-        fun fromKey(key: String?): MainTab {
-            return values().firstOrNull { it.key == key } ?: DIRECTORY
-        }
-
-        fun fromLaunchTarget(target: String?): MainTab? {
-            if (target.isNullOrBlank()) return null
-            return values().firstOrNull { it.key == target }
-        }
-    }
-}
-
-private suspend fun runWithUiProgress(
-    setProgressState: (OperationProgress?) -> Unit,
-    label: String,
-    total: Int? = null,
-    block: suspend ((Int) -> Unit) -> Unit
-) {
-    setProgressState(OperationProgress(label, 0, total))
-    delay(50)
-    try {
-        val setProgress: (Int) -> Unit = { i -> setProgressState(OperationProgress(label, i, total)) }
-        block(setProgress)
-    } finally {
-        setProgressState(null)
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlataleaApp(
-    initialFileUri: androidx.compose.runtime.MutableState<String?>? = null,
+    initialFileUri: MutableState<String?>? = null,
     initialLaunchTarget: String? = null
 ) {
     val context = LocalContext.current
-    // 配置功能（域服务）：持久配置唯一创建入口；各域经窄投影消费，不感知存储实现
-    val config = rememberConfigService(context)
+    val scope = rememberCoroutineScope()
 
-    // AppShell + DirectoryRoot state (long-lived while the app shell is active)
-    // 目录域共享数据对象（AppShell 分层设计 §2.4）：root、当前路径、刷新信号
+    // ==== 创建：域服务与共享状态 ====
+    val config = rememberConfigService(context)
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
     val browserTab = rememberBrowserTabState(context, config.browser, initialDirUri)
-
-    // Transient viewer / editor routes (short-lived feature flows)
-    // Browser 域工作流：根目录切换（最近根/换根确认）与外源保存（覆盖确认）
     val rootSwitch = rememberRootSwitchWorkflow(context, browserTab)
     val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
-    // Crypto 域快速遮罩工作流（单文件/批量）
     val quickObfuscate = rememberQuickObfuscateWorkflow(context)
-    // 查看器类临时 Route：统一由 TransientRoute 建模，渲染在 TransientViewerRouteHost 中
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = rememberViewerSessions(browserTab.rootUri)
-    // Crypto 域（GPG 加解密 / .pass 保护查看编辑）单槽工作流状态
     val crypto = rememberCryptoWorkflow()
+    val archiveReader = rememberArchiveReaderWorkflow(context, scope)
+    val epubReader = rememberEpubReaderWorkflow(context, scope)
+    val archiveOps = rememberArchiveOperationWorkflow(context, scope)
 
-    // AppShell navigation + shared UI surfaces
+    // ==== 创建：导航服务（主界面全部的显示状态）====
+    fun persistTabChoice(tab: MainTab, previousTab: MainTab?) {
+        scope.launch {
+            if (tab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
+                if (previousTab != null && previousTab.exitRestorePolicy == TabExitRestorePolicy.PERSISTENT) {
+                    config.shell.setLastNonServerMainTab(previousTab.key)
+                }
+            } else {
+                config.shell.setLastNonServerMainTab(tab.key)
+            }
+            config.shell.setLastMainTab(tab.key)
+        }
+    }
+    val nav = rememberNavigationState(onTabSwitched = ::persistTabChoice)
+    // 速记/书摘功能域服务（功能独立化）：数据与收尾协程住服务，页面只是投影；
+    // tab 切换 = 页面退出（onDispose 触发收尾）+ 新页面启动，服务不动
+    val quickNoteService = remember { QuickNoteService(context, scope, markdownViewerSessionCache) }
+    val bookNoteService = remember { BookNoteService(context, scope, markdownViewerSessionCache) }
+    LaunchedEffect(browserTab.rootUri) {
+        quickNoteService.rootUri = browserTab.rootUri
+        bookNoteService.rootUri = browserTab.rootUri
+    }
+    val quickNoteTab = quickNoteTabFeature(
+        config = config.quickNote,
+        service = quickNoteService
+    )
+    val bookNoteTab = bookNoteTabFeature(
+        service = bookNoteService
+    )
     var saveCompletedToken by remember { mutableStateOf(0) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
 
-    // App shell commands / helpers
-    val scope = rememberCoroutineScope()
+    // ==== 创建：宿主能力（tab 层与功能页共用）====
+    fun recordRecentOpen(
+        type: String, key: String, title: String,
+        uri: String? = null, playlistId: String? = null
+    ) {
+        scope.launch {
+            config.shell.addRecentOpenItem(type, key, title, uri, playlistId)
+        }
+    }
+    val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
 
-    // Startup behavior
+    fun startBatchOperation(
+        label: String,
+        names: List<String>,
+        onFinished: (OperationRunState) -> Unit = {},
+        block: suspend (OperationRunState) -> Unit
+    ) {
+        val state = OperationRunState(label, names)
+        lateinit var page: AppPage
+        state.onClose = { nav.pop(page) }
+        page = appPage { OperationScreen(state = state) }
+        nav.push(page)
+        scope.launch {
+            try {
+                block(state)
+            } finally {
+                state.finished = true
+                onFinished(state)
+            }
+        }
+    }
+
+    var lastBackPressTime by remember { mutableStateOf(0L) }
+    fun finishCurrentActivity() {
+        (context as? Activity)?.finish()
+    }
     val launchShortcutTarget = MainTab.fromLaunchTarget(initialLaunchTarget)
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
+    fun requestExitApp() {
+        if ((nav.currentTab ?: MainTab.DIRECTORY) == MainTab.QUICK_NOTE) {
+            quickNoteService.requestExitApp { finishCurrentActivity() }
+            return
+        }
+        if (bypassExitDoubleConfirm) {
+            finishCurrentActivity()
+        } else {
+            val now = System.currentTimeMillis()
+            if (now - lastBackPressTime < 2000) finishCurrentActivity()
+            else {
+                lastBackPressTime = now
+                Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
+    val progressOpState = remember { mutableStateOf<OperationProgress?>(null) }
+    var progressOp by progressOpState
+    val progressCancelActionState = remember { mutableStateOf<(() -> Unit)?>(null) }
+    var progressCancelAction by progressCancelActionState
+    suspend fun runWithProgress(
+        label: String,
+        total: Int? = null,
+        block: suspend ((Int) -> Unit) -> Unit
+    ) {
+        progressCancelAction = null
+        try {
+            runWithUiProgress(
+                setProgressState = { progressOp = it },
+                label = label,
+                total = total,
+                block = block
+            )
+        } finally {
+            progressCancelAction = null
+        }
+    }
+
+    val treeLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            val normalized = normalizeContentUriString(uri.toString())
+            val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
+            rootSwitch.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
+        }
+    }
+
+    val networkServices = networkServicesTabs(
+        context = context,
+        config = config.network,
+        readerConfig = config.reader,
+        activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
+        rootUri = browserTab.rootUri,
+        displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri ?: "",
+        familyRootUri = browserTab.rootUri ?: initialDirUri,
+        hideDotFiles = browserTab.hideDotFiles,
+        onRequestExitApp = { requestExitApp() }
+    )
+
+    // ==== 启动行为（门前提探测 / 恢复 / 外源入口）====
     var startupDecryptKeyEnabled by remember { mutableStateOf(false) }
     var hasSecretKeyFile by remember { mutableStateOf(false) }
     var unlockedByStartup by remember { mutableStateOf(false) }
@@ -226,10 +210,6 @@ fun PlataleaApp(
     }
     val showUnlockGate = startupDecryptKeyEnabled && hasSecretKeyFile && !unlockedByStartup
 
-    var viewerPreviewBytes by remember { mutableStateOf(4096) }
-    LaunchedEffect(config.editing) {
-        config.editing.viewerPreviewBytes.collect { viewerPreviewBytes = it }
-    }
     LaunchedEffect(config.shell) {
         config.shell.recentOpenItems.collect { recentOpenItems = it }
     }
@@ -241,26 +221,6 @@ fun PlataleaApp(
         initialFileUri.value = null
         browserSave.offer(uriStr)
     }
-
-    // App 级 Tab 命令入口：所有跨域"切到某 Tab"的请求统一走这里，避免各处直接改 currentMainTab
-    fun persistTabChoice(tab: MainTab, previousTab: MainTab?) {
-        scope.launch {
-            val previousTab = previousTab
-            if (tab.exitRestorePolicy == TabExitRestorePolicy.TRANSIENT) {
-                if (previousTab != null && previousTab.exitRestorePolicy == TabExitRestorePolicy.PERSISTENT) {
-                    config.shell.setLastNonServerMainTab(previousTab.key)
-                }
-            } else {
-                config.shell.setLastNonServerMainTab(tab.key)
-            }
-            config.shell.setLastMainTab(tab.key)
-        }
-    }
-
-    // 导航服务（《主界面判断归位设计》P1）：主界面全部的显示状态——
-    // tab 层（currentTab）+ 功能页栈；tab 持久化决策经回调交宿主
-    val nav = rememberNavigationState(onTabSwitched = ::persistTabChoice)
-
     LaunchedEffect(config.shell, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
             Toast.makeText(context, context.getString(R.string.crash_report_found_toast), Toast.LENGTH_SHORT).show()
@@ -283,153 +243,6 @@ fun PlataleaApp(
         }
         nav.restore(restoreTab)
     }
-
-    fun recordRecentOpen(
-        type: String,
-        key: String,
-        title: String,
-        uri: String? = null,
-        playlistId: String? = null
-    ) {
-        scope.launch {
-            config.shell.addRecentOpenItem(
-                type = type,
-                key = key,
-                title = title,
-                uri = uri,
-                playlistId = playlistId
-            )
-        }
-    }
-
-    // Archive 阅读器域：压缩包 / 文档阅读的临时 Route（请求 -> 密码 -> 解压 -> 查看器）
-    val archiveReader = rememberArchiveReaderWorkflow(context, scope)
-    // EPUB 阅读器域：.epub / .llm.zip / .txt / .llm 统一经 epub_cache 渲染（批次 C）
-    val epubReader = rememberEpubReaderWorkflow(context, scope)
-    // 阅读启动路由表：各 tab 经统一入口启动阅读，宿主不再散装回调（批次 B1）
-    val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
-
-    // 批量操作执行页（E2 样板）已入导航栈：以功能页 push/pop，
-    // 栈顶即当前执行页，关闭经 OperationRunState.onClose pop。
-    /**
-     * 批量操作执行页编排（E2）：创建执行状态并以功能页入导航栈，协程内逐项
-     * 执行（状态翻转 / 取消检查由 OperationRunState.runEach 封装），结束后
-     * 停留结果页；收尾动作（清待处理列表 / 刷新等）在执行结束时立即执行，
-     * 用户随后点关闭退回主界面（pop 导航栈）。
-     */
-    fun startBatchOperation(
-        label: String,
-        names: List<String>,
-        onFinished: (OperationRunState) -> Unit = {},
-        block: suspend (OperationRunState) -> Unit
-    ) {
-        val state = OperationRunState(label, names)
-        lateinit var page: AppPage
-        state.onClose = { nav.pop(page) }
-        page = appPage { OperationScreen(state = state) }
-        nav.push(page)
-        scope.launch {
-            try {
-                block(state)
-            } finally {
-                state.finished = true
-                onFinished(state)
-            }
-        }
-    }
-
-    // 独立全屏 Route 聚合槽（批次 D）：即时型槽 + 各工作流终态聚合为单一
-    // activeRoute，顶层 when 与 Host 均不感知具体功能种类。优先级：即时型
-    // 查看器最先（最新打开覆盖阅读器），工作流终态次之。执行页在导航栈中，
-    // 全屏接管期间不可能同时打开查看器，两层互斥。
-    val activeRoute: TransientRoute? = transientRoute
-        ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
-        ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
-        ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
-        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
-        ?: (crypto.request as? CryptoRequest.PassEdit)?.let { TransientRoute.PassEditor(crypto) }
-        ?: (crypto.request as? CryptoRequest.PassView)?.let { TransientRoute.PassViewer(crypto) }
-
-
-    val quickNoteTab = quickNoteTabFeature(
-        config = config.quickNote,
-        rootUri = browserTab.rootUri,
-        isActive = nav.currentTab == MainTab.QUICK_NOTE,
-        markdownViewerSessionCache = markdownViewerSessionCache
-    )
-    val bookNoteTab = bookNoteTabFeature(
-        rootUri = browserTab.rootUri,
-        isActive = nav.currentTab == MainTab.BOOK_NOTE,
-        markdownViewerSessionCache = markdownViewerSessionCache
-    )
-
-    // Archive 操作向导域（P2 上移主函数：向导功能页需要在此组装）
-    val archiveOps = rememberArchiveOperationWorkflow(context, scope)
-
-    // ---- 退出协商（原 MainTabsRootContent 局部函数上移，tab 层与功能页共用）----
-    var lastBackPressTime by remember { mutableStateOf(0L) }
-    fun finishCurrentActivity() {
-        (context as? Activity)?.finish()
-    }
-
-    fun requestExitApp() {
-        if ((nav.currentTab ?: MainTab.DIRECTORY) == MainTab.QUICK_NOTE) {
-            quickNoteTab.requestExitApp(context) { finishCurrentActivity() }
-            return
-        }
-        if (bypassExitDoubleConfirm) {
-            finishCurrentActivity()
-        } else {
-            val now = System.currentTimeMillis()
-            if (now - lastBackPressTime < 2000) finishCurrentActivity()
-            else {
-                lastBackPressTime = now
-                Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    // ---- 宿主操作进度（P2 上移主函数：进度对话框在全局层挂载，任何显示阶段可见）----
-    val progressOpState = remember { mutableStateOf<OperationProgress?>(null) }
-    var progressOp by progressOpState
-    val progressCancelActionState = remember { mutableStateOf<(() -> Unit)?>(null) }
-    var progressCancelAction by progressCancelActionState
-
-    suspend fun runWithProgress(
-        label: String,
-        total: Int? = null,
-        block: suspend ((Int) -> Unit) -> Unit
-    ) {
-        progressCancelAction = null
-        try {
-            runWithUiProgress(
-                setProgressState = { progressOp = it },
-                label = label,
-                total = total,
-                block = block
-            )
-        } finally {
-            progressCancelAction = null
-        }
-    }
-
-
-    // Config 域：配置导入 / 导出工作流（独立状态持有者，写盘后通过回调刷新目录）
-
-    val treeLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri: Uri? ->
-        if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-            )
-            val normalized = normalizeContentUriString(uri.toString())
-            val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
-            rootSwitch.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
-        }
-    }
-
     LaunchedEffect(browserSave.pendingSaveFileUri, browserTab.rootUri) {
         browserSave.consumeIfReady { dir ->
             initialDirUri = dir
@@ -438,22 +251,16 @@ fun PlataleaApp(
         }
     }
 
-    // 网络服务域（FTP / WebUI / 家庭网络）（P2 上移主函数：公告转发页需要组装；
-    // 服务生命周期 effect 常驻执行，不再随 MainTabsRootContent 阶段性重组）
-    val networkServices = networkServicesTabs(
-        context = context,
-        config = config.network,
-        readerConfig = config.reader,
-        activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
-        rootUri = browserTab.rootUri,
-        displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri ?: "",
-        familyRootUri = browserTab.rootUri ?: initialDirUri,
-        hideDotFiles = browserTab.hideDotFiles,
-        onRequestExitApp = { requestExitApp() }
-    )
+    // 全屏 Route 聚合槽（批次 D）：即时型查看器最先，工作流终态次之
+    val activeRoute: TransientRoute? = transientRoute
+        ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
+        ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
+        ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
+        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
+        ?: (crypto.request as? CryptoRequest.PassEdit)?.let { TransientRoute.PassEditor(crypto) }
+        ?: (crypto.request as? CryptoRequest.PassView)?.let { TransientRoute.PassViewer(crypto) }
 
-    // ---- P2 跨域向导功能页：DialogPageBinder 把域状态绑定到页面栈 ----
-    // （置位入栈 / 清空出栈；向导对话框在页面内组合，组件本体留在域文件）
+    // ==== 接线：跨域向导功能页（页面工厂 + DialogPageBinder 绑定域状态）====
     val quickMaskPage = remember {
         quickObfuscateDialogPage(
             workflow = quickObfuscate,
@@ -528,7 +335,6 @@ fun PlataleaApp(
             onBack = { requestExitApp() }
         )
     }
-    // PassView / PassEdit 走全屏查看器（activeRoute 聚合），不经对话框页
     DialogPageBinder(nav, quickMaskPage) { quickObfuscate.batchTarget != null || quickObfuscate.quickTarget != null }
     DialogPageBinder(nav, cryptoPage) {
         val r = crypto.request
@@ -540,558 +346,80 @@ fun PlataleaApp(
     DialogPageBinder(nav, bulletinPage) { bulletinForwardRequest != null }
     DialogPageBinder(nav, overwritePage) { browserSave.overwriteConfirm != null }
 
-    @Composable
-    fun MainTabsRootContent() {
-        val displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!!
-        val activeMainTab = nav.currentTab ?: MainTab.DIRECTORY
-
-        fun requestOpenQuickNoteTabFromDirectory() {
-            nav.switchTab(MainTab.QUICK_NOTE)
-            quickNoteTab.requestOpenWithCachedPassword()
-        }
-
-
-        // App-level transient dialogs / playback-target workflow
-        LaunchedEffect(saveCompletedToken) { if (saveCompletedToken > 0) browserTab.refresh() }
-
-
-        // DirectoryRoot derived UI state
-        LaunchedEffect(browserTab.rootUri) {
-            rootSwitch.refreshTrashUri(browserTab.rootUri)
-        }
-
-        // Config 域：设置 tab 功能对象（设置项镜像、对话框群、导入导出 workflow 内聚于工厂）
-        val configTab = configTabFeature(
-            context = context,
-            config = config.editing,
-            gitConfig = config.git,
-            readerConfig = config.reader,
-            scope = scope,
-            networkConfig = networkServices.config,
-            browserRootUri = { browserTab.rootUri },
-            onFilesChanged = { browserTab.refresh() }
-        )
-        // Git 分享临时流程（目录文件共享到 Git 仓库）
-
-        // Archive 操作向导域：解压 / 压缩向导（表单状态在 ArchiveOperationWorkflowState，执行编排留宿主）
-
-        // PlayerTab 域：播放器 tab 功能对象（接口面：MainTabFeature + PlayerTabApi，实现不可见）
-        val playerTab = playerTabFeature(
-            context = context,
-            config = config.player,
-            scope = scope,
-            autoplayShortcut = launchShortcutTarget == MainTab.PLAYER,
-            onRequestExitApp = { requestExitApp() },
-            recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
-            onBatchFinished = { browserTab.finishPendingList() },
-            onOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
-        )
-
-        // tab 层返回键（P2 后）：向导类分支已随功能页迁移（页内 BackHandler），
-        // 此处只保留 tab 页内对话框、阅读器请求、目录返回与退出协商。
-        // 注：viewer 阶段（passContent/passEdit/阅读器全屏）由
-        // TransientViewerRouteHost 内的 BackHandler 处理，主界面此时不在组合中。
-        BackHandler {
-            when {
-                progressOp != null -> {
-                    progressCancelAction?.invoke()
-                }
-                configTab.hasOpenConfigDialog -> configTab.closeTopConfigDialog()
-                browserTab.showPendingDeleteConfirm -> browserTab.showPendingDeleteConfirm = false
-                browserTab.showPendingList -> browserTab.showPendingList = false
-                networkServices.family.isBulletinBoardOpen -> networkServices.family.closeBulletinBoard()
-                activeMainTab != MainTab.DIRECTORY -> requestExitApp()
-                archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
-                epubReader.request?.kind in EpubReaderCancelableKinds -> epubReader.cancelRequest()
-                browserTab.canGoBack -> browserTab.goBack()
-                else -> {
-                    requestExitApp()
-                }
-            }
-        }
-
-        // P3：tab 层页面模板（tab 栏渲染与项分类归页面框架，主界面不渲染 tab 栏）
-        MainTabsScaffold(
-            nav = nav,
-            header = {
-                SavingProgressHeader(
-                    pubEncryptInProgress = crypto.pubEncryptInProgress,
-                    saveInProgress = browserSave.inProgress
-                )
-            }
-        ) {
-        val browserTabHostDependencies = BrowserTabHostDependencies(
-            scope = scope,
-            archiveReader = archiveReader,
-            epubReader = epubReader,
-            archiveOps = archiveOps,
-            crypto = crypto,
-            configImportExportWorkflow = configTab.importExport,
-            markdownViewerSessionCache = markdownViewerSessionCache,
-            playbackState = playerTab.playbackState,
-            initialDirUri = initialDirUri,
-            cachedTrashUri = rootSwitch.cachedTrashUri,
-            setTransientRoute = { transientRoute = it },
-            recordRecentOpen = { type, key, title, uri, playlistId -> recordRecentOpen(type, key, title, uri, playlistId) },
-            quickObfuscate = quickObfuscate,
-            playerTab = playerTab,
-            rootSwitch = rootSwitch,
-            onForwardToBulletin = { payload -> networkServices.familyNetworkManager.requestForward(payload) },
-            onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
-            requestOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
-            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
-            operationTarget = config.operationTarget,
-        )
-        val directoryTab = browserTabFeature(state = browserTab, deps = browserTabHostDependencies)
-                MainTabContentHost(
-                    activeMainTab = activeMainTab,
-                    features = listOf(
-            directoryTab,
-            mainTabFeature(MainTab.RECENT) {
-                RecentTabRoute(
-                    RecentTabRouteState(
-                        items = recentOpenItems.take(30),
-                        onOpenRecentItem = { item ->
-                        openRecentItemWithStaleGuard(
-                            scope = scope,
-                            context = context,
-                            item = item,
-                            isPlaylistPresent = { id -> config.player.playlists.first().any { it.id == id } },
-                            onRemoveStaleItem = { stale ->
-                                scope.launch { config.shell.removeRecentOpenItem(stale.type, stale.key) }
-                            },
-                            open = {
-                        openRecentItemByType(
-                            context = context,
-                            item = item,
-                            currentPlaybackState = playerTab.playbackState,
-                            recordRecentOpen = { type, key, title, uri, playlistId ->
-                                recordRecentOpen(
-                                    type = type,
-                                    key = key,
-                                    title = title,
-                                    uri = uri,
-                                    playlistId = playlistId
-                                )
-                            },
-                            switchMainTab = { tab -> nav.switchTab(tab) },
-                            readingLauncher = readingLauncher
-                        )
-                            }
-                    )
-                    },
-                        onDeleteRecentItem = { item ->
-                        scope.launch {
-                            config.shell.removeRecentOpenItem(item.type, item.key)
-                        }
-                    },
-                        onClearRecentItems = {
-                            scope.launch {
-                                config.shell.clearRecentOpenItems()
-                            }
-                        }
-                    )
-                )
-            },
-            networkServices.ftp,
-            networkServices.webUi,
-            networkServices.family,
-            configTab,
-            mainTabFeature(
-                MainTab.GIT_PROJECTS,
-                {
-                        GitProjectsTabRoute(
-                            GitProjectsTabRouteState(
-                                config = config.git,
-                                rootUri = browserTab.rootUri
-                            )
-                        )
-                    }
-            ),
-            bookNoteTab,
-            quickNoteTab,
-            mainTabFeature(
-                MainTab.QUICK_CRYPTO,
-                {
-                        QuickCryptoTabRoute()
-                    }
-            ),
-            mainTabFeature(
-                MainTab.DICTIONARY,
-                {
-                        DictionaryTabRoute(
-                            DictionaryTabRouteState(
-                                config = config.dictionary,
-                                onRequestExitApp = { requestExitApp() }
-                            )
-                        )
-                    }
-            ),
-            mainTabFeature(
-                MainTab.ABOUT,
-                {
-                        AboutTabRoute()
-                    }
-            ),
-            playerTab
-                    )
-                )
-        }
-
-
-    }
-    // （修复）MainTabsRootContent 局部函数定义至此闭合。
-    // 5b3f9ec 平移时丢失了此闭合括号，导致下方顶层 when 被吞进定义体，
-    // else -> MainTabsRootContent() 成为永不可达的递归调用，主界面组合为空（白屏）。
+    // ==== 组合栈顶：顶层 when 分派（互斥的显示阶段）====
     when {
-        showUnlockGate -> {
-            BackHandler { (context as? Activity)?.finish() }
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                var unlockPwd by remember { mutableStateOf("") }
-                var unlockInProgress by remember { mutableStateOf(false) }
-                var unlockError by remember { mutableStateOf<String?>(null) }
-                Column(
-                    modifier = Modifier.widthIn(max = 320.dp).padding(24.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Icon(Icons.Default.Lock, contentDescription = null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-                    Text(
-                        stringResource(R.string.browser_startup_decrypt_enabled),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Text(
-                        stringResource(R.string.browser_enter_private_key_unlock),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    ReliablePasswordInputField(
-                        value = unlockPwd,
-                        onValueChange = { unlockPwd = it; unlockError = null },
-                        label = { Text(stringResource(R.string.browser_private_key_password_label)) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = !unlockInProgress
-                    )
-                    unlockError?.let { err ->
-                        Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-                    }
-                    Button(
-                        onClick = {
-                            if (unlockPwd.isEmpty() || unlockInProgress) return@Button
-                            unlockInProgress = true
-                            unlockError = null
-                            scope.launch {
-                                val ok = withContext(Dispatchers.IO) {
-                                    GpgHelper.tryUnlockSecretKey(context, unlockPwd.toCharArray())
-                                }
-                                unlockInProgress = false
-                                if (ok) {
-                                    SecretKeyPasswordCache.set(unlockPwd.toCharArray())
-                                    unlockedByStartup = true
-                                } else {
-                                    unlockError = context.getString(R.string.browser_password_wrong_or_decrypt_failed)
-                                }
-                            }
-                        },
-                        enabled = unlockPwd.isNotEmpty() && !unlockInProgress,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        if (unlockInProgress) {
-                            CircularProgressIndicator(Modifier.size(24.dp), color = MaterialTheme.colorScheme.onPrimary)
-                        } else {
-                            Text(stringResource(R.string.browser_unlock_action))
-                        }
-                    }
-                }
-            }
-        }
-        browserTab.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> {
-            var lastBackPressTime by remember { mutableStateOf(0L) }
-            BackHandler {
-                val now = System.currentTimeMillis()
-                if (now - lastBackPressTime < 2000) (context as? Activity)?.finish()
-                else {
-                    lastBackPressTime = now
-                    Toast.makeText(context, context.getString(R.string.browser_press_again_to_exit), Toast.LENGTH_SHORT).show()
-                }
-            }
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        if (browserSave.pendingSaveFileUri != null) stringResource(R.string.browser_external_open_save_prompt) else stringResource(R.string.browser_select_root_prompt),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    Button(onClick = { treeLauncher.launch(null) }) {
-                        Icon(Icons.Default.FolderOpen, contentDescription = null, Modifier.size(20.dp))
-                        Spacer(Modifier.size(8.dp))
-                        Text(if (browserSave.pendingSaveFileUri != null) stringResource(R.string.browser_select_save_location) else stringResource(R.string.browser_select_root_button))
-                    }
-                }
-            }
-        }
-        // 功能页（导航栈栈顶，如批量执行页）：整页自绘，返回键页内自理。
-        // 全屏接管期间不可能同时打开查看器，与 activeRoute 两层互斥
-        nav.top != null -> {
-            nav.top?.let { it.content() }
-        }
-        activeRoute != null -> {
-            // 独立全屏 Route 单槽（批次 D）：即时型 + 工作流型统一在此渲染，
-            // 宿主不再感知具体功能种类
-            TransientViewerRouteHost(
-                route = activeRoute!!,
-                config = config.reader,
-                markdownViewerSessionCache = markdownViewerSessionCache,
-                bookNote = bookNoteTab,
-                recordRecentOpen = { type, key, title, uri, playlistId ->
-                    recordRecentOpen(
-                        type = type,
-                        key = key,
-                        title = title,
-                        uri = uri,
-                        playlistId = playlistId
-                    )
-                },
-                onRouteChange = { transientRoute = it },
+        showUnlockGate -> StartupUnlockGateScreen(onUnlocked = { unlockedByStartup = true })
+        browserTab.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> NoRootGateScreen(
+            externalSavePending = browserSave.pendingSaveFileUri != null,
+            treeLauncher = treeLauncher
+        )
+        // 功能页（导航栈栈顶，如批量执行页）：整页自绘，返回键页内自理
+        nav.top != null -> nav.top?.let { it.content() }
+        activeRoute != null -> TransientViewerRouteHost(
+            route = activeRoute!!,
+            config = config.reader,
+            markdownViewerSessionCache = markdownViewerSessionCache,
+            bookNote = bookNoteService,
+            recordRecentOpen = { type, key, title, uri, playlistId ->
+                recordRecentOpen(type, key, title, uri, playlistId)
+            },
+            onRouteChange = { transientRoute = it },
+            browserTab = browserTab,
+            scope = scope,
+        )
+        else -> MainTabsScreen(
+            MainTabsScreenHost(
+                config = config,
                 browserTab = browserTab,
+                rootSwitch = rootSwitch,
+                browserSave = browserSave,
+                quickObfuscate = quickObfuscate,
+                crypto = crypto,
+                archiveOps = archiveOps,
+                archiveReader = archiveReader,
+                epubReader = epubReader,
+                markdownViewerSessionCache = markdownViewerSessionCache,
+                networkServices = networkServices,
+                quickNoteService = quickNoteService,
+                bookNoteService = bookNoteService,
+                quickNoteTab = quickNoteTab,
+                bookNoteTab = bookNoteTab,
+                nav = nav,
                 scope = scope,
+                requestExitApp = ::requestExitApp,
+                recordRecentOpen = ::recordRecentOpen,
+                runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+                startBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
+                readingLauncher = readingLauncher,
+                recentOpenItems = recentOpenItems,
+                initialDirUri = initialDirUri,
+                saveCompletedToken = saveCompletedToken,
+                launchShortcutTarget = launchShortcutTarget,
+                progressOp = progressOp,
+                progressCancelAction = progressCancelAction,
+                transientRoute = { transientRoute = it },
             )
-        }
-        else -> MainTabsRootContent()
+        )
     }
-    // 宿主操作进度对话框（P2 上移全局层）：runWithProgress 可运行于任何显示阶段
-    // （tab 层 / 向导功能页 / 阅读器），进度指示不应依赖某一层组合存活
+    // 宿主操作进度对话框（全局层挂载，任何显示阶段可见）
     progressOp?.let { OperationProgressDialog(it, progressCancelAction) }
 }
 
-// ============================================================================
-// P2 跨域向导功能页组装：Dialog UI 组件留在域文件，此处只做组合接线与
-// 返回键。页面生存期由 DialogPageBinder 绑定域状态（置位入栈 / 清空出栈）。
-// ============================================================================
-
-/**
- * 向导页返回键：对齐原主界面 BackHandler 的分支次序——进度取消优先于
- * 向导关闭（runWithProgress 运行中 back = 取消进度而非关向导）。
- */
-@Composable
-private fun DialogPageBackHandler(
-    progressOp: OperationProgress?,
-    progressCancelAction: (() -> Unit)?,
-    onDialogBack: () -> Unit
+/** 宿主进度运行器（P2）：状态置位 -> 执行 -> 清理，取消动作业主自定。 */
+internal suspend fun runWithUiProgress(
+    setProgressState: (OperationProgress?) -> Unit,
+    label: String,
+    total: Int? = null,
+    block: suspend ((Int) -> Unit) -> Unit
 ) {
-    // 低优先：向导自身的关闭（先注册）
-    BackHandler { onDialogBack() }
-    // 高优先：进度取消（后注册，enabled 时抢先）
-    BackHandler(enabled = progressOp != null) { progressCancelAction?.invoke() }
-}
-
-/**
- * 快速遮罩向导页（单文件 / 批量）。执行走自有 quickInProgress 或执行页，
- * 不经宿主 runWithProgress，页内 back 无进度取消分支。
- */
-private fun quickObfuscateDialogPage(
-    workflow: QuickObfuscateWorkflowState,
-    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
-    onQuickFinished: () -> Unit,
-    onBatchFinished: () -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
-            if (workflow.batchTarget != null) workflow.resetIfBatchActive()
-            else workflow.resetIfQuickActive()
-        }
-        QuickObfuscateDialogs(
-            workflow = workflow,
-            runBatchOperation = runBatchOperation,
-            onQuickFinished = onQuickFinished,
-            onBatchFinished = onBatchFinished
-        )
+    setProgressState(OperationProgress(label, 0, total))
+    delay(50)
+    try {
+        val setProgress: (Int) -> Unit = { i -> setProgressState(OperationProgress(label, i, total)) }
+        block(setProgress)
+    } finally {
+        setProgressState(null)
     }
-    return page
-}
-
-/** GPG 加解密 / .pass 保护向导页（PassView / PassEdit 走全屏查看器，不经此页）。 */
-private fun cryptoDialogPage(
-    workflow: CryptoWorkflowState,
-    scope: CoroutineScope,
-    rootUriProvider: () -> String?,
-    currentDirUriProvider: () -> String,
-    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
-    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
-    onRefresh: () -> Unit,
-    onBatchFinished: () -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
-            if (!workflow.inProgress) workflow.close()
-        }
-        CryptoDialogs(
-            workflow = workflow,
-            scope = scope,
-            rootUri = rootUriProvider(),
-            currentDirUri = currentDirUriProvider(),
-            runWithProgress = runWithProgress,
-            runBatchOperation = runBatchOperation,
-            onRefresh = onRefresh,
-            onBatchFinished = onBatchFinished
-        )
-    }
-    return page
-}
-
-/** 压缩 / 解压向导页（确认后由 executeArchiveOperation 执行文件操作）。 */
-private fun archiveOpsDialogPage(
-    context: Context,
-    scope: CoroutineScope,
-    workflow: ArchiveOperationWorkflowState,
-    browserTab: BrowserTabState,
-    displayUriProvider: () -> String,
-    progressOpState: MutableState<OperationProgress?>,
-    progressCancelActionState: MutableState<(() -> Unit)?>,
-    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        DialogPageBackHandler(progressOpState.value, progressCancelActionState.value) {
-            workflow.close()
-        }
-        ArchiveOperationDialogs(
-            workflow = workflow,
-            onConfirm = {
-                executeArchiveOperation(
-                    context = context,
-                    scope = scope,
-                    workflow = workflow,
-                    browserTab = browserTab,
-                    displayUri = displayUriProvider(),
-                    progressOpState = progressOpState,
-                    progressCancelActionState = progressCancelActionState,
-                    runBatchOperation = runBatchOperation
-                )
-            }
-        )
-    }
-    return page
-}
-
-/** 换根页：根选择对话框与清空回收站确认同域同页（先后最多一个显示）。 */
-private fun rootSwitchDialogPage(
-    workflow: BrowserRootSwitchWorkflow,
-    browserTab: BrowserTabState,
-    recentRootUrisProvider: () -> List<String>,
-    initialDirUriSink: (String) -> Unit,
-    treeLauncher: ManagedActivityResultLauncher<Uri?, Uri?>,
-    scope: CoroutineScope,
-    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
-    context: Context
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
-            when {
-                workflow.showChangeRootConfirm -> workflow.dismissChangeRootConfirm()
-                else -> workflow.dismissRootSwitch()
-            }
-        }
-        if (workflow.showRootSwitchDialog) {
-            RootSwitchDialog(
-                recentRootUris = recentRootUrisProvider(),
-                workflow = workflow,
-                onPickRoot = { rootUri -> workflow.pickRecentRoot(rootUri, initialDirUriSink) },
-                onLaunchPicker = { treeLauncher.launch(null) }
-            )
-        }
-        if (workflow.showChangeRootConfirm && browserTab.rootUri != null) {
-            val r = browserTab.rootUri!!
-            val root = Uri.parse(normalizeContentUriString(r))
-            ChangeRootConfirmDialog(
-                onEmptyAndChange = {
-                    scope.launch {
-                        workflow.dismissChangeRootConfirm()
-                        runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
-                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                            if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
-                            treeLauncher.launch(null)
-                            browserTab.refresh()
-                        }
-                    }
-                },
-                onChangeDirectly = {
-                    workflow.dismissChangeRootConfirm()
-                    treeLauncher.launch(null)
-                },
-                onCancel = workflow::dismissChangeRootConfirm
-            )
-        }
-    }
-    return page
-}
-
-/**
- * 公告转发页：转发目标选择流程（完成 / 取消退回）。
- * P4：请求槽在 FamilyNetworkManager（域状态），页面投影 forwardRequest；
- * familyNetworkForeground 需组合期读取，经 provider 注入。
- */
-private fun bulletinForwardDialogPage(
-    manager: FamilyNetworkManager,
-    familyNetworkForegroundProvider: () -> Boolean,
-    localServiceEnabledProvider: () -> Boolean,
-    onDismiss: () -> Unit,
-    onComplete: () -> Unit,
-    onBack: () -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        // 对齐原主界面 BackHandler 行为：转发流程无对话框级 back 分支，
-        // 落到退出协商
-        BackHandler { onBack() }
-        val payload by manager.forwardRequest.collectAsState()
-        payload?.let {
-            BulletinForwardTargetFlow(
-                manager = manager,
-                payload = it,
-                localServiceEnabled = localServiceEnabledProvider(),
-                keepEphemeralSession = !familyNetworkForegroundProvider(),
-                onDismiss = onDismiss,
-                onComplete = onComplete
-            )
-        }
-    }
-    return page
-}
-
-/** 外源保存覆盖确认页：目标目录就绪且重名时由 BrowserSaveWorkflow 置位。 */
-private fun overwriteConfirmDialogPage(
-    browserSave: BrowserSaveWorkflow,
-    onOverwriteSaved: (String) -> Unit,
-    onSkipped: (String) -> Unit,
-    onBack: () -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        // 对齐原主界面 BackHandler 行为：覆盖确认无对话框级 back 分支，
-        // 落到退出协商
-        BackHandler { onBack() }
-        browserSave.overwriteConfirm?.let { (_, fileName) ->
-            OverwriteSaveConfirmDialog(
-                fileName = fileName,
-                onOverwrite = { browserSave.confirmOverwrite(onOverwriteSaved) },
-                onSkip = { browserSave.skipOverwrite(onSkipped) }
-            )
-        }
-    }
-    return page
 }
 
 internal fun normalizeContentUriString(s: String): String =

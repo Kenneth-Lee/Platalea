@@ -361,6 +361,15 @@ internal fun rememberConfigImportExportWorkflow(
         ConfigImportExportWorkflowState(context, config, scope, rootUriProvider, onConfigFileWritten)
     }
 }
+internal const val CONFIG_EXPORT_FILE_NAME = "local_manager_config.json"
+
+internal enum class ConfigExportResult {
+    SUCCESS,
+    FILE_EXISTS,
+    ENCRYPT_FAILED,
+    FAILED
+}
+
 
 /** 渲染配置导入 / 导出工作流的全部对话框。无活动流程时不显示任何内容。 */
 @Composable

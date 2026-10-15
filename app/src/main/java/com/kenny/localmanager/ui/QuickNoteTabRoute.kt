@@ -1,263 +1,64 @@
 package com.kenny.localmanager.ui
 
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
-import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-data class QuickNoteTabController(
-    override val data: QuickNoteLoadedData?,
-    val startWithAddDialog: Boolean,
-    override val inProgress: Boolean,
-    override val passwordPromptState: TabPasswordPromptState,
-    val requestOpen: (Boolean, String?) -> Unit,
-    val requestOpenWithCachedPassword: (Boolean) -> Unit,
-    val updateEntries: (List<QuickNoteEntry>) -> Unit,
-    private val persistHandler: (String, ((Boolean) -> Unit)?) -> Unit
-) : BaseTabRouteController<QuickNoteLoadedData> {
-    override fun persistIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)?) {
-        persistHandler(reason, onFinished)
-    }
-}
-
+/**
+ * 速记 tab 页面（功能独立化改造）。
+ *
+ * 页面生存期 = 功能运行期：进入组合时启动（ensureLoaded），离开组合时退出
+ * （onDispose 触发"切换标签"持久化；收尾协程在 QuickNoteService 中完成，
+ * 不依赖页面存活）。页面只做服务投影 + 页面私有 UI 态。
+ */
 @Composable
-internal fun rememberQuickNoteTabController(
-    rootUri: String?,
-    isActive: Boolean,
-    markdownViewerSessionCache: ViewerSessions
-): QuickNoteTabController {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var quickNoteData by remember { mutableStateOf<QuickNoteLoadedData?>(null) }
-    var quickNoteEntriesSnapshot by remember { mutableStateOf<List<QuickNoteEntry>>(emptyList()) }
-    var quickNoteLastSavedHash by remember { mutableStateOf<Int?>(null) }
-    var quickNoteStartWithAddDialog by remember { mutableStateOf(false) }
-    var quickNotePassword by remember { mutableStateOf("") }
-    var quickNotePasswordRequired by remember { mutableStateOf(false) }
-    var quickNoteInProgress by remember { mutableStateOf(false) }
-    var quickNoteLoadRequested by remember { mutableStateOf(false) }
+internal fun QuickNoteTabRoute(
+    config: QuickNoteConfigView,
+    service: QuickNoteService
+) {
+    // 功能启动：会话未加载时带缓存密码自动打开
+    LaunchedEffect(Unit) { service.ensureLoaded() }
 
-    fun resetQuickNotePromptState() {
-        quickNotePassword = ""
-        quickNotePasswordRequired = false
-        quickNoteInProgress = false
-    }
-
-    fun persistQuickNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
-        val currentData = quickNoteData ?: run {
-            onFinished?.invoke(true)
-            return
-        }
-        if (quickNoteInProgress) {
-            onFinished?.invoke(false)
-            return
-        }
-        val snapshot = quickNoteEntriesSnapshot
-        val snapshotHash = snapshot.hashCode()
-        if (quickNoteLastSavedHash == snapshotHash) {
-            onFinished?.invoke(true)
-            return
-        }
-        quickNoteInProgress = true
-        scope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    saveQuickNoteData(context, currentData, snapshot)
-                }
-                result.onSuccess { saved ->
-                    markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                    quickNoteData = saved
-                    quickNoteEntriesSnapshot = saved.entries
-                    quickNoteLastSavedHash = saved.entries.hashCode()
-                    onFinished?.invoke(true)
-                }.onFailure { throwable ->
-                    Toast.makeText(
-                        context,
-                        context.getString(
-                            R.string.quick_note_auto_save_failed,
-                            reason,
-                            throwable.message ?: context.getString(R.string.common_unknown_error)
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                    onFinished?.invoke(false)
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Toast.makeText(
-                    context,
-                    context.getString(
-                        R.string.quick_note_auto_save_failed,
-                        reason,
-                        error.message ?: context.getString(R.string.common_unknown_error)
-                    ),
-                    Toast.LENGTH_LONG
-                ).show()
-                onFinished?.invoke(false)
-            } finally {
-                quickNoteInProgress = false
-            }
+    // startWithAddDialog 一次性意图的消费（原 isActive 触发链的页面等价）
+    LaunchedEffect(service.data, service.startWithAddDialog) {
+        if (service.data != null && service.startWithAddDialog) {
+            service.startWithAddDialog = false
         }
     }
 
-    fun requestOpenQuickNote(startWithAddDialog: Boolean, password: String? = null) {
-        val root = rootUri?.let { normalizeContentUriString(it) }
-        if (root == null) {
-            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
-            return
-        }
-        quickNoteLoadRequested = true
-        quickNoteStartWithAddDialog = startWithAddDialog
-        quickNoteInProgress = true
-        scope.launch {
-            try {
-                when (val result = withContext(Dispatchers.IO) {
-                    openQuickNoteData(context, root, password)
-                }) {
-                    is QuickNoteOpenResult.Success -> {
-                        quickNoteData = result.data
-                        quickNoteEntriesSnapshot = result.data.entries
-                        quickNoteLastSavedHash = result.data.entries.hashCode()
-                        quickNotePasswordRequired = false
-                        quickNotePassword = ""
-                        quickNoteLoadRequested = false
-                    }
-                    QuickNoteOpenResult.RequiresPassword -> {
-                        quickNotePasswordRequired = true
-                        quickNoteLoadRequested = false
-                    }
-                    is QuickNoteOpenResult.Error -> {
-                        quickNoteLoadRequested = false
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                quickNoteLoadRequested = false
-                quickNotePasswordRequired = false
-                Toast.makeText(
-                    context,
-                    error.message ?: context.getString(R.string.common_unknown_error),
-                    Toast.LENGTH_SHORT
-                ).show()
-            } finally {
-                quickNoteInProgress = false
-            }
-        }
-    }
-
-    LaunchedEffect(isActive, quickNoteData) {
-        if (isActive && quickNoteData == null) {
-            quickNoteLoadRequested = true
-        }
-    }
-
-    LaunchedEffect(rootUri, quickNoteData, quickNoteInProgress, quickNoteLoadRequested, quickNotePasswordRequired) {
-        if (
-            quickNoteLoadRequested &&
-            rootUri != null &&
-            quickNoteData == null &&
-            !quickNoteInProgress &&
-            !quickNotePasswordRequired
-        ) {
-            requestOpenQuickNote(false, SecretKeyPasswordCache.get()?.let { String(it) })
-        }
-    }
-
-    LaunchedEffect(isActive, quickNoteData, quickNoteStartWithAddDialog) {
-        if (isActive && quickNoteData != null && quickNoteStartWithAddDialog) {
-            quickNoteStartWithAddDialog = false
-        }
-    }
-
-    val persistReasonTabSwitch = context.getString(R.string.quick_note_persist_reason_tab_switch)
-    val persistReasonBackground = context.getString(R.string.quick_note_persist_reason_background)
-
-    var previousIsActive by remember { mutableStateOf(false) }
-    LaunchedEffect(isActive) {
-        if (previousIsActive && !isActive) {
-            persistQuickNoteIfNeeded(persistReasonTabSwitch)
-        }
-        previousIsActive = isActive
-    }
-
+    // 功能退出协议：页面离开组合 = 功能退出（tab 切走或全屏 Route 顶替），
+    // 触发持久化；无变化时 hash 守卫直接跳过
+    val reasonTabSwitch = stringResource(R.string.quick_note_persist_reason_tab_switch)
+    val reasonBackground = stringResource(R.string.quick_note_persist_reason_background)
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, isActive, persistReasonBackground) {
+    DisposableEffect(lifecycleOwner, reasonTabSwitch, reasonBackground) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && isActive) {
-                persistQuickNoteIfNeeded(persistReasonBackground)
+            if (event == Lifecycle.Event.ON_STOP) {
+                service.persistIfNeeded(reasonBackground)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            service.persistIfNeeded(reasonTabSwitch)
         }
     }
 
-    return QuickNoteTabController(
-        data = quickNoteData,
-        startWithAddDialog = quickNoteStartWithAddDialog,
-        inProgress = quickNoteInProgress,
-        passwordPromptState = TabPasswordPromptState(
-            required = quickNotePasswordRequired,
-            password = quickNotePassword,
-            inProgress = quickNoteInProgress,
-            onPasswordChange = { if (!quickNoteInProgress) quickNotePassword = it },
-            onConfirm = { pwd ->
-                if (!quickNoteInProgress) {
-                    requestOpenQuickNote(quickNoteStartWithAddDialog, pwd)
-                }
-            },
-            onDismiss = {
-                if (!quickNoteInProgress) {
-                    resetQuickNotePromptState()
-                    quickNoteStartWithAddDialog = false
-                    quickNoteLoadRequested = false
-                }
-            }
-        ),
-        requestOpen = ::requestOpenQuickNote,
-        requestOpenWithCachedPassword = { startWithAddDialog ->
-            requestOpenQuickNote(startWithAddDialog, SecretKeyPasswordCache.get()?.let { String(it) })
-        },
-        updateEntries = { quickNoteEntriesSnapshot = it },
-        persistHandler = ::persistQuickNoteIfNeeded
-    )
-}
-
-@Composable
-internal fun QuickNoteTabRoute(
-    config: QuickNoteConfigView,
-    controller: QuickNoteTabController
-) {
     TabRouteContent(
-        controller = controller,
+        controller = service,
         loadingText = stringResource(R.string.quick_note_opening)
     ) { data ->
         QuickNoteScreen(
             config = config,
             loadedData = data,
-            startWithAddDialog = controller.startWithAddDialog,
-            inProgress = controller.inProgress,
-            onEntriesChanged = controller.updateEntries
+            startWithAddDialog = service.startWithAddDialog,
+            inProgress = service.inProgress,
+            onEntriesChanged = service::updateEntries
         )
     }
 }

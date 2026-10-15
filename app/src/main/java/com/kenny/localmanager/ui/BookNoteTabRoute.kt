@@ -1,202 +1,34 @@
 package com.kenny.localmanager.ui
 
-import android.widget.Toast
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.kenny.localmanager.R
-import com.kenny.localmanager.gpg.SecretKeyPasswordCache
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
-data class BookNoteTabController(
-    override val data: BookNoteLoadedData?,
-    val entriesSnapshot: List<BookNoteEntry>,
-    override val inProgress: Boolean,
-    override val passwordPromptState: TabPasswordPromptState,
-    val requestOpen: (String?) -> Unit,
-    val requestOpenWithCachedPassword: () -> Unit,
-    val requestLoad: () -> Unit,
-    val updateEntries: (List<BookNoteEntry>) -> Unit,
-    private val persistHandler: (String, ((Boolean) -> Unit)?) -> Unit
-) : BaseTabRouteController<BookNoteLoadedData> {
-    override fun persistIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)?) {
-        persistHandler(reason, onFinished)
-    }
-}
-
+/**
+ * 书摘 tab 页面（功能独立化改造，与速记同构）。
+ *
+ * 页面生存期 = 功能运行期。与速记的差异：条目更新即时自动保存
+ * （BookNoteService.updateEntries），退出时不做"切换标签"持久化（原行为）。
+ */
 @Composable
-internal fun rememberBookNoteTabController(
-    rootUri: String?,
-    isActive: Boolean,
-    markdownViewerSessionCache: ViewerSessions
-): BookNoteTabController {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var bookNoteData by remember { mutableStateOf<BookNoteLoadedData?>(null) }
-    var bookNoteEntriesSnapshot by remember { mutableStateOf<List<BookNoteEntry>>(emptyList()) }
-    var bookNoteLastSavedHash by remember { mutableStateOf<Int?>(null) }
-    var bookNotePassword by remember { mutableStateOf("") }
-    var bookNotePasswordRequired by remember { mutableStateOf(false) }
-    var bookNoteInProgress by remember { mutableStateOf(false) }
-    var bookNoteLoadRequested by remember { mutableStateOf(false) }
+internal fun BookNoteTabRoute(
+    service: BookNoteService
+) {
+    // 功能启动：会话未加载时带缓存密码自动打开
+    LaunchedEffect(Unit) { service.ensureLoaded() }
 
-    fun resetBookNotePromptState() {
-        bookNotePassword = ""
-        bookNotePasswordRequired = false
-        bookNoteInProgress = false
-    }
-
-    fun persistBookNoteIfNeeded(reason: String, onFinished: ((Boolean) -> Unit)? = null) {
-        val currentData = bookNoteData ?: run {
-            onFinished?.invoke(true)
-            return
-        }
-        if (bookNoteInProgress) {
-            onFinished?.invoke(false)
-            return
-        }
-        val snapshot = bookNoteEntriesSnapshot
-        val snapshotHash = snapshot.hashCode()
-        if (bookNoteLastSavedHash == snapshotHash) {
-            onFinished?.invoke(true)
-            return
-        }
-        bookNoteInProgress = true
-        scope.launch {
-            try {
-                val result = withContext(Dispatchers.IO) {
-                    saveBookNoteData(context, currentData, snapshot)
-                }
-                result.onSuccess { saved ->
-                    markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
-                    bookNoteData = saved
-                    bookNoteEntriesSnapshot = saved.entries
-                    bookNoteLastSavedHash = saved.entries.hashCode()
-                    onFinished?.invoke(true)
-                }.onFailure { throwable ->
-                    Toast.makeText(
-                        context,
-                        context.getString(
-                            R.string.book_note_auto_save_failed,
-                            reason,
-                            throwable.message ?: context.getString(R.string.common_unknown_error)
-                        ),
-                        Toast.LENGTH_LONG
-                    ).show()
-                    onFinished?.invoke(false)
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                Toast.makeText(
-                    context,
-                    context.getString(
-                        R.string.book_note_auto_save_failed,
-                        reason,
-                        error.message ?: context.getString(R.string.common_unknown_error)
-                    ),
-                    Toast.LENGTH_LONG
-                ).show()
-                onFinished?.invoke(false)
-            } finally {
-                bookNoteInProgress = false
-            }
-        }
-    }
-
-    fun requestOpenBookNote(password: String? = null) {
-        val root = rootUri?.let { normalizeContentUriString(it) }
-        if (root == null) {
-            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
-            return
-        }
-        bookNoteLoadRequested = true
-        bookNoteInProgress = true
-        scope.launch {
-            try {
-                when (val result = withContext(Dispatchers.IO) {
-                    openBookNoteData(context, root, password)
-                }) {
-                    is BookNoteOpenResult.Success -> {
-                        bookNoteData = result.data
-                        bookNoteEntriesSnapshot = result.data.entries
-                        bookNoteLastSavedHash = result.data.entries.hashCode()
-                        bookNotePasswordRequired = false
-                        bookNotePassword = ""
-                        bookNoteLoadRequested = false
-                    }
-                    BookNoteOpenResult.RequiresPassword -> {
-                        bookNotePasswordRequired = true
-                        bookNoteLoadRequested = false
-                    }
-                    is BookNoteOpenResult.Error -> {
-                        bookNoteLoadRequested = false
-                        Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (error: Throwable) {
-                bookNoteLoadRequested = false
-                bookNotePasswordRequired = false
-                Toast.makeText(
-                    context,
-                    error.message ?: context.getString(R.string.common_unknown_error),
-                    Toast.LENGTH_SHORT
-                ).show()
-            } finally {
-                bookNoteInProgress = false
-            }
-        }
-    }
-
-    LaunchedEffect(isActive, bookNoteData) {
-        if (isActive && bookNoteData == null) {
-            bookNoteLoadRequested = true
-        }
-    }
-
-    LaunchedEffect(rootUri, bookNoteData, bookNoteInProgress, bookNoteLoadRequested, bookNotePasswordRequired) {
-        if (
-            bookNoteLoadRequested &&
-            rootUri != null &&
-            bookNoteData == null &&
-            !bookNoteInProgress &&
-            !bookNotePasswordRequired
-        ) {
-            requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
-        }
-    }
-
-    val persistReasonUpdate = context.getString(R.string.book_note_persist_reason_update)
-    val persistReasonBackground = context.getString(R.string.book_note_persist_reason_background)
-
-    LaunchedEffect(bookNoteData, bookNoteEntriesSnapshot, bookNoteInProgress, persistReasonUpdate) {
-        if (bookNoteData == null || bookNoteInProgress) return@LaunchedEffect
-        val snapshotHash = bookNoteEntriesSnapshot.hashCode()
-        if (bookNoteLastSavedHash != snapshotHash) {
-            persistBookNoteIfNeeded(persistReasonUpdate)
-        }
-    }
-
+    // 后台持久化（app 退到后台时）
+    val reasonBackground = stringResource(R.string.book_note_persist_reason_background)
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, persistReasonBackground) {
+    DisposableEffect(lifecycleOwner, reasonBackground) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_STOP && bookNoteData != null) {
-                persistBookNoteIfNeeded(persistReasonBackground)
+            if (event == Lifecycle.Event.ON_STOP && service.data != null) {
+                service.persistIfNeeded(reasonBackground)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -205,47 +37,14 @@ internal fun rememberBookNoteTabController(
         }
     }
 
-    return BookNoteTabController(
-        data = bookNoteData,
-        entriesSnapshot = bookNoteEntriesSnapshot,
-        inProgress = bookNoteInProgress,
-        passwordPromptState = TabPasswordPromptState(
-            required = bookNotePasswordRequired,
-            password = bookNotePassword,
-            inProgress = bookNoteInProgress,
-            onPasswordChange = { if (!bookNoteInProgress) bookNotePassword = it },
-            onConfirm = { pwd ->
-                if (!bookNoteInProgress) {
-                    requestOpenBookNote(pwd)
-                }
-            },
-            onDismiss = {
-                if (!bookNoteInProgress) {
-                    resetBookNotePromptState()
-                    bookNoteLoadRequested = false
-                }
-            }
-        ),
-        requestOpen = ::requestOpenBookNote,
-        requestOpenWithCachedPassword = {
-            requestOpenBookNote(SecretKeyPasswordCache.get()?.let { String(it) })
-        },
-        requestLoad = { bookNoteLoadRequested = true },
-        updateEntries = { bookNoteEntriesSnapshot = it },
-        persistHandler = ::persistBookNoteIfNeeded
-    )
-}
-
-@Composable
-internal fun BookNoteTabRoute(controller: BookNoteTabController) {
     TabRouteContent(
-        controller = controller,
+        controller = service,
         loadingText = stringResource(R.string.book_note_opening)
     ) { data ->
         BookNoteScreen(
             loadedData = data,
-            inProgress = controller.inProgress,
-            onEntriesChanged = controller.updateEntries
+            inProgress = service.inProgress,
+            onEntriesChanged = service::updateEntries
         )
     }
 }
