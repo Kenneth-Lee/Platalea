@@ -100,6 +100,7 @@ import com.kenny.localmanager.player.saveEditableAudioAnnotationToMp3
 import com.kenny.localmanager.player.saveEditableAudioAnnotationWithJaudiotagger
 import com.kenny.localmanager.player.supportsJaudiotaggerWrite
 import com.kenny.localmanager.player.validateEditableAudioAnnotationForm
+import com.kenny.localmanager.ui.MainTab
 import com.kenny.localmanager.ui.OperationRunState
 import com.kenny.localmanager.ui.RootService
 import com.kenny.localmanager.ui.TransientRoute
@@ -618,7 +619,8 @@ internal class BrowserTabHostDependencies(
     // ---- 导航出口（经宿主：切 tab 是导航服务的判断）----
     val onForwardToBulletin: (BulletinForwardPayload) -> Unit,
     val onOpenQuickNote: () -> Unit,
-    val requestOpenPlayerTab: () -> Unit,
+    /** 通用切 tab 出口（导航服务）：会话句柄与宿主编排共用。 */
+    val switchTab: (MainTab) -> Unit,
     // ---- 宿主编排能力 ----
     val runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
     val runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
@@ -644,7 +646,6 @@ internal fun BrowserTabHost(
     val playerTab = deps.playerTab
     val onForwardToBulletin = deps.onForwardToBulletin
     val onOpenQuickNote = deps.onOpenQuickNote
-    val requestOpenPlayerTab = deps.requestOpenPlayerTab
     val runWithProgress = deps.runWithProgress
     val runBatchOperation = deps.runBatchOperation
     // 目录会话别名（组合期间读取即订阅快照）
@@ -655,6 +656,16 @@ internal fun BrowserTabHost(
     fun refresh() = state.refresh()
     val backStack = state.backStack
     val pendingList = state.pendingList
+    // 会话句柄（拆解设计 §2.1）：浏览器对外部动作开放的受限命令接口。
+    // 功能域动作经它发收尾命令；实现只调域内既有方法，不新造状态。
+    val sessionHandle = remember(state) {
+        object : BrowserSessionHandle {
+            override fun refresh() = state.refresh()
+            override fun addToPending(item: DocumentFileModel) { state.pendingList.add(item) }
+            override fun removeFromPending(item: DocumentFileModel) { state.pendingList.remove(item) }
+            override fun switchTab(tab: MainTab) = deps.switchTab(tab)
+        }
+    }
     fun clearPendingList() = state.clearPendingList()
     var showPendingList by state::showPendingList
     var showPendingDeleteConfirm by state::showPendingDeleteConfirm
@@ -984,6 +995,7 @@ internal fun BrowserTabHost(
                             BrowserTabRouteState(
                                 modifier = Modifier.fillMaxSize(),
                                 config = config,
+                                session = sessionHandle,
                                 currentUri = displayUri,
                                 refreshTrigger = refreshKey,
                                 dirCache = dirCache,
@@ -1120,16 +1132,11 @@ internal fun BrowserTabHost(
                                     onForwardToBulletin(BulletinForwardPayload.Files(items))
                                 },
                                 onUnzipRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.Unzip(it)) },
-                                onRequestMdZipView = readingLauncher::mdZip,
                                 onRequestHtmlView = readingLauncher::html,
-                                onRequestHtmlZipView = readingLauncher::htmlZip,
                                 onRequestOpenUrl = readingLauncher::htmlUrl,
-                                onRequestLlmZipView = readingLauncher::llmZip,
                                 onRequestEpubView = readingLauncher::epub,
                                 onRequestTxtView = readingLauncher::txt,
                                 onRequestLlmView = readingLauncher::llm,
-                                onRequestPicZipView = readingLauncher::picZip,
-                                onRequestVidZipView = readingLauncher::vidZip,
                                 onRequestDirectoryImageView = { item, dirUri, siblings ->
                                     scope.launch {
                                         runCatching {
@@ -1169,7 +1176,7 @@ internal fun BrowserTabHost(
                                     }
                                 },
                                 playbackState = playbackState,
-                                onOpenPlaybackScreen = { requestOpenPlayerTab() },
+                                onOpenPlaybackScreen = { deps.switchTab(MainTab.PLAYER) },
                                 zipEditTargetUri = zipEditTargetUriValue,
                                 zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
                                 zipEditTargetIsZip = zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true,

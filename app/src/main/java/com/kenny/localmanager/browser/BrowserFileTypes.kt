@@ -4,32 +4,18 @@ import com.kenny.localmanager.ui.openRecentItemByType
 import com.kenny.localmanager.file.isEpubFile
 import com.kenny.localmanager.file.isLlmFile
 import com.kenny.localmanager.file.isTxtFile
+import com.kenny.localmanager.file.isPicZip
+import com.kenny.localmanager.file.isVidZip
 import com.kenny.localmanager.ui.RecentTabRoute
 /**
  * 浏览器域文件类型谓词（批次 B2）：文件名 → 类型的单一知识来源。
- *
+ * 压缩包谓词（isCompressedMarkdown 等 5 个）已随打开意图声明迁往
+ * file 包（CompressedFileTypes.kt，拆解设计第一批——三方共用故为
+ * 域间工具）。
  * 点击行为表（BrowserScreen.openItemByDefault）、上下文菜单的独特项条件、
  * 最近记录的打开路由（RecentTabRoute.openRecentItemByType）三处共用这套谓词，
  * 避免同一后缀知识散装手写。新增阅读/操作格式时只在此处加谓词 + 各表加行。
  */
-internal fun isCompressedMarkdown(name: String): Boolean =
-    name.endsWith(".md.zip", ignoreCase = true) || name.endsWith(".rst.zip", ignoreCase = true)
-
-/** 判断文件名是否为压缩 HTML 文件（.html.zip）。 */
-internal fun isCompressedHtml(name: String): Boolean =
-    name.endsWith(".html.zip", ignoreCase = true)
-
-/** 判断文件名是否为压缩 LLM 包（.llm.zip）。 */
-internal fun isCompressedLlmZip(name: String): Boolean =
-    name.endsWith(".llm.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .pic.zip 图片压缩包。 */
-internal fun isPicZip(name: String): Boolean =
-    name.endsWith(".pic.zip", ignoreCase = true)
-
-/** 判断文件名是否为 .vid.zip 视频压缩包。 */
-internal fun isVidZip(name: String): Boolean =
-    name.endsWith(".vid.zip", ignoreCase = true)
 
 /** 判断文件名是否为 EPUB 文件。 */
 internal fun isEpubFile(name: String): Boolean =

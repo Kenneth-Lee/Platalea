@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kenny.localmanager.R
+import com.kenny.localmanager.browser.BrowserActions
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.HtmlZipExtractResult
 import com.kenny.localmanager.file.HtmlZipParseResult
@@ -573,6 +574,8 @@ internal object ArchiveReaderModule {
 
     fun attach(context: Context, scope: CoroutineScope) {
         instance = ArchiveReaderWorkflowState(context.applicationContext, scope)
+        // 文件浏览能力声明（拆解设计第一批）：压缩包阅读打开意图。
+        ArchiveReaderIntents.registerAll(BrowserActions.registry)
     }
 
     fun resetForTest() {

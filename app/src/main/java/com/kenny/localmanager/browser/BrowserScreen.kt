@@ -132,6 +132,8 @@ import com.kenny.localmanager.file.getArchiveFirstLevelEntries
 import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.guessExternalOpenMimeType
 import com.kenny.localmanager.file.isGalleryImageFile
+import com.kenny.localmanager.file.isPicZip
+import com.kenny.localmanager.file.isVidZip
 import com.kenny.localmanager.file.isHtmlFile
 import com.kenny.localmanager.file.listChildrenFast
 import com.kenny.localmanager.file.loadEpubFromCache
@@ -1030,6 +1032,7 @@ private fun FileSearchResultsDialog(
 internal fun BrowserScreen(
     modifier: Modifier = Modifier,
     config: BrowserConfigView,
+    session: BrowserSessionHandle,
     currentUri: String,
     refreshTrigger: Int,
     dirCache: Map<String, CachedDir>,
@@ -1065,14 +1068,9 @@ internal fun BrowserScreen(
     onRequestQuickMask: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onUnzipRequest: (DocumentFileModel) -> Unit = {},
-    onRequestMdZipView: (DocumentFileModel) -> Unit = {},
     onRequestHtmlView: (DocumentFileModel) -> Unit = {},
-    onRequestHtmlZipView: (DocumentFileModel) -> Unit = {},
     onRequestOpenUrl: (String) -> Unit = {},
-    onRequestLlmZipView: (DocumentFileModel) -> Unit = {},
     onRequestEpubView: (DocumentFileModel) -> Unit = {},
-    onRequestPicZipView: (DocumentFileModel) -> Unit = {},
-    onRequestVidZipView: (DocumentFileModel) -> Unit = {},
     onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
     onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
@@ -1303,17 +1301,16 @@ internal fun BrowserScreen(
 
     fun defaultOpenMenuLabel(target: DocumentFileModel): String {
         if (target.isDirectory) return context.getString(R.string.context_default_enter_directory)
+        // 已迁移打开意图（拆解设计）：标题取槽位最小适用意图的声明。
+        BrowserActions.registry.matchIntent(target)?.let {
+            return context.getString(it.labelRes)
+        }
         return when {
-            isCompressedMarkdown(target.name) -> context.getString(R.string.context_view_zip_markdown)
             isHtmlFile(target.name) -> context.getString(R.string.context_default_open_html)
-            isCompressedHtml(target.name) -> context.getString(R.string.context_view_zip_html)
-            isCompressedLlmZip(target.name) -> context.getString(R.string.context_view_zip_llm)
             isEpubFile(target.name) -> context.getString(R.string.context_default_open_epub)
             isTxtFile(target.name) -> context.getString(R.string.context_default_open_txt)
             isLlmFile(target.name) -> context.getString(R.string.context_default_open_llm)
             isGalleryImageFile(target.name) -> context.getString(R.string.context_view_images)
-            isPicZip(target.name) -> context.getString(R.string.context_view_compressed_images)
-            isVidZip(target.name) -> context.getString(R.string.context_view_videos)
             isPdfFile(target.name) -> context.getString(R.string.context_default_open_pdf)
             isExtractableArchive(target.name) -> context.getString(R.string.browser_extract_action)
             isGpgEncryptedFile(target.name) -> context.getString(R.string.context_gpg_decrypt)
@@ -1332,15 +1329,14 @@ internal fun BrowserScreen(
             onNavigate(target.uri.toString())
             return
         }
+        // 已迁移打开意图（拆解设计）：单击分发先查声明注册表。
+        BrowserActions.registry.matchIntent(target)?.let {
+            it.open(target, session)
+            return
+        }
         when {
-            isCompressedMarkdown(target.name) ->
-                onRequestMdZipView(target)
             isHtmlFile(target.name) ->
                 onRequestHtmlView(target)
-            isCompressedHtml(target.name) ->
-                onRequestHtmlZipView(target)
-            isCompressedLlmZip(target.name) ->
-                onRequestLlmZipView(target)
             isEpubFile(target.name) ->
                 onRequestEpubView(target)
             isTxtFile(target.name) ->
@@ -1349,10 +1345,6 @@ internal fun BrowserScreen(
                 onRequestLlmView(target)
             isGalleryImageFile(target.name) ->
                 onRequestDirectoryImageView(target, currentUri, galleryImageItems)
-            isPicZip(target.name) ->
-                onRequestPicZipView(target)
-            isVidZip(target.name) ->
-                onRequestVidZipView(target)
             isPdfFile(target.name) ->
                 onRequestPdfView(target)
             isExtractableArchive(target.name) ->

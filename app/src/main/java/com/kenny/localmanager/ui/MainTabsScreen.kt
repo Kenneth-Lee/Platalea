@@ -136,7 +136,7 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
                 playerTab = playerTab,
                 onForwardToBulletin = { payload -> networkServices.familyNetworkManager.requestForward(payload) },
                 onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
-                requestOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
+                switchTab = { nav.switchTab(it) },
                 runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
                 runBatchOperation = { label, names, onFinished, block ->
                     startBatchOperation(label, names, onFinished, block)

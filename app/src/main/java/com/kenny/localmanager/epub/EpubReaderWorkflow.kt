@@ -9,6 +9,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import com.kenny.localmanager.R
+import com.kenny.localmanager.browser.BrowserActions
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.isArchiveCacheStampValid
 import com.kenny.localmanager.file.EpubExtractResult
@@ -441,6 +442,8 @@ internal object EpubReaderModule {
 
     fun attach(context: Context, scope: CoroutineScope) {
         instance = EpubReaderWorkflowState(context.applicationContext, scope)
+        // 文件浏览能力声明（拆解设计第一批）：压缩 LLM 包打开意图。
+        EpubReaderIntents.registerAll(BrowserActions.registry)
     }
 
     fun resetForTest() {
