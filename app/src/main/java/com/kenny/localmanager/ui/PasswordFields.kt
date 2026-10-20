@@ -94,34 +94,40 @@ private fun readClipboardPassword(context: Context): String? {
     return text.ifBlank { null }
 }
 
-private enum class PasswordKeyCategory { DIGIT, UPPER, LOWER, SYMBOL }
+internal enum class PasswordKeyCategory { DIGIT, UPPER, LOWER, SYMBOL }
 
 private val digitKeys = "1234567890".toList()
-private val upperKeys = ('A'..'Z').toList()
-private val lowerKeys = ('a'..'z').toList()
+/** 字母页按传统键盘（QWERTY）三行布局：10/9/7。 */
+private val qwertyUpperRows = listOf(
+    "QWERTYUIOP".toList(),
+    "ASDFGHJKL".toList(),
+    "ZXCVBNM".toList()
+)
+private val qwertyLowerRows = listOf(
+    "qwertyuiop".toList(),
+    "asdfghjkl".toList(),
+    "zxcvbnm".toList()
+)
 private val symbolKeys = listOf(
     '~', '!', '@', '#', '$', '%', '^', '&', '*',
     '(', ')', '_', '+', '-', '=', '[', ']', '{', '}',
     '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?', '`', '\\'
 )
 
-private fun categoryPages(category: PasswordKeyCategory): List<List<Char>> {
-    val keys = when (category) {
-        PasswordKeyCategory.DIGIT -> digitKeys
-        PasswordKeyCategory.UPPER -> upperKeys
-        PasswordKeyCategory.LOWER -> lowerKeys
-        PasswordKeyCategory.SYMBOL -> symbolKeys
-    }
-    return keys.chunked(30)
+/** 每页的行结构（页 = 行列表）：字母页 QWERTY 三行一页；数字页每行 5 键；符号页 30 键/页每行 5 键。 */
+internal fun categoryPages(category: PasswordKeyCategory): List<List<List<Char>>> = when (category) {
+    PasswordKeyCategory.DIGIT -> listOf(digitKeys.chunked(5))
+    PasswordKeyCategory.UPPER -> listOf(qwertyUpperRows)
+    PasswordKeyCategory.LOWER -> listOf(qwertyLowerRows)
+    PasswordKeyCategory.SYMBOL -> symbolKeys.chunked(30).map { it.chunked(5) }
 }
 
 @Composable
 private fun PasswordGridPage(
-    keys: List<Char>,
+    rows: List<List<Char>>,
     enabled: Boolean,
     onPress: (Char) -> Unit
 ) {
-    val rows = keys.chunked(5)
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         rows.forEach { rowKeys ->
             Row(
@@ -129,13 +135,15 @@ private fun PasswordGridPage(
                 horizontalArrangement = Arrangement.Center
             ) {
                 rowKeys.forEach { key ->
+                    // 5 键行（数字/符号）大键；QWERTY 行键多，缩小键宽保持整行在屏内
+                    val keyWidth = if (rowKeys.size > 5) 28.dp else 50.dp
                     OutlinedButton(
                         onClick = { onPress(key) },
                         enabled = enabled,
                         modifier = Modifier
                             .padding(horizontal = 2.dp, vertical = 1.dp)
-                            .width(50.dp)
-                            .height(32.dp),
+                            .width(keyWidth)
+                            .height(34.dp),
                         contentPadding = PaddingValues(0.dp)
                     ) {
                         Text(key.toString(), style = MaterialTheme.typography.bodySmall)
@@ -177,7 +185,7 @@ internal fun ReliablePasswordInputField(
     }
     val pages = remember(category) { categoryPages(category) }
     if (pageIndex > pages.lastIndex) pageIndex = 0
-    val pageKeys = pages.getOrElse(pageIndex) { emptyList() }
+    val pageRows = pages.getOrElse(pageIndex) { emptyList() }
     val editingText = if (requireConfirmation) buffer else value
     val edit: (String) -> Unit = { newText ->
         if (requireConfirmation) buffer = newText else onValueChange(newText)
@@ -393,7 +401,7 @@ internal fun ReliablePasswordInputField(
 
                         Spacer(Modifier.height(4.dp))
                         PasswordGridPage(
-                            keys = pageKeys,
+                            rows = pageRows,
                             enabled = enabled,
                             onPress = { ch -> edit(editingText + ch) }
                         )
