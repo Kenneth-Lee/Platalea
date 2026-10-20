@@ -48,7 +48,33 @@ data class ZipEditResult(
 )
 
 /** 进度阶段 */
-enum class ZipEditStage { COPY_TARGET, MODIFY, WRITE_BACK }
+enum class ZipEditStage { COPY_TARGET, MODIFY, WRITE_BACK, EXTRACT }
+
+/**
+ * 选中条目展开：勾选目录条目（名以 / 结尾）时包含其全部子孙条目；
+ * 勾选目录内单文件仅含自身（写出时顶层目录按需创建）。
+ */
+internal fun expandSelectedZipEntries(allEntryNames: List<String>, selected: Set<String>): List<String> {
+    val result = linkedSetOf<String>()
+    for (name in allEntryNames) {
+        if (name in selected) {
+            result.add(name)
+            continue
+        }
+        // 逐级向上检查祖先目录前缀（目录条目自身名以 / 结尾，其父为根）；
+        // 剥到空段即到根，终止，避免 "d/" 这类名字自复制死循环。
+        var rest = name
+        while (rest.contains('/')) {
+            rest = rest.substringBeforeLast('/')
+            if (rest.isEmpty()) break
+            if (rest + "/" in selected) {
+                result.add(name)
+                break
+            }
+        }
+    }
+    return result.toList()
+}
 
 /**
  * 使打包阅读器（md/html/pic/vid zip 及 epub/llm zip 共用的解压缓存）针对指定 zip URI 全部失效。
@@ -501,6 +527,93 @@ fun removeZipEntries(
         return ZipEditResult(false, error = "cancelled")
     } catch (e: Exception) {
         Log.e(ZIP_EDITOR_TAG, "removeZipEntries failed", e)
+        return ZipEditResult(false, error = e.message ?: e.javaClass.simpleName)
+    } finally {
+        cacheDir.deleteRecursively()
+    }
+}
+
+/**
+ * 把 zip 中选定的文件平铺解压到目标目录（应用根目录）：只取每个文件
+ * 本身、不带内部目录结构（编辑器里取单个文件出来用的场景）；
+ * 文件名冲突与其他解压功能同策略自动改名（name(1)）。zip 本身不被修改。
+ * 选中条目含加密项时需密码（needsPassword / wrongPassword 语义与加入一致）。
+ */
+fun extractZipEntries(
+    context: Context,
+    zipUri: Uri,
+    treeUri: Uri?,
+    destDirUri: Uri,
+    entryNames: List<String>,
+    setProgress: (ZipEditStage, Int, Int, Long, Long) -> Unit,
+    shouldCancel: () -> Boolean = { false },
+    password: CharArray? = null
+): ZipEditResult {
+    val cacheDir = buildEditCacheDir(context)
+    try {
+        val targetBytes = docTreeSize(context, zipUri, treeUri)
+        setProgress(ZipEditStage.COPY_TARGET, 0, 1, 0, targetBytes)
+        val localZip = File(cacheDir, "target.zip")
+        val resolvedTarget = resolveDocUriWithTree(zipUri, treeUri)
+        context.contentResolver.openInputStream(resolvedTarget)?.use { input ->
+            localZip.outputStream().use { output ->
+                var done = 0L
+                copyStreamCounting(input, output, shouldCancel) { done += it; setProgress(ZipEditStage.COPY_TARGET, 0, 1, done, targetBytes) }
+            }
+        } ?: return ZipEditResult(false, error = "open target failed")
+
+        val writer = try {
+            ArchiveDocumentWriter(context, destDirUri, treeUri)
+        } catch (e: Exception) {
+            return ZipEditResult(false, error = e.message ?: "locate dest dir failed")
+        }
+
+        val headers = ZipFile(localZip).use { it.fileHeaders.orEmpty() }
+        val expanded = expandSelectedZipEntries(headers.map { it.fileName }, entryNames.toSet())
+        // 平铺语义：只写文件，目录条目本身无需创建（勾选目录仅展开其子孙文件）
+        val selHeaders = headers.filter { !it.isDirectory && it.fileName in expanded.toHashSet() }
+
+        // 选中条目含加密项：先校验密码（未做任何写出）
+        if (selHeaders.any { it.isEncrypted }) {
+            if (password == null || password.isEmpty()) {
+                return ZipEditResult(false, needsPassword = true)
+            }
+            if (!verifyZipPassword(localZip, password)) {
+                return ZipEditResult(false, wrongPassword = true)
+            }
+        }
+
+        val total = selHeaders.size.coerceAtLeast(1)
+        val totalBytes = selHeaders.filter { !it.isDirectory }.sumOf { it.uncompressedSize.coerceAtLeast(0L) }
+        var bytesDone = 0L
+        val report: (Int) -> Unit = { n -> if (n > 0) bytesDone += n.toLong() }
+        ZipFile(localZip, password).use { zip ->
+            selHeaders.forEachIndexed { index, header ->
+                if (shouldCancel()) return ZipEditResult(false, error = "cancelled")
+                val name = header.fileName
+                val werr = writer.writeFileFlat(name, shouldCancel) { output ->
+                    zip.getInputStream(header).use { input ->
+                        val buf = ByteArray(64 * 1024)
+                        while (true) {
+                            if (shouldCancel()) throw ArchiveOperationCancelledException("zip extract cancelled")
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            output.write(buf, 0, n)
+                            if (n > 0) report(n)
+                        }
+                    }
+                }
+                if (werr != null) {
+                    return ZipEditResult(false, error = (werr as? UnzipResult.IOError)?.message ?: "write failed: $name")
+                }
+                setProgress(ZipEditStage.EXTRACT, index + 1, total, bytesDone, totalBytes)
+            }
+        }
+        return ZipEditResult(true, renamed = writer.renamedTopLevel())
+    } catch (e: ArchiveOperationCancelledException) {
+        return ZipEditResult(false, error = "cancelled")
+    } catch (e: Exception) {
+        Log.e(ZIP_EDITOR_TAG, "extractZipEntries failed", e)
         return ZipEditResult(false, error = e.message ?: e.javaClass.simpleName)
     } finally {
         cacheDir.deleteRecursively()

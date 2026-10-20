@@ -133,6 +133,7 @@ private fun ZipEditProgressDialog(
         ZipEditStage.COPY_TARGET -> stringResource(R.string.zip_edit_stage_copy)
         ZipEditStage.MODIFY -> stringResource(R.string.zip_edit_stage_modify)
         ZipEditStage.WRITE_BACK -> stringResource(R.string.zip_edit_stage_write_back)
+        ZipEditStage.EXTRACT -> stringResource(R.string.zip_edit_stage_extract)
         null -> ""
     }
     val (done, total) = workflow.progress

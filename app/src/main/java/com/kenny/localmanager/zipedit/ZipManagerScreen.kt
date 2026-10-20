@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import com.kenny.localmanager.R
 import com.kenny.localmanager.file.ZipEntryInfo
+import com.kenny.localmanager.file.expandSelectedZipEntries
 import com.kenny.localmanager.file.listZipEntries
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,7 @@ internal data class ZipManagerRouteState(
     val treeUri: String?,
     val refreshTrigger: Int,
     val onRemoveEntries: (List<String>) -> Unit,
+    val onExtractEntries: (List<String>) -> Unit,
     val onAddFiles: (List<Uri>) -> Unit,
     val onDismiss: () -> Unit
 )
@@ -69,6 +71,7 @@ internal fun ZipManagerScreen(state: ZipManagerRouteState) {
     var loadError by remember(state.targetUri, state.refreshTrigger) { mutableStateOf(false) }
     var selected by remember(state.targetUri, state.refreshTrigger) { mutableStateOf(setOf<String>()) }
     var confirmDelete by remember { mutableStateOf(false) }
+    var confirmExtract by remember { mutableStateOf(false) }
 
     val addFilesLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments()
@@ -128,6 +131,9 @@ internal fun ZipManagerScreen(state: ZipManagerRouteState) {
                     Row {
                         TextButton(onClick = { selected = emptySet() }) {
                             Text(stringResource(R.string.zip_manager_clear_selection))
+                        }
+                        Button(onClick = { confirmExtract = true }) {
+                            Text(stringResource(R.string.zip_manager_extract_action))
                         }
                         Button(onClick = { confirmDelete = true }) {
                             Text(stringResource(R.string.zip_manager_delete_action))
@@ -195,6 +201,27 @@ internal fun ZipManagerScreen(state: ZipManagerRouteState) {
                 }
             }
         }
+    }
+
+    if (confirmExtract) {
+        AlertDialog(
+            onDismissRequest = { confirmExtract = false },
+            title = { Text(stringResource(R.string.zip_manager_extract_action)) },
+            text = {
+                // 勾选目录条目会展开为其中全部文件，确认框按展开后的文件数计
+                val entryNames = entries.orEmpty().map { it.name }
+                val fileCount = expandSelectedZipEntries(entryNames, selected).count { !it.endsWith("/") }
+                Text(stringResource(R.string.zip_manager_extract_confirm, fileCount))
+            },
+            confirmButton = {
+                Button(onClick = {
+                    confirmExtract = false
+                    val toExtract = selected.toList()
+                    if (toExtract.isNotEmpty()) state.onExtractEntries(toExtract)
+                }) { Text(stringResource(R.string.zip_manager_extract_action)) }
+            },
+            dismissButton = { TextButton(onClick = { confirmExtract = false }) { Text(stringResource(R.string.common_cancel)) } }
+        )
     }
 
     if (confirmDelete) {

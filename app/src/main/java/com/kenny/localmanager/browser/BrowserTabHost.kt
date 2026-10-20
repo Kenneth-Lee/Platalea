@@ -48,6 +48,7 @@ import com.kenny.localmanager.file.UnzipResult
 import com.kenny.localmanager.file.addToZip
 import com.kenny.localmanager.file.copyDocumentTo
 import com.kenny.localmanager.file.deleteDocument
+import com.kenny.localmanager.file.extractZipEntries
 import com.kenny.localmanager.file.emptyTrash
 import com.kenny.localmanager.file.fileExtensionKey
 import com.kenny.localmanager.file.invalidateArchiveViewerCaches
@@ -797,6 +798,53 @@ internal fun BrowserTabHost(
         }
     }
 
+    /** 待解压的条目（密码环重试时取用）：会话 + 选中条目。 */
+    var zipExtractPending by remember { mutableStateOf<Pair<ZipManagerSession, List<String>>?>(null) }
+
+    /** 把选中条目解压到应用根目录：顶层同名自动改名；加密条目走密码环。 */
+    fun executeZipExtract(
+        entryNames: List<String>,
+        session: ZipManagerSession,
+        password: String? = null
+    ) {
+        val destDir = rootUri ?: run {
+            Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
+            return
+        }
+        beginZipEditExecution()
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                extractZipEntries(
+                    context = context,
+                    zipUri = Uri.parse(session.uri),
+                    treeUri = rootUri?.let { Uri.parse(it) },
+                    destDirUri = Uri.parse(destDir),
+                    entryNames = entryNames,
+                    setProgress = { stage, done, total, bytesDone, bytesTotal -> ZipEditModule.service.updateProgress(stage, done, total, bytesDone, bytesTotal) },
+                    shouldCancel = { zipEditCancelFlag },
+                    password = password?.toCharArray()
+                )
+            }
+            when {
+                result.needsPassword -> {
+                    zipExtractPending = session to entryNames
+                    ZipEditModule.service.requestPassword(session.name)
+                }
+                result.wrongPassword -> {
+                    zipExtractPending = session to entryNames
+                    ZipEditModule.service.requestPassword(session.name, wrongPrevious = true)
+                }
+                result.ok -> {
+                    zipExtractPending = null
+                    state.refresh()
+                    // 成功含改名明细走结果对话框（与其他解压反馈一致）
+                    ZipEditModule.service.finish(result)
+                }
+                else -> ZipEditModule.service.finish(result)
+            }
+        }
+    }
+
     /** 待执行加入的目标 URI（向导确认后取用；密码重试环亦据此重试） */
     var zipEditPendingTarget by remember { mutableStateOf<String?>(null) }
 
@@ -1265,10 +1313,15 @@ internal fun BrowserTabHost(
             },
             onCancelProgress = { zipEditCancelFlag = true },
             onSubmitPassword = { pw ->
-                val request = ZipEditModule.service.addRequest ?: return@ZipEditDialogs
-                val targetUri = zipEditPendingTarget ?: zipEditTargetUriValue ?: return@ZipEditDialogs
-                val writeBack = targetUri == zipEditTargetUriValue
-                executeZipAdd(request, targetUri, writeBack, pw)
+                val request = ZipEditModule.service.addRequest
+                if (request != null) {
+                    val targetUri = zipEditPendingTarget ?: zipEditTargetUriValue ?: return@ZipEditDialogs
+                    val writeBack = targetUri == zipEditTargetUriValue
+                    executeZipAdd(request, targetUri, writeBack, pw)
+                } else {
+                    val (session, entries) = zipExtractPending ?: return@ZipEditDialogs
+                    executeZipExtract(entries, session, pw)
+                }
             }
         )
         zipManagerSession?.let { session ->
@@ -1279,6 +1332,7 @@ internal fun BrowserTabHost(
                     treeUri = rootUri,
                     refreshTrigger = zipManagerRefresh,
                     onRemoveEntries = { names -> executeZipRemove(names, session) },
+                    onExtractEntries = { names -> executeZipExtract(names, session) },
                     onAddFiles = { uris ->
                         // SAF 选择器返回的文件解析为模型后走加入向导（IO 查询显示名）
                         scope.launch {

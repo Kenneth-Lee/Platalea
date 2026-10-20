@@ -2178,13 +2178,14 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="zip_edit_stage_copy">Reading target and sources…</string>
     <string name="zip_edit_stage_modify">Modifying archive…</string>
     <string name="zip_edit_stage_write_back">Writing back to target…</string>
+    <string name="zip_edit_stage_extract">Extracting…</string>
     <string name="zip_edit_result_ok_title">Done</string>
     <string name="zip_edit_result_fail_title">Failed</string>
     <string name="zip_edit_result_ok">Operation completed</string>
     <string name="zip_edit_result_renamed">Entries renamed due to name conflicts:</string>
     <string name="zip_edit_result_encrypted_kept">Target is encrypted; new entries were encrypted the same way</string>
     <string name="zip_edit_password_title">ZIP password</string>
-    <string name="zip_edit_password_hint">"%1$s" is an encrypted archive. Password required to add files:</string>
+    <string name="zip_edit_password_hint">“%1$s” is an encrypted archive. Enter its password to continue: </string>
     <string name="zip_edit_password_wrong">Wrong password, try again</string>
     <string name="zip_edit_password_wrong_result">Wrong password; nothing was modified</string>
     <string name="zip_edit_encrypted_badge">encrypted</string>
@@ -2198,8 +2199,10 @@ Use a dedicated PDF reader if you need to select text.</string>
     <string name="zip_manager_empty">Archive is empty</string>
     <string name="zip_manager_selected_count">%1$d selected</string>
     <string name="zip_manager_clear_selection">Clear selection</string>
-    <string name="zip_manager_delete_action">Delete selected</string>
+    <string name="zip_manager_delete_action">Delete</string>
     <string name="zip_manager_delete_confirm_title">Delete entries</string>
+    <string name="zip_manager_extract_action">Extract</string>
+    <string name="zip_manager_extract_confirm">Extract %1$d files flat to the app root (no folders). Name conflicts are auto-renamed.</string>
     <string name="zip_manager_delete_confirm">%1$d entry(ies) will be permanently removed from the archive. This cannot be undone.</string>
     <string name="zip_manager_entry_meta">Size %1$d · Compressed %2$d</string>
 </resources>

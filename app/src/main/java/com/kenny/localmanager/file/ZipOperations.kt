@@ -632,7 +632,7 @@ private fun openSevenZFile(channel: SeekableByteChannel, password: CharArray?): 
     }
 }
 
-private class ArchiveDocumentWriter(
+internal class ArchiveDocumentWriter(
     private val context: Context,
     parentDirUri: Uri,
     treeUri: Uri?
@@ -714,6 +714,27 @@ private class ArchiveDocumentWriter(
             currentUri = nextUri
         }
         return currentUri
+    }
+
+    /** 本次写出中因同名自动改名的顶层名明细（原名 -> 实际名），供结果反馈。 */
+    fun renamedTopLevel(): List<Pair<String, String>> =
+        topLevelNameMap.filter { it.key != it.value }.map { it.key to it.value }.toList()
+
+    /** 平铺写出：忽略原路径，仅取文件名直接放根目录；顶层冲突自动改名。 */
+    fun writeFileFlat(path: String, shouldCancel: () -> Boolean, writeBody: (OutputStream) -> Unit): UnzipResult? {
+        val fileName = sanitizeArchivePath(path).substringAfterLast('/')
+        if (fileName.isBlank()) return UnzipResult.IOError("解压失败：无效文件名 [$path]")
+        val targetName = reserveTopLevelName(fileName, isDirectory = false)
+        val fileUri = try {
+            DocumentsContract.createDocument(cr, rootDirUri, "application/octet-stream", targetName)
+        } catch (_: Exception) {
+            null
+        } ?: return UnzipResult.IOError("解压失败：创建目标文件失败 [$path]")
+        cr.openOutputStream(fileUri)?.use { output ->
+            throwIfCancelled(shouldCancel)
+            writeBody(output)
+        } ?: return UnzipResult.IOError("解压失败：打开输出流失败 [$path]")
+        return null
     }
 
     fun ensureDirectory(path: String): Boolean {

@@ -2254,13 +2254,14 @@ OPF目录文件: %2$s</string>
     <string name="zip_edit_stage_copy">正在读取目标与源文件…</string>
     <string name="zip_edit_stage_modify">正在修改压缩包…</string>
     <string name="zip_edit_stage_write_back">正在写回目标文件…</string>
+    <string name="zip_edit_stage_extract">正在解压…</string>
     <string name="zip_edit_result_ok_title">完成</string>
     <string name="zip_edit_result_fail_title">失败</string>
     <string name="zip_edit_result_ok">操作已完成</string>
     <string name="zip_edit_result_renamed">以下条目因同名已自动改名：</string>
     <string name="zip_edit_result_encrypted_kept">目标为加密压缩包，新条目已按原加密方式加密</string>
     <string name="zip_edit_password_title">输入 ZIP 密码</string>
-    <string name="zip_edit_password_hint">“%1$s”为加密压缩包，需要密码才能加入：</string>
+    <string name="zip_edit_password_hint">“%1$s”为加密压缩包，需要密码才能继续：</string>
     <string name="zip_edit_password_wrong">密码不正确，请重试</string>
     <string name="zip_edit_password_wrong_result">密码不正确，未做任何修改</string>
     <string name="zip_edit_encrypted_badge">加密</string>
@@ -2274,8 +2275,10 @@ OPF目录文件: %2$s</string>
     <string name="zip_manager_empty">压缩包为空</string>
     <string name="zip_manager_selected_count">已选 %1$d 项</string>
     <string name="zip_manager_clear_selection">取消全选</string>
-    <string name="zip_manager_delete_action">删除所选</string>
+    <string name="zip_manager_delete_action">删除</string>
     <string name="zip_manager_delete_confirm_title">删除条目</string>
+    <string name="zip_manager_extract_action">解压</string>
+    <string name="zip_manager_extract_confirm">将把 %1$d 个文件平铺解压到应用根目录（不带目录结构），同名自动改名。</string>
     <string name="zip_manager_delete_confirm">将从压缩包中永久删除 %1$d 个条目，此操作不可撤销。</string>
     <string name="zip_manager_entry_meta">大小 %1$d · 压缩后 %2$d</string>
 </resources>

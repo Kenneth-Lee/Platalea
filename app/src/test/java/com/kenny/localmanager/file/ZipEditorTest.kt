@@ -185,6 +185,26 @@ class ZipEditorTest {
     }
 
     @Test
+    fun expandSelectedEntriesIncludesChildrenOfSelectedDirectories() {
+        val all = listOf("a.txt", "rst/", "rst/style", "rst/sub/", "rst/sub/b.txt", "c.txt")
+        val selected = setOf("rst/")
+        assertEquals(listOf("rst/", "rst/style", "rst/sub/", "rst/sub/b.txt"), expandSelectedZipEntries(all, selected))
+    }
+
+    @Test
+    fun expandSelectedEntriesSingleFileOnly() {
+        val all = listOf("a.txt", "rst/", "rst/style", "rst/sub/b.txt")
+        assertEquals(listOf("rst/style"), expandSelectedZipEntries(all, setOf("rst/style")))
+    }
+
+    @Test
+    fun expandSelectedEntriesMixedSelectionKeepsOrder() {
+        val all = listOf("a.txt", "d/", "d/x", "d/y", "b.txt")
+        val selected = setOf("b.txt", "d/y")
+        assertEquals(listOf("d/y", "b.txt"), expandSelectedZipEntries(all, selected))
+    }
+
+    @Test
     fun removeEntriesFromEncryptedZipNeedsNoPassword() {
         val enc = createAesZip("pw")
         assertTrue(removeEntriesFromZipFile(enc, listOf("e1.txt")))
