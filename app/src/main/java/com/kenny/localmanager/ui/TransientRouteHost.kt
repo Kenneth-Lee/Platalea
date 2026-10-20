@@ -55,11 +55,11 @@ internal sealed interface TransientRoute {
      */
     data class WorkflowViewer(val workflow: ViewerHostWorkflow) : TransientRoute
 
-    /** 工作流型：Crypto 域 .pass 保护内容查看全屏。 */
-    data class PassViewer(val workflow: CryptoWorkflowState) : TransientRoute
+    /** 工作流型：Crypto 域 .pass 保护内容查看全屏（状态唯一，经 CryptoModule 读取）。 */
+    object PassViewer : TransientRoute
 
-    /** 工作流型：Crypto 域 .pass 保护内容编辑全屏。 */
-    data class PassEditor(val workflow: CryptoWorkflowState) : TransientRoute
+    /** 工作流型：Crypto 域 .pass 保护内容编辑全屏（状态唯一，经 CryptoModule 读取）。 */
+    object PassEditor : TransientRoute
 
 }
 
@@ -197,35 +197,37 @@ internal fun TransientViewerRouteHost(
         }
         is TransientRoute.PassViewer -> {
             // E1：request 态（密码框）也在本 Route 内渲染；判空防御重组间隙
-            val content = route.workflow.passContent
+            val workflow = CryptoModule.service
+            val content = workflow.passContent
             if (content != null) {
-                BackHandler { route.workflow.closePassContent() }
+                BackHandler { workflow.closePassContent() }
                 PassContentViewerScreen(
                     config = config,
                     innerFileName = content.innerFileName,
                     decryptedBytes = content.decryptedBytes,
-                    onBack = { route.workflow.closePassContent() }
+                    onBack = { workflow.closePassContent() }
                 )
             } else {
                 PassOpenPhaseDialogs(
-                    workflow = route.workflow,
+                    workflow = workflow,
                     scope = scope,
                     rootUri = browserTab.rootUri
                 )
             }
         }
         is TransientRoute.PassEditor -> {
-            val state = route.workflow.passEdit
+            val workflow = CryptoModule.service
+            val state = workflow.passEdit
             if (state != null) {
                 val context = LocalContext.current
-                BackHandler { route.workflow.closePassEdit() }
+                BackHandler { workflow.closePassEdit() }
                 PassEditScreen(
                     fileName = state.innerName,
                     initialDecryptedBytes = state.decryptedBytes,
                     onSave = { newBytes ->
                         scope.launch {
                             val ok = savePassEditReencrypted(context, state, newBytes)
-                            route.workflow.closePassEdit()
+                            workflow.closePassEdit()
                             browserTab.refresh()
                             Toast.makeText(
                                 context,
@@ -235,11 +237,11 @@ internal fun TransientViewerRouteHost(
                             ).show()
                         }
                     },
-                    onBack = { route.workflow.closePassEdit() }
+                    onBack = { workflow.closePassEdit() }
                 )
             } else {
                 PassOpenPhaseDialogs(
-                    workflow = route.workflow,
+                    workflow = workflow,
                     scope = scope,
                     rootUri = browserTab.rootUri
                 )

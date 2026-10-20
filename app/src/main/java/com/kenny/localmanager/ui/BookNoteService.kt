@@ -27,7 +27,11 @@ internal class BookNoteService(
     private val scope: CoroutineScope,
     private val markdownViewerSessionCache: ViewerSessions
 ) : BaseTabRouteController<BookNoteLoadedData> {
-    var rootUri: String? = null
+    /** 会话打开时的根（快照）：显示时与根服务核对，不一致即换根重载（换根立即生效）。 */
+    private var sessionRoot: String? = null
+
+    /** 会话代数：换根重载/重新打开时递增；飞行中的收尾与加载协程结果过期即丢弃。 */
+    private var sessionGeneration = 0
 
     override var data by mutableStateOf<BookNoteLoadedData?>(null)
         internal set
@@ -49,9 +53,23 @@ internal class BookNoteService(
         inProgress = false
     }
 
-    /** 功能启动（页面进入组合时调用）。 */
+    /** 功能启动（页面进入组合时调用）：未加载时自动打开；已加载则核对会话根
+     *  与根服务——换根立即生效（收尾保存旧会话后按新根重载）。 */
     fun ensureLoaded() {
-        if (data != null || inProgress || passwordRequired || loadRequested) return
+        if (data != null) {
+            val currentRoot = RootService.rootUri?.let { normalizeContentUriString(it) }
+            if (sessionRoot != currentRoot) reloadForRootChange()
+            return
+        }
+        if (inProgress || passwordRequired || loadRequested) return
+        requestOpen(SecretKeyPasswordCache.get()?.let { String(it) })
+    }
+
+    /** 换根重载：旧会话收尾保存（写旧根，修改不丢），清空后按新根重新打开。 */
+    private fun reloadForRootChange() {
+        persistIfNeeded(context.getString(R.string.book_note_persist_reason_update), null)
+        data = null
+        entriesSnapshot = emptyList()
         requestOpen(SecretKeyPasswordCache.get()?.let { String(it) })
     }
 
@@ -71,12 +89,15 @@ internal class BookNoteService(
             return
         }
         inProgress = true
+        val generation = sessionGeneration
         scope.launch {
             try {
                 val result = withContext(Dispatchers.IO) {
                     saveBookNoteData(context, currentData, snapshot)
                 }
                 result.onSuccess { saved ->
+                    // 会话已换代（换根重载）：文件已写入旧根（修改不丢），状态归新会话
+                    if (generation != sessionGeneration) return@onSuccess
                     markdownViewerSessionCache.invalidateByUri(saved.fileInfo.uri.toString())
                     data = saved
                     entriesSnapshot = saved.entries
@@ -100,19 +121,22 @@ internal class BookNoteService(
     }
 
     fun requestOpen(password: String? = null) {
-        val root = rootUri?.let { normalizeContentUriString(it) }
+        val root = RootService.rootUri?.let { normalizeContentUriString(it) }
         if (root == null) {
             Toast.makeText(context, context.getString(R.string.common_select_root_first), Toast.LENGTH_SHORT).show()
             return
         }
         loadRequested = true
         inProgress = true
+        val generation = ++sessionGeneration
         scope.launch {
             try {
                 when (val result = withContext(Dispatchers.IO) {
                     openBookNoteData(context, root, password)
                 }) {
                     is BookNoteOpenResult.Success -> {
+                        if (generation != sessionGeneration) return@launch
+                        sessionRoot = root
                         data = result.data
                         entriesSnapshot = result.data.entries
                         lastSavedHash = result.data.entries.hashCode()
@@ -121,10 +145,12 @@ internal class BookNoteService(
                         loadRequested = false
                     }
                     BookNoteOpenResult.RequiresPassword -> {
+                        if (generation != sessionGeneration) return@launch
                         passwordRequired = true
                         loadRequested = false
                     }
                     is BookNoteOpenResult.Error -> {
+                        if (generation != sessionGeneration) return@launch
                         loadRequested = false
                         Toast.makeText(context, result.message, Toast.LENGTH_SHORT).show()
                     }

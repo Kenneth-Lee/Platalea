@@ -97,7 +97,7 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
             nav = nav,
             header = {
                 SavingProgressHeader(
-                    pubEncryptInProgress = crypto.pubEncryptInProgress,
+                    pubEncryptInProgress = CryptoModule.service.pubEncryptInProgress,
                     saveInProgress = browserSave.inProgress
                 )
             }
@@ -107,7 +107,6 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
                 archiveReader = archiveReader,
                 epubReader = epubReader,
                 archiveOps = archiveOps,
-                crypto = crypto,
                 configImportExportWorkflow = configTab.importExport,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 playbackState = playerTab.playbackState,
@@ -232,7 +231,6 @@ internal class MainTabsScreenHost(
     val rootSwitch: BrowserRootSwitchWorkflow,
     val browserSave: BrowserSaveWorkflow,
     val quickObfuscate: QuickObfuscateWorkflowState,
-    val crypto: CryptoWorkflowState,
     val archiveOps: ArchiveOperationWorkflowState,
     val archiveReader: ArchiveReaderWorkflowState,
     val epubReader: EpubReaderWorkflowState,

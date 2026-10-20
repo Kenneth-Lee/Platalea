@@ -55,8 +55,7 @@ fun PlataleaApp(
     val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
     val quickObfuscate = rememberQuickObfuscateWorkflow(context)
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
-    val markdownViewerSessionCache = rememberViewerSessions(browserTab.rootUri)
-    val crypto = rememberCryptoWorkflow()
+    val markdownViewerSessionCache = rememberViewerSessions(RootService.rootUri)
     val archiveReader = rememberArchiveReaderWorkflow(context, scope)
     val epubReader = rememberEpubReaderWorkflow(context, scope)
     val archiveOps = rememberArchiveOperationWorkflow(context, scope)
@@ -79,10 +78,6 @@ fun PlataleaApp(
     // tab 切换 = 页面退出（onDispose 触发收尾）+ 新页面启动，服务不动
     val quickNoteService = remember { QuickNoteService(context, scope, markdownViewerSessionCache) }
     val bookNoteService = remember { BookNoteService(context, scope, markdownViewerSessionCache) }
-    LaunchedEffect(browserTab.rootUri) {
-        quickNoteService.rootUri = browserTab.rootUri
-        bookNoteService.rootUri = browserTab.rootUri
-    }
     val quickNoteTab = quickNoteTabFeature(
         config = config.quickNote,
         service = quickNoteService
@@ -179,7 +174,7 @@ fun PlataleaApp(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
             val normalized = normalizeContentUriString(uri.toString())
-            val previousRoot = browserTab.rootUri?.let { normalizeContentUriString(it) }
+            val previousRoot = RootService.rootUri?.let { normalizeContentUriString(it) }
             rootSwitch.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
         }
     }
@@ -189,9 +184,9 @@ fun PlataleaApp(
         config = config.network,
         readerConfig = config.reader,
         activeMainTab = nav.currentTab ?: MainTab.DIRECTORY,
-        rootUri = browserTab.rootUri,
-        displayUri = browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri ?: "",
-        familyRootUri = browserTab.rootUri ?: initialDirUri,
+        rootUri = RootService.rootUri,
+        displayUri = browserTab.currentUri ?: initialDirUri ?: RootService.rootUri ?: "",
+        familyRootUri = RootService.rootUri ?: initialDirUri,
         hideDotFiles = browserTab.hideDotFiles,
         onRequestExitApp = { requestExitApp() }
     )
@@ -243,7 +238,7 @@ fun PlataleaApp(
         }
         nav.restore(restoreTab)
     }
-    LaunchedEffect(browserSave.pendingSaveFileUri, browserTab.rootUri) {
+    LaunchedEffect(browserSave.pendingSaveFileUri, RootService.rootUri) {
         browserSave.consumeIfReady { dir ->
             initialDirUri = dir
             browserTab.navigateTo(dir)
@@ -251,14 +246,12 @@ fun PlataleaApp(
         }
     }
 
-    // 全屏 Route 聚合槽（批次 D）：即时型查看器最先，工作流终态次之
+    // 全屏 Route 聚合槽（批次 D）：即时型查看器最先，工作流终态次之。
+    // pass Route 的显示判断在加密模块（activePassRoute），此处只聚合。
     val activeRoute: TransientRoute? = transientRoute
         ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
         ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
-        ?: crypto.passEdit?.let { TransientRoute.PassEditor(crypto) }
-        ?: crypto.passContent?.let { TransientRoute.PassViewer(crypto) }
-        ?: (crypto.request as? CryptoRequest.PassEdit)?.let { TransientRoute.PassEditor(crypto) }
-        ?: (crypto.request as? CryptoRequest.PassView)?.let { TransientRoute.PassViewer(crypto) }
+        ?: CryptoModule.activePassRoute()
 
     // ==== 接线：跨域向导功能页（页面工厂 + DialogPageBinder 绑定域状态）====
     val quickMaskPage = remember {
@@ -272,25 +265,13 @@ fun PlataleaApp(
             }
         )
     }
-    val cryptoPage = remember {
-        cryptoDialogPage(
-            workflow = crypto,
-            scope = scope,
-            rootUriProvider = { browserTab.rootUri },
-            currentDirUriProvider = { browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!! },
-            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
-            onRefresh = { browserTab.refresh() },
-            onBatchFinished = { browserTab.finishPendingList() }
-        )
-    }
     val archiveOpsPage = remember {
         archiveOpsDialogPage(
             context = context,
             scope = scope,
             workflow = archiveOps,
             browserTab = browserTab,
-            displayUriProvider = { browserTab.currentUri ?: initialDirUri ?: browserTab.rootUri!! },
+            displayUriProvider = { browserTab.currentUri ?: initialDirUri ?: RootService.rootUri!! },
             progressOpState = progressOpState,
             progressCancelActionState = progressCancelActionState,
             runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
@@ -336,10 +317,16 @@ fun PlataleaApp(
         )
     }
     DialogPageBinder(nav, quickMaskPage) { quickObfuscate.batchTarget != null || quickObfuscate.quickTarget != null }
-    DialogPageBinder(nav, cryptoPage) {
-        val r = crypto.request
-        r != null && r !is CryptoRequest.PassView && r !is CryptoRequest.PassEdit
-    }
+    CryptoWizardBinding(
+        nav = nav,
+        scope = scope,
+        rootUriProvider = { RootService.rootUri },
+        currentDirUriProvider = { browserTab.currentUri ?: initialDirUri ?: RootService.rootUri!! },
+        runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+        runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
+        onRefresh = { browserTab.refresh() },
+        onBatchFinished = { browserTab.finishPendingList() }
+    )
     DialogPageBinder(nav, archiveOpsPage) { archiveOps.request != null }
     DialogPageBinder(nav, rootSwitchPage) { rootSwitch.showRootSwitchDialog || rootSwitch.showChangeRootConfirm }
     val bulletinForwardRequest by networkServices.familyNetworkManager.forwardRequest.collectAsState()
@@ -349,7 +336,7 @@ fun PlataleaApp(
     // ==== 组合栈顶：顶层 when 分派（互斥的显示阶段）====
     when {
         showUnlockGate -> StartupUnlockGateScreen(onUnlocked = { unlockedByStartup = true })
-        browserTab.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> NoRootGateScreen(
+        RootService.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> NoRootGateScreen(
             externalSavePending = browserSave.pendingSaveFileUri != null,
             treeLauncher = treeLauncher
         )
@@ -374,7 +361,6 @@ fun PlataleaApp(
                 rootSwitch = rootSwitch,
                 browserSave = browserSave,
                 quickObfuscate = quickObfuscate,
-                crypto = crypto,
                 archiveOps = archiveOps,
                 archiveReader = archiveReader,
                 epubReader = epubReader,

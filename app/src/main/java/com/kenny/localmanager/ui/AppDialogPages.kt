@@ -28,7 +28,7 @@ import kotlinx.coroutines.withContext
  * 向导关闭（runWithProgress 运行中 back = 取消进度而非关向导）。
  */
 @Composable
-private fun DialogPageBackHandler(
+internal fun DialogPageBackHandler(
     progressOp: OperationProgress?,
     progressCancelAction: (() -> Unit)?,
     onDialogBack: () -> Unit
@@ -59,36 +59,6 @@ internal fun quickObfuscateDialogPage(
             workflow = workflow,
             runBatchOperation = runBatchOperation,
             onQuickFinished = onQuickFinished,
-            onBatchFinished = onBatchFinished
-        )
-    }
-    return page
-}
-
-/** GPG 加解密 / .pass 保护向导页（PassView / PassEdit 走全屏查看器，不经此页）。 */
-internal fun cryptoDialogPage(
-    workflow: CryptoWorkflowState,
-    scope: CoroutineScope,
-    rootUriProvider: () -> String?,
-    currentDirUriProvider: () -> String,
-    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
-    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
-    onRefresh: () -> Unit,
-    onBatchFinished: () -> Unit
-): AppPage {
-    lateinit var page: AppPage
-    page = appPage {
-        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
-            if (!workflow.inProgress) workflow.close()
-        }
-        CryptoDialogs(
-            workflow = workflow,
-            scope = scope,
-            rootUri = rootUriProvider(),
-            currentDirUri = currentDirUriProvider(),
-            runWithProgress = runWithProgress,
-            runBatchOperation = runBatchOperation,
-            onRefresh = onRefresh,
             onBatchFinished = onBatchFinished
         )
     }

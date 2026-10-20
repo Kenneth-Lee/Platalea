@@ -29,7 +29,7 @@ internal fun rememberBrowserTabState(
 ): BrowserTabState {
     val state = remember { BrowserTabState(context, config) }
     LaunchedEffect(Unit) {
-        state.restoreRoot()
+        RootService.restore(config)
     }
     LaunchedEffect(state.rootUri, initialDirUri) {
         state.ensureCurrentUri(initialDirUri)

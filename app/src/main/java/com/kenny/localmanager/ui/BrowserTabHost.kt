@@ -81,7 +81,7 @@ import kotlinx.coroutines.withContext
 
 // 文件浏览模块（《主界面 AppShell 分层设计》Step 2）：目录浏览、待处理面板、批次确认的组合宿主。
 // 导航开关（showPendingList 等 Route 事实）由宿主持有、经 state 注入；内容实现全部内聚本文件。
-// 批量操作的发起经共享对象直呼（archiveOps/crypto...），跨域弹窗请求经出口回调上交宿主。
+// 批量操作的发起经共享对象直呼（archiveOps）或模块直呼（CryptoModule），跨域弹窗请求经出口回调上交宿主。
 
 // 批量操作执行 helper（原主程序顶层平移）
 private fun doCopyPendingToCurrentDir(
@@ -506,8 +506,8 @@ internal class BrowserTabState(
     val config: BrowserConfigView,
 ) {
     // ===== 目录会话（单一所有权）=====
-    var rootUri by mutableStateOf<String?>(null)
-        private set
+    /** 当前根：查询根服务（唯一属地），本域不再持有镜像。 */
+    val rootUri: String? get() = RootService.rootUri
     var currentUri by mutableStateOf<String?>(null)
         private set
     private val refreshRevision = mutableIntStateOf(0)
@@ -515,17 +515,6 @@ internal class BrowserTabState(
 
     fun refresh() {
         refreshRevision.intValue++
-    }
-
-    suspend fun restoreRoot() {
-        rootUri = config.rootUri.first()?.let { normalizeContentUriString(it) }
-    }
-
-    fun changeRoot(uri: String, refresh: Boolean = true) {
-        val normalized = normalizeContentUriString(uri)
-        rootUri = normalized
-        currentUri = normalized
-        if (refresh) refresh()
     }
 
     fun navigateTo(uri: String) {
@@ -588,7 +577,6 @@ internal class BrowserTabHostDependencies(
     val archiveReader: ArchiveReaderWorkflowState,
     val epubReader: EpubReaderWorkflowState,
     val archiveOps: ArchiveOperationWorkflowState,
-    val crypto: CryptoWorkflowState,
     val configImportExportWorkflow: ConfigImportExportWorkflowState,
     val markdownViewerSessionCache: ViewerSessions,
     val playbackState: PlaybackState?,
@@ -623,7 +611,6 @@ internal fun BrowserTabHost(
         ReadingLauncher(deps.archiveReader, deps.epubReader, deps.setTransientRoute)
     }
     val archiveOps = deps.archiveOps
-    val crypto = deps.crypto
     val configImportExportWorkflow = deps.configImportExportWorkflow
     val markdownViewerSessionCache = deps.markdownViewerSessionCache
     val playbackState = deps.playbackState
@@ -1034,10 +1021,10 @@ internal fun BrowserTabHost(
                                 },
                                 onCreateMusicPlaylist = playerTab::requestCreateDirectoryPlaylist,
                                 onRequestGpgDecrypt = { fileModel, dirUri ->
-                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
+                                    CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
                                 },
                                 onRequestGpgEncrypt = { fileModel, dirUri ->
-                                    crypto.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
+                                    CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
                                 },
                                 onRequestQuickMask = quickObfuscate::requestQuick,
                                 onConfirmDelete = { model, deletePermanently ->
@@ -1091,9 +1078,9 @@ internal fun BrowserTabHost(
                                 },
                                 onRequestPdfView = readingLauncher::pdf,
                                 onCompressArchiveRequest = { archiveOps.open(ArchiveOperationRequest.CompressFile(it)) },
-                                onRequestPassProtect = { model -> crypto.open(CryptoRequest.PassProtect(model)) },
-                                onRequestPassView = { model -> crypto.open(CryptoRequest.PassView(model)) },
-                                onRequestPassEdit = { model, dirUri -> crypto.open(CryptoRequest.PassEdit(model, dirUri)) },
+                                onRequestPassProtect = { model -> CryptoModule.service.open(CryptoRequest.PassProtect(model)) },
+                                onRequestPassView = { model -> CryptoModule.service.open(CryptoRequest.PassView(model)) },
+                                onRequestPassEdit = { model, dirUri -> CryptoModule.service.open(CryptoRequest.PassEdit(model, dirUri)) },
                                 onRequestImportConfig = { model ->
                                     configImportExportWorkflow.startImportFromUri(model.uri)
                                 },
@@ -1185,7 +1172,7 @@ internal fun BrowserTabHost(
                         val list = pendingList.filter { !it.isDirectory }
                         if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_encrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
-                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchEncrypt(list, displayUri)))
+                            CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.BatchEncrypt(list, displayUri)))
                         }
                     }
                 },
@@ -1196,7 +1183,7 @@ internal fun BrowserTabHost(
                         val list = pendingList.filter { !it.isDirectory }
                         if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_decrypt_candidates), Toast.LENGTH_SHORT).show()
                         else {
-                            crypto.open(CryptoRequest.Gpg(GpgOpState.BatchDecrypt(list, displayUri)))
+                            CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.BatchDecrypt(list, displayUri)))
                         }
                     }
                 },

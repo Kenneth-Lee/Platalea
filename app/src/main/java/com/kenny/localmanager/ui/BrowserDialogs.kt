@@ -131,14 +131,14 @@ internal class BrowserRootSwitchWorkflow(
         }
     }
 
-    /** 记录根切换并应用（treeLauncher 回调后宿主调用）。 */
+    /** 记录根切换并应用（treeLauncher 回调后宿主调用）：改根经根服务，目录会话重置留在本编排。 */
     fun applyNewRoot(previousRoot: String?, normalized: String, initialDirUriSink: (String) -> Unit) {
         scope.launch {
             browserTab.config.recordRecentRootSwitch(previousRoot, normalized)
-            browserTab.config.setRootUri(normalized)
+            RootService.change(normalized, browserTab.config)
         }
         browserTab.backStack.clear()
-        browserTab.changeRoot(normalized, refresh = false)
+        browserTab.navigateTo(normalizeContentUriString(normalized))
         initialDirUriSink(normalized)
     }
 }
