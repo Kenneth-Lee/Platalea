@@ -14,6 +14,28 @@ import com.kenny.localmanager.data.RecentOpenItem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import com.kenny.localmanager.archivereader.ArchiveReaderCancelableKinds
+import com.kenny.localmanager.archivereader.ArchiveReaderModule
+import com.kenny.localmanager.browser.BrowserSaveModule
+import com.kenny.localmanager.browser.BrowserTabHostDependencies
+import com.kenny.localmanager.browser.BrowserTabState
+import com.kenny.localmanager.browser.RootSwitchModule
+import com.kenny.localmanager.browser.browserTabFeature
+import com.kenny.localmanager.config.ConfigService
+import com.kenny.localmanager.config.configTabFeature
+import com.kenny.localmanager.crypto.CryptoModule
+import com.kenny.localmanager.dict.DictionaryTabRoute
+import com.kenny.localmanager.dict.DictionaryTabRouteState
+import com.kenny.localmanager.epub.EpubReaderCancelableKinds
+import com.kenny.localmanager.epub.EpubReaderModule
+import com.kenny.localmanager.git.GitProjectsTabRoute
+import com.kenny.localmanager.git.GitProjectsTabRouteState
+import com.kenny.localmanager.player.PlayerTabApi
+import com.kenny.localmanager.player.playerTabFeature
+import com.kenny.localmanager.quicknote.QuickNoteModule
+import com.kenny.localmanager.viewer.ReadingLauncher
+import com.kenny.localmanager.config.AboutTabRoute
+import com.kenny.localmanager.crypto.QuickCryptoTabRoute
 
 /**
  * tab 层页面（P5 从主函数局部函数 MainTabsRootContent 归位）：组合根之外
@@ -32,7 +54,7 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
 
         fun requestOpenQuickNoteTabFromDirectory() {
             nav.switchTab(MainTab.QUICK_NOTE)
-            quickNoteService.requestOpenWithCachedPassword(true)
+            QuickNoteModule.service.requestOpenWithCachedPassword(true)
         }
 
         // App-level transient dialogs / playback-target workflow
@@ -104,8 +126,6 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
         ) {
             val browserTabHostDependencies = BrowserTabHostDependencies(
                 scope = scope,
-                configImportExportWorkflow = configTab.importExport,
-                markdownViewerSessionCache = markdownViewerSessionCache,
                 playbackState = playerTab.playbackState,
                 initialDirUri = initialDirUri,
                 cachedTrashUri = RootSwitchModule.service.cachedTrashUri,
@@ -223,12 +243,8 @@ internal class MainTabsScreenHost(
     // 域对象（组合根创建）
     val config: ConfigService,
     val browserTab: BrowserTabState,
-    val markdownViewerSessionCache: ViewerSessions,
     val networkServices: NetworkServicesTabs,
-    // 域服务（功能独立化：速记/书摘数据与收尾住服务，跨域出口直呼）
-    val quickNoteService: QuickNoteService,
-    val bookNoteService: BookNoteService,
-    // 速记/书摘 tab 装配（content/overlay 的薄壳，由组合根套 service 生成）
+    // 速记/书摘 tab 装配（content/overlay 的薄壳；服务住模块直呼）
     val quickNoteTab: MainTabFeature,
     val bookNoteTab: MainTabFeature,
     val nav: NavigationState,

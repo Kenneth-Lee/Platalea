@@ -35,6 +35,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import com.kenny.localmanager.file.formatSize
 
 private const val MAX_IN_MEMORY_BODY_BYTES = 8L * 1024L * 1024L
 private const val WEBUI_HEADER_READ_TIMEOUT_MS = 3000L

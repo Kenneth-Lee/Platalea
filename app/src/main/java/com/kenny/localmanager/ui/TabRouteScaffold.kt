@@ -10,6 +10,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.kenny.localmanager.R
+import com.kenny.localmanager.crypto.GpgPasswordDialog
 
 data class TabPasswordPromptState(
     val required: Boolean,

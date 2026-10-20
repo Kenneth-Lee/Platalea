@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.kenny.localmanager.browser.BrowserTabState
+import com.kenny.localmanager.config.BrowserConfigView
 
 /**
  * 根功能的服务（功能模块化第一批样板）：当前根目录这一会话参数的唯一属地。

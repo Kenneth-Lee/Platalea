@@ -9,6 +9,15 @@ import com.kenny.localmanager.ftp.FtpServerManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import com.kenny.localmanager.config.NetworkConfigView
+import com.kenny.localmanager.config.ReaderConfigView
+import com.kenny.localmanager.config.rememberNetworkServiceConfigState
+import com.kenny.localmanager.family.FamilyNetworkScreen
+import com.kenny.localmanager.config.NetworkServiceConfigState
+import com.kenny.localmanager.ftp.FtpTabRoute
+import com.kenny.localmanager.ftp.WebUiTabRoute
+import com.kenny.localmanager.ftp.FtpTabRouteState
+import com.kenny.localmanager.ftp.WebUiTabRouteState
 
 /** FTP tab 功能对象（呈现接口；服务启停/配置同步生命周期在域工厂内聚）。 */
 internal interface FtpTabFeature : MainTabFeature

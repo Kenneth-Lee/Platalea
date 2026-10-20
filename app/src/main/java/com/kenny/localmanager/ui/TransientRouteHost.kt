@@ -9,6 +9,23 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import com.kenny.localmanager.archivereader.ViewerHostWorkflow
+import com.kenny.localmanager.booknote.BookNoteModule
+import com.kenny.localmanager.browser.BrowserTabState
+import com.kenny.localmanager.config.ReaderConfigView
+import com.kenny.localmanager.crypto.CryptoModule
+import com.kenny.localmanager.crypto.PassOpenPhaseDialogs
+import com.kenny.localmanager.viewer.ArchiveViewerHostLayer
+import com.kenny.localmanager.viewer.ArchiveViewerRouteHost
+import com.kenny.localmanager.viewer.HtmlViewerScreen
+import com.kenny.localmanager.viewer.MarkdownViewerScreen
+import com.kenny.localmanager.viewer.PassContentViewerScreen
+import com.kenny.localmanager.viewer.PdfViewerScreen
+import com.kenny.localmanager.viewer.ViewerSessionsModule
+import com.kenny.localmanager.crypto.PassEditScreen
+import com.kenny.localmanager.crypto.savePassEditReencrypted
+import com.kenny.localmanager.viewer.ViewerScreen
+import com.kenny.localmanager.viewer.HtmlViewerLocation
 
 /**
  * 独立全屏 Route（TransientRoute）：从任意 tab 启动、盖住整个主界面的
@@ -109,8 +126,6 @@ internal fun htmlViewerRouteFromUrl(url: String): TransientRoute.HtmlViewer =
 internal fun TransientViewerRouteHost(
     route: TransientRoute,
     config: ReaderConfigView,
-    markdownViewerSessionCache: ViewerSessions,
-    bookNote: BookNoteService,
     recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     onRouteChange: (TransientRoute?) -> Unit,
     browserTab: BrowserTabState,
@@ -124,7 +139,7 @@ internal fun TransientViewerRouteHost(
                 initialFileUri = route.uri,
                 initialFileName = route.fileName,
                 isEncrypted = route.isEncrypted,
-                sessionCache = markdownViewerSessionCache,
+                sessionCache = ViewerSessionsModule.service,
                 onBack = { onRouteChange(null) },
                 onOpenFile = { openUri, openName, openEncrypted ->
                     when {
@@ -170,11 +185,11 @@ internal fun TransientViewerRouteHost(
                 config = config,
                 uri = route.uri,
                 fileName = route.fileName,
-                bookNoteLoadedData = bookNote.data,
-                bookNoteEntries = bookNote.entriesSnapshot,
-                bookNoteInProgress = bookNote.inProgress,
-                onRequestOpenBookNotes = bookNote::requestOpenWithCachedPassword,
-                onBookNoteEntriesChanged = bookNote::updateEntries,
+                bookNoteLoadedData = BookNoteModule.service.data,
+                bookNoteEntries = BookNoteModule.service.entriesSnapshot,
+                bookNoteInProgress = BookNoteModule.service.inProgress,
+                onRequestOpenBookNotes = BookNoteModule.service::requestOpenWithCachedPassword,
+                onBookNoteEntriesChanged = BookNoteModule.service::updateEntries,
                 onBack = { onRouteChange(null) }
             )
         }
@@ -187,8 +202,7 @@ internal fun TransientViewerRouteHost(
                     workflow = route.workflow,
                     browserTab = browserTab,
                     readerConfig = config,
-                    markdownViewerSessionCache = markdownViewerSessionCache,
-                    bookNote = bookNote,
+
                     recordRecentOpen = recordRecentOpen,
                 )
             } else {

@@ -29,6 +29,27 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import com.kenny.localmanager.archiveops.ArchiveOpsModule
+import com.kenny.localmanager.archiveops.ArchiveOpsWizardBinding
+import com.kenny.localmanager.archivereader.ArchiveReaderModule
+import com.kenny.localmanager.booknote.BookNoteModule
+import com.kenny.localmanager.browser.BrowserSaveModule
+import com.kenny.localmanager.browser.BrowserSaveWizardBinding
+import com.kenny.localmanager.browser.RootSwitchModule
+import com.kenny.localmanager.browser.RootSwitchWizardBinding
+import com.kenny.localmanager.browser.rememberBrowserTabState
+import com.kenny.localmanager.config.rememberConfigService
+import com.kenny.localmanager.crypto.CryptoModule
+import com.kenny.localmanager.crypto.CryptoWizardBinding
+import com.kenny.localmanager.epub.EpubReaderModule
+import com.kenny.localmanager.family.BulletinForwardBinding
+import com.kenny.localmanager.note.bookNoteTabFeature
+import com.kenny.localmanager.note.quickNoteTabFeature
+import com.kenny.localmanager.obfuscate.QuickObfuscateModule
+import com.kenny.localmanager.obfuscate.QuickObfuscateWizardBinding
+import com.kenny.localmanager.quicknote.QuickNoteModule
+import com.kenny.localmanager.viewer.ReadingLauncher
+import com.kenny.localmanager.viewer.ViewerSessionsRootBinding
 
 /**
  * PlataleaApp——应用组合根（P5 定型）。
@@ -55,7 +76,7 @@ fun PlataleaApp(
     remember { BrowserSaveModule.attach(context, scope, browserTab) }
     remember { QuickObfuscateModule.attach(context, scope) }
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
-    val markdownViewerSessionCache = rememberViewerSessions(RootService.rootUri)
+    ViewerSessionsRootBinding()
     remember { ArchiveReaderModule.attach(context, scope) }
     remember { EpubReaderModule.attach(context, scope) }
     remember { ArchiveOpsModule.attach(context, scope) }
@@ -74,17 +95,14 @@ fun PlataleaApp(
         }
     }
     val nav = rememberNavigationState(onTabSwitched = ::persistTabChoice)
-    // 速记/书摘功能域服务（功能独立化）：数据与收尾协程住服务，页面只是投影；
-    // tab 切换 = 页面退出（onDispose 触发收尾）+ 新页面启动，服务不动
-    val quickNoteService = remember { QuickNoteService(context, scope, markdownViewerSessionCache) }
-    val bookNoteService = remember { BookNoteService(context, scope, markdownViewerSessionCache) }
+    // 速记/书摘功能域服务（功能模块化）：服务住模块，组合根一行接线，
+    // tab 装配只带配置快照；数据与收尾协程住服务，页面只是投影
+    remember { QuickNoteModule.attach(context, scope) }
+    remember { BookNoteModule.attach(context, scope) }
     val quickNoteTab = quickNoteTabFeature(
-        config = config.quickNote,
-        service = quickNoteService
+        config = config.quickNote
     )
-    val bookNoteTab = bookNoteTabFeature(
-        service = bookNoteService
-    )
+    val bookNoteTab = bookNoteTabFeature()
     var saveCompletedToken by remember { mutableStateOf(0) }
     var recentOpenItems by remember { mutableStateOf<List<RecentOpenItem>>(emptyList()) }
 
@@ -128,7 +146,7 @@ fun PlataleaApp(
     val bypassExitDoubleConfirm = launchShortcutTarget == MainTab.PLAYER || launchShortcutTarget == MainTab.QUICK_NOTE
     fun requestExitApp() {
         if ((nav.currentTab ?: MainTab.DIRECTORY) == MainTab.QUICK_NOTE) {
-            quickNoteService.requestExitApp { finishCurrentActivity() }
+            QuickNoteModule.service.requestExitApp { finishCurrentActivity() }
             return
         }
         if (bypassExitDoubleConfirm) {
@@ -324,8 +342,6 @@ fun PlataleaApp(
         activeRoute != null -> TransientViewerRouteHost(
             route = activeRoute!!,
             config = config.reader,
-            markdownViewerSessionCache = markdownViewerSessionCache,
-            bookNote = bookNoteService,
             recordRecentOpen = { type, key, title, uri, playlistId ->
                 recordRecentOpen(type, key, title, uri, playlistId)
             },
@@ -337,10 +353,7 @@ fun PlataleaApp(
             MainTabsScreenHost(
                 config = config,
                 browserTab = browserTab,
-                markdownViewerSessionCache = markdownViewerSessionCache,
                 networkServices = networkServices,
-                quickNoteService = quickNoteService,
-                bookNoteService = bookNoteService,
                 quickNoteTab = quickNoteTab,
                 bookNoteTab = bookNoteTab,
                 nav = nav,

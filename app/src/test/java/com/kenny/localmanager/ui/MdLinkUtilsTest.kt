@@ -3,6 +3,7 @@ package com.kenny.localmanager.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import com.kenny.localmanager.viewer.MdLinkUtils
 
 /**
  * MdLinkUtils 单元测试：外链/主机名判断、相对路径提取。

@@ -10,6 +10,7 @@ import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.util.Locale
+import com.kenny.localmanager.ui.normalizeContentUriString
 
 // 外部应用打开 / URI 工具：给定 URI 即可工作，与文件浏览器无耦合，
 // 可被任何界面（浏览器菜单、最近记录、待处理列表、查看器等）调用。

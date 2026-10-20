@@ -61,6 +61,14 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.kenny.localmanager.browser.isCompressedHtml
+import com.kenny.localmanager.browser.isCompressedLlmZip
+import com.kenny.localmanager.browser.isCompressedMarkdown
+import com.kenny.localmanager.browser.isLlmFile
+import com.kenny.localmanager.browser.isPicZip
+import com.kenny.localmanager.browser.isTxtFile
+import com.kenny.localmanager.browser.isVidZip
+import com.kenny.localmanager.viewer.ReadingLauncher
 
 data class RecentTabRouteState(
     val items: List<RecentOpenItem>,

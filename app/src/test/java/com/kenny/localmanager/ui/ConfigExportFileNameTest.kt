@@ -3,6 +3,7 @@ package com.kenny.localmanager.ui
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import com.kenny.localmanager.config.normalizeConfigExportFileName
 
 /** normalizeConfigExportFileName 后缀规范化：加密 .json.gpg / 明文 .json。 */
 class ConfigExportFileNameTest {

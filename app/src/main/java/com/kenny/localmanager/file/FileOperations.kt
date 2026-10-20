@@ -14,6 +14,8 @@ import java.io.OutputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.Locale
+import com.kenny.localmanager.ui.normalizeContentUriString
+import com.kenny.localmanager.file.DocumentFileModel
 
 private const val TAG = "FileOperations"
 

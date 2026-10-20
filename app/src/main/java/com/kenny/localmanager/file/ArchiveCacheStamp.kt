@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import java.io.File
+import com.kenny.localmanager.file.DocumentFileModel
 
 /**
  * 打包阅读器缓存（.md/.rst/.html/.pic/.vid/.llm.zip、.epub）的失效判定。

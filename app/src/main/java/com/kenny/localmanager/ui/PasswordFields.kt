@@ -55,6 +55,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kenny.localmanager.R
+import com.kenny.localmanager.crypto.CryptoDialogs
+import com.kenny.localmanager.obfuscate.QuickObfuscateDialogs
 
 /**
  * 密码输入共享件：校验、可靠输入框（自定义键盘，支持键盘内二次确认）。
