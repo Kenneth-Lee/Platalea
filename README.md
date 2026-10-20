@@ -27,7 +27,7 @@
 以，建议直接从项目主页上安装。
 
 最新一个发布版本在这里：
-[LocalManager-V0.32](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.32/app-release.apk)
+[LocalManager-V0.33](https://atomgit.com/Kenneth-Lee-2025/local_manager/releases/download/V0.33/app-release.apk)
 
 ## 设计思路
 
@@ -560,7 +560,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 * V0.30 完善webui，支持读取手机配置，剪贴板等功能，图片增加多svg的支持，修正一组bug。
 * V0.31 架构大规模重构（可能造成不稳定），重点不让大部分逻辑挤到主程序文件中，也在重构过程中修复了一组bug，另外增加了zip文件的编辑功能（可以在zip文件中增加文件和删除文件）
 * V0.32 继续架构重构，分离独立功能到独立模块中，支持文件查找和文件批量改名功能。
-* V0.33 开发中，继续架构重构，密码输入直接在加密键盘上输入两次，zip目录内容访问统一不需要密码（格式自身就是这个特性），配置文件导入导出默认加密，删除git文件共享功能（不实用）。
+* V0.33 继续架构重构。同时增加功能：密码输入直接在加密键盘上输入两次，优化加密键盘布局，zip目录内容访问统一不需要密码（格式自身就是这个特性），编缉zip内容的时候允许导出不问文件，配置文件导入导出默认加密，删除不实用的git文件共享功能，待处理列表中显示当前目录和当前目标文件。
+* V0.34 开发中
 
 ### 已知问题
 
