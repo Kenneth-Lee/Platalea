@@ -574,9 +574,6 @@ internal class BrowserTabState(
  */
 internal class BrowserTabHostDependencies(
     val scope: CoroutineScope,
-    val archiveReader: ArchiveReaderWorkflowState,
-    val epubReader: EpubReaderWorkflowState,
-    val archiveOps: ArchiveOperationWorkflowState,
     val configImportExportWorkflow: ConfigImportExportWorkflowState,
     val markdownViewerSessionCache: ViewerSessions,
     val playbackState: PlaybackState?,
@@ -585,9 +582,7 @@ internal class BrowserTabHostDependencies(
     val setTransientRoute: (TransientRoute?) -> Unit,
     val recordRecentOpen: (type: String, key: String, title: String, uri: String?, playlistId: String?) -> Unit,
     // ---- 跨域出口（P4：命令式直呼目标域对象，不再经宿主回调中转）----
-    val quickObfuscate: QuickObfuscateWorkflowState,
     val playerTab: PlayerTabFeature,
-    val rootSwitch: BrowserRootSwitchWorkflow,
     // ---- 导航出口（经宿主：切 tab 是导航服务的判断）----
     val onForwardToBulletin: (BulletinForwardPayload) -> Unit,
     val onOpenQuickNote: () -> Unit,
@@ -606,11 +601,9 @@ internal fun BrowserTabHost(
     val context = state.context
     val scope = deps.scope
     val config = state.config
-    val archiveReader = deps.archiveReader
-    val readingLauncher = remember(deps.archiveReader, deps.epubReader, deps.setTransientRoute) {
-        ReadingLauncher(deps.archiveReader, deps.epubReader, deps.setTransientRoute)
+    val readingLauncher = remember(deps.setTransientRoute) {
+        ReadingLauncher(deps.setTransientRoute)
     }
-    val archiveOps = deps.archiveOps
     val configImportExportWorkflow = deps.configImportExportWorkflow
     val markdownViewerSessionCache = deps.markdownViewerSessionCache
     val playbackState = deps.playbackState
@@ -618,9 +611,7 @@ internal fun BrowserTabHost(
     val cachedTrashUri = deps.cachedTrashUri
     val setTransientRoute = deps.setTransientRoute
     val recordRecentOpen = deps.recordRecentOpen
-    val quickObfuscate = deps.quickObfuscate
     val playerTab = deps.playerTab
-    val rootSwitch = deps.rootSwitch
     val onForwardToBulletin = deps.onForwardToBulletin
     val onOpenQuickNote = deps.onOpenQuickNote
     val requestOpenPlayerTab = deps.requestOpenPlayerTab
@@ -837,7 +828,7 @@ internal fun BrowserTabHost(
         val dirTitle = DocumentFile.fromTreeUri(context, Uri.parse(currentDirUri))?.name
             ?: DocumentFile.fromSingleUri(context, Uri.parse(currentDirUri))?.name
             ?: currentItem.name
-        archiveReader.openViewer(
+        ArchiveReaderModule.service.openViewer(
             PicZipViewState(
                 contentDir = contentDir,
                 imagePaths = normalizedImages.map { it.name },
@@ -950,7 +941,7 @@ internal fun BrowserTabHost(
                                         }
                                     }
                                 },
-                                onChangeRoot = rootSwitch::open,
+                                onChangeRoot = RootSwitchModule.service::open,
                                 onRestoreFromTrash = rootUri?.let { r ->
                                     { model ->
                                         scope.launch {
@@ -1026,7 +1017,7 @@ internal fun BrowserTabHost(
                                 onRequestGpgEncrypt = { fileModel, dirUri ->
                                     CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
                                 },
-                                onRequestQuickMask = quickObfuscate::requestQuick,
+                                onRequestQuickMask = QuickObfuscateModule.service::requestQuick,
                                 onConfirmDelete = { model, deletePermanently ->
                                     scope.launch {
                                         val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
@@ -1052,7 +1043,7 @@ internal fun BrowserTabHost(
                                     if (items.isEmpty()) return@BrowserTabRouteState
                                     onForwardToBulletin(BulletinForwardPayload.Files(items))
                                 },
-                                onUnzipRequest = { archiveOps.open(ArchiveOperationRequest.Unzip(it)) },
+                                onUnzipRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.Unzip(it)) },
                                 onRequestMdZipView = readingLauncher::mdZip,
                                 onRequestHtmlView = readingLauncher::html,
                                 onRequestHtmlZipView = readingLauncher::htmlZip,
@@ -1077,7 +1068,7 @@ internal fun BrowserTabHost(
                                     }
                                 },
                                 onRequestPdfView = readingLauncher::pdf,
-                                onCompressArchiveRequest = { archiveOps.open(ArchiveOperationRequest.CompressFile(it)) },
+                                onCompressArchiveRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressFile(it)) },
                                 onRequestPassProtect = { model -> CryptoModule.service.open(CryptoRequest.PassProtect(model)) },
                                 onRequestPassView = { model -> CryptoModule.service.open(CryptoRequest.PassView(model)) },
                                 onRequestPassEdit = { model, dirUri -> CryptoModule.service.open(CryptoRequest.PassEdit(model, dirUri)) },
@@ -1163,7 +1154,7 @@ internal fun BrowserTabHost(
                 onRequestBatchMask = {
                     val list = pendingList.filter { !it.isDirectory }
                     if (list.isEmpty()) Toast.makeText(context, context.getString(R.string.browser_no_mask_candidates), Toast.LENGTH_SHORT).show()
-                    else quickObfuscate.requestBatch(list)
+                    else QuickObfuscateModule.service.requestBatch(list)
                 },
                 onRequestBatchGpgEncrypt = {
                     if (pendingList.any { it.name.endsWith(".gpg", ignoreCase = true) }) {
@@ -1198,7 +1189,7 @@ internal fun BrowserTabHost(
                     if (pendingList.isEmpty()) {
                         Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), null, ""))
+                        ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), null, ""))
                     }
                 },
                 onRequestCompressToZip = {
@@ -1206,7 +1197,7 @@ internal fun BrowserTabHost(
                         Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.ZIP, "archive_$ts.zip"))
+                        ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.ZIP, "archive_$ts.zip"))
                     }
                 },
                 onRequestCompressTo7z = {
@@ -1214,7 +1205,7 @@ internal fun BrowserTabHost(
                         Toast.makeText(context, context.getString(R.string.browser_list_empty), Toast.LENGTH_SHORT).show()
                     } else {
                         val ts = java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.getDefault()).format(java.util.Date())
-                        archiveOps.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.SEVEN_Z, "archive_$ts.7z"))
+                        ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressPending(pendingList.toList(), ArchiveCompressionFormat.SEVEN_Z, "archive_$ts.7z"))
                     }
                 },
                 onClearFilteredList = { toRemove ->

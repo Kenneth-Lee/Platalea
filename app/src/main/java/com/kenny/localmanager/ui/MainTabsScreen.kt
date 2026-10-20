@@ -40,7 +40,7 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
 
         // DirectoryRoot derived UI state
         LaunchedEffect(browserTab.rootUri) {
-            rootSwitch.refreshTrashUri(browserTab.rootUri)
+            RootSwitchModule.service.refreshTrashUri(browserTab.rootUri)
         }
 
         // Config 域：设置 tab 功能对象（设置项镜像、对话框群、导入导出 workflow 内聚于工厂）
@@ -83,8 +83,8 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
                 browserTab.showPendingList -> browserTab.showPendingList = false
                 networkServices.family.isBulletinBoardOpen -> networkServices.family.closeBulletinBoard()
                 activeMainTab != MainTab.DIRECTORY -> requestExitApp()
-                archiveReader.request?.kind in ArchiveReaderCancelableKinds -> archiveReader.cancelRequest()
-                epubReader.request?.kind in EpubReaderCancelableKinds -> epubReader.cancelRequest()
+                ArchiveReaderModule.service.request?.kind in ArchiveReaderCancelableKinds -> ArchiveReaderModule.service.cancelRequest()
+                EpubReaderModule.service.request?.kind in EpubReaderCancelableKinds -> EpubReaderModule.service.cancelRequest()
                 browserTab.canGoBack -> browserTab.goBack()
                 else -> {
                     requestExitApp()
@@ -98,27 +98,22 @@ internal fun MainTabsScreen(host: MainTabsScreenHost) {
             header = {
                 SavingProgressHeader(
                     pubEncryptInProgress = CryptoModule.service.pubEncryptInProgress,
-                    saveInProgress = browserSave.inProgress
+                    saveInProgress = BrowserSaveModule.service.inProgress
                 )
             }
         ) {
             val browserTabHostDependencies = BrowserTabHostDependencies(
                 scope = scope,
-                archiveReader = archiveReader,
-                epubReader = epubReader,
-                archiveOps = archiveOps,
                 configImportExportWorkflow = configTab.importExport,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 playbackState = playerTab.playbackState,
                 initialDirUri = initialDirUri,
-                cachedTrashUri = rootSwitch.cachedTrashUri,
+                cachedTrashUri = RootSwitchModule.service.cachedTrashUri,
                 setTransientRoute = transientRoute,
                 recordRecentOpen = { type, key, title, uri, playlistId ->
                     recordRecentOpen(type, key, title, uri, playlistId)
                 },
-                quickObfuscate = quickObfuscate,
                 playerTab = playerTab,
-                rootSwitch = rootSwitch,
                 onForwardToBulletin = { payload -> networkServices.familyNetworkManager.requestForward(payload) },
                 onOpenQuickNote = { requestOpenQuickNoteTabFromDirectory() },
                 requestOpenPlayerTab = { nav.switchTab(MainTab.PLAYER) },
@@ -228,12 +223,6 @@ internal class MainTabsScreenHost(
     // 域对象（组合根创建）
     val config: ConfigService,
     val browserTab: BrowserTabState,
-    val rootSwitch: BrowserRootSwitchWorkflow,
-    val browserSave: BrowserSaveWorkflow,
-    val quickObfuscate: QuickObfuscateWorkflowState,
-    val archiveOps: ArchiveOperationWorkflowState,
-    val archiveReader: ArchiveReaderWorkflowState,
-    val epubReader: EpubReaderWorkflowState,
     val markdownViewerSessionCache: ViewerSessions,
     val networkServices: NetworkServicesTabs,
     // 域服务（功能独立化：速记/书摘数据与收尾住服务，跨域出口直呼）

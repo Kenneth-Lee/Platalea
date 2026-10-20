@@ -140,9 +140,62 @@ internal class ArchiveOperationWorkflowState(
     }
 }
 
+/**
+ * 压缩 / 解压模块（功能模块化）：组合根 attach 一行接线，调用点（目录域
+ * 待处理列表、文件长按菜单）直呼 service.open；向导页工厂与显示条件
+ * 内聚本文件（ArchiveOpsWizardBinding）。Activity 重建 attach 重置。
+ */
+internal object ArchiveOpsModule {
+    private var instance: ArchiveOperationWorkflowState? = null
+
+    val service: ArchiveOperationWorkflowState
+        get() = instance ?: error("ArchiveOpsModule 未接线：组合根需先 attach")
+
+    fun attach(context: Context, scope: CoroutineScope) {
+        instance = ArchiveOperationWorkflowState(context.applicationContext, scope)
+    }
+
+    fun resetForTest() {
+        instance = null
+    }
+}
+
+/** 压缩 / 解压向导页绑定（模块内聚）：request 置位入栈 / 清空出栈。 */
 @Composable
-internal fun rememberArchiveOperationWorkflow(context: Context, scope: CoroutineScope): ArchiveOperationWorkflowState {
-    return remember(context, scope) { ArchiveOperationWorkflowState(context.applicationContext, scope) }
+internal fun ArchiveOpsWizardBinding(
+    nav: NavigationState,
+    context: Context,
+    scope: CoroutineScope,
+    browserTab: BrowserTabState,
+    displayUriProvider: () -> String,
+    progressOpState: MutableState<OperationProgress?>,
+    progressCancelActionState: MutableState<(() -> Unit)?>,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit
+) {
+    val page = remember {
+        val workflow = ArchiveOpsModule.service
+        appPage {
+            DialogPageBackHandler(progressOpState.value, progressCancelActionState.value) {
+                workflow.close()
+            }
+            ArchiveOperationDialogs(
+                workflow = workflow,
+                onConfirm = {
+                    executeArchiveOperation(
+                        context = context,
+                        scope = scope,
+                        workflow = workflow,
+                        browserTab = browserTab,
+                        displayUri = displayUriProvider(),
+                        progressOpState = progressOpState,
+                        progressCancelActionState = progressCancelActionState,
+                        runBatchOperation = runBatchOperation
+                    )
+                }
+            )
+        }
+    }
+    DialogPageBinder(nav, page) { ArchiveOpsModule.service.request != null }
 }
 
 // ============================================================================

@@ -557,7 +557,22 @@ internal class ArchiveReaderWorkflowState(
     }
 }
 
-@Composable
-internal fun rememberArchiveReaderWorkflow(context: Context, scope: CoroutineScope): ArchiveReaderWorkflowState {
-    return remember(context, scope) { ArchiveReaderWorkflowState(context.applicationContext, scope) }
+/**
+ * 归档查看器模块（功能模块化）：组合根 attach 一行接线；启动调用点
+ * （目录域 openViewer、ReadingLauncher 分流表）直呼 service；
+ * routeActive 即"当前激活的查看 Route"，组合根聚合时只问不判。
+ */
+internal object ArchiveReaderModule {
+    private var instance: ArchiveReaderWorkflowState? = null
+
+    val service: ArchiveReaderWorkflowState
+        get() = instance ?: error("ArchiveReaderModule 未接线：组合根需先 attach")
+
+    fun attach(context: Context, scope: CoroutineScope) {
+        instance = ArchiveReaderWorkflowState(context.applicationContext, scope)
+    }
+
+    fun resetForTest() {
+        instance = null
+    }
 }

@@ -1,5 +1,6 @@
 package com.kenny.localmanager.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -101,6 +102,22 @@ internal interface Navigator {
 
     /** 退出自己 push 的功能页（从栈中移除自己）。 */
     fun pop(page: AppPage)
+}
+
+/**
+ * 向导页返回键：对齐原主界面 BackHandler 的分支次序——进度取消优先于
+ * 向导关闭（runWithProgress 运行中 back = 取消进度而非关向导）。
+ */
+@Composable
+internal fun DialogPageBackHandler(
+    progressOp: OperationProgress?,
+    progressCancelAction: (() -> Unit)?,
+    onDialogBack: () -> Unit
+) {
+    // 低优先：向导自身的关闭（先注册）
+    BackHandler { onDialogBack() }
+    // 高优先：进度取消（后注册，enabled 时抢先）
+    BackHandler(enabled = progressOp != null) { progressCancelAction?.invoke() }
 }
 
 /**

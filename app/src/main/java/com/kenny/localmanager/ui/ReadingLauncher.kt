@@ -10,18 +10,16 @@ import com.kenny.localmanager.file.DocumentFileModel
  * 纪律：新增阅读格式 = 加一个方法 + 分发处加表项，消费方接口面保持稳定。
  */
 internal class ReadingLauncher(
-    private val archiveReader: ArchiveReaderWorkflowState,
-    private val epubReader: EpubReaderWorkflowState,
     private val setTransientRoute: (TransientRoute?) -> Unit
 ) {
-    fun mdZip(model: DocumentFileModel) = archiveReader.open(ArchiveReaderKind.MD_ZIP, model)
-    fun htmlZip(model: DocumentFileModel) = archiveReader.open(ArchiveReaderKind.HTML_ZIP, model)
-    fun picZip(model: DocumentFileModel) = archiveReader.open(ArchiveReaderKind.PIC_ZIP, model)
-    fun vidZip(model: DocumentFileModel) = archiveReader.open(ArchiveReaderKind.VID_ZIP, model)
-    fun llmZip(model: DocumentFileModel) = epubReader.open(EpubReaderKind.LLM_ZIP, model)
-    fun txt(model: DocumentFileModel) = epubReader.open(EpubReaderKind.TXT, model)
-    fun llm(model: DocumentFileModel) = epubReader.open(EpubReaderKind.LLM, model)
-    fun epub(model: DocumentFileModel) = epubReader.open(EpubReaderKind.EPUB, model)
+    fun mdZip(model: DocumentFileModel) = ArchiveReaderModule.service.open(ArchiveReaderKind.MD_ZIP, model)
+    fun htmlZip(model: DocumentFileModel) = ArchiveReaderModule.service.open(ArchiveReaderKind.HTML_ZIP, model)
+    fun picZip(model: DocumentFileModel) = ArchiveReaderModule.service.open(ArchiveReaderKind.PIC_ZIP, model)
+    fun vidZip(model: DocumentFileModel) = ArchiveReaderModule.service.open(ArchiveReaderKind.VID_ZIP, model)
+    fun llmZip(model: DocumentFileModel) = EpubReaderModule.service.open(EpubReaderKind.LLM_ZIP, model)
+    fun txt(model: DocumentFileModel) = EpubReaderModule.service.open(EpubReaderKind.TXT, model)
+    fun llm(model: DocumentFileModel) = EpubReaderModule.service.open(EpubReaderKind.LLM, model)
+    fun epub(model: DocumentFileModel) = EpubReaderModule.service.open(EpubReaderKind.EPUB, model)
     fun html(model: DocumentFileModel) =
         setTransientRoute(htmlViewerRouteFromFile(model.uri.toString(), model.name))
     fun htmlUrl(url: String) = setTransientRoute(htmlViewerRouteFromUrl(url))

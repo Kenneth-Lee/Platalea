@@ -1,6 +1,7 @@
 package com.kenny.localmanager.ui
 
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -441,4 +442,36 @@ private enum class ForwardPhase {
     DEVICE,
     PASSWORD,
     BOARD
+}
+
+/**
+ * 公告转发页绑定（模块内聚）：转发请求槽在 FamilyNetworkManager（域状态），
+ * 页面工厂与显示条件归 family 域；组合根一行接线。
+ */
+@Composable
+internal fun BulletinForwardBinding(
+    nav: NavigationState,
+    manager: FamilyNetworkManager,
+    familyNetworkForegroundProvider: () -> Boolean,
+    localServiceEnabledProvider: () -> Boolean,
+    onComplete: () -> Unit,
+    onBack: () -> Unit
+) {
+    val page = remember {
+        appPage {
+            BackHandler { onBack() }
+            val payload by manager.forwardRequest.collectAsState()
+            payload?.let {
+                BulletinForwardTargetFlow(
+                    manager = manager,
+                    payload = it,
+                    localServiceEnabled = localServiceEnabledProvider(),
+                    keepEphemeralSession = !familyNetworkForegroundProvider(),
+                    onDismiss = manager::clearForwardRequest,
+                    onComplete = onComplete
+                )
+            }
+        }
+    }
+    DialogPageBinder(nav, page) { manager.forwardRequest.value != null }
 }

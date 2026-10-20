@@ -125,10 +125,75 @@ internal class QuickObfuscateWorkflowState(
     }
 }
 
+/**
+ * 快速遮罩向导页（单文件 / 批量）。执行走自有 quickInProgress 或执行页，
+ * 不经宿主 runWithProgress，页内 back 无进度取消分支。
+ */
+internal fun quickObfuscateDialogPage(
+    workflow: QuickObfuscateWorkflowState,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
+    onQuickFinished: () -> Unit,
+    onBatchFinished: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
+            if (workflow.batchTarget != null) workflow.resetIfBatchActive()
+            else workflow.resetIfQuickActive()
+        }
+        QuickObfuscateDialogs(
+            workflow = workflow,
+            runBatchOperation = runBatchOperation,
+            onQuickFinished = onQuickFinished,
+            onBatchFinished = onBatchFinished
+        )
+    }
+    return page
+}
+
+/**
+ * 快速遮罩模块（功能模块化样板推广）：状态实例由组合根 attach 接线
+ * （一行），调用点（目录域等）直呼 service，不经依赖包传递；
+ * 向导页工厂与显示条件内聚本文件（QuickObfuscateWizardBinding）。
+ * Activity 重建时 attach 重置实例（语义同原 remember 创建）。
+ */
+internal object QuickObfuscateModule {
+    private var instance: QuickObfuscateWorkflowState? = null
+
+    val service: QuickObfuscateWorkflowState
+        get() = instance ?: error("QuickObfuscateModule 未接线：组合根需先 attach")
+
+    /** 组合根接线（每次 Activity 重建执行，重置实例与协程作用域）。 */
+    fun attach(context: Context, scope: CoroutineScope) {
+        instance = QuickObfuscateWorkflowState(context, scope)
+    }
+
+    /** 仅测试用。 */
+    fun resetForTest() {
+        instance = null
+    }
+}
+
+/** 遮罩向导页绑定（模块内聚）：单文件/批量槽任一置位即入栈，清空出栈。 */
 @Composable
-internal fun rememberQuickObfuscateWorkflow(context: Context): QuickObfuscateWorkflowState {
-    val scope = rememberCoroutineScope()
-    return remember(context) { QuickObfuscateWorkflowState(context, scope) }
+internal fun QuickObfuscateWizardBinding(
+    nav: NavigationState,
+    runBatchOperation: (String, List<String>, (OperationRunState) -> Unit, suspend (OperationRunState) -> Unit) -> Unit,
+    onQuickFinished: () -> Unit,
+    onBatchFinished: () -> Unit
+) {
+    val page = remember {
+        quickObfuscateDialogPage(
+            workflow = QuickObfuscateModule.service,
+            runBatchOperation = runBatchOperation,
+            onQuickFinished = onQuickFinished,
+            onBatchFinished = onBatchFinished
+        )
+    }
+    DialogPageBinder(nav, page) {
+        val s = QuickObfuscateModule.service
+        s.batchTarget != null || s.quickTarget != null
+    }
 }
 
 /** 快速遮罩双槽弹窗（单文件/批量），完成后回调宿主收尾。 */

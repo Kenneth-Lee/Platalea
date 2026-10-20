@@ -3,6 +3,9 @@ package com.kenny.localmanager.ui
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import com.kenny.localmanager.file.emptyTrash
+import androidx.activity.compose.ManagedActivityResultLauncher
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -48,13 +51,107 @@ import kotlinx.coroutines.withContext
  * 根目录切换工作流：最近根选择、回收站检查（有内容先确认清空）、新根应用。
  * 宿主经 [open] 发起；[selectNewRoot] 的回收站检查后经 onLaunchPicker 决定直开 SAF 还是先确认。
  */
-@Composable
-internal fun rememberRootSwitchWorkflow(
-    context: Context,
+/** 换根页：根选择对话框与清空回收站确认同域同页（先后最多一个显示）。 */
+internal fun rootSwitchDialogPage(
+    workflow: BrowserRootSwitchWorkflow,
     browserTab: BrowserTabState,
-): BrowserRootSwitchWorkflow {
-    val scope = rememberCoroutineScope()
-    return remember(context, browserTab) { BrowserRootSwitchWorkflow(context, scope, browserTab) }
+    recentRootUrisProvider: () -> List<String>,
+    initialDirUriSink: (String) -> Unit,
+    treeLauncher: ManagedActivityResultLauncher<Uri?, Uri?>,
+    scope: CoroutineScope,
+    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
+    context: Context
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        DialogPageBackHandler(progressOp = null, progressCancelAction = null) {
+            when {
+                workflow.showChangeRootConfirm -> workflow.dismissChangeRootConfirm()
+                else -> workflow.dismissRootSwitch()
+            }
+        }
+        if (workflow.showRootSwitchDialog) {
+            RootSwitchDialog(
+                recentRootUris = recentRootUrisProvider(),
+                workflow = workflow,
+                onPickRoot = { rootUri -> workflow.pickRecentRoot(rootUri, initialDirUriSink) },
+                onLaunchPicker = { treeLauncher.launch(null) }
+            )
+        }
+        if (workflow.showChangeRootConfirm && browserTab.rootUri != null) {
+            val r = browserTab.rootUri!!
+            val root = Uri.parse(normalizeContentUriString(r))
+            ChangeRootConfirmDialog(
+                onEmptyAndChange = {
+                    scope.launch {
+                        workflow.dismissChangeRootConfirm()
+                        runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
+                            val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                            if (ok) Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
+                            treeLauncher.launch(null)
+                            browserTab.refresh()
+                        }
+                    }
+                },
+                onChangeDirectly = {
+                    workflow.dismissChangeRootConfirm()
+                    treeLauncher.launch(null)
+                },
+                onCancel = workflow::dismissChangeRootConfirm
+            )
+        }
+    }
+    return page
+}
+
+/**
+ * 换根模块（功能模块化）：组合根 attach 一行接线；触发点（目录菜单）直呼
+ * service.open；换根页工厂与显示条件内聚域文件（RootSwitchWizardBinding）。
+ * 编排（记最近根/清后退栈/重置会话）仍归本域向导（见 applyNewRoot）。
+ */
+internal object RootSwitchModule {
+    private var instance: BrowserRootSwitchWorkflow? = null
+
+    val service: BrowserRootSwitchWorkflow
+        get() = instance ?: error("RootSwitchModule 未接线：组合根需先 attach")
+
+    fun attach(context: Context, scope: CoroutineScope, browserTab: BrowserTabState) {
+        instance = BrowserRootSwitchWorkflow(context, scope, browserTab)
+    }
+
+    fun resetForTest() {
+        instance = null
+    }
+}
+
+/** 换根向导页绑定（模块内聚）：根选择或清空确认任一置位即入栈。 */
+@Composable
+internal fun RootSwitchWizardBinding(
+    nav: NavigationState,
+    browserTab: BrowserTabState,
+    recentRootUrisProvider: () -> List<String>,
+    initialDirUriSink: (String) -> Unit,
+    treeLauncher: ManagedActivityResultLauncher<Uri?, Uri?>,
+    scope: CoroutineScope,
+    runWithProgress: suspend (String, Int?, suspend ((Int) -> Unit) -> Unit) -> Unit,
+    context: Context
+) {
+    val page = remember {
+        rootSwitchDialogPage(
+            workflow = RootSwitchModule.service,
+            browserTab = browserTab,
+            recentRootUrisProvider = recentRootUrisProvider,
+            initialDirUriSink = initialDirUriSink,
+            treeLauncher = treeLauncher,
+            scope = scope,
+            runWithProgress = runWithProgress,
+            context = context
+        )
+    }
+    DialogPageBinder(nav, page) {
+        val s = RootSwitchModule.service
+        s.showRootSwitchDialog || s.showChangeRootConfirm
+    }
 }
 
 internal class BrowserRootSwitchWorkflow(
@@ -212,13 +309,71 @@ internal fun ChangeRootConfirmDialog(
  * 外源保存工作流：分享/另存进来的文件等目标根就绪后直接保存，重名时弹覆盖确认。
  * 宿主经 [offer] 提供来源；[consumeIfReady] 在 rootUri 变化的 LaunchedEffect 中调用。
  */
+/** 外源保存覆盖确认页：目标目录就绪且重名时由 BrowserSaveWorkflow 置位。 */
+internal fun overwriteConfirmDialogPage(
+    browserSave: BrowserSaveWorkflow,
+    onOverwriteSaved: (String) -> Unit,
+    onSkipped: (String) -> Unit,
+    onBack: () -> Unit
+): AppPage {
+    lateinit var page: AppPage
+    page = appPage {
+        // 对齐原主界面 BackHandler 行为：覆盖确认无对话框级 back 分支，
+        // 落到退出协商
+        BackHandler { onBack() }
+        browserSave.overwriteConfirm?.let { (_, fileName) ->
+            OverwriteSaveConfirmDialog(
+                fileName = fileName,
+                onOverwrite = { browserSave.confirmOverwrite(onOverwriteSaved) },
+                onSkip = { browserSave.skipOverwrite(onSkipped) }
+            )
+        }
+    }
+    return page
+}
+
+/**
+ * 外源另存模块（功能模块化）：组合根 attach 一行接线；外源入口
+ * （外部"另存为"进入 App）直呼 service.offer；覆盖确认页工厂与显示
+ * 条件内聚域文件（BrowserSaveWizardBinding）。
+ */
+internal object BrowserSaveModule {
+    private var instance: BrowserSaveWorkflow? = null
+
+    val service: BrowserSaveWorkflow
+        get() = instance ?: error("BrowserSaveModule 未接线：组合根需先 attach")
+
+    fun attach(context: Context, scope: CoroutineScope, browserTab: BrowserTabState) {
+        instance = BrowserSaveWorkflow(context, scope, browserTab)
+    }
+
+    fun resetForTest() {
+        instance = null
+    }
+}
+
+/** 另存覆盖确认页绑定（模块内聚）：overwriteConfirm 置位入栈 / 清空出栈。 */
 @Composable
-internal fun rememberBrowserSaveWorkflow(
-    context: Context,
-    browserTab: BrowserTabState,
-): BrowserSaveWorkflow {
-    val scope = rememberCoroutineScope()
-    return remember(context, browserTab) { BrowserSaveWorkflow(context, scope, browserTab) }
+internal fun BrowserSaveWizardBinding(
+    nav: NavigationState,
+    initialDirUriSink: (String) -> Unit,
+    navigateToDir: (String) -> Unit,
+    onOverwriteSaved: () -> Unit,
+    onBack: () -> Unit
+) {
+    val page = remember {
+        overwriteConfirmDialogPage(
+            browserSave = BrowserSaveModule.service,
+            onOverwriteSaved = { dir ->
+                initialDirUriSink(dir)
+                navigateToDir(dir)
+                onOverwriteSaved()
+            },
+            onSkipped = { dir -> initialDirUriSink(dir) },
+            onBack = onBack
+        )
+    }
+    DialogPageBinder(nav, page) { BrowserSaveModule.service.overwriteConfirm != null }
 }
 
 internal class BrowserSaveWorkflow(

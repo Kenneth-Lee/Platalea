@@ -420,7 +420,22 @@ internal class EpubReaderWorkflowState(
     }
 }
 
-@Composable
-internal fun rememberEpubReaderWorkflow(context: Context, scope: CoroutineScope): EpubReaderWorkflowState {
-    return remember(context, scope) { EpubReaderWorkflowState(context.applicationContext, scope) }
+/**
+ * EPUB/文本书阅读器模块（功能模块化）：组合根 attach 一行接线；启动
+ * 调用点（ReadingLauncher 分流表）直呼 service；routeActive 即"当前
+ * 激活的查看 Route"，组合根聚合时只问不判。
+ */
+internal object EpubReaderModule {
+    private var instance: EpubReaderWorkflowState? = null
+
+    val service: EpubReaderWorkflowState
+        get() = instance ?: error("EpubReaderModule 未接线：组合根需先 attach")
+
+    fun attach(context: Context, scope: CoroutineScope) {
+        instance = EpubReaderWorkflowState(context.applicationContext, scope)
+    }
+
+    fun resetForTest() {
+        instance = null
+    }
 }

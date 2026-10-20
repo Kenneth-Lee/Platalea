@@ -51,14 +51,14 @@ fun PlataleaApp(
     var recentRootUris by remember { mutableStateOf<List<String>>(emptyList()) }
     var initialDirUri by remember { mutableStateOf<String?>(null) }
     val browserTab = rememberBrowserTabState(context, config.browser, initialDirUri)
-    val rootSwitch = rememberRootSwitchWorkflow(context, browserTab)
-    val browserSave = rememberBrowserSaveWorkflow(context, browserTab)
-    val quickObfuscate = rememberQuickObfuscateWorkflow(context)
+    remember { RootSwitchModule.attach(context, scope, browserTab) }
+    remember { BrowserSaveModule.attach(context, scope, browserTab) }
+    remember { QuickObfuscateModule.attach(context, scope) }
     var transientRoute by remember { mutableStateOf<TransientRoute?>(null) }
     val markdownViewerSessionCache = rememberViewerSessions(RootService.rootUri)
-    val archiveReader = rememberArchiveReaderWorkflow(context, scope)
-    val epubReader = rememberEpubReaderWorkflow(context, scope)
-    val archiveOps = rememberArchiveOperationWorkflow(context, scope)
+    remember { ArchiveReaderModule.attach(context, scope) }
+    remember { EpubReaderModule.attach(context, scope) }
+    remember { ArchiveOpsModule.attach(context, scope) }
 
     // ==== 创建：导航服务（主界面全部的显示状态）====
     fun persistTabChoice(tab: MainTab, previousTab: MainTab?) {
@@ -97,7 +97,7 @@ fun PlataleaApp(
             config.shell.addRecentOpenItem(type, key, title, uri, playlistId)
         }
     }
-    val readingLauncher = ReadingLauncher(archiveReader, epubReader) { transientRoute = it }
+    val readingLauncher = ReadingLauncher { transientRoute = it }
 
     fun startBatchOperation(
         label: String,
@@ -175,7 +175,7 @@ fun PlataleaApp(
             )
             val normalized = normalizeContentUriString(uri.toString())
             val previousRoot = RootService.rootUri?.let { normalizeContentUriString(it) }
-            rootSwitch.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
+            RootSwitchModule.service.applyNewRoot(previousRoot, normalized) { initialDirUri = it }
         }
     }
 
@@ -214,7 +214,7 @@ fun PlataleaApp(
     LaunchedEffect(initialFileUri?.value) {
         val uriStr = initialFileUri?.value ?: return@LaunchedEffect
         initialFileUri.value = null
-        browserSave.offer(uriStr)
+        BrowserSaveModule.service.offer(uriStr)
     }
     LaunchedEffect(config.shell, initialLaunchTarget) {
         if (CrashReportStore.hasUnseenCrash(context)) {
@@ -238,8 +238,8 @@ fun PlataleaApp(
         }
         nav.restore(restoreTab)
     }
-    LaunchedEffect(browserSave.pendingSaveFileUri, RootService.rootUri) {
-        browserSave.consumeIfReady { dir ->
+    LaunchedEffect(BrowserSaveModule.service.pendingSaveFileUri, RootService.rootUri) {
+        BrowserSaveModule.service.consumeIfReady { dir ->
             initialDirUri = dir
             browserTab.navigateTo(dir)
             saveCompletedToken++
@@ -249,74 +249,20 @@ fun PlataleaApp(
     // 全屏 Route 聚合槽（批次 D）：即时型查看器最先，工作流终态次之。
     // pass Route 的显示判断在加密模块（activePassRoute），此处只聚合。
     val activeRoute: TransientRoute? = transientRoute
-        ?: if (archiveReader.routeActive) TransientRoute.WorkflowViewer(archiveReader) else null
-        ?: if (epubReader.routeActive) TransientRoute.WorkflowViewer(epubReader) else null
+        ?: if (ArchiveReaderModule.service.routeActive) TransientRoute.WorkflowViewer(ArchiveReaderModule.service) else null
+        ?: if (EpubReaderModule.service.routeActive) TransientRoute.WorkflowViewer(EpubReaderModule.service) else null
         ?: CryptoModule.activePassRoute()
 
-    // ==== 接线：跨域向导功能页（页面工厂 + DialogPageBinder 绑定域状态）====
-    val quickMaskPage = remember {
-        quickObfuscateDialogPage(
-            workflow = quickObfuscate,
-            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
-            onQuickFinished = { browserTab.refresh() },
-            onBatchFinished = {
-                browserTab.finishPendingList()
-                browserTab.refresh()
-            }
-        )
-    }
-    val archiveOpsPage = remember {
-        archiveOpsDialogPage(
-            context = context,
-            scope = scope,
-            workflow = archiveOps,
-            browserTab = browserTab,
-            displayUriProvider = { browserTab.currentUri ?: initialDirUri ?: RootService.rootUri!! },
-            progressOpState = progressOpState,
-            progressCancelActionState = progressCancelActionState,
-            runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
-        )
-    }
-    val rootSwitchPage = remember {
-        rootSwitchDialogPage(
-            workflow = rootSwitch,
-            browserTab = browserTab,
-            recentRootUrisProvider = { recentRootUris },
-            initialDirUriSink = { initialDirUri = it },
-            treeLauncher = treeLauncher,
-            scope = scope,
-            runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
-            context = context
-        )
-    }
-    // 公告转发页（P4：请求槽在家庭网络域 FamilyNetworkManager，宿主不中转）
-    val bulletinPage = remember {
-        val manager = networkServices.familyNetworkManager
-        bulletinForwardDialogPage(
-            manager = manager,
-            familyNetworkForegroundProvider = { networkServices.familyNetworkForeground },
-            localServiceEnabledProvider = { networkServices.config.localNetworkServiceEnabled },
-            onDismiss = manager::clearForwardRequest,
-            onComplete = {
-                browserTab.finishPendingList()
-                manager.clearForwardRequest()
-            },
-            onBack = { requestExitApp() }
-        )
-    }
-    val overwritePage = remember {
-        overwriteConfirmDialogPage(
-            browserSave = browserSave,
-            onOverwriteSaved = { dir ->
-                initialDirUri = dir
-                browserTab.navigateTo(dir)
-                saveCompletedToken++
-            },
-            onSkipped = { dir -> initialDirUri = dir },
-            onBack = { requestExitApp() }
-        )
-    }
-    DialogPageBinder(nav, quickMaskPage) { quickObfuscate.batchTarget != null || quickObfuscate.quickTarget != null }
+    // ==== 接线：跨域向导功能页（模块 Binding，一行一域）====
+    QuickObfuscateWizardBinding(
+        nav = nav,
+        runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) },
+        onQuickFinished = { browserTab.refresh() },
+        onBatchFinished = {
+            browserTab.finishPendingList()
+            browserTab.refresh()
+        }
+    )
     CryptoWizardBinding(
         nav = nav,
         scope = scope,
@@ -327,17 +273,50 @@ fun PlataleaApp(
         onRefresh = { browserTab.refresh() },
         onBatchFinished = { browserTab.finishPendingList() }
     )
-    DialogPageBinder(nav, archiveOpsPage) { archiveOps.request != null }
-    DialogPageBinder(nav, rootSwitchPage) { rootSwitch.showRootSwitchDialog || rootSwitch.showChangeRootConfirm }
-    val bulletinForwardRequest by networkServices.familyNetworkManager.forwardRequest.collectAsState()
-    DialogPageBinder(nav, bulletinPage) { bulletinForwardRequest != null }
-    DialogPageBinder(nav, overwritePage) { browserSave.overwriteConfirm != null }
+    ArchiveOpsWizardBinding(
+        nav = nav,
+        context = context,
+        scope = scope,
+        browserTab = browserTab,
+        displayUriProvider = { browserTab.currentUri ?: initialDirUri ?: RootService.rootUri!! },
+        progressOpState = progressOpState,
+        progressCancelActionState = progressCancelActionState,
+        runBatchOperation = { label, names, onFinished, block -> startBatchOperation(label, names, onFinished, block) }
+    )
+    RootSwitchWizardBinding(
+        nav = nav,
+        browserTab = browserTab,
+        recentRootUrisProvider = { recentRootUris },
+        initialDirUriSink = { initialDirUri = it },
+        treeLauncher = treeLauncher,
+        scope = scope,
+        runWithProgress = { label, total, block -> runWithProgress(label, total, block) },
+        context = context
+    )
+    BulletinForwardBinding(
+        nav = nav,
+        manager = networkServices.familyNetworkManager,
+        familyNetworkForegroundProvider = { networkServices.familyNetworkForeground },
+        localServiceEnabledProvider = { networkServices.config.localNetworkServiceEnabled },
+        onComplete = {
+            browserTab.finishPendingList()
+            networkServices.familyNetworkManager.clearForwardRequest()
+        },
+        onBack = { requestExitApp() }
+    )
+    BrowserSaveWizardBinding(
+        nav = nav,
+        initialDirUriSink = { initialDirUri = it },
+        navigateToDir = { dir -> browserTab.navigateTo(dir) },
+        onOverwriteSaved = { saveCompletedToken++ },
+        onBack = { requestExitApp() }
+    )
 
     // ==== 组合栈顶：顶层 when 分派（互斥的显示阶段）====
     when {
         showUnlockGate -> StartupUnlockGateScreen(onUnlocked = { unlockedByStartup = true })
-        RootService.rootUri == null && initialDirUri == null && browserSave.overwriteConfirm == null -> NoRootGateScreen(
-            externalSavePending = browserSave.pendingSaveFileUri != null,
+        RootService.rootUri == null && initialDirUri == null && BrowserSaveModule.service.overwriteConfirm == null -> NoRootGateScreen(
+            externalSavePending = BrowserSaveModule.service.pendingSaveFileUri != null,
             treeLauncher = treeLauncher
         )
         // 功能页（导航栈栈顶，如批量执行页）：整页自绘，返回键页内自理
@@ -358,12 +337,6 @@ fun PlataleaApp(
             MainTabsScreenHost(
                 config = config,
                 browserTab = browserTab,
-                rootSwitch = rootSwitch,
-                browserSave = browserSave,
-                quickObfuscate = quickObfuscate,
-                archiveOps = archiveOps,
-                archiveReader = archiveReader,
-                epubReader = epubReader,
                 markdownViewerSessionCache = markdownViewerSessionCache,
                 networkServices = networkServices,
                 quickNoteService = quickNoteService,
