@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -36,7 +37,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.window.Dialog
@@ -94,32 +94,39 @@ private fun readClipboardPassword(context: Context): String? {
     return text.ifBlank { null }
 }
 
-internal enum class PasswordKeyCategory { DIGIT, UPPER, LOWER, SYMBOL }
+internal enum class PasswordKeyCategory { UPPER, LOWER, PUNCT, SYMBOL }
 
-private val digitKeys = "1234567890".toList()
-/** 字母页按传统键盘（QWERTY）三行布局：10/9/7。 */
+/** 实体键盘式：数字行居首，下接 QWERTY 三行（大小写共享数字行）。 */
+private val digitRow = "1234567890".toList()
 private val qwertyUpperRows = listOf(
+    digitRow,
     "QWERTYUIOP".toList(),
     "ASDFGHJKL".toList(),
     "ZXCVBNM".toList()
 )
 private val qwertyLowerRows = listOf(
+    digitRow,
     "qwertyuiop".toList(),
     "asdfghjkl".toList(),
     "zxcvbnm".toList()
 )
+/** 标点集：常用标点与括号。 */
+private val punctKeys = listOf(
+    '!', '?', '.', ',', ';', ':', '\'', '"',
+    '-', '_', '(', ')', '[', ']', '{', '}'
+)
+/** 特殊符号集：上档数字符与路径、引号类符号。 */
 private val symbolKeys = listOf(
-    '~', '!', '@', '#', '$', '%', '^', '&', '*',
-    '(', ')', '_', '+', '-', '=', '[', ']', '{', '}',
-    '|', ';', ':', '\'', '"', ',', '.', '<', '>', '/', '?', '`', '\\'
+    '~', '@', '#', '$', '%', '^', '&', '*',
+    '=', '+', '|', '<', '>', '/', '`', '\\'
 )
 
-/** 每页的行结构（页 = 行列表）：字母页 QWERTY 三行一页；数字页每行 5 键；符号页 30 键/页每行 5 键。 */
-internal fun categoryPages(category: PasswordKeyCategory): List<List<List<Char>>> = when (category) {
-    PasswordKeyCategory.DIGIT -> listOf(digitKeys.chunked(5))
-    PasswordKeyCategory.UPPER -> listOf(qwertyUpperRows)
-    PasswordKeyCategory.LOWER -> listOf(qwertyLowerRows)
-    PasswordKeyCategory.SYMBOL -> symbolKeys.chunked(30).map { it.chunked(5) }
+/** 每类的行结构：字母页数字行 + QWERTY 三行；符号两集各 16 键、每行 4 键（4x4 网格）。 */
+internal fun categoryPages(category: PasswordKeyCategory): List<List<Char>> = when (category) {
+    PasswordKeyCategory.UPPER -> qwertyUpperRows
+    PasswordKeyCategory.LOWER -> qwertyLowerRows
+    PasswordKeyCategory.PUNCT -> punctKeys.chunked(4)
+    PasswordKeyCategory.SYMBOL -> symbolKeys.chunked(4)
 }
 
 @Composable
@@ -168,8 +175,7 @@ internal fun ReliablePasswordInputField(
 ) {
     val context = LocalContext.current
     var keyboardVisible by remember { mutableStateOf(false) }
-    var category by remember { mutableStateOf(PasswordKeyCategory.DIGIT) }
-    var pageIndex by remember { mutableIntStateOf(0) }
+    var category by remember { mutableStateOf(PasswordKeyCategory.LOWER) }
     // 确认轮草稿：打开键盘时从 value 起步；第一轮暂存 firstEntry，第二轮比对
     var buffer by remember { mutableStateOf(value) }
     var confirmStage by remember { mutableIntStateOf(1) }
@@ -183,9 +189,7 @@ internal fun ReliablePasswordInputField(
             mismatch = false
         }
     }
-    val pages = remember(category) { categoryPages(category) }
-    if (pageIndex > pages.lastIndex) pageIndex = 0
-    val pageRows = pages.getOrElse(pageIndex) { emptyList() }
+    val pageRows = remember(category) { categoryPages(category) }
     val editingText = if (requireConfirmation) buffer else value
     val edit: (String) -> Unit = { newText ->
         if (requireConfirmation) buffer = newText else onValueChange(newText)
@@ -352,51 +356,29 @@ internal fun ReliablePasswordInputField(
                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.DIGIT; pageIndex = 0 },
-                                enabled = enabled,
-                                modifier = Modifier.weight(1f),
-                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                            ) { Text(stringResource(R.string.pwd_kb_digits), style = MaterialTheme.typography.labelSmall) }
-                            OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.UPPER; pageIndex = 0 },
+                                onClick = { category = PasswordKeyCategory.UPPER },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_upper), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.LOWER; pageIndex = 0 },
+                                onClick = { category = PasswordKeyCategory.LOWER },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_lower), style = MaterialTheme.typography.labelSmall) }
                             OutlinedButton(
-                                onClick = { category = PasswordKeyCategory.SYMBOL; pageIndex = 0 },
+                                onClick = { category = PasswordKeyCategory.PUNCT },
+                                enabled = enabled,
+                                modifier = Modifier.weight(1f),
+                                contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
+                            ) { Text(stringResource(R.string.pwd_kb_punct), style = MaterialTheme.typography.labelSmall) }
+                            OutlinedButton(
+                                onClick = { category = PasswordKeyCategory.SYMBOL },
                                 enabled = enabled,
                                 modifier = Modifier.weight(1f),
                                 contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
                             ) { Text(stringResource(R.string.pwd_kb_symbols), style = MaterialTheme.typography.labelSmall) }
-                        }
-
-                        if (pages.size > 1) {
-                            Spacer(Modifier.height(2.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                pages.indices.forEach { idx ->
-                                    OutlinedButton(
-                                        onClick = { pageIndex = idx },
-                                        enabled = enabled,
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 2.dp, vertical = 2.dp)
-                                    ) {
-                                        Text(
-                                            text = if (idx == pageIndex) stringResource(R.string.pwd_kb_subclass_active, idx + 1) else stringResource(R.string.pwd_kb_subclass, idx + 1),
-                                            style = MaterialTheme.typography.labelSmall
-                                        )
-                                    }
-                                }
-                            }
                         }
 
                         Spacer(Modifier.height(4.dp))

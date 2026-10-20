@@ -1703,12 +1703,10 @@ Exception: %1$s: %2$s
     <string name="pwd_kb_done">Done</string>
     <string name="pwd_kb_confirm_stage">Enter again to confirm</string>
     <string name="pwd_kb_confirm_mismatch">Entries do not match, try again</string>
-    <string name="pwd_kb_digits">Digits</string>
     <string name="pwd_kb_upper">Uppercase</string>
     <string name="pwd_kb_lower">Lowercase</string>
+    <string name="pwd_kb_punct">Punctuation</string>
     <string name="pwd_kb_symbols">Symbols</string>
-    <string name="pwd_kb_subclass_active">Set %1$d*</string>
-    <string name="pwd_kb_subclass">Set %1$d</string>
     <string name="pwd_kb_space">Space</string>
     <string name="pwd_kb_backspace">Backspace</string>
     <string name="pwd_kb_clear">Clear</string>
