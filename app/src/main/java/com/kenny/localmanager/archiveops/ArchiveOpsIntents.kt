@@ -2,15 +2,16 @@ package com.kenny.localmanager.archiveops
 
 import com.kenny.localmanager.R
 import com.kenny.localmanager.browser.BrowserActionContext
+import com.kenny.localmanager.browser.BrowserActionSnapshot
 import com.kenny.localmanager.browser.BrowserActions
+import com.kenny.localmanager.browser.BrowserFileAction
 import com.kenny.localmanager.browser.BrowserOpenIntent
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.isExtractableArchive
 
 /**
- * 解压域的打开意图（文件浏览功能拆解设计 第二批）：可解压压缩包
- * （zip/rar/7z/tar…，.pic.zip/.vid.zip 除外——归压缩包阅读段）的单击
- * 默认解压，槽位 400（归档与加密段）。open 直呼本模块 service。
+ * 解压域的浏览器能力声明（拆解设计 第二批意图、第三批动作）：单击
+ * 可解压压缩包（槽 400）与菜单压缩动作（文件与目录均可）。
  */
 internal object ArchiveOpsIntents {
 
@@ -24,7 +25,18 @@ internal object ArchiveOpsIntents {
         }
     }
 
+    private object CompressAction : BrowserFileAction {
+        override val id = "archiveops.compress"
+        override fun labelRes(target: DocumentFileModel, snapshot: BrowserActionSnapshot) =
+            R.string.context_compress_archive
+        override fun applies(target: DocumentFileModel, snapshot: BrowserActionSnapshot) = true
+        override fun run(ctx: BrowserActionContext) {
+            ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressFile(ctx.target))
+        }
+    }
+
     fun registerAll(registry: BrowserActions.Registry) {
         registry.register(UnzipIntent)
+        registry.register(CompressAction)
     }
 }

@@ -33,5 +33,5 @@ internal class StubUri : Uri() {
     override fun writeToParcel(dest: Parcel, flags: Int) = Unit
     override fun equals(other: Any?): Boolean = this === other
     override fun hashCode(): Int = System.identityHashCode(this)
-    override fun toString(): String = "stub-uri"
+    override fun toString(): String = "stub-uri-${System.identityHashCode(this)}"
 }

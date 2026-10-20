@@ -1049,7 +1049,6 @@ internal fun BrowserScreen(
     onBack: () -> Unit,
     canGoBack: Boolean,
     onEmptyTrash: (() -> Unit)? = null,
-    onRestoreFromTrash: ((DocumentFileModel) -> Unit)? = null,
     isViewingTrash: Boolean = false,
     filterVisible: Boolean = true,
     hideDotFiles: Boolean = false,
@@ -1057,34 +1056,16 @@ internal fun BrowserScreen(
     onOpenFile: (uri: String, name: String, isEncrypted: Boolean) -> Unit,
     onOpenWithOtherApp: (uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?) -> Boolean = { _, _, _, _, _ -> false },
     onClearExternalOpenPreference: (name: String) -> Unit = {},
-    onAddToPendingList: (DocumentFileModel) -> Unit,
-    onRemoveFromPendingList: (DocumentFileModel) -> Unit,
-    onCopyPendingToCurrentDir: () -> Unit = {},
-    onMovePendingToCurrentDir: () -> Unit = {},
-    onShowPendingList: (Boolean) -> Unit,
     onRefresh: () -> Unit,
     onChangeRoot: () -> Unit = {},
     onCreateQuickNote: () -> Unit = {},
     onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
-    onForwardToBulletin: ((List<DocumentFileModel>) -> Unit)? = null,
-    onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
-    onRequestQuickMask: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
     onRequestOpenUrl: (String) -> Unit = {},
-    onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
-    onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
-    onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
-    onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
-    onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
-    onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     zipEditTargetUri: String? = null,
     zipEditTargetName: String? = null,
     zipEditTargetIsZip: Boolean = false,
-    onSetZipEditTarget: (DocumentFileModel) -> Unit = {},
-    onAddToZipEditTarget: (DocumentFileModel) -> Unit = {},
-    onEditZipContents: (DocumentFileModel) -> Unit = {},
     onOpenZipManager: () -> Unit = {},
-    onClearZipEditTarget: () -> Unit = {},
     playbackState: PlaybackState? = null,
     onOpenPlaybackScreen: () -> Unit = {}
 ) {
@@ -1164,7 +1145,7 @@ internal fun BrowserScreen(
     fun addSearchResultsToPending(targets: List<DocumentFileModel>) {
         val existingUris = pendingList.map { it.uri.toString() }.toHashSet()
         val toAdd = targets.filter { existingUris.add(it.uri.toString()) }
-        toAdd.forEach(onAddToPendingList)
+        toAdd.forEach { session.addToPending(it) }
         Toast.makeText(context, if (toAdd.isEmpty()) context.getString(R.string.browser_no_new_pending_items) else context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
     }
 
@@ -1295,20 +1276,33 @@ internal fun BrowserScreen(
         }
     }
 
+    /** 动作快照（拆解设计第三批）：菜单与单击分发共用的会话判断依据。 */
+    fun actionSnapshot(target: DocumentFileModel) = BrowserActionSnapshot(
+        currentUri = currentUri,
+        pendingUris = pendingList.map { it.uri.toString() }.toSet(),
+        zipEditTargetUri = zipEditTargetUri,
+        zipEditTargetIsZip = zipEditTargetIsZip,
+        isViewingTrash = isViewingTrash,
+        gallerySiblings = if (isGalleryImageFile(target.name)) galleryImageItems else emptyList(),
+    )
+
+    fun actionContext(target: DocumentFileModel) = BrowserActionContext(
+        target = target,
+        session = session,
+        snapshot = actionSnapshot(target),
+        scope = scope,
+        appContext = context,
+    )
+
     fun defaultOpenMenuLabel(target: DocumentFileModel): String {
         if (target.isDirectory) return context.getString(R.string.context_default_enter_directory)
         // 已迁移打开意图（拆解设计）：标题取槽位最小适用意图的声明。
         BrowserActions.registry.matchIntent(target)?.let {
             return context.getString(it.labelRes)
         }
-        return when {
-            isGalleryImageFile(target.name) -> context.getString(R.string.context_view_images)
-            else -> {
-                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
-                if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
-                else context.getString(R.string.context_open_with_internal_viewer)
-            }
-        }
+        val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
+        return if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
+        else context.getString(R.string.context_open_with_internal_viewer)
     }
 
     fun openItemByDefault(target: DocumentFileModel) {
@@ -1318,27 +1312,16 @@ internal fun BrowserScreen(
         }
         // 已迁移打开意图（拆解设计）：单击分发先查声明注册表。
         BrowserActions.registry.matchIntent(target)?.let {
-            it.open(
-                BrowserActionContext(
-                    target = target,
-                    session = session,
-                    snapshot = BrowserActionSnapshot(currentUri = currentUri),
-                )
-            )
+            it.open(actionContext(target))
             return
         }
-        when {
-            isGalleryImageFile(target.name) ->
-                onRequestDirectoryImageView(target, currentUri, galleryImageItems)
-            else -> {
-                val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
-                if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {
-                    Unit
-                } else {
-                    val encrypted = isGpgEncryptedFile(target.name)
-                    onOpenFile(target.uri.toString(), target.name, encrypted)
-                }
-            }
+        // 兑底（拆解设计：槽 900 待第四批动作化）：外开偏好或内置查看器。
+        val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
+        if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {
+            Unit
+        } else {
+            val encrypted = isGpgEncryptedFile(target.name)
+            onOpenFile(target.uri.toString(), target.name, encrypted)
         }
     }
 
@@ -1538,7 +1521,7 @@ internal fun BrowserScreen(
                                 onClick = {
                                     showOverflowMenu = false
                                     val toAdd = filteredItems.filter { item -> !pendingList.any { it.uri == item.uri } }
-                                    toAdd.forEach { onAddToPendingList(it) }
+                                    toAdd.forEach { session.addToPending(it) }
                                     Toast.makeText(context, context.getString(R.string.main_menu_add_filtered_done, toAdd.size), Toast.LENGTH_SHORT).show()
                                 }
                             )
@@ -1615,7 +1598,7 @@ internal fun BrowserScreen(
                         Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 6.dp)
-                            .clickable { onOpenPlaybackScreen() },
+                            .clickable { session.openPlaybackScreen() },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Icon(Icons.AutoMirrored.Filled.PlaylistAdd, contentDescription = null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
@@ -1653,7 +1636,7 @@ internal fun BrowserScreen(
                             Icon(Icons.AutoMirrored.Filled.DriveFileMove, contentDescription = context.getString(R.string.fab_move_to_current))
                         }
                         FloatingActionButton(
-                            onClick = { onShowPendingList(true) },
+                            onClick = { session.showPendingList(true) },
                             containerColor = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.72f),
                             contentColor = MaterialTheme.colorScheme.onTertiary
                         ) {
@@ -1701,7 +1684,7 @@ internal fun BrowserScreen(
                                     label = { Text(stringResource(R.string.zip_edit_bar_label, zipEditTargetName), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)) },
                                     leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null, Modifier.size(18.dp)) }
                                 )
-                                TextButton(onClick = onClearZipEditTarget) {
+                                TextButton(onClick = { session.clearZipEditTarget() }) {
                                     Text(stringResource(R.string.zip_edit_bar_clear))
                                 }
                             }
@@ -1727,8 +1710,8 @@ internal fun BrowserScreen(
                                     showContextMenu = true
                                 },
                                 onDoubleClick = {
-                                    if (pendingList.any { it.uri == item.uri }) onRemoveFromPendingList(item)
-                                    else onAddToPendingList(item)
+                                    if (pendingList.any { it.uri == item.uri }) session.removeFromPending(item)
+                                    else session.addToPending(item)
                                 }
                             )
                         }
@@ -1881,6 +1864,7 @@ internal fun BrowserScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
+                        // 遗留外开段（第四批随对话框动作化迁出）
                         if (!menuTarget.isDirectory) {
                             TextButton(
                                 onClick = {
@@ -1900,137 +1884,24 @@ internal fun BrowserScreen(
                                     }
                                 ) { Text(context.getString(R.string.context_open_with_internal_viewer), color = MaterialTheme.colorScheme.onSurface) }
                             }
-                        if (!isPassFile(menuTarget.name)) {
+                        }
+                        // 已迁移菜单动作（拆解设计第三批）：注册序即菜单序，
+                        // 适用项依次出列，执行体直呼各域服务或会话句柄。
+                        val actionCtx = actionContext(menuTarget)
+                        BrowserActions.registry.menuActions(menuTarget, actionCtx.snapshot).forEach { action ->
                             TextButton(
                                 onClick = {
                                     showContextMenu = false
-                                    onRequestGpgEncrypt(menuTarget, currentUri)
+                                    action.run(actionContext(menuTarget))
                                     contextMenuTarget = null
                                 }
-                            ) { Text(context.getString(R.string.context_gpg_encrypt), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if ((isMarkdownFile(menuTarget.name) || isTxtFile(menuTarget.name))
-                            && onRequestPassProtect != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassProtect(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_pass_protect), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (isPassFile(menuTarget.name)) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestPassEdit(menuTarget, currentUri)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_edit_directly), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (isConfigImportFile(menuTarget.name) && onRequestImportConfig != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestImportConfig(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_import_config), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                        if (isStarDictImportCandidate(menuTarget.name) && onRequestImportStarDict != null) {
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    onRequestImportStarDict(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_import_stardict), color = MaterialTheme.colorScheme.onSurface) }
-                        }
-                    } else {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onCreateMusicPlaylist(menuTarget.uri.toString(), menuTarget.name)
-                                contextMenuTarget = null
+                            ) {
+                                Text(
+                                    stringResource(action.labelRes(menuTarget, actionCtx.snapshot)),
+                                    color = if (action.emphasized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                                )
                             }
-                        ) { Text(context.getString(R.string.browser_generate_music_playlist), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    if (isViewingTrash && onRestoreFromTrash != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onRestoreFromTrash(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_restore), color = MaterialTheme.colorScheme.primary) }
-                    }
-                    if (!menuTarget.isDirectory) {
-                        onRequestQuickMask?.let { fn ->
-                            TextButton(
-                                onClick = {
-                                    showContextMenu = false
-                                    fn(menuTarget)
-                                    contextMenuTarget = null
-                                }
-                            ) { Text(context.getString(R.string.context_quick_mask), color = MaterialTheme.colorScheme.onSurface) }
                         }
-                    }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            onCompressArchiveRequest(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) { Text(context.getString(R.string.context_compress_archive), color = MaterialTheme.colorScheme.onSurface) }
-                    if (onForwardToBulletin != null) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onForwardToBulletin.invoke(listOf(menuTarget))
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.context_forward_to_bulletin), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    TextButton(
-                        onClick = {
-                            showContextMenu = false
-                            if (pendingList.any { it.uri == menuTarget.uri }) onRemoveFromPendingList(menuTarget)
-                            else onAddToPendingList(menuTarget)
-                            contextMenuTarget = null
-                        }
-                    ) {
-                        Text(
-                            if (pendingList.any { it.uri == menuTarget.uri }) context.getString(R.string.context_remove_from_pending) else context.getString(R.string.context_add_to_pending),
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                    if (!menuTarget.isDirectory) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onSetZipEditTarget(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.zip_edit_menu_set_target), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    if (zipEditTargetIsZip && zipEditTargetUri != null && menuTarget.uri.toString() != zipEditTargetUri) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onAddToZipEditTarget(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.zip_edit_menu_add_to_target), color = MaterialTheme.colorScheme.onSurface) }
-                    }
-                    if (!menuTarget.isDirectory && menuTarget.name.endsWith(".zip", ignoreCase = true)) {
-                        TextButton(
-                            onClick = {
-                                showContextMenu = false
-                                onEditZipContents(menuTarget)
-                                contextMenuTarget = null
-                            }
-                        ) { Text(context.getString(R.string.zip_edit_menu_edit_contents), color = MaterialTheme.colorScheme.onSurface) }
-                    }
                     TextButton(
                         onClick = {
                             showContextMenu = false
@@ -3209,7 +3080,7 @@ internal fun BrowserScreen(
                     onClick = {
                         showQuickCopyConfirm = false
                         showQuickMoveConfirm = false
-                        if (isCopy) onCopyPendingToCurrentDir() else onMovePendingToCurrentDir()
+                        if (isCopy) session.copyPendingToDir() else session.movePendingToDir()
                     }
                 ) { Text(actionLabel) }
             },

@@ -63,7 +63,7 @@ import com.kenny.localmanager.file.openInputStreamSafe
 import com.kenny.localmanager.file.pathFromRoot
 import com.kenny.localmanager.file.relativePathFromCurrentDir
 import com.kenny.localmanager.file.removeZipEntries
-import com.kenny.localmanager.file.restoreFromTrash
+import com.kenny.localmanager.file.restoreFromTrash as restoreFileFromTrash
 import com.kenny.localmanager.file.unzipToParent
 import com.kenny.localmanager.player.PlaybackState
 import java.io.File
@@ -101,6 +101,11 @@ import com.kenny.localmanager.player.saveEditableAudioAnnotationWithJaudiotagger
 import com.kenny.localmanager.player.supportsJaudiotaggerWrite
 import com.kenny.localmanager.player.validateEditableAudioAnnotationForm
 import com.kenny.localmanager.archivereader.ArchiveReaderIntents
+import com.kenny.localmanager.config.ConfigIntents
+import com.kenny.localmanager.family.FamilyIntents
+import com.kenny.localmanager.obfuscate.QuickObfuscateIntents
+import com.kenny.localmanager.player.PlayerIntents
+import com.kenny.localmanager.zipedit.ZipEditIntents
 import com.kenny.localmanager.archiveops.ArchiveOpsIntents
 import com.kenny.localmanager.crypto.CryptoIntents
 import com.kenny.localmanager.epub.EpubReaderIntents
@@ -662,28 +667,9 @@ internal fun BrowserTabHost(
     fun refresh() = state.refresh()
     val backStack = state.backStack
     val pendingList = state.pendingList
-    // 会话句柄（拆解设计 §2.1）：浏览器对外部动作开放的受限命令接口。
-    // 功能域动作经它发收尾命令；实现只调域内既有方法，不新造状态。
-    val sessionHandle = remember(state) {
-        object : BrowserSessionHandle {
-            override fun refresh() = state.refresh()
-            override fun addToPending(item: DocumentFileModel) { state.pendingList.add(item) }
-            override fun removeFromPending(item: DocumentFileModel) { state.pendingList.remove(item) }
-            override fun switchTab(tab: MainTab) = deps.switchTab(tab)
-            override fun openViewerRoute(route: TransientRoute) = setTransientRoute(route)
-        }
-    }
-    // 能力声明注册（拆解设计 §2.2）：声明归各域，注册在组装层一行/域。
-    // 重复 id 被注册表拒绝（Activity 重建安全）。
-    remember(state) {
-        val registry = BrowserActions.registry
-        ArchiveReaderIntents.registerAll(registry)
-        EpubReaderIntents.registerAll(registry)
-        ViewerIntents.registerAll(registry)
-        ArchiveOpsIntents.registerAll(registry)
-        CryptoIntents.registerAll(registry)
-        true
-    }
+    // 会话句柄（拆解设计 §2.1）与能力声明注册（§2.2）：定义在 zipedit
+    // 与回收站编排之后（句柄命令需引用这些局部编排）；声明归各域，
+    // 注册在组装层一行/域，重复 id 被注册表拒绝（Activity 重建安全）。
     fun clearPendingList() = state.clearPendingList()
     var showPendingList by state::showPendingList
     var showPendingDeleteConfirm by state::showPendingDeleteConfirm
@@ -892,61 +878,11 @@ internal fun BrowserTabHost(
         zipEditPendingTarget = targetUri
     }
 
+
     val fileListLazyState = rememberLazyListState()
 
     val copyMoveLog: ((String) -> Unit)? = null
 
-    suspend fun openDirectoryImageGallery(
-        currentItem: DocumentFileModel,
-        currentDirUri: String,
-        siblingImages: List<DocumentFileModel>
-    ) {
-        val normalizedImages = siblingImages
-            .filter { !it.isDirectory && isGalleryImageFile(it.name) }
-            .distinctBy { it.uri.toString() }
-        if (normalizedImages.isEmpty()) {
-            Toast.makeText(context, context.getString(R.string.browser_no_images_in_dir), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val initialIndex = normalizedImages.indexOfFirst { it.uri == currentItem.uri }
-        if (initialIndex < 0) {
-            Toast.makeText(context, context.getString(R.string.browser_image_position_failed, currentItem.name), Toast.LENGTH_SHORT).show()
-            return
-        }
-        val galleryRoot = File(context.cacheDir, "pic_dir_gallery")
-        val galleryKey = currentDirUri.hashCode().toUInt().toString(16)
-        val cacheDir = File(galleryRoot, galleryKey)
-        val contentDir = File(cacheDir, "content")
-        withContext(Dispatchers.IO) {
-            if (cacheDir.exists()) {
-                cacheDir.deleteRecursively()
-            }
-            contentDir.mkdirs()
-            normalizedImages.forEachIndexed { index, model ->
-                val targetFile = File(contentDir, model.name)
-                val bytes = context.contentResolver.openInputStreamSafe(model.uri)?.use { it.readBytes() }
-                    ?: throw IllegalStateException(context.getString(R.string.browser_image_read_failed, index + 1, model.name, model.uri))
-                targetFile.outputStream().use { it.write(bytes) }
-            }
-            File(cacheDir, ".last_index").writeText(initialIndex.toString())
-        }
-        val dirTitle = DocumentFile.fromTreeUri(context, Uri.parse(currentDirUri))?.name
-            ?: DocumentFile.fromSingleUri(context, Uri.parse(currentDirUri))?.name
-            ?: currentItem.name
-        ArchiveReaderModule.service.openViewer(
-            PicZipViewState(
-                contentDir = contentDir,
-                imagePaths = normalizedImages.map { it.name },
-                zipFileName = dirTitle,
-                zipUri = currentItem.uri,
-                isEncrypted = false,
-                password = null,
-                initialIndex = initialIndex,
-                recordRecent = false,
-                cleanupCacheDir = cacheDir
-            )
-        )
-    }
 
     // 文件浏览派生状态（原宿主平移）
         var currentDirPath by remember { mutableStateOf("") }
@@ -991,6 +927,81 @@ internal fun BrowserTabHost(
                 onRefreshDone = { refresh() }
             )
         }
+
+    // 会话句柄（拆解设计 §2.1）：浏览器对外部动作开放的受限命令接口。
+    // 功能域动作经它发收尾命令；实现只调域内既有编排，不新造状态。
+    val sessionHandle = remember(state) {
+        object : BrowserSessionHandle {
+            override fun refresh() = state.refresh()
+            override fun addToPending(item: DocumentFileModel) { state.pendingList.add(item) }
+            override fun removeFromPending(item: DocumentFileModel) { state.pendingList.remove(item) }
+            override fun switchTab(tab: MainTab) = deps.switchTab(tab)
+            override fun openViewerRoute(route: TransientRoute) = setTransientRoute(route)
+            override fun openZipManager(uri: String, name: String, fromConfig: Boolean) {
+                zipManagerSession = ZipManagerSession(uri, name, fromConfig = fromConfig)
+            }
+            override fun setZipEditTarget(item: DocumentFileModel) {
+                scope.launch {
+                    zipEditConfig.setOperationTarget(item.uri.toString())
+                    Toast.makeText(context, context.getString(R.string.zip_edit_target_set, item.name), Toast.LENGTH_SHORT).show()
+                }
+            }
+            override fun addToZipEditTarget(item: DocumentFileModel) {
+                val targetUri = zipEditTargetUriValue
+                val targetName = zipEditTargetName
+                if (targetUri == null || targetName == null) {
+                    Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
+                } else {
+                    requestZipAdd(listOf(item), targetUri, targetName)
+                }
+            }
+            override fun copyPendingToDir() = doCopyHere()
+            override fun movePendingToDir() = doMoveHere()
+            override fun showPendingList(show: Boolean) { showPendingList = show }
+            override fun clearZipEditTarget() {
+                scope.launch {
+                    zipEditConfig.setOperationTarget(null)
+                    Toast.makeText(context, context.getString(R.string.zip_edit_target_cleared), Toast.LENGTH_SHORT).show()
+                }
+            }
+            override fun openPlaybackScreen() = deps.switchTab(MainTab.PLAYER)
+            override fun restoreFromTrash(item: DocumentFileModel) {
+                val r = rootUri ?: return
+                scope.launch {
+                    val root = Uri.parse(normalizeContentUriString(r))
+                    runWithProgress(context.getString(R.string.context_restore), null) { _ ->
+                        val ok = withContext(Dispatchers.IO) { restoreFileFromTrash(context, item.uri, root, root) }
+                        if (ok) {
+                            Toast.makeText(context, context.getString(R.string.browser_restored_to_root), Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.browser_restore_failed), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 能力声明注册（拆解设计 §2.2）：声明归各域，注册在组装层；动作
+    // 注册序即菜单序（与迁移前 if 链顺序一致）。
+    remember(state) {
+        val registry = BrowserActions.registry
+        ArchiveReaderIntents.registerAll(registry)
+        EpubReaderIntents.registerAll(registry)
+        ViewerIntents.registerAll(registry)
+        CryptoIntents.registerAll(registry)
+        ConfigIntents.registerAll(registry)
+        PlayerIntents.registerAll(registry, playerTab)
+        if (rootUri != null) BrowserIntents.registerRestore(registry)
+        QuickObfuscateIntents.registerAll(registry)
+        ArchiveOpsIntents.registerAll(registry)
+        FamilyIntents.registerAll(registry) { items ->
+            onForwardToBulletin(BulletinForwardPayload.Files(items))
+        }
+        BrowserIntents.registerPendingToggle(registry)
+        ZipEditIntents.registerAll(registry)
+        true
+    }
         val doExtractArchivesHere: () -> Unit = {
             doExtractPendingArchivesToCurrentDir(
                 context = context,
@@ -1048,22 +1059,6 @@ internal fun BrowserTabHost(
                                     }
                                 },
                                 onChangeRoot = RootSwitchModule.service::open,
-                                onRestoreFromTrash = rootUri?.let { r ->
-                                    { model ->
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress(context.getString(R.string.context_restore), null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { restoreFromTrash(context, model.uri, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, context.getString(R.string.browser_restored_to_root), Toast.LENGTH_SHORT).show()
-                                                    refresh()
-                                                } else {
-                                                    Toast.makeText(context, context.getString(R.string.browser_restore_failed), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
                                 filterVisible = filterVisible,
                                 hideDotFiles = hideDotFiles,
                                 isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
@@ -1104,20 +1099,11 @@ internal fun BrowserTabHost(
                                         scope.launch { config.clearExternalOpenPackageForExtension(extension) }
                                     }
                                 },
-                                onAddToPendingList = { item -> pendingList.add(item) },
-                                onRemoveFromPendingList = { item -> pendingList.remove(item) },
-                                onCopyPendingToCurrentDir = doCopyHere,
-                                onMovePendingToCurrentDir = doMoveHere,
-                                onShowPendingList = { show -> showPendingList = show },
                                 onRefresh = { refresh() },
                                 onCreateQuickNote = {
                                     onOpenQuickNote()
                                 },
                                 onCreateMusicPlaylist = playerTab::requestCreateDirectoryPlaylist,
-                                onRequestGpgEncrypt = { fileModel, dirUri ->
-                                    CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
-                                },
-                                onRequestQuickMask = QuickObfuscateModule.service::requestQuick,
                                 onConfirmDelete = { model, deletePermanently ->
                                     scope.launch {
                                         val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
@@ -1139,67 +1125,11 @@ internal fun BrowserTabHost(
                                         }
                                     }
                                 },
-                                onForwardToBulletin = { items ->
-                                    if (items.isEmpty()) return@BrowserTabRouteState
-                                    onForwardToBulletin(BulletinForwardPayload.Files(items))
-                                },
                                 onRequestOpenUrl = readingLauncher::htmlUrl,
-                                onRequestDirectoryImageView = { item, dirUri, siblings ->
-                                    scope.launch {
-                                        runCatching {
-                                            openDirectoryImageGallery(item, dirUri, siblings)
-                                        }.onFailure { error ->
-                                            Toast.makeText(
-                                                context,
-                                                context.getString(R.string.browser_open_dir_images_failed, error.message ?: error.javaClass.simpleName),
-                                                Toast.LENGTH_LONG
-                                            ).show()
-                                        }
-                                    }
-                                },
-                                onCompressArchiveRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressFile(it)) },
-                                onRequestPassProtect = { model -> CryptoModule.service.open(CryptoRequest.PassProtect(model)) },
-                                onRequestPassEdit = { model, dirUri -> CryptoModule.service.open(CryptoRequest.PassEdit(model, dirUri)) },
-                                onRequestImportConfig = { model ->
-                                    ConfigImportExportModule.service.startImportFromUri(model.uri)
-                                },
-                                onRequestImportStarDict = { model ->
-                                    scope.launch {
-                                        val result = withContext(Dispatchers.IO) {
-                                            importStarDict(context, model.uri, model.name)
-                                        }
-                                        result.onSuccess {
-                                            val message = if (it.evicted != null) {
-                                                context.getString(R.string.browser_dict_imported_evicted, it.imported.name, it.imported.wordCount, it.evicted.name)
-                                            } else {
-                                                context.getString(R.string.browser_dict_imported, it.imported.name, it.imported.wordCount)
-                                            }
-                                            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
-                                        }.onFailure {
-                                            Toast.makeText(context, context.getString(R.string.browser_dict_import_failed, it.message ?: context.getString(R.string.common_unknown_error)), Toast.LENGTH_LONG).show()
-                                        }
-                                    }
-                                },
                                 playbackState = playbackState,
-                                onOpenPlaybackScreen = { deps.switchTab(MainTab.PLAYER) },
                                 zipEditTargetUri = zipEditTargetUriValue,
                                 zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
                                 zipEditTargetIsZip = zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true,
-                                onSetZipEditTarget = { model ->
-                                    scope.launch {
-                                        zipEditConfig.setOperationTarget(model.uri.toString())
-                                        Toast.makeText(context, context.getString(R.string.zip_edit_target_set, model.name), Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                onAddToZipEditTarget = { model ->
-                                    val targetUri = zipEditTargetUriValue
-                                    val targetName = zipEditTargetName
-                                    if (targetUri == null || targetName == null) {
-                                        Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
-                                    } else {
-                                        requestZipAdd(listOf(model), targetUri, targetName)
-                                    }
-                                },
                                 onOpenZipManager = {
                                     val targetUri = zipEditTargetUriValue
                                     val targetName = zipEditTargetName
@@ -1209,15 +1139,6 @@ internal fun BrowserTabHost(
                                         zipManagerSession = ZipManagerSession(targetUri, targetName, fromConfig = true)
                                     }
                                 },
-                                onEditZipContents = { model ->
-                                    zipManagerSession = ZipManagerSession(model.uri.toString(), model.name, fromConfig = false)
-                                },
-                                onClearZipEditTarget = {
-                                    scope.launch {
-                                        zipEditConfig.setOperationTarget(null)
-                                        Toast.makeText(context, context.getString(R.string.zip_edit_target_cleared), Toast.LENGTH_SHORT).show()
-                                    }
-                                }
                             )
                         )
         if (showPendingList) {
