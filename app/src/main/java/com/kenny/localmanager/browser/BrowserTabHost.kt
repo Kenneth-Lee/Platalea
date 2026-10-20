@@ -930,6 +930,8 @@ internal fun BrowserTabHost(
 
     // 会话句柄（拆解设计 §2.1）：浏览器对外部动作开放的受限命令接口。
     // 功能域动作经它发收尾命令；实现只调域内既有编排，不新造状态。
+    // 操作会话对话框请求（第四批）：Host 持有，BrowserScreen 渲染。
+    var dialogSessionRequest by remember { mutableStateOf<DialogSession?>(null) }
     val sessionHandle = remember(state) {
         object : BrowserSessionHandle {
             override fun refresh() = state.refresh()
@@ -953,6 +955,90 @@ internal fun BrowserTabHost(
                     Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
                 } else {
                     requestZipAdd(listOf(item), targetUri, targetName)
+                }
+            }
+            override fun openDialog(dialog: DialogSession) { dialogSessionRequest = dialog }
+            override fun closeDialog() { dialogSessionRequest = null }
+            override fun openBuiltinViewer(uri: String, name: String, encrypted: Boolean) {
+                // 与迁移前接线一致：Viewer 路由的加密标志恒为 false
+                setTransientRoute(TransientRoute.Viewer(uri, name, false))
+            }
+            override fun openWithOtherApp(uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?): Boolean {
+                val opened = launchExternalOpen(context, uri, packageName, name, forcedMimeType)
+                if (opened) {
+                    recordRecentOpen(RECENT_TYPE_EXTERNAL_OPEN, uri, name, uri, null)
+                    if (rememberChoice) {
+                        val extension = fileExtensionKey(name)
+                        if (extension != null && !packageName.isNullOrBlank()) {
+                            scope.launch { config.setExternalOpenPackageForExtension(extension, packageName) }
+                        }
+                    }
+                } else {
+                    val extension = fileExtensionKey(name)
+                    if (!packageName.isNullOrBlank() && extension != null) {
+                        scope.launch { config.clearExternalOpenPackageForExtension(extension) }
+                        Toast.makeText(context, context.getString(R.string.browser_external_app_unavailable), Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
+                    }
+                }
+                return opened
+            }
+            override fun clearExternalOpenPreference(name: String) {
+                val extension = fileExtensionKey(name)
+                if (extension != null) {
+                    scope.launch { config.clearExternalOpenPackageForExtension(extension) }
+                }
+            }
+            override fun confirmDelete(target: DocumentFileModel, permanently: Boolean) {
+                scope.launch {
+                    val label = if (permanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
+                    runWithProgress(label, null) { _ ->
+                        val ok = withContext(Dispatchers.IO) {
+                            if (permanently) {
+                                context.contentResolver.deleteDocument(target.uri)
+                            } else {
+                                val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
+                                moveToTrash(context, target.uri, root, root)
+                            }
+                        }
+                        if (ok) {
+                            Toast.makeText(context, if (permanently) context.getString(R.string.browser_deleted) else context.getString(R.string.browser_moved_to_trash), Toast.LENGTH_SHORT).show()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.browser_operation_failed), Toast.LENGTH_SHORT).show()
+                        }
+                        refresh()
+                    }
+                }
+            }
+            override fun emptyTrash() {
+                val r = rootUri ?: return
+                scope.launch {
+                    val root = Uri.parse(normalizeContentUriString(r))
+                    runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
+                        val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
+                        if (ok) {
+                            Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
+                            refresh()
+                        } else {
+                            Toast.makeText(context, context.getString(R.string.browser_empty_trash_failed), Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                }
+            }
+            override fun openUrl(url: String) {
+                readingLauncher.htmlUrl(url)
+            }
+            override fun createQuickNote() = onOpenQuickNote()
+            override fun createMusicPlaylist(currentUri: String, name: String) =
+                playerTab.requestCreateDirectoryPlaylist(currentUri, name)
+            override fun openZipManagerFromConfig() {
+                val targetUri = zipEditTargetUriValue
+                val targetName = zipEditTargetName
+                if (targetUri == null || targetName == null) {
+                    Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
+                } else {
+                    zipManagerSession = ZipManagerSession(targetUri, targetName, fromConfig = true)
                 }
             }
             override fun copyPendingToDir() = doCopyHere()
@@ -986,6 +1072,7 @@ internal fun BrowserTabHost(
     // 注册序即菜单序（与迁移前 if 链顺序一致）。
     remember(state) {
         val registry = BrowserActions.registry
+        BrowserIntents.registerOpenEntries(registry)
         ArchiveReaderIntents.registerAll(registry)
         EpubReaderIntents.registerAll(registry)
         ViewerIntents.registerAll(registry)
@@ -1000,6 +1087,7 @@ internal fun BrowserTabHost(
         }
         BrowserIntents.registerPendingToggle(registry)
         ZipEditIntents.registerAll(registry)
+        BrowserIntents.registerTailEntries(registry)
         true
     }
         val doExtractArchivesHere: () -> Unit = {
@@ -1042,103 +1130,17 @@ internal fun BrowserTabHost(
                                     }
                                 },
                                 canGoBack = state.canGoBack,
-                                onEmptyTrash = rootUri?.let { r ->
-                                    {
-                                        scope.launch {
-                                            val root = Uri.parse(normalizeContentUriString(r))
-                                            runWithProgress(context.getString(R.string.main_menu_empty_trash), null) { _ ->
-                                                val ok = withContext(Dispatchers.IO) { emptyTrash(context, root, root) }
-                                                if (ok) {
-                                                    Toast.makeText(context, context.getString(R.string.browser_trash_emptied), Toast.LENGTH_SHORT).show()
-                                                    refresh()
-                                                } else {
-                                                    Toast.makeText(context, context.getString(R.string.browser_empty_trash_failed), Toast.LENGTH_SHORT).show()
-                                                }
-                                            }
-                                        }
-                                    }
-                                },
+                                dialogSession = dialogSessionRequest,
                                 onChangeRoot = RootSwitchModule.service::open,
                                 filterVisible = filterVisible,
                                 hideDotFiles = hideDotFiles,
                                 isViewingTrash = cachedTrashUri != null && (displayUri == cachedTrashUri.toString() || isInsideDirectory(Uri.parse(displayUri), cachedTrashUri!!)),
                                 preferredExternalPackages = preferredExternalPackages,
-                                onOpenFile = { uri, name, _ ->
-                                    setTransientRoute(TransientRoute.Viewer(uri, name, false))
-                                },
-                                onOpenWithOtherApp = { uri, name, packageName, rememberChoice, forcedMimeType ->
-                                    val opened = launchExternalOpen(context, uri, packageName, name, forcedMimeType)
-                                    if (opened) {
-                                        recordRecentOpen(
-                                            RECENT_TYPE_EXTERNAL_OPEN,
-                                            uri,
-                                            name,
-                                            uri,
-                                            null
-                                        )
-                                        if (rememberChoice) {
-                                            val extension = fileExtensionKey(name)
-                                            if (extension != null && !packageName.isNullOrBlank()) {
-                                                scope.launch { config.setExternalOpenPackageForExtension(extension, packageName) }
-                                            }
-                                        }
-                                    } else {
-                                        val extension = fileExtensionKey(name)
-                                        if (!packageName.isNullOrBlank() && extension != null) {
-                                            scope.launch { config.clearExternalOpenPackageForExtension(extension) }
-                                            Toast.makeText(context, context.getString(R.string.browser_external_app_unavailable), Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, context.getString(R.string.browser_no_app_to_open), Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
-                                    opened
-                                },
-                                onClearExternalOpenPreference = { name ->
-                                    val extension = fileExtensionKey(name)
-                                    if (extension != null) {
-                                        scope.launch { config.clearExternalOpenPackageForExtension(extension) }
-                                    }
-                                },
                                 onRefresh = { refresh() },
-                                onCreateQuickNote = {
-                                    onOpenQuickNote()
-                                },
-                                onCreateMusicPlaylist = playerTab::requestCreateDirectoryPlaylist,
-                                onConfirmDelete = { model, deletePermanently ->
-                                    scope.launch {
-                                        val label = if (deletePermanently) context.getString(R.string.common_delete) else context.getString(R.string.browser_moved_to_trash)
-                                        runWithProgress(label, null) { _ ->
-                                            val ok = withContext(Dispatchers.IO) {
-                                                if (deletePermanently) {
-                                                    context.contentResolver.deleteDocument(model.uri)
-                                                } else {
-                                                    val root = rootUri?.let { Uri.parse(normalizeContentUriString(it)) } ?: return@withContext false
-                                                    moveToTrash(context, model.uri, root, root)
-                                                }
-                                            }
-                                            if (ok) {
-                                                Toast.makeText(context, if (deletePermanently) context.getString(R.string.browser_deleted) else context.getString(R.string.browser_moved_to_trash), Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                Toast.makeText(context, context.getString(R.string.browser_operation_failed), Toast.LENGTH_SHORT).show()
-                                            }
-                                            refresh()
-                                        }
-                                    }
-                                },
-                                onRequestOpenUrl = readingLauncher::htmlUrl,
                                 playbackState = playbackState,
                                 zipEditTargetUri = zipEditTargetUriValue,
                                 zipEditTargetName = zipEditTargetRootPath?.let { relativePathFromCurrentDir(it, currentDirPath) } ?: zipEditTargetName,
                                 zipEditTargetIsZip = zipEditTargetName?.endsWith(".zip", ignoreCase = true) == true,
-                                onOpenZipManager = {
-                                    val targetUri = zipEditTargetUriValue
-                                    val targetName = zipEditTargetName
-                                    if (targetUri == null || targetName == null) {
-                                        Toast.makeText(context, context.getString(R.string.zip_edit_no_target), Toast.LENGTH_LONG).show()
-                                    } else {
-                                        zipManagerSession = ZipManagerSession(targetUri, targetName, fromConfig = true)
-                                    }
-                                },
                             )
                         )
         if (showPendingList) {

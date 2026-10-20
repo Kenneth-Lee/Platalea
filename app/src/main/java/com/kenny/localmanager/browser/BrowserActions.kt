@@ -26,6 +26,9 @@ internal interface BrowserFileAction {
     /** UI 强调（主色文案，如回收站恢复）；默认普通色。 */
     val emphasized: Boolean get() = false
 
+    /** 危险操作（错误色文案，如删除）；默认普通色。 */
+    val destructive: Boolean get() = false
+
     /** 执行：内部直呼本域服务；会话命令经会话句柄。 */
     fun run(ctx: BrowserActionContext)
 }
@@ -77,6 +80,29 @@ internal interface BrowserSessionHandle {
     fun clearZipEditTarget()
     /** 打开播放页（底部标签切换）。 */
     fun openPlaybackScreen()
+    // —— 第四批：对话框会话与宿主编排收编 ——
+    /** 挂起操作会话对话框（域动作经此打开浏览器对话框链）。 */
+    fun openDialog(dialog: DialogSession)
+    /** 关闭当前操作会话对话框。 */
+    fun closeDialog()
+    /** 兜底内置查看器（槽 900 动作与内开菜单项的执行体）。 */
+    fun openBuiltinViewer(uri: String, name: String, encrypted: Boolean)
+    /** 外部应用打开（返回是否成功拉起）。 */
+    fun openWithOtherApp(uri: String, name: String, packageName: String?, rememberChoice: Boolean, forcedMimeType: String?): Boolean
+    /** 清除某扩展名的外部打开偏好。 */
+    fun clearExternalOpenPreference(name: String)
+    /** 确认删除（移入回收站或永久删除，进度与刷新在宿主实现）。 */
+    fun confirmDelete(target: DocumentFileModel, permanently: Boolean)
+    /** 清空回收站。 */
+    fun emptyTrash()
+    /** 打开 URL（阅读启动器）。 */
+    fun openUrl(url: String)
+    /** 打开快记创建入口。 */
+    fun createQuickNote()
+    /** 对当前目录生成音乐列表。 */
+    fun createMusicPlaylist(currentUri: String, name: String)
+    /** 从配置入口打开 ZIP 管理页（顶栏待处理目标条）。 */
+    fun openZipManagerFromConfig()
 }
 
 /** 菜单构建/执行时的只读快照：动作声明所需的会话判断依据。 */
@@ -89,6 +115,8 @@ internal class BrowserActionSnapshot(
     val isViewingTrash: Boolean = false,
     /** 当前目录的图片项（目录图库意图的兄弟列表）。 */
     val gallerySiblings: List<DocumentFileModel> = emptyList(),
+    /** 外部打开偏好（扩展名键，槽 900 兜底与内开项的判断依据）。 */
+    val externalOpenPreferences: Map<String, String> = emptyMap(),
 )
 
 /** 菜单项点击时传递的上下文：目标文件 + 会话句柄 + 快照 + 执行环境。 */

@@ -133,4 +133,53 @@ class BrowserActionsTest {
         checkNotNull(plain)
         check(plain.id == "archiveops.unzip") { "普通 zip 应选解压，实得 ${plain.id}" }
     }
+
+    @Test
+    fun `第四批外开内开详情删除进入菜单序`() {
+        val registry = BrowserActions.Registry()
+        BrowserIntents.registerOpenEntries(registry)
+        com.kenny.localmanager.crypto.CryptoIntents.registerAll(registry)
+        com.kenny.localmanager.obfuscate.QuickObfuscateIntents.registerAll(registry)
+        com.kenny.localmanager.archiveops.ArchiveOpsIntents.registerAll(registry)
+        BrowserIntents.registerPendingToggle(registry)
+        com.kenny.localmanager.zipedit.ZipEditIntents.registerAll(registry)
+        BrowserIntents.registerTailEntries(registry)
+
+        val actions = registry.menuActions(file("a.md"), BrowserActionSnapshot())
+        val ids = actions.map { it.id }
+        // 第四批：外开/内开在最前，详情/删除在最后（同迁移前 if 链位次）
+        check(ids.first() == "browser.open.external") { "首个应为外开，实得 ${ids.first()}" }
+        check(ids.last() == "browser.delete") { "末尾应为删除，实得 ${ids.last()}" }
+        check(ids.contains("browser.detail"))
+        // 删除为破坏性动作（红字标记）
+        check(registry.menuActions(file("a.md"), BrowserActionSnapshot()).first { it.id == "browser.delete" }.destructive)
+        // 目录不出外开/内开
+        val dir = file("dir").copy(isDirectory = true)
+        check(registry.menuActions(dir, BrowserActionSnapshot()).none { it.id == "browser.open.external" })
+    }
+
+    @Test
+    fun `内开项在外开偏好存在时补充列出`() {
+        val registry = BrowserActions.Registry()
+        BrowserIntents.registerOpenEntries(registry)
+        // 无偏好：默认打开已是内置查看器，不重复列内开项
+        check(registry.menuActions(file("a.md"), BrowserActionSnapshot()).none { it.id == "browser.open.internal" })
+        // 有偏好：默认打开走外开，需补列内开项
+        val withPref = BrowserActionSnapshot(externalOpenPreferences = mapOf("md" to "pkg"))
+        check(registry.menuActions(file("a.md"), withPref).any { it.id == "browser.open.internal" })
+    }
+
+    @Test
+    fun `槽900兜底意图覆盖无声明文件`() {
+        val registry = BrowserActions.Registry()
+        com.kenny.localmanager.archivereader.ArchiveReaderIntents.registerAll(registry)
+        BrowserIntents.registerTailEntries(registry)
+
+        val match = registry.matchIntent(file("unknown.xyz"))
+        checkNotNull(match)
+        check(match.id == "browser.open.fallback") { "未声明文件应由槽 900 兜底，实得 ${match.id}" }
+        // 目录不适用
+        check(registry.matchIntent(file("dir").copy(isDirectory = true)) == null)
+    }
+
 }
