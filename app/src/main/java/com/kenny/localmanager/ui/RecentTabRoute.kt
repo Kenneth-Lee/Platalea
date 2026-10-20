@@ -64,9 +64,9 @@ import kotlinx.coroutines.withContext
 import com.kenny.localmanager.file.isCompressedHtml
 import com.kenny.localmanager.file.isCompressedLlmZip
 import com.kenny.localmanager.file.isCompressedMarkdown
-import com.kenny.localmanager.browser.isLlmFile
+import com.kenny.localmanager.file.isLlmFile
 import com.kenny.localmanager.file.isPicZip
-import com.kenny.localmanager.browser.isTxtFile
+import com.kenny.localmanager.file.isTxtFile
 import com.kenny.localmanager.file.isVidZip
 import com.kenny.localmanager.viewer.ReadingLauncher
 

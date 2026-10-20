@@ -442,8 +442,6 @@ internal object EpubReaderModule {
 
     fun attach(context: Context, scope: CoroutineScope) {
         instance = EpubReaderWorkflowState(context.applicationContext, scope)
-        // 文件浏览能力声明（拆解设计第一批）：压缩 LLM 包打开意图。
-        EpubReaderIntents.registerAll(BrowserActions.registry)
     }
 
     fun resetForTest() {

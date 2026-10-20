@@ -26,7 +26,7 @@ class BrowserActionsTest {
         @StringRes override val labelRes: Int = R.string.context_view_zip_markdown,
     ) : BrowserOpenIntent {
         override fun applies(target: DocumentFileModel) = target.name == appliesTo
-        override fun open(target: DocumentFileModel, session: BrowserSessionHandle) = Unit
+        override fun open(ctx: BrowserActionContext) = Unit
     }
 
     @Test
@@ -66,5 +66,20 @@ class BrowserActionsTest {
         val registry = BrowserActions.Registry()
         val snapshot = BrowserActionSnapshot()
         check(registry.menuActions(file("a"), snapshot).isEmpty())
+    }
+
+    @Test
+    fun `压缩包阅读意图优先于解压意图（100 槽小于 400 槽）`() {
+        val registry = BrowserActions.Registry()
+        com.kenny.localmanager.archivereader.ArchiveReaderIntents.registerAll(registry)
+        com.kenny.localmanager.archiveops.ArchiveOpsIntents.registerAll(registry)
+
+        val match = registry.matchIntent(file("a.md.zip"))
+        checkNotNull(match)
+        check(match.id == "archivereader.mdzip") { "a.md.zip 应选压缩包阅读而非解压，实得 ${match.id}" }
+
+        val plain = registry.matchIntent(file("b.zip"))
+        checkNotNull(plain)
+        check(plain.id == "archiveops.unzip") { "普通 zip 应选解压，实得 ${plain.id}" }
     }
 }

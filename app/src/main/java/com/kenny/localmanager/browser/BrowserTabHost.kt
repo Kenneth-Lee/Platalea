@@ -100,6 +100,12 @@ import com.kenny.localmanager.player.saveEditableAudioAnnotationToMp3
 import com.kenny.localmanager.player.saveEditableAudioAnnotationWithJaudiotagger
 import com.kenny.localmanager.player.supportsJaudiotaggerWrite
 import com.kenny.localmanager.player.validateEditableAudioAnnotationForm
+import com.kenny.localmanager.archivereader.ArchiveReaderIntents
+import com.kenny.localmanager.archiveops.ArchiveOpsIntents
+import com.kenny.localmanager.crypto.CryptoIntents
+import com.kenny.localmanager.epub.EpubReaderIntents
+import com.kenny.localmanager.file.isExtractableArchive
+import com.kenny.localmanager.viewer.ViewerIntents
 import com.kenny.localmanager.ui.MainTab
 import com.kenny.localmanager.ui.OperationRunState
 import com.kenny.localmanager.ui.RootService
@@ -664,7 +670,19 @@ internal fun BrowserTabHost(
             override fun addToPending(item: DocumentFileModel) { state.pendingList.add(item) }
             override fun removeFromPending(item: DocumentFileModel) { state.pendingList.remove(item) }
             override fun switchTab(tab: MainTab) = deps.switchTab(tab)
+            override fun openViewerRoute(route: TransientRoute) = setTransientRoute(route)
         }
+    }
+    // 能力声明注册（拆解设计 §2.2）：声明归各域，注册在组装层一行/域。
+    // 重复 id 被注册表拒绝（Activity 重建安全）。
+    remember(state) {
+        val registry = BrowserActions.registry
+        ArchiveReaderIntents.registerAll(registry)
+        EpubReaderIntents.registerAll(registry)
+        ViewerIntents.registerAll(registry)
+        ArchiveOpsIntents.registerAll(registry)
+        CryptoIntents.registerAll(registry)
+        true
     }
     fun clearPendingList() = state.clearPendingList()
     var showPendingList by state::showPendingList
@@ -1086,9 +1104,6 @@ internal fun BrowserTabHost(
                                         scope.launch { config.clearExternalOpenPackageForExtension(extension) }
                                     }
                                 },
-                                onOpenMarkdownView = { uri, name, encrypted ->
-                                    setTransientRoute(TransientRoute.MarkdownViewer(uri, name, encrypted))
-                                },
                                 onAddToPendingList = { item -> pendingList.add(item) },
                                 onRemoveFromPendingList = { item -> pendingList.remove(item) },
                                 onCopyPendingToCurrentDir = doCopyHere,
@@ -1099,9 +1114,6 @@ internal fun BrowserTabHost(
                                     onOpenQuickNote()
                                 },
                                 onCreateMusicPlaylist = playerTab::requestCreateDirectoryPlaylist,
-                                onRequestGpgDecrypt = { fileModel, dirUri ->
-                                    CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Decrypt(fileModel, dirUri)))
-                                },
                                 onRequestGpgEncrypt = { fileModel, dirUri ->
                                     CryptoModule.service.open(CryptoRequest.Gpg(GpgOpState.Encrypt(fileModel, dirUri)))
                                 },
@@ -1131,12 +1143,7 @@ internal fun BrowserTabHost(
                                     if (items.isEmpty()) return@BrowserTabRouteState
                                     onForwardToBulletin(BulletinForwardPayload.Files(items))
                                 },
-                                onUnzipRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.Unzip(it)) },
-                                onRequestHtmlView = readingLauncher::html,
                                 onRequestOpenUrl = readingLauncher::htmlUrl,
-                                onRequestEpubView = readingLauncher::epub,
-                                onRequestTxtView = readingLauncher::txt,
-                                onRequestLlmView = readingLauncher::llm,
                                 onRequestDirectoryImageView = { item, dirUri, siblings ->
                                     scope.launch {
                                         runCatching {
@@ -1150,10 +1157,8 @@ internal fun BrowserTabHost(
                                         }
                                     }
                                 },
-                                onRequestPdfView = readingLauncher::pdf,
                                 onCompressArchiveRequest = { ArchiveOpsModule.service.open(ArchiveOperationRequest.CompressFile(it)) },
                                 onRequestPassProtect = { model -> CryptoModule.service.open(CryptoRequest.PassProtect(model)) },
-                                onRequestPassView = { model -> CryptoModule.service.open(CryptoRequest.PassView(model)) },
                                 onRequestPassEdit = { model, dirUri -> CryptoModule.service.open(CryptoRequest.PassEdit(model, dirUri)) },
                                 onRequestImportConfig = { model ->
                                     ConfigImportExportModule.service.startImportFromUri(model.uri)

@@ -574,8 +574,6 @@ internal object ArchiveReaderModule {
 
     fun attach(context: Context, scope: CoroutineScope) {
         instance = ArchiveReaderWorkflowState(context.applicationContext, scope)
-        // 文件浏览能力声明（拆解设计第一批）：压缩包阅读打开意图。
-        ArchiveReaderIntents.registerAll(BrowserActions.registry)
     }
 
     fun resetForTest() {

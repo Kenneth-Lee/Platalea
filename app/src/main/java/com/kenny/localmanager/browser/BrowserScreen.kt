@@ -131,7 +131,12 @@ import com.kenny.localmanager.file.fileExtensionKey
 import com.kenny.localmanager.file.getArchiveFirstLevelEntries
 import com.kenny.localmanager.file.getEpubCacheDir
 import com.kenny.localmanager.file.guessExternalOpenMimeType
+import com.kenny.localmanager.file.isExtractableArchive
 import com.kenny.localmanager.file.isGalleryImageFile
+import com.kenny.localmanager.file.isGpgEncryptedFile
+import com.kenny.localmanager.file.isMarkdownFile
+import com.kenny.localmanager.file.isPassFile
+import com.kenny.localmanager.file.isPdfFile
 import com.kenny.localmanager.file.isPicZip
 import com.kenny.localmanager.file.isVidZip
 import com.kenny.localmanager.file.isHtmlFile
@@ -1062,23 +1067,14 @@ internal fun BrowserScreen(
     onCreateQuickNote: () -> Unit = {},
     onCreateMusicPlaylist: (String, String) -> Unit = { _, _ -> },
     onForwardToBulletin: ((List<DocumentFileModel>) -> Unit)? = null,
-    onOpenMarkdownView: (uri: String, name: String, encrypted: Boolean) -> Unit = { _, _, _ -> },
-    onRequestGpgDecrypt: (DocumentFileModel, String) -> Unit,
     onRequestGpgEncrypt: (DocumentFileModel, String) -> Unit,
     onRequestQuickMask: ((DocumentFileModel) -> Unit)? = null,
     onConfirmDelete: ((DocumentFileModel, Boolean) -> Unit)? = null,
-    onUnzipRequest: (DocumentFileModel) -> Unit = {},
-    onRequestHtmlView: (DocumentFileModel) -> Unit = {},
     onRequestOpenUrl: (String) -> Unit = {},
-    onRequestEpubView: (DocumentFileModel) -> Unit = {},
     onRequestDirectoryImageView: (DocumentFileModel, String, List<DocumentFileModel>) -> Unit = { _, _, _ -> },
-    onRequestPdfView: (DocumentFileModel) -> Unit = {},
     onCompressArchiveRequest: (DocumentFileModel) -> Unit = {},
     onRequestPassProtect: ((DocumentFileModel) -> Unit)? = null,
-    onRequestPassView: (DocumentFileModel) -> Unit = {},
     onRequestPassEdit: (DocumentFileModel, String) -> Unit = { _, _ -> },
-    onRequestTxtView: (DocumentFileModel) -> Unit = {},
-    onRequestLlmView: (DocumentFileModel) -> Unit = {},
     onRequestImportConfig: ((DocumentFileModel) -> Unit)? = null,
     onRequestImportStarDict: ((DocumentFileModel) -> Unit)? = null,
     zipEditTargetUri: String? = null,
@@ -1306,16 +1302,7 @@ internal fun BrowserScreen(
             return context.getString(it.labelRes)
         }
         return when {
-            isHtmlFile(target.name) -> context.getString(R.string.context_default_open_html)
-            isEpubFile(target.name) -> context.getString(R.string.context_default_open_epub)
-            isTxtFile(target.name) -> context.getString(R.string.context_default_open_txt)
-            isLlmFile(target.name) -> context.getString(R.string.context_default_open_llm)
             isGalleryImageFile(target.name) -> context.getString(R.string.context_view_images)
-            isPdfFile(target.name) -> context.getString(R.string.context_default_open_pdf)
-            isExtractableArchive(target.name) -> context.getString(R.string.browser_extract_action)
-            isGpgEncryptedFile(target.name) -> context.getString(R.string.context_gpg_decrypt)
-            isPassFile(target.name) -> context.getString(R.string.context_view_password)
-            isMarkdownFile(target.name) -> context.getString(R.string.context_render_markdown)
             else -> {
                 val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
                 if (preferredPackage != null) context.getString(R.string.context_default_open_with_preferred)
@@ -1331,30 +1318,18 @@ internal fun BrowserScreen(
         }
         // 已迁移打开意图（拆解设计）：单击分发先查声明注册表。
         BrowserActions.registry.matchIntent(target)?.let {
-            it.open(target, session)
+            it.open(
+                BrowserActionContext(
+                    target = target,
+                    session = session,
+                    snapshot = BrowserActionSnapshot(currentUri = currentUri),
+                )
+            )
             return
         }
         when {
-            isHtmlFile(target.name) ->
-                onRequestHtmlView(target)
-            isEpubFile(target.name) ->
-                onRequestEpubView(target)
-            isTxtFile(target.name) ->
-                onRequestTxtView(target)
-            isLlmFile(target.name) ->
-                onRequestLlmView(target)
             isGalleryImageFile(target.name) ->
                 onRequestDirectoryImageView(target, currentUri, galleryImageItems)
-            isPdfFile(target.name) ->
-                onRequestPdfView(target)
-            isExtractableArchive(target.name) ->
-                onUnzipRequest(target)
-            isGpgEncryptedFile(target.name) ->
-                onRequestGpgDecrypt(target, currentUri)
-            isPassFile(target.name) ->
-                onRequestPassView(target)
-            isMarkdownFile(target.name) ->
-                onOpenMarkdownView(target.uri.toString(), target.name, false)
             else -> {
                 val preferredPackage = fileExtensionKey(target.name)?.let { preferredExternalPackages[it] }
                 if (preferredPackage != null && onOpenWithOtherApp(target.uri.toString(), target.name, preferredPackage, false, null)) {

@@ -6,7 +6,7 @@ import com.kenny.localmanager.browser.EditableAudioAnnotation
 import com.kenny.localmanager.browser.EditableImageExif
 import com.kenny.localmanager.browser.compareChangedAudioAnnotationFields
 import com.kenny.localmanager.browser.compareChangedImageExifFields
-import com.kenny.localmanager.browser.isExtractableArchive
+import com.kenny.localmanager.file.isExtractableArchive
 import com.kenny.localmanager.file.isVidZip
 import com.kenny.localmanager.browser.mergeEditableImageExifForBatch
 import com.kenny.localmanager.player.mergeEditableAudioAnnotationForBatch

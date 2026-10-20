@@ -3,6 +3,7 @@ package com.kenny.localmanager.browser
 import androidx.annotation.StringRes
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.ui.MainTab
+import com.kenny.localmanager.ui.TransientRoute
 
 /**
  * 文件动作（文件浏览功能拆解设计 §2.1）：功能域向浏览器声明的一项
@@ -39,7 +40,8 @@ internal interface BrowserOpenIntent {
 
     fun applies(target: DocumentFileModel): Boolean
 
-    fun open(target: DocumentFileModel, session: BrowserSessionHandle)
+    /** 执行：入参上下文（目标文件+会话句柄+快照），与文件动作对称。 */
+    fun open(ctx: BrowserActionContext)
 }
 
 /**
@@ -51,10 +53,14 @@ internal interface BrowserSessionHandle {
     fun addToPending(item: DocumentFileModel)
     fun removeFromPending(item: DocumentFileModel)
     fun switchTab(tab: MainTab)
+    /** 打开全屏查看 Route（导航出口：PDF/Markdown/HTML 查看器）。 */
+    fun openViewerRoute(route: TransientRoute)
 }
 
 /** 菜单构建/执行时的只读快照：动作声明所需的会话判断依据。 */
 internal class BrowserActionSnapshot(
+    /** 当前目录（解密/解压等"写回当前目录"型动作的落点）。 */
+    val currentUri: String? = null,
     val pendingUris: Set<String> = emptySet(),
     val zipEditTargetUri: String? = null,
     val zipEditTargetIsZip: Boolean = false,

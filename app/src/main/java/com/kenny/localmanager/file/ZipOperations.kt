@@ -38,9 +38,6 @@ import java.io.OutputStream
 import java.nio.channels.SeekableByteChannel
 import java.nio.charset.Charset
 import java.util.Locale
-import com.kenny.localmanager.browser.isEpubFile
-import com.kenny.localmanager.browser.isLlmFile
-import com.kenny.localmanager.browser.isTxtFile
 
 private const val TAG = "ZipOperations"
 private const val MIME_ZIP = "application/zip"

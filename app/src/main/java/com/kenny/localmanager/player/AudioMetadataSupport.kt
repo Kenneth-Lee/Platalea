@@ -21,7 +21,7 @@ import com.kenny.localmanager.browser.BrowserScreen
 import com.kenny.localmanager.browser.BrowserTabHost
 import com.kenny.localmanager.browser.EditableAudioAnnotation
 import com.kenny.localmanager.browser.compareChangedAudioAnnotationFields
-import com.kenny.localmanager.browser.isExtractableArchive
+import com.kenny.localmanager.file.isExtractableArchive
 
 /**
  * 音频元数据域共享符号：查重归一化、元数据读取（TrackMetadata）、音频注解（MP3 tag / Jaudiotagger）

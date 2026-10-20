@@ -1,9 +1,9 @@
 package com.kenny.localmanager.archivereader
 
 import com.kenny.localmanager.R
+import com.kenny.localmanager.browser.BrowserActionContext
 import com.kenny.localmanager.browser.BrowserActions
 import com.kenny.localmanager.browser.BrowserOpenIntent
-import com.kenny.localmanager.browser.BrowserSessionHandle
 import com.kenny.localmanager.file.DocumentFileModel
 import com.kenny.localmanager.file.isCompressedHtml
 import com.kenny.localmanager.file.isCompressedMarkdown
@@ -23,8 +23,8 @@ internal object ArchiveReaderIntents {
         override val slot = 100
         override val labelRes = R.string.context_view_zip_markdown
         override fun applies(target: DocumentFileModel) = isCompressedMarkdown(target.name)
-        override fun open(target: DocumentFileModel, session: BrowserSessionHandle) {
-            ArchiveReaderModule.service.open(ArchiveReaderKind.MD_ZIP, target)
+        override fun open(ctx: BrowserActionContext) {
+            ArchiveReaderModule.service.open(ArchiveReaderKind.MD_ZIP, ctx.target)
         }
     }
 
@@ -33,8 +33,8 @@ internal object ArchiveReaderIntents {
         override val slot = 100
         override val labelRes = R.string.context_view_zip_html
         override fun applies(target: DocumentFileModel) = isCompressedHtml(target.name)
-        override fun open(target: DocumentFileModel, session: BrowserSessionHandle) {
-            ArchiveReaderModule.service.open(ArchiveReaderKind.HTML_ZIP, target)
+        override fun open(ctx: BrowserActionContext) {
+            ArchiveReaderModule.service.open(ArchiveReaderKind.HTML_ZIP, ctx.target)
         }
     }
 
@@ -43,8 +43,8 @@ internal object ArchiveReaderIntents {
         override val slot = 100
         override val labelRes = R.string.context_view_compressed_images
         override fun applies(target: DocumentFileModel) = isPicZip(target.name)
-        override fun open(target: DocumentFileModel, session: BrowserSessionHandle) {
-            ArchiveReaderModule.service.open(ArchiveReaderKind.PIC_ZIP, target)
+        override fun open(ctx: BrowserActionContext) {
+            ArchiveReaderModule.service.open(ArchiveReaderKind.PIC_ZIP, ctx.target)
         }
     }
 
@@ -53,8 +53,8 @@ internal object ArchiveReaderIntents {
         override val slot = 100
         override val labelRes = R.string.context_view_videos
         override fun applies(target: DocumentFileModel) = isVidZip(target.name)
-        override fun open(target: DocumentFileModel, session: BrowserSessionHandle) {
-            ArchiveReaderModule.service.open(ArchiveReaderKind.VID_ZIP, target)
+        override fun open(ctx: BrowserActionContext) {
+            ArchiveReaderModule.service.open(ArchiveReaderKind.VID_ZIP, ctx.target)
         }
     }
 
